@@ -306,6 +306,7 @@ export const en = {
             invalidName: 'Use 1 to 64 letters, digits or underscores.',
             forbiddenCharacter:
                 'Remove the quotes, semicolons and backslashes: FXServer reads them as commands.',
+            quoteOrSemicolon: 'Remove the quotes and semicolons: FXServer reads them as commands.',
             reserved: 'Observer sets this one itself, or it would break supervision.',
             secret: 'This holds a secret: set it in the cfg, never on the command line, which anyone on the host can read.',
             duplicate: 'An argument above already sets this name.',

@@ -51,6 +51,7 @@ const PROBLEMS = {
     optionLike: true,
     invalidName: true,
     forbiddenCharacter: true,
+    quoteOrSemicolon: true,
     reserved: true,
     secret: true,
     duplicate: true,

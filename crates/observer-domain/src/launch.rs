@@ -182,6 +182,8 @@ pub enum LaunchProblem {
     InvalidName,
     /// `"`, `;` or `\`, which FXServer's command line reads as syntax.
     ForbiddenCharacter,
+    /// `"` or `;` in a Windows path, where `\` separates folders.
+    QuoteOrSemicolon,
     Reserved,
     Secret,
     /// The name was set by an earlier argument.
@@ -261,12 +263,13 @@ fn path_problem(path: &str, platform: Platform) -> Option<LaunchProblem> {
         Platform::Windows => windows_path_problem(path),
         Platform::Unix => unix_path_problem(path),
     }
-    .or_else(|| {
-        let forbidden = match platform {
-            Platform::Windows => path.contains(['"', ';']),
-            Platform::Unix => path.contains(['"', ';', '\\']),
-        };
-        forbidden.then_some(LaunchProblem::ForbiddenCharacter)
+    .or_else(|| match platform {
+        Platform::Windows => path
+            .contains(['"', ';'])
+            .then_some(LaunchProblem::QuoteOrSemicolon),
+        Platform::Unix => path
+            .contains(['"', ';', '\\'])
+            .then_some(LaunchProblem::ForbiddenCharacter),
     })
 }
 
@@ -467,8 +470,8 @@ mod tests {
             (r"C:\FXServer\NUL:", LaunchProblem::DevicePath),
             (r"C:\FXServer\COM1:\build", LaunchProblem::DevicePath),
             (r"C:\FXServer\CON:x", LaunchProblem::DevicePath),
-            (r#"C:\FX"Server"#, LaunchProblem::ForbiddenCharacter),
-            (r"C:\FXServer;quit", LaunchProblem::ForbiddenCharacter),
+            (r#"C:\FX"Server"#, LaunchProblem::QuoteOrSemicolon),
+            (r"C:\FXServer;quit", LaunchProblem::QuoteOrSemicolon),
         ] {
             assert_eq!(build_path(path, Platform::Windows), [problem], "{path:?}");
         }
