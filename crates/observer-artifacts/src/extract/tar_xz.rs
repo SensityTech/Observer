@@ -16,6 +16,7 @@ use lzma_rust2::XzReader;
 use tar::EntryType;
 
 use super::{Budget, MAX_UNPACKED, Refusal, check_characters, components, refuse, write_entry};
+use crate::disk::{self, SPACE_MARGIN};
 use crate::error::{Error, io};
 use crate::http::MIB;
 
@@ -32,7 +33,10 @@ const MAX_STREAM: u64 = MAX_UNPACKED + 64 * MIB;
 
 /// Extracts into `into`, which must not exist yet. A damaged stream can fail halfway, after some
 /// files are written: `into` is always a staging folder for that reason.
-pub(crate) fn extract(archive: &Path, into: &Path) -> Result<(), Error> {
+///
+/// `space` is what the volume was found to have free for the files. A tar does not say what it
+/// unpacks to, so once the files pass that, the volume is checked again, for as much more.
+pub(crate) fn extract(archive: &Path, into: &Path, space: u64) -> Result<(), Error> {
     let mut file = File::open(archive).map_err(io(archive))?;
     let mut magic = [0; 6];
     if file.read_exact(&mut magic).is_err() || magic != XZ_MAGIC {
@@ -49,6 +53,7 @@ pub(crate) fn extract(archive: &Path, into: &Path) -> Result<(), Error> {
     fs::create_dir(into).map_err(io(into))?;
     let mut tree = Tree::default();
     let mut budget = Budget::default();
+    let mut checked = space;
     for entry in tar.entries().map_err(|error| damaged(&error))? {
         let mut entry = entry.map_err(|error| damaged(&error))?;
         let kind = entry.header().entry_type();
@@ -73,6 +78,10 @@ pub(crate) fn extract(archive: &Path, into: &Path) -> Result<(), Error> {
         match kind {
             EntryType::Regular | EntryType::Continuous => {
                 tree.claim(&path, Claim::File).map_err(refuse)?;
+                if budget.bytes() > checked {
+                    disk::require_space(into, size.saturating_add(space).saturating_add(SPACE_MARGIN))?;
+                    checked = budget.bytes().saturating_add(space);
+                }
                 if let Some(parent) = target.parent() {
                     fs::create_dir_all(parent).map_err(io(parent))?;
                 }
@@ -312,11 +321,14 @@ mod tests {
     use super::*;
     use crate::samples::{TarEntry, noise, tar_xz};
 
+    /// Free space found on the volume for the files, as much as the tests could need.
+    const PLENTY: u64 = u64::MAX;
+
     fn extracted(entries: &[TarEntry]) -> (tempfile::TempDir, Result<(), Error>) {
         let dir = tempfile::tempdir().unwrap();
         let archive = dir.path().join("fx.tar.xz");
         fs::write(&archive, tar_xz(entries)).unwrap();
-        let result = extract(&archive, &dir.path().join("tree"));
+        let result = extract(&archive, &dir.path().join("tree"), PLENTY);
         (dir, result)
     }
 
@@ -554,7 +566,7 @@ mod tests {
         let archive = dir.path().join("fx.tar.xz");
         fs::write(&archive, b"<html>maintenance</html>").unwrap();
 
-        let error = extract(&archive, &dir.path().join("tree")).unwrap_err();
+        let error = extract(&archive, &dir.path().join("tree"), PLENTY).unwrap_err();
 
         assert!(matches!(error, Error::Damaged(_)), "{error}");
     }
@@ -570,7 +582,7 @@ mod tests {
         )]);
         fs::write(&archive, &bytes[..bytes.len() / 2]).unwrap();
 
-        let error = extract(&archive, &dir.path().join("tree")).unwrap_err();
+        let error = extract(&archive, &dir.path().join("tree"), PLENTY).unwrap_err();
 
         assert!(matches!(error, Error::Damaged(_)), "{error}");
     }
@@ -579,7 +591,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let archive = dir.path().join("fx.tar.xz");
         fs::write(&archive, bytes).unwrap();
-        extract(&archive, &dir.path().join("tree"))
+        extract(&archive, &dir.path().join("tree"), PLENTY)
     }
 
     #[test]
@@ -608,6 +620,25 @@ mod tests {
         let error = extracted_bytes(&bytes).unwrap_err();
 
         assert!(matches!(error, Error::Damaged(_)), "{error}");
+    }
+
+    #[test]
+    fn files_past_the_space_found_free_get_the_volume_checked_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let archive = dir.path().join("fx.tar.xz");
+        fs::write(
+            &archive,
+            tar_xz(&[
+                TarEntry::File("run.sh", b"#!/bin/bash", 0o755),
+                TarEntry::File("alpine/opt/cfx-server/FXServer", &noise(4096), 0o755),
+            ]),
+        )
+        .unwrap();
+
+        // Two bytes were found free: both files are past them, and the volume has room for more.
+        extract(&archive, &dir.path().join("tree"), 2).unwrap();
+
+        assert_eq!(fs::read(dir.path().join("tree/run.sh")).unwrap(), b"#!/bin/bash");
     }
 
     #[cfg(unix)]

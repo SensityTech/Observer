@@ -11,6 +11,9 @@ use crate::http::MIB;
 /// rename or a removal fail; the same call a little later succeeds.
 const BUSY_DELAYS_MS: [u64; 6] = [50, 100, 200, 400, 800, 1600];
 
+/// Kept free beyond what an extraction needs.
+pub(crate) const SPACE_MARGIN: u64 = 64 * MIB;
+
 /// FXServer does not use long paths on Windows, and a build's deepest file sits about 125
 /// characters below its root.
 const DEEPEST_ENTRY: usize = 125;

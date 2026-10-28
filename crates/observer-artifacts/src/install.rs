@@ -21,8 +21,6 @@ const HEAD_TIMEOUT: Duration = Duration::from_secs(30);
 /// Room for the download and its extraction, checked before anything is fetched.
 const WINDOWS_SPACE: u64 = 350 * MIB;
 const LINUX_SPACE: u64 = 450 * MIB;
-/// Kept free beyond what an extraction needs.
-const SPACE_MARGIN: u64 = 64 * MIB;
 /// An xz archive does not say how much it unpacks to; FXServer's expand a little over four times.
 const XZ_EXPANSION: u64 = 5;
 /// Who signs FXServer.exe. Linux builds carry no signature at all.
@@ -256,12 +254,13 @@ fn extract(
     match platform {
         Platform::Windows => {
             let plan = extract::plan_zip(archive)?;
-            disk::require_space(root, plan.unpacked + SPACE_MARGIN)?;
+            disk::require_space(root, plan.unpacked + disk::SPACE_MARGIN)?;
             extract::extract_zip(archive, &plan, tree)
         }
         Platform::Linux => {
-            disk::require_space(root, archive_bytes.saturating_mul(XZ_EXPANSION) + SPACE_MARGIN)?;
-            extract::extract_tar_xz(archive, tree)
+            let space = archive_bytes.saturating_mul(XZ_EXPANSION);
+            disk::require_space(root, space + disk::SPACE_MARGIN)?;
+            extract::extract_tar_xz(archive, tree, space)
         }
     }
 }
