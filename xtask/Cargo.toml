@@ -9,6 +9,7 @@ publish.workspace = true
 anyhow.workspace = true
 brotli = "9.1.1"
 flate2 = "1.1.10"
+observer-domain.workspace = true
 walkdir = "2.5.0"
 
 [lints]

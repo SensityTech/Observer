@@ -11,7 +11,11 @@ export const useTheme = () => {
     const [theme, setThemeState] = useState<Theme>(currentTheme);
 
     const setTheme = useCallback((next: Theme) => {
-        document.documentElement.dataset.theme = next;
+        const root = document.documentElement;
+        // Every colour flips at once: hover transitions would otherwise fade a few late.
+        root.classList.add('is-theming');
+        root.dataset.theme = next;
+        requestAnimationFrame(() => requestAnimationFrame(() => root.classList.remove('is-theming')));
         setThemeState(next);
         try {
             localStorage.setItem(STORAGE_KEY, next);

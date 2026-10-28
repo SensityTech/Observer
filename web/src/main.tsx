@@ -5,12 +5,32 @@ import { RouterProvider } from '@tanstack/react-router';
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 
+import { meQuery } from './api/auth';
+import { ApiError, configureSession } from './api/client';
 import { I18nProvider } from './i18n/I18nProvider';
-import { router } from './router';
+import { createPanelRouter } from './router';
 
 const queryClient = new QueryClient({
     defaultOptions: {
-        queries: { retry: 1, refetchOnWindowFocus: true },
+        queries: {
+            // A refusal stays a refusal; only a request that got no answer is worth another try.
+            retry: (failures, error) => !(error instanceof ApiError) && failures < 1,
+            refetchOnWindowFocus: true,
+        },
+    },
+});
+
+const router = createPanelRouter(queryClient);
+
+configureSession({
+    // The routes' guards run again and send the user where they now belong.
+    ended: () => {
+        queryClient.removeQueries({ predicate: (query) => query.queryKey[0] !== 'me' });
+        queryClient.setQueryData(meQuery.queryKey, null);
+        void router.invalidate();
+    },
+    passwordChangeRequired: () => {
+        void queryClient.invalidateQueries({ queryKey: meQuery.queryKey }).then(() => router.invalidate());
     },
 });
 

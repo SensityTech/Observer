@@ -22,6 +22,10 @@ pub struct Config {
 #[serde(default, deny_unknown_fields)]
 pub struct HttpConfig {
     pub listen: SocketAddr,
+    /// The names the panel is reached by, such as `panel.example.com`. Addresses and `localhost`
+    /// always work; the API refuses any other name, which a stranger's page could have pointed at
+    /// this host.
+    pub hosts: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -46,6 +50,7 @@ impl Default for HttpConfig {
         // 40120 and 40122 are txAdmin's; staying clear of them lets both run on one host.
         Self {
             listen: SocketAddr::from(([0, 0, 0, 0], 40125)),
+            hosts: Vec::new(),
         }
     }
 }
@@ -121,7 +126,7 @@ mod tests {
         let path = dir.path().join("observer.toml");
         fs::write(
             &path,
-            "data_dir = \"state\"\n[http]\nlisten = \"127.0.0.1:9000\"\n",
+            "data_dir = \"state\"\n[http]\nlisten = \"127.0.0.1:9000\"\nhosts = [\"panel.example.com\"]\n",
         )
         .unwrap();
 
@@ -129,6 +134,7 @@ mod tests {
 
         assert_eq!(config.data_dir, dir.path().join("state"));
         assert_eq!(config.http.listen, SocketAddr::from(([127, 0, 0, 1], 9000)));
+        assert_eq!(config.http.hosts, ["panel.example.com"]);
         assert_eq!(config.log.level, "info");
     }
 

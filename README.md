@@ -57,8 +57,9 @@ cargo xtask check                     # everything CI checks
 While working on the panel, `npm run dev` in `web/` serves it on http://localhost:41820 with hot reload
 and forwards `/api` to a running Observer (set `OBSERVER_URL` to reach another one).
 
-`cargo xtask bindings` regenerates the TypeScript types of the API from the Rust ones; CI fails when the
-committed types are out of date. `cargo xtask dist` builds a release binary with the panel inside.
+`cargo xtask bindings` regenerates the TypeScript types of the API from the Rust ones, and the
+permission constants the panel gates on from the Rust catalog; CI fails when the committed files are
+out of date. `cargo xtask dist` builds a release binary with the panel inside.
 
 ### Configuration
 
@@ -77,6 +78,21 @@ level = "info"               # a tracing filter; the OBSERVER_LOG variable overr
 
 `observer db check` and `observer db backup` inspect and back up the database while Observer is
 stopped.
+
+### First run and accounts
+
+On its first start, Observer prints a link on the terminal that creates the owner account. The link
+works for 30 minutes and never appears in the logs. Under systemd, or once it has expired, run
+`observer setup-link` for a new one.
+
+These commands work while Observer runs:
+
+```bash
+observer user list                    # accounts, roles and permissions
+observer user reset-password <name>   # a temporary password; works for the owner too
+observer user unlock <name>           # lift the login locks on an account
+observer setup-link                   # a new owner-creation link, while no account exists
+```
 
 ## License
 

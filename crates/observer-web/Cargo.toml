@@ -7,13 +7,20 @@ publish.workspace = true
 
 [dependencies]
 axum.workspace = true
+futures-util.workspace = true
+observer-app.workspace = true
 observer-domain.workspace = true
 rust-embed.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 tower-http.workspace = true
+tracing.workspace = true
 
 [dev-dependencies]
 http-body-util.workspace = true
-serde_json.workspace = true
+jiff.workspace = true
+observer-store.workspace = true
+tempfile.workspace = true
 tokio = { workspace = true, features = ["macros", "rt"] }
 tower = { workspace = true, features = ["util"] }
 

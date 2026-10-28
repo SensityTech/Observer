@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use rusqlite::config::DbConfig;
-use rusqlite::{Connection, OpenFlags};
+use rusqlite::{Connection, OpenFlags, Transaction, TransactionBehavior};
 
 use crate::backup::{self, BackupKind};
 use crate::migrations;
@@ -17,6 +17,11 @@ pub enum StoreError {
          use that version or restore a backup"
     )]
     TooNew { found: usize, known: usize },
+    #[error(
+        "the database has schema {found} and this build needs {known}; start Observer once to \
+         migrate it"
+    )]
+    NotMigrated { found: usize, known: usize },
     #[error(transparent)]
     Sqlite(#[from] rusqlite::Error),
     #[error(transparent)]
@@ -53,6 +58,34 @@ impl Database {
         let dir = backups.clone();
 
         let conn = blocking(move || open_blocking(&path, &dir)).await?;
+
+        Ok(Self {
+            conn: conn.into(),
+            backups,
+        })
+    }
+
+    /// Opens an existing database without migrating it, while Observer itself may be running: the
+    /// command line uses it to change accounts under a live instance.
+    pub async fn open_existing(
+        path: impl Into<PathBuf>,
+        backups: impl Into<PathBuf>,
+    ) -> Result<Self, StoreError> {
+        let path = path.into();
+        let backups = backups.into();
+
+        let conn = blocking(move || {
+            if !path.exists() {
+                return Err(StoreError::Missing(path));
+            }
+            let flags = OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX;
+            let conn = Connection::open_with_flags(&path, flags)?;
+            configure(&conn)?;
+            check_integrity(&conn)?;
+            migrations::require_latest(&conn)?;
+            Ok(conn)
+        })
+        .await?;
 
         Ok(Self {
             conn: conn.into(),
@@ -112,19 +145,49 @@ impl Database {
         self.call(move |_| Ok(backup::newest(&dir, kind)?)).await
     }
 
+    /// Runs `function` in one transaction, committed when it returns `Ok`. The transaction takes
+    /// the write lock up front, so it never fails halfway for want of it.
+    pub async fn write<R, E, F>(&self, function: F) -> Result<R, E>
+    where
+        R: Send + 'static,
+        E: From<StoreError> + Send + 'static,
+        F: FnOnce(&Transaction<'_>) -> Result<R, E> + Send + 'static,
+    {
+        self.call(move |conn| {
+            let transaction = conn
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .map_err(StoreError::from)?;
+            let value = function(&transaction)?;
+            transaction.commit().map_err(StoreError::from)?;
+            Ok(value)
+        })
+        .await
+    }
+
+    /// Runs `function` on the connection, for reads.
+    pub async fn read<R, E, F>(&self, function: F) -> Result<R, E>
+    where
+        R: Send + 'static,
+        E: From<StoreError> + Send + 'static,
+        F: FnOnce(&Connection) -> Result<R, E> + Send + 'static,
+    {
+        self.call(move |conn| function(conn)).await
+    }
+
     /// Closes the connection, which folds the WAL back into the database file.
     pub async fn close(self) -> Result<(), StoreError> {
         self.conn.close().await.map_err(|_| StoreError::Closed)
     }
 
-    async fn call<R, F>(&self, function: F) -> Result<R, StoreError>
+    async fn call<R, E, F>(&self, function: F) -> Result<R, E>
     where
         R: Send + 'static,
-        F: FnOnce(&mut Connection) -> Result<R, StoreError> + Send + 'static,
+        E: From<StoreError> + Send + 'static,
+        F: FnOnce(&mut Connection) -> Result<R, E> + Send + 'static,
     {
         self.conn.call(function).await.map_err(|error| match error {
             tokio_rusqlite::Error::Error(error) => error,
-            _ => StoreError::Closed,
+            _ => StoreError::Closed.into(),
         })
     }
 }
@@ -177,6 +240,15 @@ fn check_integrity(conn: &Connection) -> Result<(), StoreError> {
     } else {
         Err(StoreError::Corrupt(verdict))
     }
+}
+
+/// A migrated in-memory database, for the repositories' tests.
+#[cfg(test)]
+pub(crate) fn memory() -> Connection {
+    let mut conn = Connection::open_in_memory().unwrap();
+    configure(&conn).unwrap();
+    migrations::apply(&mut conn, Path::new("unused")).unwrap();
+    conn
 }
 
 #[cfg(test)]
@@ -282,6 +354,50 @@ mod tests {
 
         assert!(matches!(error, StoreError::Missing(_)));
         assert!(!path.exists());
+    }
+
+    #[tokio::test]
+    async fn an_existing_database_opens_without_migrating_only_at_this_builds_schema() {
+        let dir = tempfile::tempdir().unwrap();
+        let (path, backups) = paths(dir.path());
+        assert!(matches!(
+            Database::open_existing(&path, &backups).await.err().unwrap(),
+            StoreError::Missing(_)
+        ));
+        let db = Database::open(&path, &backups).await.unwrap();
+
+        let second = Database::open_existing(&path, &backups).await.unwrap();
+        assert_eq!(
+            second.instance_id().await.unwrap(),
+            db.instance_id().await.unwrap()
+        );
+        second.close().await.unwrap();
+        db.close().await.unwrap();
+
+        Connection::open(&path)
+            .unwrap()
+            .pragma_update(None, "user_version", 1)
+            .unwrap();
+        let error = Database::open_existing(&path, &backups).await.err().unwrap();
+        assert!(matches!(error, StoreError::NotMigrated { found: 1, .. }));
+    }
+
+    #[tokio::test]
+    async fn a_failed_write_rolls_back_everything_it_did() {
+        let dir = tempfile::tempdir().unwrap();
+        let (path, backups) = paths(dir.path());
+        let db = Database::open(&path, &backups).await.unwrap();
+
+        let result: Result<(), StoreError> = db
+            .write(|tx| {
+                tx.execute("INSERT INTO settings (key, value) VALUES ('probe', '1')", [])?;
+                Err(StoreError::Closed)
+            })
+            .await;
+
+        assert!(result.is_err());
+        let value = db.read(|conn| crate::settings::get(conn, "probe")).await.unwrap();
+        assert_eq!(value, None);
     }
 
     #[tokio::test]

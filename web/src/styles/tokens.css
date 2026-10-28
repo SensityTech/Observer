@@ -1,131 +1,621 @@
 /*
- * Observer's design tokens, copied from the validated mockup (docs/design/mockups/style-a-client.html,
- * chosen on 2026-10-28). Every colour is redefined per theme on <html data-theme>; components only
- * ever read these variables.
+ * Observer · design tokens, style A (the client space).
+ *
+ * Source of truth: docs/design/mockups/style-a-client.html, chosen by the owner on 2026-10-28.
+ * Spec and reasoning: docs/design/DESIGN.md. Every value below comes from the mockup unless its
+ * comment says "added": those few come from Aperture's kit (resources/css/site/kit.css) or fix a
+ * contrast the mockup missed, and DESIGN.md lists them.
+ *
+ * Entry file (web/src/styles/app.css):
+ *   @import "tailwindcss";
+ *   @import "./tokens.css";
+ * Checked with Tailwind CSS 4.3.3.
+ *
+ * Two layers of names:
+ * - raw tokens (--bg, --ink, --accent...), the mockup's names, redefined per theme on [data-theme].
+ *   Plain CSS and runtime code (the lightweight-charts theme) read these.
+ * - Tailwind keys (--color-bg -> bg-bg, text-ink...) mapped onto them with @theme inline, so a
+ *   utility reads the raw token of the nearest [data-theme] ancestor, never a value frozen at :root.
+ * One rename: the mockup's --shadow-* are --elev-* here. A raw token named like a Tailwind key
+ * (--shadow-sm) makes Tailwind emit `--shadow-sm: var(--shadow-sm)` into its theme layer.
  */
 
-/* ---------- Tokens shared by both themes ---------- */
-:root {
-    --r-xs: 5px;
-    --r-sm: 8px;
-    --r: 10px;
-    --r-card: 14px;
-    --r-rail: 18px;
-    --r-pill: 9999px;
-    --font:
+/* Colour never goes through these: a token already follows the nearest [data-theme]. They exist for
+   the rare non-colour difference between themes (the sun or moon of the theme switch) and follow the
+   root theme only: an ancestor selector would match both inside a forced subtree, and light: (emitted
+   last) would win there. :root without data-theme is dark, like the tokens. */
+@custom-variant dark (&:where(:root:not([data-theme="light"]), :root:not([data-theme="light"]) *));
+@custom-variant light (&:where(:root[data-theme="light"], :root[data-theme="light"] *));
+
+/* ---------- Static theme: the same in both themes ---------- */
+@theme {
+    --color-*: initial;
+    --text-*: initial;
+    --radius-*: initial;
+    --shadow-*: initial;
+    --breakpoint-*: initial;
+
+    /* Self-hosted variable woff2 (@fontsource-variable/inter, @fontsource-variable/jetbrains-mono),
+     then the mockup's stacks. */
+    --font-sans:
         'Inter Variable', 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
-    --mono:
+    --font-mono:
         'JetBrains Mono Variable', 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-    --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
-    --rail-width: 272px;
-    --rail-gap: 12px;
-    --rail-pad: 8px;
+
+    /* Type scale: every size the mockup uses, named by role (DESIGN.md §3). The mockup sets most of
+     these sizes without a line height, so they keep the body's 1.5; only the sizes it sets its own
+     on carry another value. Elements that differ (chip, marker, logo at 1; event text at 1.55) add
+     a leading-* utility, which wins over the size's line height whatever the order. */
+    --text-tag: 10px;
+    --text-tag--line-height: 1;
+    --text-micro: 10.5px;
+    --text-micro--line-height: 1.5;
+    --text-eyebrow: 11px;
+    --text-eyebrow--line-height: 1.4;
+    --text-caption: 11.5px;
+    --text-caption--line-height: 1.5;
+    --text-meta: 12px;
+    --text-meta--line-height: 1.5;
+    --text-small: 12.5px;
+    --text-small--line-height: 1.5;
+    --text-ui: 13px;
+    --text-ui--line-height: 1.5;
+    --text-nav: 13.5px;
+    --text-nav--line-height: 1.5;
+    --text-body: 14px;
+    --text-body--line-height: 1.5;
+    --text-card: 15px;
+    --text-card--line-height: 1.5;
+    --text-card--letter-spacing: -0.01em;
+    --text-card--font-weight: 600;
+    --text-touch: 16px;
+    --text-touch--line-height: 1.5;
+    --text-figure-sm: 17px;
+    --text-figure-sm--line-height: 1.5;
+    --text-figure-sm--font-weight: 600;
+    --text-state: 20px;
+    --text-state--line-height: 1.3;
+    --text-state--letter-spacing: -0.015em;
+    --text-state--font-weight: 600;
+    --text-figure: 22px;
+    --text-figure--line-height: 1.15;
+    --text-figure--letter-spacing: -0.02em;
+    --text-figure--font-weight: 600;
+    --text-page: 26px;
+    --text-page--line-height: 1.2;
+    --text-page--letter-spacing: -0.02em;
+    --text-page--font-weight: 600;
+    --text-tile: 28px;
+    --text-tile--line-height: 1.1;
+    --text-tile--letter-spacing: -0.02em;
+    --text-tile--font-weight: 600;
+
+    --tracking-label: 0.06em;
+    --tracking-group: 0.08em;
+    --tracking-tag: 0.04em;
+    --tracking-btn: -0.005em;
+    --tracking-snug: -0.01em;
+    --tracking-logo: -0.015em;
+    --tracking-title: -0.02em;
+
+    /* Mobile-first twins of the mockup's max-width queries (560, 760, 900, 1024, 1180, 1360, 1520).
+     max-md: is the phone layout (760px and under), max-xl: the drawer (1024px and under). */
+    --breakpoint-sm: 561px;
+    --breakpoint-md: 761px;
+    --breakpoint-lg: 901px;
+    --breakpoint-xl: 1025px;
+    --breakpoint-2xl: 1181px;
+    --breakpoint-3xl: 1361px;
+    --breakpoint-4xl: 1521px;
+
+    --container-desc: 640px;
+    --container-search: 260px;
+    --container-split: 260px;
+    --container-toast: 380px;
+    --container-empty: 380px;
+    --container-drawer: 440px;
+    --container-dialog: 520px;
+    --container-palette: 640px;
+
+    --default-transition-duration: 0.15s;
+    --default-transition-timing-function: ease;
+    --ease-std: cubic-bezier(0.2, 0.8, 0.2, 1);
+
+    /* live-ping is the mockup's; the four entrances and the skeleton are Aperture's kit (added). */
+    --animate-live-ping: live-ping 1.8s cubic-bezier(0, 0, 0.2, 1) infinite;
+    --animate-pop: pop-in 0.16s cubic-bezier(0.2, 0.8, 0.2, 1);
+    --animate-rise: rise-in 0.22s cubic-bezier(0.2, 0.8, 0.2, 1);
+    --animate-slide: slide-in 0.24s cubic-bezier(0.2, 0.8, 0.2, 1);
+    --animate-fade: fade-in 0.2s ease-out;
+    --animate-skeleton: skeleton 1.6s ease-in-out infinite;
+
+    @keyframes live-ping {
+        0% {
+            transform: scale(1);
+            opacity: 0.55;
+        }
+        80%,
+        100% {
+            transform: scale(2.8);
+            opacity: 0;
+        }
+    }
+    @keyframes pop-in {
+        from {
+            opacity: 0;
+            transform: translateY(-4px) scale(0.98);
+        }
+        to {
+            opacity: 1;
+            transform: none;
+        }
+    }
+    @keyframes rise-in {
+        from {
+            opacity: 0;
+            transform: translateY(8px) scale(0.985);
+        }
+        to {
+            opacity: 1;
+            transform: none;
+        }
+    }
+    @keyframes slide-in {
+        from {
+            opacity: 0;
+            transform: translateX(24px);
+        }
+        to {
+            opacity: 1;
+            transform: none;
+        }
+    }
+    @keyframes fade-in {
+        from {
+            opacity: 0;
+        }
+        to {
+            opacity: 1;
+        }
+    }
+    @keyframes skeleton {
+        50% {
+            opacity: 0.45;
+        }
+    }
 }
 
-/* ---------- Dark, the default: Aperture's dark with its film grain ---------- */
-:root[data-theme='dark'] {
-    color-scheme: dark;
-    --bg: #0b0b0b;
-    --bg-subtle: #0f0f10;
-    --surface: #141414;
-    --surface-2: #1a1a1a;
-    --surface-3: #222222;
-    --raise: #262626;
-    --line: rgba(255, 255, 255, 0.08);
-    --line-strong: rgba(255, 255, 255, 0.14);
-    --ink: #f5f5f5;
-    --ink-2: #c4c4c4;
-    --ink-3: #8a8a8a;
-    --accent: #4d8dff;
-    --accent-ink: #8ab4ff;
-    --accent-soft: rgba(77, 141, 255, 0.12);
-    --on-accent: #0a0a0a;
-    --btn-bg: #f5f5f5;
-    --btn-ink: #0b0b0b;
-    --success: #4ade80;
-    --success-soft: rgba(74, 222, 128, 0.12);
-    --warning: #fbbf24;
-    --warning-fill: #fbbf24;
-    --warning-soft: rgba(251, 191, 36, 0.12);
-    --danger: #f87171;
-    --danger-ink: #f87171;
-    --danger-soft: rgba(248, 113, 113, 0.12);
-    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.5);
-    --shadow-btn: 0 1px 2px rgba(0, 0, 0, 0.5), 0 10px 24px -12px rgba(0, 0, 0, 0.9);
-    --shadow-pop: 0 1px 2px rgba(0, 0, 0, 0.4), 0 18px 48px -16px rgba(0, 0, 0, 0.85);
-    --shadow-rail: inset 0 1px 0 rgba(255, 255, 255, 0.04), 0 24px 48px -28px rgba(0, 0, 0, 0.9);
-    --overlay: rgba(0, 0, 0, 0.62);
-    --rail-bg: var(--surface);
-    --console-bg: var(--bg);
-    --term-fg: #d4d4d4;
-    --term-dim: #8a8a8a;
-    --term-cyan: #22d3ee;
-    --term-green: #4ade80;
-    --term-yellow: #fbbf24;
-    --term-red: #f87171;
-    --term-magenta: #e879f9;
-    /*
-   * Aperture's film grain (site/grain.css), copied as is: four tiles of 59, 67,
-   * 73 and 89px, prime sides so the stack never repeats on one screen. Dark
-   * surfaces only; on white it reads as dirt.
-   */
-    --grain:
-        url('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADsAAAA7BAMAAAA3C++AAAAAMFBMVEX///////////////////////////////////////////////////////////////9Or7hAAAAAEHRSTlMAAQIDBAUGBwgJCgsMDQ4PPFyWBgAAA69JREFUeNo1VcuV5DYMBED5DlDeO8ieAEj1BKBeR+D3nH8sroJm56SWSKB+wIh6RF7qLvwbohkp+DVUnj/VfLtsV7wNUZzGF5shcooEnr9XiIubtJbm20Xn9FTjZVMVlNMlS8UkX3jtfaiZs2OgIr7mUDXPPqLFMJ1b1GUJriYg4eDfTeI0l0CJSZREO/6dFpKBeuyeYherJZ6k4XvqBgB/WfokMXtNkFoamTh3i5mN+NbxjY+nXiQ1gPtQigHcgNhTgf73kHGcgDPFeJVstR0n1LBSCWiuie9RqhHBSjkCnU4fYv0fKUnjGFCqlJ7gC1HwPmaRwZNuO0HQpY/O0lBc7WwlIOC7r+zgKb2JdrSbNAdG3cvk2viwcYGFZAAGHQSnKA/9eNzEcaNnIedeCqAmCqjpRaL5LV43Q7pYBOSdBJmmfmtPhoEVD5dzuOQXLFlNWuZn8Ld00oc60PbBZo6nmfJwlBO/QAR4kR/7bWLDHrOgNvGll8CyRoPvkwVw+cMr4lfEDVf11ibzi+cpV8/FC9KdsQJqFGjO4Mlo7s3IGSSiQUblrU9jJxBR9kYEd6lGW1eAJiKMZyg8UAhnSAoZqfFAPwTVD7NL3rF73495vGqcD/1RGmolzWSGM+kXOqEp8TzNeKj/KYuYyHvjLY7DiS5fiCHINvroA9LCwtjZDSe3J4CNcHuaw8rQqqR0HK3ZZbrDlP+gl4HlyzBJ9I89VtmsdSEgFVqdfD6IqmWjXFUPakMiKjU5FrMP9FzyNIZpoAj38Sverijas+oCrictQSseR9GbU5XB/DLiFRM18O9yK2fdwNz83eDmapwNYg0cvEGQpoIFV5MytRwipD3AqvTuZklYvhjARXcXkqOdgUaqOhgDjccHYP/EHd/oj1ZauVMwsJDA6L++ycQ4G5Dnlke6FRkb7K6rplaP9F8ApX8Je5sdwWFlGpnbm2bUxIU3tYGJv7BImQttKN34cVudR6OXACREGHkSl/6kJNPjhcUEzVWXc/5gEHi+HSsG6K9u32pTPlxWjxwMLwq0rCRzGHB5cLJeVA1FejZuPI6bc9dgwpXX78GB0E/IwitvGGm0yZ79mRFhL+Hb7s/gAlCAL/MXAysXQ8OZcIx2KFe7VDZr9TSu0wWOl5dOyuWOelwtcP14puz5x8FwHvhUMZhM1ac2A4D+gj3MgdT4qDLtaO01Tg4VsXhn2jOKFVicarpvrf8xgOIYH2Wsrf+s8OBeVKw7LD1we3MGR+1glf8BpklYEpPfM5IAAAAASUVORK5CYII='),
-        url('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEMAAABDBAMAAAA15KVAAAAAMFBMVEX///////////////////////////////////////////////////////////////9Or7hAAAAAEHRSTlMAAQIDBAUGBwgJCgsMDQ4PPFyWBgAABMJJREFUeNo9VkFyJDkIBNS+g2TfkWoeoKrevVd7PzAR+/+/bCbtWU/Y065CKEkywTJVTtGpKinS/TtVPt1kyxLzUMGXuuN/FzPTEH4S36k7t7gPlSby6jj+leqzp4l/bUGkdgZu7XieCLXompIZkmEuQxpOIvPCNcxbd3VvQjR4YT7Fu2u2U/H8FGSRZwt9Pn0hYCICyHL5nNlv3OBxEZMQTTZfOq8DSY+J9D4idKEsYKhMbny8JeqyQFV4w8KGs0gCQ6kPppuOz4KUYUaUBvAI138RBJYMePneAweQamjiaSd5t6B+BxM9p1sDuy7NcT/jDSUgC4HLd8fJ5RcwBB519Y23gbzJQAMdM5ldHa+jAalI5MftFzl00IoOBYLljOrJIjld2MxR1E4WqIBw8yGBKtCxVG/q5kWL2uF+Fj8dQYheKYB5foviRlkAguSQSrJ4TTQX8NWKEDIHwFFVySvYHlwEyASOmPM4ZBKkHZCIMpVTJm6paN5BzoJHxAYEJ53cvunq9iMRNmrULx64Ph9ohwrwob2AC0jZwPbub0mjxjh1BqE0SITYoLJbDmIkYioiJOLCT/AQ7u0f6ZeFpqOT4BUB6CNVitu/XY6TrhgjydtbEzJdJ2PJRsEcTxyYmhtygM3kMjB4NUhOr0U+oAmV+qdtth8HGES/iGtqtKYyty6lOmG+YNvyjMiIsuTUl57D+AtBbJhS/ldzNWWeAJKoAhSWj6dR1pIOgeUJelEvEPkH/JCAxbOLrHSl/eYXWUx2AT/68DIHWwwZT+JMtap41IyouHcl3q9k11cvnS2Puhf5cOAlDUxvflzs/95mHA3g82IU2o8Ak7ATV+IDhsHsrMBXI0hDBbQG725Q5jAv2ChalWYIvQyzxTmKsne95d7Q+WAXzVyRxV4cAAotfADng6BfnISjAQuA4j66rVSnD1zHvBBX7wOfYS7awUnVpkd/0Sw1K9+HIH844jEU9kWp5OJtPmRa0D/vcIciZvkNgvyEItqD3q720gEI5ejj+bFNb04HpazexsA7oUgzDuSd4OlxKJQC/Y7qJS2gBFUWzdJHYiRL1Gjp0DYyQQdbDVLV8p7lwMsP1GS/iZGlhPZ438qQJ65CrT1meA5mDdQKwmRjglCwE8VOtPARWBT35DhE/cv3wF4B/1mqQoVRQzCoKO4NWLTX9Ock0ZG28WlxK8irLKtQMJxQg2dNXPE4TV72u7+3lZUKFGZ8prFfzmGANTGKUSR1ei1Jyu8mn2m914mTBkEB90HzPjhIgQ2s/XpMplmy3eddQxisS0P7aoDiOfmFiaMmILeNxt9OFC6ftiam1NkudkKu3vN+S2R2W88yMjI2+Em5ZOfA6s29k+4H5HvWgPnOZW9VaS0q+3EZPYC9yumNNkE7YA87BgLgKGSGfdNBHCyUoMzFNmG3GJXOae0HqInRhBdiYpDqzgnRWc0LoieAi7O6NidXvHNNKu0MYRoX6QoKPOXOM+UtOO5u2q+Dh4muN9WiGjdv7l90ZqINdCxW66LdufOVkTWZ5Q+f0CaYYMsoY3xzaXAjUa+IafAVUZQD7vkXl7dtEufvv1h4wI4nr/KSJ6/Fw402llz410nPGlBXctPXRO1CCe3m/wHN42/YGRnhBAAAAABJRU5ErkJggg=='),
-        url('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEkAAABJBAMAAACDXRbvAAAAMFBMVEX///////////////////////////////////////////////////////////////9Or7hAAAAAEHRSTlMAAQIDBAUGBwgJCgsMDQ4PPFyWBgAABZVJREFUeNotVlGy3DYMIynnn5Rf/ik5B5C9F7DTHuC1vf9dCtDZmZ21tRJFAiAkcTc9JUNdJWWFtiWq0jWX2i6ZXczFXd2WOp8OETGMqRi+EvpTNA88CV7VxAeeBtZ/QmaIeB6X6Lo1G1bh3a4U7Sammo7IWBTSLA1x+yYVQ3x6qtneRRtnRsrIdE1LH2FcpSnTzPiDcR1NKx+xMPxi2JrIjt9nItdhiI/aeibqEz9QgSKf9F+jyy4yuXZDxROFBcBwzpeeKsMlfC5BPJvNWQWCNdZ8ztbiNxLvrN6lNQKBNRp6IOnCpT7GNS59Hznf0U8jiunB+hC1qw6uzQJ3DOTQsQTb+TK/s+sxA6lgznoIimS38YYlZAN/dTnb8s5aHMghR0DlqC0bqgCXY8as8vg5B/704Xa7YqwzUModEo0sAFVJQwLJkhPInScmfZ2xvxAMlN3UG3OSZ1VqSF8Bg+qxBXdB6j8IdQ5sQTy2Snh3qAhl31iARYSPX9KAl1b4eyiS3ljCPsgXiVMkZKxPbX2kIAXMkeB2deZqPaHPIQQTCtkpU2w2tH7srVwGVM8SbEOgwQTdN0bL3/5TL0BciiaS4bV27uAHswb2w+IP1lixQxIT812eNzYGKXX0lFLf4OwsjuRGYQwFPDHWuy5fzKlTwS1qrcncSSoxV1DoHZ3AbdCJaId3A2BO8Va+v9C0BA6Btu6W6ztfffUG4muhj6f2PZ3yzB3pTQbpGxOB4pf0rzH7qy7gCLRBLZ4wv7MfuxxV6WJs1BsQTFjGUkEFCOzeUi5FELgGhlHQIHbgGMHAmkG/Q/pVSaM/BrD9Frk2kEtCRR+JtbrEXCeKj1s5D+gL2T/n0SkA58aM4EnH8Ohg1FDXpfbt3JH/7rSF9L4voRnsXgiSrykj5AyKw/TlCXGeDXUHBEj30mqG2l0G2pZsjddSPKk8bk8WOxuKg/RDZC7QH9IS6t7pj4jsyIBtqL8ZZVg1DlszqqcctiYT0aJmk/K5dWgpOfDKq1d7lS/fWEp7hiYGnRH5BQmohoAlYWNbg4kgX7ALVY1dC3JEY0lWulmgroYwMmGqg2ULLN+OMoFw+sdbLDbA3KVlkCHw/2azjI0pl+fL+mNxFfHCGDr6X2K4hBJMEE2PBTLl4Lb7QVTRyf7VdcNGD9MaUlJn8nR9tHU1h7ZeXcQkYP3J/uPJA4qBICpCa+IhLRq1qovJQcOFSh1tQKjNsLvsKIhkfZAMGIxA9+4ldJoOXRMK0IyyvdFCKQv4DkI9k5sDDvQb9MItKhZF0c/aiANqHakvWCGPVTREGW4RAcGAOICNLLX7tmDayQMNzUEOd1vQOCpvjQk9fnlXz9dXSpSW9UYjnGVifwddJtFpsUmjDiEqypX13GL/aOyBVFEjNLv1ci5aXiuF+YzqhFknGDg5DxJDieOsUPIgPAEh7ZSG8d1z4yWA0oZFnaDN76llcUmmfOWo10n7oolf0M18Gv2FDlwkD61D1oLH9h4AQEksULc1mXwjqx9cJvw9PKHEzHNW92XLlUE/7BCZDKqTuLEpPuTX0CPOu4txkv64X9BeqhyWo+OAi6bvcu5QYlkyzUBx/mFwUUpoi4ay4dPQ5aDdY3e/KRPsi9gOdyvTwPPJNO0EgzzTll6g/z87/6Ka4DjfEEVdeMrE/iST5QjYzN4bGEiZdSfiGY5v7GUKnmcf2BOSQNVSXuU4coAV1iyvm5XZqD7sBHNCG3Mrqy7D5qEJVXAJcVzcvPGo5vG3yarLUx5x8cjjPJ4FuHR1qMrcWGFd+kDEr+wn9cG7XcCqcKVqNyZ/NuFVhtXhiOS1Bkqj+dOC4XKwYWpz0oMuwIU7WwHpX1rndllYxHgtDDfCBogH8jClB1djVTujV3BzABhKhpBcCWmusAtJXvk/3EuEuKy6NTcAAAAASUVORK5CYII='),
-        url('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAFkAAABZBAMAAACnJZWcAAAAMFBMVEX///////////////////////////////////////////////////////////////9Or7hAAAAAEHRSTlMAAQIDBAUGBwgJCgsMDQ4PPFyWBgAACBxJREFUeNo9l0ty5bYSRAuF63kBVM8BUm8Osr2Aqw4vwA7vfy8+WVA/qaPFL1CfzKyk2VeUaGYxwtssIzgspbRaLA7jjnsxs8FTa9hh+pk8785xs9F68EpZNuaY3d/GmUV0463vw8YKLy0625h6egy/uOW2SsywEsO0Ygtd46Q4e3h3K7PkNSslvGs9nbPEsDl+2ot7nNxudw+LHmUOtuXYTYn0XEiRVBunNY/HrQ1eCRJjcWutRCg//tM2dfGonW316cNWG9pa14mnEZoyLzWsLf5yfymNKH54D2fTQm7F17pNy/axQ9bl0nU4lIBrvTKpg7VghbhJ3YsXRVL4Pa3b/llNrek3f3jXXqxys9Scyu9s9tiO/affOuq0yG5r5VW99lyJdGYlDsXlo5U13CoNWaqrkwl73hTB54i/47yDLebRskZTcZT2arl0p0n9ZfekGURTBBCiHVG19Zg70XeWk3hZscShoONs2cExFiAJIUAvqO3PQaUMDJAOKwzh76QBMRWSq5Wk51QnWqu7/VxR295fay5aLDwMq1dTQB6A7eCpUU+qrH3bsUpba4afQ1DQ+73ZR6kUYlKZckaoesL2ynYL2D/Pbl7uGKCrEYIJYEX1eLHckagcie92KnwwWJpTABUrTmJdWom0hVZu6wVqs06jrrSk9wOahXJpYzOF9wi9KXEj9tOUIUsWrdZLRp/hlQ+HSFEepwWJFZh1sg/7tv0Mq6qF8acCHxlEol6pFtJxe3WRLWCRBAB+HFQz+dmijRH3ohanUGu+4IoiSThwqnTcsvs89PJakqSmCqMUtSALZL6o3Kj2zooqRVfTl8hDEYTo8EvRgQ3Tay+tcma1R3a7jSLOTYHAaAcdGsAM8sBnou2nCksHx3sqJmW9wMvuQivjHggU7VlzU6UM/8peUGYV6i11Yq91C2qbr7UJpGFiEAWSPI6LVCZb+l9K4ci8716F0OZP3F1gfZUUSzRH/3iQR9V20hhVKcIFl3ixriNWtY/Uk2onV15tZgBqy6oqcR/IsHNbML1B11IZlCDb+JD41XYVkaAhf0N6I0Wh2k0bOyUGUmLNLxVOreQt8YRABYfk2RB3EGdhfyjp+t2vciRk7et29pgpdlP5qBIfyUUCSoU0+7ikJweHDSiqMYp0+Tfw9euVkxoKyzbZeRjxjHJ8mUCquLc8HGwYqFGSzCIxSrQQ4kVT6Q1DpKtTJFJnZO/DrpXTQXv65qha97BoQ3kyp5oV/mGzWzYnibGW5J3TPZ/IY4gk0qIm2S1Lw0lUG5pVKyMqTw6NlPcY/7NjtgYWpag1xhbw4U3aUsaTRWBsufgvOPdOLroQunO1DAXmUEVRkgjOpWCq71EAB2r1sZKIrqhzYIpo5Xsy7s4Q0SkYIvuXVAhSCJOayYkqaDOENE2vE40rKOYvNfGkaB+PKrBQ58vV6t7FzLtvgRqaQ9nLY34IQkS3NAGFqQF2HgaowD1kAb4UJbEUiFEyvs//S9gf6hSMR//fe20LzSkCRpWhl1jju/M5L5kegs1Ww3FO+1OE9Bx4U43IwbMcjDF6UmIO849yOFtDURLHHbyZ2V/fqxq1fL/kNiQBJwi45TvojabpEB79H8vKql5cYJcDtbN5tleVDuCeHmuflr5p3Hu8WFya7HqdeFit9JQaBAn5DLpRi21waubUlJ3nFipkH95kWMSlwSSfDGsKvqImn6yK698DUwH8HmnW6r5/WA7YSfLai8M6CeN1hH0z6ytze+jI2vxl82+h0zAdUkqxvgsfqAYooz7UcOwZkGok4nKbRLpmsMimLBwIoLXqQ1oMHv1sIHyWbzPYOg0+o6yk67AfJ7VBLphnPWTGQBwQxoDI3aH9WdmbKtZ62B6BDCtQo3zf0BWjJumu8eKhpcerI5lrV5h9V3TPkboHdg5bFI+Mup9YXlNXEJ40slR7nmkdm6zXek8iQdWXPGoAoJ8aHUM+gEnaVJn1oD0UDJznhJzSSJwjmHVZTEv6RY5GlcXa9ajWz7Y6Jl8rVWfwCdu3hLFS9YsQn1SzHPEzxyUan9dCXQYnKHQSQtkiaBjFJE5s24o+plNzXyP+xZ+oSf6O0bdtLJrNUeNQdVLhwERW6g+AR9coFiTrsfW7SN1/4+jSeJu2jnS0kEZPwTUe/CvjQXUFXLwtgfdjU0DzksIztjynyXlGVmj8Y2lh12bGAxbazD0Rdcsa6SvDRdFBa1B/Cj5kUNsedTlK1YOp7vUcYPK60S/Nytgd2LGjUyo+SNQqCABeL1qlpp8fmU2NU2+o6EXDBTR9KI2lPoBe29OTpk+QxcH95EwY+giwa/g534smUtRaU4LZRSl/aLA8WJr9JVBEGIpErml2cd9S4fRd8mrjiKXGy3BvB6WwTpeFSKdFLPEGBvdMh9l+oXqZaF2fQLmkGRJL9bQQHkIk11Myf3MCU3rBk7MvYafJdZEiJ5hAzXfk70jTj5IItMJ21yiMVJirpqEE57j/GukLgY0EU+rKBOzsJ0+WvmV/nS25cEH6fLTMlNXffv9tCZkNKzsP+5tjtqjAdYCS3sr2WGKuezqtsO0z0msMKp3eNbLjbK65g/Lk5+QPRoC+ZuVlYV9647kNj0p03HLCCdZLWfpsDBsZMDWcQC7qBFflk/Pj4YjtkQlJYzc2guGe3VXzdqY55lMlDXRODdzTiv2J5XvnNzb4UM8rChZSlG2/7NtHCCRiHwaq2efZR8LWUdH0UiBfI7ek89syxFjXN+y9cHb6lvB16asxBWmO12ij2X/aRr7avTM1pgAAAABJRU5ErkJggg==');
+/* ---------- Per-theme keys: utilities read the raw token directly ---------- */
+@theme inline {
+    --color-transparent: transparent;
+    --color-current: currentColor;
+
+    --color-bg: var(--bg);
+    --color-bg-subtle: var(--bg-subtle);
+    --color-surface: var(--surface);
+    --color-surface-2: var(--surface-2);
+    --color-surface-3: var(--surface-3);
+    --color-raise: var(--raise);
+    --color-line: var(--line);
+    --color-line-strong: var(--line-strong);
+    --color-ink: var(--ink);
+    --color-ink-2: var(--ink-2);
+    --color-ink-3: var(--ink-3);
+    --color-accent: var(--accent);
+    --color-accent-ink: var(--accent-ink);
+    --color-accent-soft: var(--accent-soft);
+    --color-on-accent: var(--on-accent);
+    --color-btn: var(--btn-bg);
+    --color-btn-ink: var(--btn-ink);
+    --color-success: var(--success);
+    --color-success-soft: var(--success-soft);
+    --color-warning: var(--warning);
+    --color-warning-fill: var(--warning-fill);
+    --color-warning-soft: var(--warning-soft);
+    --color-danger: var(--danger);
+    --color-danger-ink: var(--danger-ink);
+    --color-danger-soft: var(--danger-soft);
+    --color-on-danger: var(--on-danger);
+    --color-overlay: var(--overlay);
+    --color-rail: var(--rail-bg);
+    --color-console: var(--console-bg);
+    --color-console-hover: var(--console-hover);
+    --color-term-fg: var(--term-fg);
+    --color-term-dim: var(--term-dim);
+    --color-term-cyan: var(--term-cyan);
+    --color-term-green: var(--term-green);
+    --color-term-yellow: var(--term-yellow);
+    --color-term-red: var(--term-red);
+    --color-term-magenta: var(--term-magenta);
+    --color-term-blue: var(--term-blue);
+    --color-hover: var(--hover);
+    --color-active: var(--active);
+    --color-chart-muted: var(--chart-muted);
+    --color-focus-ring: var(--focus-ring);
+    --color-grid-dot: var(--grid-dot);
+
+    --radius-xs: var(--r-xs);
+    --radius-sm: var(--r-sm);
+    --radius-control: var(--r);
+    --radius-box: var(--r-box);
+    --radius-card: var(--r-card);
+    --radius-dialog: var(--r-dialog);
+    --radius-rail: var(--r-rail);
+    --radius-pill: var(--r-pill);
+
+    --shadow-sm: var(--elev-sm);
+    --shadow-btn: var(--elev-btn);
+    --shadow-pop: var(--elev-pop);
+    --shadow-rail: var(--elev-rail);
+    --shadow-lg: var(--elev-lg);
 }
 
-/* ---------- Light: Aperture's light, white and very light grey panels ---------- */
-:root[data-theme='light'] {
-    color-scheme: light;
-    --bg: #ffffff;
-    --bg-subtle: #fafafa;
-    --surface: #ffffff;
-    --surface-2: #f6f6f7;
-    --surface-3: #efeff1;
-    --raise: #ffffff;
-    --line: rgba(10, 10, 12, 0.08);
-    --line-strong: rgba(10, 10, 12, 0.14);
-    --ink: #1c1d1f;
-    --ink-2: #4b5058;
-    --ink-3: #6b7079;
-    --accent: #1f5bea;
-    --accent-ink: #1d4fd7;
-    --accent-soft: #edf2fd;
-    --on-accent: #ffffff;
-    --btn-bg: #1c1d1f;
-    --btn-ink: #ffffff;
-    --success: #137337;
-    --success-soft: #ecfdf3;
-    --warning: #a34b08;
-    --warning-fill: #d97706;
-    --warning-soft: #fff7e6;
-    --danger: #dc2626;
-    --danger-ink: #b91c1c;
-    --danger-soft: #fef2f2;
-    --shadow-sm: 0 1px 2px rgba(16, 17, 19, 0.06);
-    --shadow-btn: 0 1px 2px rgba(0, 0, 0, 0.22), 0 10px 24px -12px rgba(0, 0, 0, 0.45);
-    --shadow-pop: 0 1px 2px rgba(16, 17, 19, 0.06), 0 18px 40px -16px rgba(16, 17, 19, 0.28);
-    --shadow-rail: 0 1px 2px rgba(16, 17, 19, 0.06);
-    --overlay: rgba(16, 17, 19, 0.32);
-    --rail-bg: var(--bg-subtle);
-    --console-bg: var(--bg-subtle);
-    --term-fg: #2a2b2e;
-    --term-dim: #6b7079;
-    --term-cyan: #0e7490;
-    --term-green: #137337;
-    --term-yellow: #a34b08;
-    --term-red: #b91c1c;
-    --term-magenta: #a21caf;
-    --grain: none;
+@layer base {
+    /* ---------- Raw tokens shared by both themes ---------- */
+    :root {
+        --r-xs: 5px;
+        --r-sm: 8px;
+        --r: 10px;
+        --r-box: 12px; /* added: the mockup's literal 12px (status bar, switcher), also popovers and toasts */
+        --r-card: 14px;
+        --r-dialog: 16px; /* added: Aperture's modal */
+        --r-rail: 18px;
+        --r-pill: 9999px;
+        --font: var(--font-sans);
+        --mono: var(--font-mono);
+        --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+        --rail-width: 272px;
+        --rail-gap: 12px;
+        --rail-pad: 8px;
+        --drawer-width: min(320px, calc(100vw - 40px));
+        --mobilebar-height: 60px;
+        /* added: one stacking order for the shell and its layers (the mockup sets 30, 40, 55, 60, 100) */
+        --z-dock: 2;
+        --z-rail: 30;
+        --z-mobilebar: 40;
+        --z-popover: 50;
+        --z-scrim: 55;
+        --z-drawer: 60;
+        --z-dialog: 70;
+        --z-toast: 80;
+        --z-skip: 100;
+    }
+
+    /* ---------- Dark, the default: Aperture's dark with its film grain ---------- */
+    :root,
+    [data-theme='dark'] {
+        color-scheme: dark;
+        --bg: #0b0b0b;
+        --bg-subtle: #0f0f10;
+        --surface: #141414;
+        --surface-2: #1a1a1a;
+        --surface-3: #222222;
+        --raise: #262626;
+        --line: rgba(255, 255, 255, 0.08);
+        --line-strong: rgba(255, 255, 255, 0.14);
+        --ink: #f5f5f5;
+        --ink-2: #c4c4c4;
+        --ink-3: #8a8a8a;
+        --accent: #4d8dff;
+        --accent-ink: #8ab4ff;
+        --accent-soft: rgba(77, 141, 255, 0.12);
+        --on-accent: #0a0a0a;
+        --btn-bg: #f5f5f5;
+        --btn-ink: #0b0b0b;
+        --success: #4ade80;
+        --success-soft: rgba(74, 222, 128, 0.12);
+        --warning: #fbbf24;
+        --warning-fill: #fbbf24;
+        --warning-soft: rgba(251, 191, 36, 0.12);
+        --danger: #f87171;
+        --danger-ink: #f87171;
+        --danger-soft: rgba(248, 113, 113, 0.12);
+        --on-danger: #0b0b0b; /* added: Aperture's kit */
+        --elev-sm: 0 1px 2px rgba(0, 0, 0, 0.5);
+        --elev-btn: 0 1px 2px rgba(0, 0, 0, 0.5), 0 10px 24px -12px rgba(0, 0, 0, 0.9);
+        --elev-pop: 0 1px 2px rgba(0, 0, 0, 0.4), 0 18px 48px -16px rgba(0, 0, 0, 0.85);
+        --elev-rail: inset 0 1px 0 rgba(255, 255, 255, 0.04), 0 24px 48px -28px rgba(0, 0, 0, 0.9);
+        --elev-lg: 0 30px 80px -30px rgba(0, 0, 0, 0.85); /* added: Aperture's kit (dialogs) */
+        --overlay: rgba(0, 0, 0, 0.62);
+        --grid-dot: rgba(255, 255, 255, 0.08); /* added: Aperture's kit (empty states) */
+        --rail-bg: var(--surface);
+        --console-bg: var(--bg);
+        --term-fg: #d4d4d4;
+        --term-dim: #8a8a8a;
+        --term-cyan: #22d3ee;
+        --term-green: #4ade80;
+        --term-yellow: #fbbf24;
+        --term-red: #f87171;
+        --term-magenta: #e879f9;
+        --term-blue: #60a5fa; /* added: ANSI blue, DESIGN.md v1 palette, 7.74:1 on the console */
+        /*
+     * Aperture's film grain (site/grain.css), copied as is: four tiles of 59, 67, 73 and 89px,
+     * prime sides so the stack never repeats on one screen. Dark surfaces only; on white it reads
+     * as dirt. Painted by body (the canvas) only: cards, the rail, charts and the console stay flat.
+     */
+        --grain:
+            url('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADsAAAA7BAMAAAA3C++AAAAAMFBMVEX///////////////////////////////////////////////////////////////9Or7hAAAAAEHRSTlMAAQIDBAUGBwgJCgsMDQ4PPFyWBgAAA69JREFUeNo1VcuV5DYMBED5DlDeO8ieAEj1BKBeR+D3nH8sroJm56SWSKB+wIh6RF7qLvwbohkp+DVUnj/VfLtsV7wNUZzGF5shcooEnr9XiIubtJbm20Xn9FTjZVMVlNMlS8UkX3jtfaiZs2OgIr7mUDXPPqLFMJ1b1GUJriYg4eDfTeI0l0CJSZREO/6dFpKBeuyeYherJZ6k4XvqBgB/WfokMXtNkFoamTh3i5mN+NbxjY+nXiQ1gPtQigHcgNhTgf73kHGcgDPFeJVstR0n1LBSCWiuie9RqhHBSjkCnU4fYv0fKUnjGFCqlJ7gC1HwPmaRwZNuO0HQpY/O0lBc7WwlIOC7r+zgKb2JdrSbNAdG3cvk2viwcYGFZAAGHQSnKA/9eNzEcaNnIedeCqAmCqjpRaL5LV43Q7pYBOSdBJmmfmtPhoEVD5dzuOQXLFlNWuZn8Ld00oc60PbBZo6nmfJwlBO/QAR4kR/7bWLDHrOgNvGll8CyRoPvkwVw+cMr4lfEDVf11ibzi+cpV8/FC9KdsQJqFGjO4Mlo7s3IGSSiQUblrU9jJxBR9kYEd6lGW1eAJiKMZyg8UAhnSAoZqfFAPwTVD7NL3rF73495vGqcD/1RGmolzWSGM+kXOqEp8TzNeKj/KYuYyHvjLY7DiS5fiCHINvroA9LCwtjZDSe3J4CNcHuaw8rQqqR0HK3ZZbrDlP+gl4HlyzBJ9I89VtmsdSEgFVqdfD6IqmWjXFUPakMiKjU5FrMP9FzyNIZpoAj38Sverijas+oCrictQSseR9GbU5XB/DLiFRM18O9yK2fdwNz83eDmapwNYg0cvEGQpoIFV5MytRwipD3AqvTuZklYvhjARXcXkqOdgUaqOhgDjccHYP/EHd/oj1ZauVMwsJDA6L++ycQ4G5Dnlke6FRkb7K6rplaP9F8ApX8Je5sdwWFlGpnbm2bUxIU3tYGJv7BImQttKN34cVudR6OXACREGHkSl/6kJNPjhcUEzVWXc/5gEHi+HSsG6K9u32pTPlxWjxwMLwq0rCRzGHB5cLJeVA1FejZuPI6bc9dgwpXX78GB0E/IwitvGGm0yZ79mRFhL+Hb7s/gAlCAL/MXAysXQ8OZcIx2KFe7VDZr9TSu0wWOl5dOyuWOelwtcP14puz5x8FwHvhUMZhM1ac2A4D+gj3MgdT4qDLtaO01Tg4VsXhn2jOKFVicarpvrf8xgOIYH2Wsrf+s8OBeVKw7LD1we3MGR+1glf8BpklYEpPfM5IAAAAASUVORK5CYII='),
+            url('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEMAAABDBAMAAAA15KVAAAAAMFBMVEX///////////////////////////////////////////////////////////////9Or7hAAAAAEHRSTlMAAQIDBAUGBwgJCgsMDQ4PPFyWBgAABMJJREFUeNo9VkFyJDkIBNS+g2TfkWoeoKrevVd7PzAR+/+/bCbtWU/Y065CKEkywTJVTtGpKinS/TtVPt1kyxLzUMGXuuN/FzPTEH4S36k7t7gPlSby6jj+leqzp4l/bUGkdgZu7XieCLXompIZkmEuQxpOIvPCNcxbd3VvQjR4YT7Fu2u2U/H8FGSRZwt9Pn0hYCICyHL5nNlv3OBxEZMQTTZfOq8DSY+J9D4idKEsYKhMbny8JeqyQFV4w8KGs0gCQ6kPppuOz4KUYUaUBvAI138RBJYMePneAweQamjiaSd5t6B+BxM9p1sDuy7NcT/jDSUgC4HLd8fJ5RcwBB519Y23gbzJQAMdM5ldHa+jAalI5MftFzl00IoOBYLljOrJIjld2MxR1E4WqIBw8yGBKtCxVG/q5kWL2uF+Fj8dQYheKYB5foviRlkAguSQSrJ4TTQX8NWKEDIHwFFVySvYHlwEyASOmPM4ZBKkHZCIMpVTJm6paN5BzoJHxAYEJ53cvunq9iMRNmrULx64Ph9ohwrwob2AC0jZwPbub0mjxjh1BqE0SITYoLJbDmIkYioiJOLCT/AQ7u0f6ZeFpqOT4BUB6CNVitu/XY6TrhgjydtbEzJdJ2PJRsEcTxyYmhtygM3kMjB4NUhOr0U+oAmV+qdtth8HGES/iGtqtKYyty6lOmG+YNvyjMiIsuTUl57D+AtBbJhS/ldzNWWeAJKoAhSWj6dR1pIOgeUJelEvEPkH/JCAxbOLrHSl/eYXWUx2AT/68DIHWwwZT+JMtap41IyouHcl3q9k11cvnS2Puhf5cOAlDUxvflzs/95mHA3g82IU2o8Ak7ATV+IDhsHsrMBXI0hDBbQG725Q5jAv2ChalWYIvQyzxTmKsne95d7Q+WAXzVyRxV4cAAotfADng6BfnISjAQuA4j66rVSnD1zHvBBX7wOfYS7awUnVpkd/0Sw1K9+HIH844jEU9kWp5OJtPmRa0D/vcIciZvkNgvyEItqD3q720gEI5ejj+bFNb04HpazexsA7oUgzDuSd4OlxKJQC/Y7qJS2gBFUWzdJHYiRL1Gjp0DYyQQdbDVLV8p7lwMsP1GS/iZGlhPZ438qQJ65CrT1meA5mDdQKwmRjglCwE8VOtPARWBT35DhE/cv3wF4B/1mqQoVRQzCoKO4NWLTX9Ock0ZG28WlxK8irLKtQMJxQg2dNXPE4TV72u7+3lZUKFGZ8prFfzmGANTGKUSR1ei1Jyu8mn2m914mTBkEB90HzPjhIgQ2s/XpMplmy3eddQxisS0P7aoDiOfmFiaMmILeNxt9OFC6ftiam1NkudkKu3vN+S2R2W88yMjI2+Em5ZOfA6s29k+4H5HvWgPnOZW9VaS0q+3EZPYC9yumNNkE7YA87BgLgKGSGfdNBHCyUoMzFNmG3GJXOae0HqInRhBdiYpDqzgnRWc0LoieAi7O6NidXvHNNKu0MYRoX6QoKPOXOM+UtOO5u2q+Dh4muN9WiGjdv7l90ZqINdCxW66LdufOVkTWZ5Q+f0CaYYMsoY3xzaXAjUa+IafAVUZQD7vkXl7dtEufvv1h4wI4nr/KSJ6/Fw402llz410nPGlBXctPXRO1CCe3m/wHN42/YGRnhBAAAAABJRU5ErkJggg=='),
+            url('data:image/png;base64,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'),
+            url('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAFkAAABZBAMAAACnJZWcAAAAMFBMVEX///////////////////////////////////////////////////////////////9Or7hAAAAAEHRSTlMAAQIDBAUGBwgJCgsMDQ4PPFyWBgAACBxJREFUeNo9l0ty5bYSRAuF63kBVM8BUm8Osr2Aqw4vwA7vfy8+WVA/qaPFL1CfzKyk2VeUaGYxwtssIzgspbRaLA7jjnsxs8FTa9hh+pk8785xs9F68EpZNuaY3d/GmUV0463vw8YKLy0625h6egy/uOW2SsywEsO0Ygtd46Q4e3h3K7PkNSslvGs9nbPEsDl+2ot7nNxudw+LHmUOtuXYTYn0XEiRVBunNY/HrQ1eCRJjcWutRCg//tM2dfGonW316cNWG9pa14mnEZoyLzWsLf5yfymNKH54D2fTQm7F17pNy/axQ9bl0nU4lIBrvTKpg7VghbhJ3YsXRVL4Pa3b/llNrek3f3jXXqxys9Scyu9s9tiO/affOuq0yG5r5VW99lyJdGYlDsXlo5U13CoNWaqrkwl73hTB54i/47yDLebRskZTcZT2arl0p0n9ZfekGURTBBCiHVG19Zg70XeWk3hZscShoONs2cExFiAJIUAvqO3PQaUMDJAOKwzh76QBMRWSq5Wk51QnWqu7/VxR295fay5aLDwMq1dTQB6A7eCpUU+qrH3bsUpba4afQ1DQ+73ZR6kUYlKZckaoesL2ynYL2D/Pbl7uGKCrEYIJYEX1eLHckagcie92KnwwWJpTABUrTmJdWom0hVZu6wVqs06jrrSk9wOahXJpYzOF9wi9KXEj9tOUIUsWrdZLRp/hlQ+HSFEepwWJFZh1sg/7tv0Mq6qF8acCHxlEol6pFtJxe3WRLWCRBAB+HFQz+dmijRH3ohanUGu+4IoiSThwqnTcsvs89PJakqSmCqMUtSALZL6o3Kj2zooqRVfTl8hDEYTo8EvRgQ3Tay+tcma1R3a7jSLOTYHAaAcdGsAM8sBnou2nCksHx3sqJmW9wMvuQivjHggU7VlzU6UM/8peUGYV6i11Yq91C2qbr7UJpGFiEAWSPI6LVCZb+l9K4ci8716F0OZP3F1gfZUUSzRH/3iQR9V20hhVKcIFl3ixriNWtY/Uk2onV15tZgBqy6oqcR/IsHNbML1B11IZlCDb+JD41XYVkaAhf0N6I0Wh2k0bOyUGUmLNLxVOreQt8YRABYfk2RB3EGdhfyjp+t2vciRk7et29pgpdlP5qBIfyUUCSoU0+7ikJweHDSiqMYp0+Tfw9euVkxoKyzbZeRjxjHJ8mUCquLc8HGwYqFGSzCIxSrQQ4kVT6Q1DpKtTJFJnZO/DrpXTQXv65qha97BoQ3kyp5oV/mGzWzYnibGW5J3TPZ/IY4gk0qIm2S1Lw0lUG5pVKyMqTw6NlPcY/7NjtgYWpag1xhbw4U3aUsaTRWBsufgvOPdOLroQunO1DAXmUEVRkgjOpWCq71EAB2r1sZKIrqhzYIpo5Xsy7s4Q0SkYIvuXVAhSCJOayYkqaDOENE2vE40rKOYvNfGkaB+PKrBQ58vV6t7FzLtvgRqaQ9nLY34IQkS3NAGFqQF2HgaowD1kAb4UJbEUiFEyvs//S9gf6hSMR//fe20LzSkCRpWhl1jju/M5L5kegs1Ww3FO+1OE9Bx4U43IwbMcjDF6UmIO849yOFtDURLHHbyZ2V/fqxq1fL/kNiQBJwi45TvojabpEB79H8vKql5cYJcDtbN5tleVDuCeHmuflr5p3Hu8WFya7HqdeFit9JQaBAn5DLpRi21waubUlJ3nFipkH95kWMSlwSSfDGsKvqImn6yK698DUwH8HmnW6r5/WA7YSfLai8M6CeN1hH0z6ytze+jI2vxl82+h0zAdUkqxvgsfqAYooz7UcOwZkGok4nKbRLpmsMimLBwIoLXqQ1oMHv1sIHyWbzPYOg0+o6yk67AfJ7VBLphnPWTGQBwQxoDI3aH9WdmbKtZ62B6BDCtQo3zf0BWjJumu8eKhpcerI5lrV5h9V3TPkboHdg5bFI+Mup9YXlNXEJ40slR7nmkdm6zXek8iQdWXPGoAoJ8aHUM+gEnaVJn1oD0UDJznhJzSSJwjmHVZTEv6RY5GlcXa9ajWz7Y6Jl8rVWfwCdu3hLFS9YsQn1SzHPEzxyUan9dCXQYnKHQSQtkiaBjFJE5s24o+plNzXyP+xZ+oSf6O0bdtLJrNUeNQdVLhwERW6g+AR9coFiTrsfW7SN1/4+jSeJu2jnS0kEZPwTUe/CvjQXUFXLwtgfdjU0DzksIztjynyXlGVmj8Y2lh12bGAxbazD0Rdcsa6SvDRdFBa1B/Cj5kUNsedTlK1YOp7vUcYPK60S/Nytgd2LGjUyo+SNQqCABeL1qlpp8fmU2NU2+o6EXDBTR9KI2lPoBe29OTpk+QxcH95EwY+giwa/g534smUtRaU4LZRSl/aLA8WJr9JVBEGIpErml2cd9S4fRd8mrjiKXGy3BvB6WwTpeFSKdFLPEGBvdMh9l+oXqZaF2fQLmkGRJL9bQQHkIk11Myf3MCU3rBk7MvYafJdZEiJ5hAzXfk70jTj5IItMJ21yiMVJirpqEE57j/GukLgY0EU+rKBOzsJ0+WvmV/nS25cEH6fLTMlNXffv9tCZkNKzsP+5tjtqjAdYCS3sr2WGKuezqtsO0z0msMKp3eNbLjbK65g/Lk5+QPRoC+ZuVlYV9647kNj0p03HLCCdZLWfpsDBsZMDWcQC7qBFflk/Pj4YjtkQlJYzc2guGe3VXzdqY55lMlDXRODdzTiv2J5XvnNzb4UM8rChZSlG2/7NtHCCRiHwaq2efZR8LWUdH0UiBfI7ek89syxFjXN+y9cHb6lvB16asxBWmO12ij2X/aRr7avTM1pgAAAABJRU5ErkJggg==');
+    }
+
+    /* ---------- Light: Aperture's light, white and very light grey panels ---------- */
+    [data-theme='light'] {
+        color-scheme: light;
+        --bg: #ffffff;
+        --bg-subtle: #fafafa;
+        --surface: #ffffff;
+        --surface-2: #f6f6f7;
+        --surface-3: #efeff1;
+        --raise: #ffffff;
+        --line: rgba(10, 10, 12, 0.08);
+        --line-strong: rgba(10, 10, 12, 0.14);
+        --ink: #1c1d1f;
+        --ink-2: #4b5058;
+        --ink-3: #6b7079;
+        --accent: #1f5bea;
+        --accent-ink: #1d4fd7;
+        --accent-soft: #edf2fd;
+        --on-accent: #ffffff;
+        --btn-bg: #1c1d1f;
+        --btn-ink: #ffffff;
+        --success: #137337;
+        --success-soft: #ecfdf3;
+        --warning: #a34b08;
+        --warning-fill: #d97706;
+        --warning-soft: #fff7e6;
+        --danger: #dc2626;
+        --danger-ink: #b91c1c;
+        --danger-soft: #fef2f2;
+        --on-danger: #ffffff; /* added: Aperture's kit */
+        --elev-sm: 0 1px 2px rgba(16, 17, 19, 0.06);
+        --elev-btn: 0 1px 2px rgba(0, 0, 0, 0.22), 0 10px 24px -12px rgba(0, 0, 0, 0.45);
+        --elev-pop: 0 1px 2px rgba(16, 17, 19, 0.06), 0 18px 40px -16px rgba(16, 17, 19, 0.28);
+        --elev-rail: 0 1px 2px rgba(16, 17, 19, 0.06);
+        --elev-lg: 0 30px 80px -30px rgba(16, 17, 19, 0.35); /* added: Aperture's kit (dialogs) */
+        --overlay: rgba(16, 17, 19, 0.32);
+        --grid-dot: rgba(10, 10, 12, 0.14); /* added: Aperture's kit (empty states) */
+        --rail-bg: var(--bg-subtle);
+        --console-bg: var(--bg-subtle);
+        --term-fg: #2a2b2e;
+        --term-dim: #6b7079;
+        --term-cyan: #0e7490;
+        --term-green: #137337;
+        --term-yellow: #a34b08;
+        --term-red: #b91c1c;
+        --term-magenta: #a21caf;
+        --term-blue: #1d4ed8; /* added: ANSI blue, DESIGN.md v1 palette, 6.42:1 on the console */
+        --grain: none;
+    }
+
+    /* Mixes of the theme's own tokens, redeclared wherever a theme is set so a forced subtree mixes
+     its own ink, not the root's. */
+    :root,
+    [data-theme] {
+        --hover: color-mix(in srgb, var(--ink) 6%, transparent);
+        --active: color-mix(in srgb, var(--ink) 8%, transparent);
+        /* Grey data marks (bars, shares, flat trends): half the ink holds 3:1 on every surface they sit
+       on, the light track included. */
+        --chart-muted: color-mix(in srgb, var(--ink) 50%, transparent);
+        --focus-ring: color-mix(in srgb, var(--accent) 22%, transparent);
+        /* added: the console's row hover. 6% (the mockup's --hover) takes the light theme's time
+       column to 4.24:1; 2% keeps it at 4.59:1. */
+        --console-hover: var(--hover);
+    }
+    [data-theme='light'] {
+        --console-hover: color-mix(in srgb, var(--ink) 2%, transparent);
+    }
+
+    /* ---------- Base ---------- */
+    html {
+        background-color: var(--bg);
+    }
+
+    body {
+        min-width: 320px;
+        min-height: 100dvh;
+        font-family: var(--font);
+        font-size: 14px;
+        line-height: 1.5;
+        color: var(--ink);
+        /* Every number on the page in tabular figures, so columns of values line up. */
+        font-variant-numeric: tabular-nums;
+        background-color: var(--bg);
+        /* The canvas carries the grain; cards stay flat over it (Aperture's client/shell.css). */
+        background-image: var(--grain);
+        -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
+        text-rendering: optimizeLegibility;
+        overflow-x: clip;
+    }
+
+    :where(code, kbd, samp, pre) {
+        font-family: var(--mono);
+        font-variant-ligatures: none;
+    }
+
+    /* No 700 anywhere: emphasis inside text is the 600 of the titles (500 in pills, set there). */
+    :where(b, strong) {
+        font-weight: 600;
+    }
+
+    ::selection {
+        background: var(--accent);
+        color: var(--on-accent);
+    }
+
+    /* The outline follows each element's own radius; fields draw their ring instead (DESIGN.md §8).
+     Inside a group padded 3px, the 2px offset would cover the group's border: segment items take
+     focus-visible:outline-offset-1, theme-switch buttons focus-visible:outline-offset-0. */
+    :where(a, button, summary, [tabindex], [role='button']):focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 2px;
+    }
+
+    /* While the theme flips, every colour changes at once (removed two frames later by the toggle). */
+    .is-theming *,
+    .is-theming *::before,
+    .is-theming *::after {
+        transition: none !important;
+    }
+
+    /* The page under an open drawer does not scroll. */
+    html.drawer-open {
+        overflow: hidden;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+        *,
+        *::before,
+        *::after {
+            animation-duration: 0.01ms !important;
+            animation-iteration-count: 1 !important;
+            transition-duration: 0.01ms !important;
+            scroll-behavior: auto !important;
+        }
+    }
 }
 
-/* Mixes of the theme's own tokens, so hover and bar tints follow both themes. */
-:root {
-    --hover: color-mix(in srgb, var(--ink) 6%, transparent);
-    --active: color-mix(in srgb, var(--ink) 8%, transparent);
-    /* Grey data marks (bars, shares, flat trends): half the ink holds 3:1 on every surface they sit on, the light track included. */
-    --chart-muted: color-mix(in srgb, var(--ink) 50%, transparent);
-    --focus-ring: color-mix(in srgb, var(--accent) 22%, transparent);
+/* ---------- Utilities the components need ---------- */
+
+/* The grain again, for a canvas-level block that paints --bg over the body (a full-page layout).
+   Never on a card, the rail, a chart or the console. With other background images, list it last. */
+@utility grain {
+    background-image: var(--grain);
+}
+
+/* Mono capitals: card and banner eyebrows. The status bar keys and rail headings are text-micro. */
+@utility eyebrow {
+    font-family: var(--mono);
+    font-size: 11px;
+    line-height: 1.4;
+    font-weight: 500;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    font-variant-ligatures: none;
+}
+
+/* A technical value inside Inter text: build number, clock time, identifier. */
+@utility mono-inline {
+    font-family: var(--mono);
+    font-size: 0.92em;
+    letter-spacing: 0;
+    font-variant-ligatures: none;
+}
+
+/* A code token in prose or an event line: 0xC0000005, citizen-scripting-lua.dll. */
+@utility code-inline {
+    padding: 1px 5px;
+    border: 1px solid var(--line);
+    border-radius: var(--r-xs);
+    background: var(--surface-2);
+    color: var(--ink);
+    font-family: var(--mono);
+    font-size: 12px;
+    font-variant-ligatures: none;
+    white-space: nowrap;
+}
+
+@utility kbd {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 20px;
+    height: 20px;
+    padding: 0 5px;
+    border: 1px solid var(--line-strong);
+    border-bottom-width: 2px;
+    border-radius: var(--r-xs);
+    background: var(--surface);
+    color: var(--ink-3);
+    font-family: var(--mono);
+    font-size: 11px;
+    line-height: 1;
+    white-space: nowrap;
+    font-variant-ligatures: none;
+}
+
+/* Status LEDs: 8px round, always beside a word (size-2.5 in the state banner).
+   `led` paints --led and the modifiers set only that variable, never `background`: Tailwind emits
+   led-live before led, so a modifier that set the background itself would lose to led's grey. */
+@utility led {
+    position: relative;
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    flex: none;
+    border-radius: 50%;
+    background: var(--led, var(--ink-3));
+}
+/* The one thing that moves on its own: a live signal. The ping inherits the LED's colour. */
+@utility led-live {
+    --led: var(--accent);
+    &::after {
+        content: '';
+        position: absolute;
+        inset: 0;
+        border-radius: inherit;
+        background: inherit;
+        animation: var(--animate-live-ping);
+    }
+}
+@utility led-ok {
+    --led: var(--success);
+}
+@utility led-warning {
+    --led: var(--warning-fill);
+}
+@utility led-down {
+    --led: var(--danger);
+}
+/* added: a transition in progress (starting, stopping, restarting), still. */
+@utility led-pending {
+    --led: transparent;
+    box-shadow: inset 0 0 0 1.5px var(--accent);
+}
+/* added: nothing known (Observer cannot reach FXServer). */
+@utility led-off {
+    --led: transparent;
+    box-shadow: inset 0 0 0 1.5px var(--ink-3);
+}
+
+@utility scrollbar-thin {
+    scrollbar-width: thin;
+    scrollbar-color: var(--line-strong) transparent;
+}
+@utility scrollbar-none {
+    scrollbar-width: none;
+    &::-webkit-scrollbar {
+        display: none;
+    }
+}
+
+/* SVG strokes keep their width when a viewBox is stretched (sparklines, static charts). */
+@utility non-scaling-stroke {
+    vector-effect: non-scaling-stroke;
+}
+
+/* In a wrapping flex row (card head, toolbar), the item before a [data-push] child takes the auto
+   margin, so a wrapped item starts its own line instead of hanging at the right. */
+@utility wrap-push {
+    & > :has(+ [data-push]) {
+        margin-right: auto;
+    }
+}
+
+/* added: Aperture's empty-state ground. */
+@utility dot-grid {
+    background-image: radial-gradient(var(--grid-dot) 1px, transparent 1.5px);
+    background-size: 16px 16px;
+}
+
+/* added: Aperture's loading bar, sized to the content it stands for. */
+@utility skeleton {
+    display: block;
+    height: 12px;
+    border-radius: 6px;
+    background: var(--surface-3);
+    animation: var(--animate-skeleton);
 }

@@ -8,7 +8,10 @@ use crate::backup::{self, BackupKind};
 use crate::database::StoreError;
 
 /// Applied in order and never edited once released: a schema change is a new file.
-const MIGRATIONS: &[M<'static>] = &[M::up(include_str!("../migrations/0001_instance.sql"))];
+const MIGRATIONS: &[M<'static>] = &[
+    M::up(include_str!("../migrations/0001_instance.sql")),
+    M::up(include_str!("../migrations/0002_accounts.sql")),
+];
 
 /// The schema version this build migrates to.
 pub(crate) fn latest() -> usize {
@@ -41,6 +44,23 @@ pub(crate) fn apply(conn: &mut Connection, backups: &Path) -> Result<(), StoreEr
 
     migrations.to_latest(conn)?;
     Ok(())
+}
+
+/// Refuses a database whose schema is not exactly this build's, without changing it.
+pub(crate) fn require_latest(conn: &Connection) -> Result<(), StoreError> {
+    let known = latest();
+    match Migrations::from_slice(MIGRATIONS).current_version(conn)? {
+        SchemaVersion::Inside(current) if current.get() == known => Ok(()),
+        SchemaVersion::Outside(found) => Err(StoreError::TooNew {
+            found: found.get(),
+            known,
+        }),
+        SchemaVersion::Inside(found) => Err(StoreError::NotMigrated {
+            found: found.get(),
+            known,
+        }),
+        SchemaVersion::NoneSet => Err(StoreError::NotMigrated { found: 0, known }),
+    }
 }
 
 #[cfg(test)]

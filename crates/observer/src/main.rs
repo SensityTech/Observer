@@ -3,7 +3,9 @@ mod db;
 mod lock;
 mod logging;
 mod run;
+mod setup;
 mod shutdown;
+mod user;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -30,6 +32,11 @@ enum Command {
     /// Maintain the state database while Observer is stopped.
     #[command(subcommand)]
     Db(DbCommand),
+    /// Manage accounts from the host, even while Observer runs.
+    #[command(subcommand)]
+    User(UserCommand),
+    /// Print a new link that creates the owner account, while none exists.
+    SetupLink,
 }
 
 #[derive(Debug, Subcommand)]
@@ -38,6 +45,22 @@ enum DbCommand {
     Check,
     /// Write a backup of the database now.
     Backup,
+}
+
+#[derive(Debug, Subcommand)]
+enum UserCommand {
+    /// List every account with its role and permissions.
+    List,
+    /// Give an account a temporary password and end its sessions. Works for the owner too.
+    ResetPassword {
+        /// The account's username.
+        name: String,
+    },
+    /// Lift the login locks on an account, from every network.
+    Unlock {
+        /// The account's username.
+        name: String,
+    },
 }
 
 #[tokio::main]
@@ -49,6 +72,10 @@ async fn main() -> ExitCode {
             Command::Run => run::run(config).await,
             Command::Db(DbCommand::Check) => db::check(&config).await,
             Command::Db(DbCommand::Backup) => db::backup(&config).await,
+            Command::User(UserCommand::List) => user::list(&config).await,
+            Command::User(UserCommand::ResetPassword { name }) => user::reset_password(&config, &name).await,
+            Command::User(UserCommand::Unlock { name }) => user::unlock(&config, &name).await,
+            Command::SetupLink => setup::link(&config).await,
         },
         Err(error) => Err(error),
     };
