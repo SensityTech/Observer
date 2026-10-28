@@ -752,11 +752,12 @@ function ListChip({
     );
 }
 
+// Browsers list no `UTC`, which Observer knows: a host in another zone could not be set to it.
 const zones = (() => {
     try {
-        return Intl.supportedValuesOf('timeZone');
+        return ['UTC', ...Intl.supportedValuesOf('timeZone').filter((zone) => zone !== 'UTC')];
     } catch {
-        return [];
+        return ['UTC'];
     }
 })();
 

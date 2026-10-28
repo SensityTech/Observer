@@ -177,6 +177,15 @@ describe('SchedulePage', () => {
         live.stop();
     });
 
+    it('should offer UTC right after the host zone', async () => {
+        const { getByLabelText, live } = await page('11');
+
+        const options = [...(getByLabelText(en.schedule.timeZone) as HTMLSelectElement).options];
+
+        expect(options.slice(0, 2).map((option) => option.value)).toEqual(['', 'UTC']);
+        live.stop();
+    });
+
     it('should count the changes typed in the save bar', async () => {
         const { getByRole, getByText, queryByText, live } = await page('11');
         expect(queryByText(en.schedule.changes(1))).toBeNull();
