@@ -24,17 +24,22 @@ export function AppShell() {
     const closeMenu = () => setMenuOpen(false);
 
     useEffect(() => {
-        document.documentElement.classList.toggle('drawer-open', menuOpen);
         if (!menuOpen) {
             return;
         }
+        const root = document.documentElement;
+        root.classList.add('drawer-open');
         const closeOnEscape = (event: KeyboardEvent) => {
             if (event.key === 'Escape') {
                 setMenuOpen(false);
             }
         };
         window.addEventListener('keydown', closeOnEscape);
-        return () => window.removeEventListener('keydown', closeOnEscape);
+        // Also when the shell goes away with the drawer open, signing out from it: the sign-in page must scroll.
+        return () => {
+            window.removeEventListener('keydown', closeOnEscape);
+            root.classList.remove('drawer-open');
+        };
     }, [menuOpen]);
 
     // Signed out under the shell: the route guard is already on its way to the sign-in page.

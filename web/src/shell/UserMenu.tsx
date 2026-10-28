@@ -34,6 +34,7 @@ export function UserMenu({ me, onNavigate }: { me: Me; onNavigate: () => void })
                     label: t.account.signOut,
                     icon: LogOut,
                     onSelect: () => {
+                        onNavigate();
                         void signOut(queryClient).finally(() => navigate({ to: '/login' }));
                     },
                 },
