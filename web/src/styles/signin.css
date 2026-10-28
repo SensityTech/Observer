@@ -1,0 +1,806 @@
+/*
+ * The sign-in, setup and new-password pages: a ruled form rail on the left that follows the theme,
+ * an always dark stage on the right with the dither iris around the mark. Ported from the validated
+ * sign-in mockup (docs/design/mockups/login.html), itself a port of Aperture's sign-in; sizes,
+ * spacing and motion are the mockup's, colours its tokens.
+ */
+
+@layer base {
+    /* The few values the sign-in reads that the panel never needs (Aperture's kit). */
+    :root {
+        --r-panel: 20px;
+        /* The Union Jack's own colours, fixed in both themes: a recoloured flag is no longer the flag. */
+        --flag-blue: #012169;
+        --flag-red: #c8102e;
+        --flag-white: #ffffff;
+    }
+    :root,
+    [data-theme='dark'] {
+        --glass: rgba(22, 22, 22, 0.76);
+        --crop: rgba(255, 255, 255, 0.3);
+    }
+    [data-theme='light'] {
+        --glass: rgba(255, 255, 255, 0.84);
+        --crop: rgba(10, 10, 12, 0.3);
+    }
+}
+
+@layer components {
+    /* The rail's head, form and foot are separate grid items, so on a phone the stage slots in
+       before the foot instead of after it. */
+    .signin {
+        display: grid;
+        grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
+        grid-template-rows: auto minmax(0, 1fr) auto;
+        min-height: 100vh;
+        min-height: 100dvh;
+        font-size: 15px;
+        line-height: 1.6;
+        background-color: var(--bg);
+        background-image: var(--grain);
+    }
+    .signin > * {
+        grid-column: 1;
+        min-width: 0;
+    }
+    .signin > .signin-stage {
+        grid-column: 2;
+        grid-row: 1 / -1;
+    }
+    .signin-head-row {
+        border-bottom: 1px solid var(--line);
+    }
+    .signin-foot-row {
+        border-top: 1px solid var(--line);
+    }
+    .signin-rail {
+        width: 100%;
+        max-width: 520px;
+        margin-inline: auto;
+        padding-inline: 44px;
+        border-inline: 1px solid var(--line);
+    }
+    /* Crop marks at the frame's top corners. */
+    .signin-framed {
+        position: relative;
+    }
+    .signin-framed::before,
+    .signin-framed::after {
+        content: '';
+        position: absolute;
+        top: -6px;
+        width: 11px;
+        height: 11px;
+        pointer-events: none;
+        background:
+            linear-gradient(var(--crop), var(--crop)) 5px 0 / 1px 11px no-repeat,
+            linear-gradient(var(--crop), var(--crop)) 0 5px / 11px 1px no-repeat;
+    }
+    .signin-framed::before {
+        left: -6px;
+    }
+    .signin-framed::after {
+        right: -6px;
+    }
+    .signin-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        min-height: 72px;
+    }
+    .signin-logo {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        border-radius: 6px;
+        font-size: 17px;
+        font-weight: 600;
+        letter-spacing: -0.015em;
+        line-height: 1;
+        color: var(--ink);
+        white-space: nowrap;
+    }
+    .signin-logo > svg {
+        flex: none;
+    }
+    .signin-prefs {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+    }
+    .signin-frame {
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        padding-block: 48px;
+    }
+    .signin-foot {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px 16px;
+        min-height: 64px;
+        padding-block: 16px;
+        font-size: 13px;
+        color: var(--ink-3);
+    }
+
+    /* The form rail */
+    .signin-body {
+        display: flex;
+        flex-direction: column;
+        gap: 24px;
+    }
+    .signin-intro {
+        display: flex;
+        flex-direction: column;
+        gap: 14px;
+    }
+    .signin-eyebrow {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        font-family: var(--mono);
+        font-size: 12px;
+        line-height: 1.4;
+        font-weight: 500;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: var(--ink-3);
+        font-variant-ligatures: none;
+    }
+    .signin-title {
+        font-size: 40px;
+        line-height: 1.12;
+        letter-spacing: -0.02em;
+        font-weight: 500;
+        text-wrap: balance;
+    }
+    .signin-tone {
+        color: var(--ink-3);
+    }
+    .signin-lead {
+        font-size: 15px;
+        line-height: 1.6;
+        color: var(--ink-2);
+        text-wrap: pretty;
+    }
+    .signin-form {
+        display: flex;
+        flex-direction: column;
+        gap: 18px;
+        margin-top: 4px;
+    }
+    .signin-forgot {
+        position: relative;
+        border-radius: 4px;
+        font-size: 13px;
+        font-weight: 500;
+        line-height: 1.5;
+        color: var(--accent-ink);
+    }
+    .signin-forgot:hover {
+        text-decoration: underline;
+        text-underline-offset: 3px;
+    }
+    .signin-note {
+        display: flex;
+        align-items: flex-start;
+        gap: 12px;
+        margin-top: 6px;
+        padding: 14px;
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        background: var(--surface-2);
+    }
+    .signin-note-icon {
+        display: grid;
+        place-items: center;
+        width: 32px;
+        height: 32px;
+        flex: none;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--surface);
+        color: var(--ink-2);
+    }
+    .signin-small {
+        font-size: 13px;
+        line-height: 1.5;
+    }
+    .signin-xs {
+        font-size: 12px;
+        line-height: 1.45;
+    }
+    .signin-code {
+        padding: 1px 5px;
+        border: 1px solid var(--line);
+        border-radius: var(--r-xs);
+        background: var(--surface);
+        color: var(--ink);
+        font-family: var(--mono);
+        font-size: 12px;
+        font-variant-ligatures: none;
+        -webkit-box-decoration-break: clone;
+        box-decoration-break: clone;
+    }
+    .signin-guard {
+        display: flex;
+        align-items: flex-start;
+        gap: 6px;
+    }
+    .signin-remember {
+        display: inline-flex;
+        align-self: flex-start;
+        align-items: flex-start;
+        gap: 10px;
+        font-size: 14px;
+        line-height: 1.45;
+        color: var(--ink);
+        cursor: pointer;
+    }
+    .signin-remember:hover input:not(:checked) + span {
+        border-color: color-mix(in srgb, var(--ink) 30%, transparent);
+    }
+    .signin-guard > svg {
+        flex: none;
+        margin-top: 2px;
+    }
+
+    /* The language picker */
+    .signin-lang {
+        position: relative;
+    }
+    .signin-lang-button > .signin-chevron {
+        opacity: 0.6;
+        transition: transform 0.2s var(--ease);
+    }
+    .signin-lang-button:has(+ :popover-open) {
+        color: var(--ink);
+        background: var(--hover);
+    }
+    .signin-lang-button:has(+ :popover-open) > .signin-chevron {
+        transform: rotate(180deg);
+    }
+    .signin-flag {
+        position: relative;
+        display: inline-block;
+        flex: none;
+        width: 18px;
+        height: 12px;
+        overflow: hidden;
+        border-radius: 2px;
+        vertical-align: -1px;
+    }
+    .signin-flag > svg {
+        display: block;
+        width: 100%;
+        height: 100%;
+    }
+    .signin-flag::after {
+        content: '';
+        position: absolute;
+        inset: 0;
+        border-radius: inherit;
+        box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ink) 18%, transparent);
+        pointer-events: none;
+    }
+    .signin-lang-menu {
+        position: fixed;
+        inset: auto;
+        margin: 0;
+        min-width: 200px;
+        padding: 6px;
+        border: 1px solid var(--line-strong);
+        border-radius: 12px;
+        background: var(--glass);
+        color: var(--ink);
+        box-shadow: var(--elev-pop);
+        -webkit-backdrop-filter: blur(18px) saturate(1.4);
+        backdrop-filter: blur(18px) saturate(1.4);
+    }
+    .signin-lang-menu:popover-open {
+        animation: var(--animate-pop);
+    }
+    .signin-menu-item {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        width: 100%;
+        min-height: 34px;
+        padding: 0 10px;
+        border-radius: 8px;
+        font-size: 13.5px;
+        color: var(--ink-2);
+        text-align: left;
+        white-space: nowrap;
+    }
+    .signin-menu-item:hover,
+    .signin-menu-item:focus-visible {
+        background: color-mix(in srgb, var(--ink) 7%, transparent);
+        color: var(--ink);
+        outline: 0;
+    }
+    .signin-menu-item[aria-current='true'] {
+        color: var(--ink);
+    }
+    .signin-menu-item > .signin-check {
+        margin-left: auto;
+        color: var(--accent-ink);
+    }
+
+    /* The always dark stage */
+    .signin-stage {
+        display: flex;
+        min-width: 0;
+        padding: 12px;
+    }
+    .signin-panel {
+        position: relative;
+        flex: 1 1 auto;
+        display: flex;
+        flex-direction: column;
+        gap: 24px;
+        min-width: 0;
+        min-height: 760px;
+        padding: 28px 32px 32px;
+        overflow: hidden;
+        border: 1px solid var(--line);
+        border-radius: var(--r-panel);
+        color: var(--ink);
+        background-color: var(--bg-subtle);
+        /* The kit's dotted grid over the grain: one size per layer. */
+        background-image: radial-gradient(var(--grid-dot) 1px, transparent 1.5px), var(--grain);
+        background-size:
+            16px 16px,
+            auto,
+            auto,
+            auto,
+            auto;
+    }
+    .signin-panel > * {
+        position: relative;
+    }
+    .signin-stage-head {
+        z-index: 1;
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+    }
+    .signin-live {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        height: 28px;
+        padding: 0 10px;
+        border: 1px solid var(--line);
+        border-radius: var(--r-pill);
+        background: var(--surface);
+        color: var(--ink-2);
+        font-size: 12.5px;
+        font-weight: 500;
+        line-height: 1.5;
+        white-space: nowrap;
+    }
+    .signin-iris {
+        flex: 1 1 auto;
+        min-height: 300px;
+        display: grid;
+        place-items: center;
+    }
+    /* The live field reaches past the panel's top and sides and below the iris's own edge, so it is
+       the whole disc the still picture draws: clipped by the panel, faded by the veil. */
+    .signin-dither {
+        --dither: var(--accent);
+        position: absolute;
+        inset: -96px -40px -240px;
+        pointer-events: none;
+    }
+    .signin-dither-still {
+        --dot: conic-gradient(at 3px 3px, transparent 75%, var(--dither) 0);
+        position: absolute;
+        left: 50%;
+        top: calc(50% - 72px);
+        width: 820px;
+        aspect-ratio: 1;
+        transform: translate(-50%, -50%);
+        pointer-events: none;
+        background: var(--dot) 0 0 / 12px 12px;
+        -webkit-mask-image: radial-gradient(closest-side, #000 0, rgba(0, 0, 0, 0.9) 40%, transparent 100%);
+        mask-image: radial-gradient(closest-side, #000 0, rgba(0, 0, 0, 0.9) 40%, transparent 100%);
+    }
+    .signin-dither-still::before,
+    .signin-dither-still::after {
+        content: '';
+        position: absolute;
+        inset: 0;
+    }
+    .signin-dither-still::before {
+        background: var(--dot) 6px 6px / 12px 12px;
+        -webkit-mask-image:
+            radial-gradient(closest-side, #000 0, #000 40%, transparent 80%),
+            repeating-radial-gradient(circle, #000 0 30px, transparent 30px 48px);
+        -webkit-mask-composite: source-in;
+        mask-image:
+            radial-gradient(closest-side, #000 0, #000 40%, transparent 80%),
+            repeating-radial-gradient(circle, #000 0 30px, transparent 30px 48px);
+        mask-composite: intersect;
+    }
+    .signin-dither-still::after {
+        background:
+            var(--dot) 6px 0 / 12px 12px,
+            var(--dot) 0 6px / 12px 12px;
+        -webkit-mask-image: radial-gradient(closest-side, #000 0, #000 16%, transparent 48%);
+        mask-image: radial-gradient(closest-side, #000 0, #000 16%, transparent 48%);
+    }
+    /* One canvas pixel per dot, scaled six times without smoothing, then cut into 3px dots by the
+       same lattice used as a mask. */
+    .signin-dither-canvas {
+        position: absolute;
+        pointer-events: none;
+        image-rendering: crisp-edges;
+        image-rendering: pixelated;
+        -webkit-mask-image: conic-gradient(at 3px 3px, transparent 75%, #000 0);
+        mask-image: conic-gradient(at 3px 3px, transparent 75%, #000 0);
+        -webkit-mask-size: 6px 6px;
+        mask-size: 6px 6px;
+    }
+    :root:not([data-theme='light']) :is(.signin-dither-still, .signin-dither-canvas) {
+        opacity: 0.85;
+    }
+    /* The still picture stays measured under the canvas, which took it over. */
+    @media screen {
+        [data-dither] > .signin-dither-still {
+            visibility: hidden;
+        }
+    }
+    @media print {
+        .signin-dither-canvas {
+            display: none;
+        }
+    }
+    /* Observer's mark at the core, its colours inverted onto the accent tile. */
+    .signin-core {
+        position: relative;
+        display: grid;
+        place-items: center;
+        width: 88px;
+        height: 88px;
+        border-radius: 22px;
+        background: var(--accent);
+        color: var(--on-accent);
+        box-shadow:
+            0 0 0 10px color-mix(in srgb, var(--bg-subtle) 70%, transparent),
+            0 0 90px 10px color-mix(in srgb, var(--accent) 55%, transparent);
+    }
+    .signin-core > svg {
+        width: 100%;
+        height: 100%;
+    }
+    .signin-tag {
+        position: absolute;
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 10px;
+        border: 1px solid var(--line-strong);
+        border-radius: var(--r-pill);
+        background: var(--glass);
+        font-family: var(--mono);
+        font-size: 11.5px;
+        line-height: 1.5;
+        color: var(--ink-2);
+        white-space: nowrap;
+        font-variant-ligatures: none;
+        -webkit-backdrop-filter: blur(10px);
+        backdrop-filter: blur(10px);
+    }
+    .signin-tag b {
+        font-weight: 500;
+        color: var(--ink);
+    }
+    .signin-tag-tick {
+        left: 7%;
+        top: 24%;
+    }
+    .signin-tag-players {
+        right: 6%;
+        top: 62%;
+    }
+    .signin-swatch {
+        width: 8px;
+        height: 8px;
+        flex: none;
+        border-radius: 2px;
+        background: var(--tint);
+    }
+    .signin-veil {
+        position: absolute;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        height: 58%;
+        background: linear-gradient(
+            0deg,
+            var(--bg-subtle) 46%,
+            color-mix(in srgb, var(--bg-subtle) 0%, transparent)
+        );
+        pointer-events: none;
+    }
+    .signin-fact-block {
+        display: flex;
+        flex-direction: column;
+        gap: 14px;
+        max-width: 600px;
+    }
+    .signin-marker {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        font-family: var(--mono);
+        font-size: 12px;
+        line-height: 1.4;
+        color: var(--accent-ink);
+        font-variant-ligatures: none;
+    }
+    .signin-marker::before {
+        content: '';
+        width: 7px;
+        height: 7px;
+        flex: none;
+        border-radius: 1px;
+        background: var(--accent);
+    }
+    .signin-fact {
+        font-size: 48px;
+        line-height: 1;
+        letter-spacing: -0.03em;
+        font-weight: 700;
+        text-transform: uppercase;
+        text-wrap: balance;
+    }
+    .signin-fact-body {
+        max-width: 520px;
+        font-size: 15px;
+        line-height: 1.6;
+        color: var(--ink-2);
+        text-wrap: pretty;
+    }
+    .signin-fact-body .signin-code {
+        font-size: 12.5px;
+        background: var(--surface-2);
+        white-space: nowrap;
+    }
+    .signin-events {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+    }
+
+    /* The ticker: the items twice, so the loop is seamless. */
+    .signin-ticker {
+        position: relative;
+        overflow: hidden;
+        -webkit-mask-image: linear-gradient(90deg, transparent, #000 6%, #000 94%, transparent);
+        mask-image: linear-gradient(90deg, transparent, #000 6%, #000 94%, transparent);
+    }
+    .signin-ticker-track {
+        display: flex;
+        width: max-content;
+        animation: signin-marquee 60s linear infinite;
+    }
+    .signin-ticker:hover .signin-ticker-track {
+        animation-play-state: paused;
+    }
+    .signin-ticker-track > * {
+        margin-right: 12px;
+    }
+    .signin-tick {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        width: 360px;
+        flex: none;
+        padding: 12px;
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        background-color: var(--surface);
+        background-image: var(--grain);
+    }
+    .signin-initials {
+        display: inline-grid;
+        place-items: center;
+        width: 44px;
+        height: 44px;
+        flex: none;
+        border-radius: 11px;
+        background: var(--surface-3);
+        color: var(--ink);
+        font-size: 15px;
+        font-weight: 600;
+        letter-spacing: 0.02em;
+        line-height: 1;
+    }
+    .signin-initials > svg {
+        width: 28px;
+        height: 28px;
+    }
+    .signin-tick-main {
+        display: flex;
+        flex-direction: column;
+        gap: 3px;
+        flex: 1 1 0;
+        min-width: 0;
+        line-height: 1.6;
+    }
+    .signin-tick-title {
+        overflow: hidden;
+        font-size: 14px;
+        font-weight: 700;
+        letter-spacing: -0.01em;
+        text-transform: uppercase;
+        color: var(--ink);
+        white-space: nowrap;
+        text-overflow: ellipsis;
+    }
+    .signin-tick-detail {
+        overflow: hidden;
+        font-family: var(--mono);
+        font-size: 12px;
+        color: var(--ink-3);
+        white-space: nowrap;
+        text-overflow: ellipsis;
+        font-variant-ligatures: none;
+    }
+    .signin-tick-side {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-end;
+        gap: 3px;
+        flex: none;
+        line-height: 1.6;
+    }
+    .signin-tick-figure {
+        font-size: 14px;
+        font-weight: 600;
+        color: var(--accent-ink);
+    }
+    .signin-tick-time {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        font-size: 12px;
+        color: var(--ink-3);
+    }
+    .signin-thumb {
+        display: grid;
+        place-items: center;
+        width: 48px;
+        height: 48px;
+        flex: none;
+        border-radius: 10px;
+        background: var(--tint-soft);
+        color: var(--tint-ink);
+    }
+    /* State tokens only, never a new colour. */
+    .tint-accent {
+        --tint: var(--accent);
+        --tint-ink: var(--accent-ink);
+        --tint-soft: var(--accent-soft);
+    }
+    .tint-success {
+        --tint: var(--success);
+        --tint-ink: var(--success);
+        --tint-soft: var(--success-soft);
+    }
+    .tint-warning {
+        --tint: var(--warning-fill);
+        --tint-ink: var(--warning);
+        --tint-soft: var(--warning-soft);
+    }
+    .tint-danger {
+        --tint: var(--danger);
+        --tint-ink: var(--danger-ink);
+        --tint-soft: var(--danger-soft);
+    }
+    .tint-neutral {
+        --tint: var(--ink-3);
+        --tint-ink: var(--ink-2);
+        --tint-soft: var(--surface-3);
+    }
+
+    @keyframes signin-marquee {
+        to {
+            transform: translateX(-50%);
+        }
+    }
+    @media (prefers-reduced-motion: reduce) {
+        .signin-ticker {
+            overflow-x: auto;
+        }
+        .signin-ticker-track {
+            animation: none;
+        }
+    }
+
+    @media (max-width: 1024px) {
+        .signin {
+            grid-template-columns: minmax(0, 1fr);
+            grid-template-rows: none;
+        }
+        .signin > .signin-stage {
+            grid-column: 1;
+            grid-row: auto;
+            border-top: 1px solid var(--line);
+        }
+        .signin-title {
+            font-size: 34px;
+        }
+        .signin-panel {
+            min-height: 0;
+        }
+        .signin-iris {
+            min-height: 340px;
+        }
+    }
+
+    @media (max-width: 760px) {
+        .signin-rail {
+            padding-inline: 20px;
+            border-inline: 0;
+        }
+        .signin-framed::before,
+        .signin-framed::after {
+            display: none;
+        }
+        .signin-frame {
+            padding-block: 40px 48px;
+        }
+        .signin-title {
+            font-size: 28px;
+        }
+        .signin-stage {
+            padding: 8px;
+        }
+        .signin-panel {
+            padding: 20px 18px 22px;
+            gap: 20px;
+        }
+        .signin-iris {
+            min-height: 260px;
+        }
+        .signin-dither-still {
+            width: 520px;
+        }
+        .signin-core {
+            width: 64px;
+            height: 64px;
+            border-radius: 16px;
+        }
+        .signin-fact {
+            font-size: 30px;
+        }
+        .signin-tag {
+            display: none;
+        }
+        .signin-tick {
+            width: 300px;
+        }
+        /* 44px touch targets without moving the layout: the hit area grows around the small controls. */
+        .signin-forgot::before {
+            content: '';
+            position: absolute;
+            inset: -13px -8px;
+        }
+        .signin-remember {
+            padding-block: 12px;
+        }
+        .signin-logo {
+            min-height: 44px;
+        }
+    }
+}

@@ -2,11 +2,22 @@ import { useQuery } from '@tanstack/react-query';
 
 import { healthQuery } from '../api/health';
 import { useI18n } from '../i18n/I18nProvider';
+import { useLinkState } from '../live/context';
+import type { LinkState } from '../live/realtime';
+import { cn } from '../lib/cn';
 
-/** Observer's own state for now; FXServer's joins it once Observer supervises a server. */
+const LINK_LED = {
+    connecting: 'led-pending',
+    live: 'led-live',
+    offline: 'led-down',
+    refused: 'led-down',
+} satisfies Record<LinkState, string>;
+
+/** Observer's own state and the live link's for now; FXServer's joins them once Observer supervises a server. */
 export function StatusBar() {
     const { t } = useI18n();
     const health = useQuery(healthQuery);
+    const link = useLinkState();
 
     const state = health.isPending ? 'pending' : health.isError ? 'down' : 'ok';
 
@@ -16,7 +27,8 @@ export function StatusBar() {
                 <dt>{t.status.observer}</dt>
                 <dd>
                     <span
-                        className={`dot ${state === 'ok' ? 'is-live' : state === 'down' ? 'is-down' : ''}`}
+                        className={cn('led', state === 'ok' && 'led-live', state === 'down' && 'led-down')}
+                        aria-hidden="true"
                     />
                     {t.status[state]}
                 </dd>
@@ -27,6 +39,13 @@ export function StatusBar() {
                     <dd className="font-mono">{health.data.version}</dd>
                 </div>
             )}
+            <div className="status-cell">
+                <dt>{t.status.updates}</dt>
+                <dd>
+                    <span className={cn('led', LINK_LED[link])} aria-hidden="true" />
+                    {t.status.link[link]}
+                </dd>
+            </div>
         </dl>
     );
 }

@@ -1,7 +1,7 @@
 import { createContext, use, useEffect, useMemo, useState, type ReactNode } from 'react';
 
 import type { Messages } from './en';
-import { formatBytes, formatDateTime, formatNumber } from './format';
+import { formatBytes, formatDateTime, formatDuration, formatNumber, formatTimestamp } from './format';
 import { DEFAULT_LOCALE, LOCALES, isLocale, type Locale } from './locales';
 
 const STORAGE_KEY = 'observer.locale';
@@ -14,6 +14,9 @@ type I18n = {
         number: (value: number, options?: Intl.NumberFormatOptions) => string;
         bytes: (bytes: number) => string;
         dateTime: (date: Date, options?: Intl.DateTimeFormatOptions) => string;
+        duration: (seconds: number) => string;
+        /** An API timestamp (RFC 3339) as tables show it, in local time. */
+        timestamp: (rfc3339: string, options?: { seconds?: boolean }) => string;
     };
 };
 
@@ -51,6 +54,8 @@ export function I18nProvider({ children }: { children: ReactNode }) {
                 number: (number, options) => formatNumber(locale, number, options),
                 bytes: (bytes) => formatBytes(locale, bytes),
                 dateTime: (date, options) => formatDateTime(locale, date, options),
+                duration: (seconds) => formatDuration(locale, seconds),
+                timestamp: (rfc3339, options) => formatTimestamp(new Date(rfc3339), options),
             },
         }),
         [locale],

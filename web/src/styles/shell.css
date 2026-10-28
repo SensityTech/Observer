@@ -8,7 +8,7 @@
         position: absolute;
         left: 12px;
         top: -60px;
-        z-index: 100;
+        z-index: var(--z-skip);
         padding: 10px 14px;
         border-radius: var(--r);
         background: var(--btn-bg);
@@ -17,110 +17,6 @@
     }
     .skip:focus-visible {
         top: 12px;
-    }
-
-    .eyebrow {
-        font-family: var(--mono);
-        font-size: 11px;
-        line-height: 1.4;
-        font-weight: 500;
-        letter-spacing: 0.06em;
-        text-transform: uppercase;
-        color: var(--ink-3);
-        font-variant-ligatures: none;
-    }
-
-    /* Buttons */
-    .btn {
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        gap: 8px;
-        height: 38px;
-        padding: 0 14px;
-        border: 1px solid transparent;
-        border-radius: var(--r);
-        font-size: 14px;
-        font-weight: 500;
-        line-height: 1;
-        letter-spacing: -0.005em;
-        white-space: nowrap;
-        user-select: none;
-        transition:
-            background-color 0.15s,
-            border-color 0.15s,
-            color 0.15s,
-            transform 0.15s;
-    }
-    .btn:active {
-        transform: translateY(0.5px);
-    }
-    .btn-primary {
-        background: var(--btn-bg);
-        color: var(--btn-ink);
-        box-shadow: var(--shadow-btn);
-    }
-    .btn-primary:hover {
-        background: color-mix(in srgb, var(--btn-bg) 86%, var(--btn-ink));
-    }
-    .btn-secondary {
-        background: var(--surface);
-        color: var(--ink);
-        border-color: var(--line-strong);
-        box-shadow: var(--shadow-sm);
-    }
-    .btn-secondary:hover {
-        background: var(--surface-2);
-    }
-    .btn-ghost {
-        color: var(--ink-2);
-    }
-    .btn-ghost:hover {
-        background: var(--hover);
-        color: var(--ink);
-    }
-    .btn-icon {
-        width: 38px;
-        padding: 0;
-    }
-
-    /* LEDs. The live one is the only thing on a page that moves on its own. */
-    .dot {
-        position: relative;
-        display: inline-block;
-        width: 8px;
-        height: 8px;
-        flex: none;
-        border-radius: 50%;
-        background: var(--ink-3);
-    }
-    .dot.is-live {
-        background: var(--accent);
-    }
-    .dot.is-ok {
-        background: var(--success);
-    }
-    .dot.is-down {
-        background: var(--danger);
-    }
-    .dot.is-live::after {
-        content: '';
-        position: absolute;
-        inset: 0;
-        border-radius: 50%;
-        background: inherit;
-        animation: ping 1.8s cubic-bezier(0, 0, 0.2, 1) infinite;
-    }
-    @keyframes ping {
-        0% {
-            transform: scale(1);
-            opacity: 0.55;
-        }
-        80%,
-        100% {
-            transform: scale(2.8);
-            opacity: 0;
-        }
     }
 
     /* Cards */
@@ -163,7 +59,7 @@
         background: var(--rail-bg);
         border: 1px solid var(--line);
         border-radius: var(--r-rail);
-        box-shadow: var(--shadow-rail);
+        box-shadow: var(--elev-rail);
     }
     .rail-head {
         display: flex;
@@ -181,9 +77,6 @@
         letter-spacing: -0.015em;
         line-height: 1;
         color: var(--ink);
-    }
-    .rail-close {
-        margin-left: auto;
     }
 
     .nav {
@@ -245,6 +138,27 @@
         background: var(--accent);
     }
 
+    .nav-group {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 14px 10px 6px;
+        font-family: var(--mono);
+        font-size: 10.5px;
+        font-weight: 500;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--ink-3);
+        font-variant-ligatures: none;
+    }
+    .nav-group::after {
+        content: '';
+        flex: 1 1 auto;
+        height: 1px;
+        margin-right: calc(-1 * var(--rail-pad));
+        background: var(--line);
+    }
+
     .rail-foot {
         display: flex;
         flex-direction: column;
@@ -279,15 +193,74 @@
     .theme-switch > button:hover {
         color: var(--ink);
     }
+    /* At the default offset, the outline would cover the group's border. */
+    .theme-switch > button:focus-visible {
+        outline-offset: 0;
+    }
     .theme-switch > button[aria-pressed='true'] {
         background: var(--raise);
         color: var(--ink);
         box-shadow:
-            var(--shadow-sm),
+            var(--elev-sm),
             0 0 0 1px var(--line);
     }
     .theme-switch > button[aria-pressed='true'] > svg {
         color: var(--accent);
+    }
+    .user {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        width: 100%;
+        padding: 6px 8px;
+        border-radius: 10px;
+        text-align: left;
+        transition: background-color 0.12s;
+    }
+    .user:hover,
+    .user:has(+ :popover-open) {
+        background: var(--hover);
+    }
+    .user > svg {
+        flex: none;
+        color: var(--ink-3);
+    }
+    .avatar {
+        display: grid;
+        place-items: center;
+        width: 32px;
+        height: 32px;
+        flex: none;
+        border-radius: 50%;
+        background: var(--surface-3);
+        color: var(--ink);
+        font-size: 12px;
+        font-weight: 600;
+        letter-spacing: 0.02em;
+    }
+    .user-meta {
+        display: flex;
+        flex-direction: column;
+        flex: 1 1 0;
+        min-width: 0;
+        line-height: 1.35;
+    }
+    .user-name {
+        overflow: hidden;
+        font-size: 13.5px;
+        font-weight: 500;
+        color: var(--ink);
+        white-space: nowrap;
+        text-overflow: ellipsis;
+    }
+    .user-role {
+        font-size: 12px;
+        color: var(--ink-3);
+    }
+    /* ink-3 under the hover tint falls below 4.5:1 on the light rail. */
+    .user:hover .user-role,
+    .user:has(+ :popover-open) .user-role {
+        color: var(--ink-2);
     }
 
     /* The page and its status bar */
@@ -314,7 +287,7 @@
         border: 1px solid var(--line);
         border-radius: 12px;
         background: var(--surface);
-        box-shadow: var(--shadow-sm);
+        box-shadow: var(--elev-sm);
     }
     .status-cell {
         display: flex;
@@ -391,13 +364,10 @@
         .rail-wrap {
             position: sticky;
             top: 0;
-            z-index: 30;
+            z-index: var(--z-rail);
             height: 100vh;
             height: 100dvh;
             padding: var(--rail-gap) 0 var(--rail-gap) var(--rail-gap);
-        }
-        .rail-close {
-            display: none;
         }
     }
 
@@ -406,7 +376,7 @@
         .rail-wrap {
             position: fixed;
             inset: 0 auto 0 0;
-            z-index: 60;
+            z-index: var(--z-drawer);
             width: min(320px, calc(100vw - 40px));
             height: 100vh;
             height: 100dvh;
@@ -426,7 +396,7 @@
             display: block;
             position: fixed;
             inset: 0;
-            z-index: 55;
+            z-index: var(--z-scrim);
             background: var(--overlay);
         }
         .nav-item {
@@ -438,7 +408,7 @@
         .mobilebar {
             position: sticky;
             top: 0;
-            z-index: 40;
+            z-index: var(--z-mobilebar);
             display: flex;
             align-items: center;
             gap: 8px;
@@ -467,19 +437,34 @@
 
     /* Phones: 44px touch targets, the status bar stacks. */
     @media (max-width: 760px) {
-        .btn {
-            height: 44px;
-        }
-        .btn-icon {
-            width: 44px;
-        }
         .topbar {
             padding: 12px 16px 0;
         }
         .status {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
             width: 100%;
             height: auto;
-            min-height: 44px;
+        }
+        .status-cell {
+            flex-direction: column;
+            align-items: flex-start;
+            gap: 3px;
+            padding: 8px 12px;
+            white-space: normal;
+        }
+        .status-cell + .status-cell {
+            border-left: 0;
+        }
+        .status-cell:nth-child(even) {
+            border-left: 1px solid var(--line);
+        }
+        .status-cell:nth-child(n + 3) {
+            border-top: 1px solid var(--line);
+        }
+        .status-cell > dd {
+            flex-wrap: wrap;
+            gap: 2px 6px;
         }
         .content {
             padding: 16px 16px 40px;
