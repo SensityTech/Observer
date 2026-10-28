@@ -7,6 +7,7 @@ mod backup;
 mod database;
 pub mod launch;
 pub mod login_failures;
+pub mod metrics;
 mod migrations;
 pub mod sessions;
 pub mod settings;
@@ -16,4 +17,5 @@ pub mod users;
 
 pub use backup::BackupKind;
 pub use database::{Database, Inspection, StoreError};
+pub use metrics::MetricsDatabase;
 pub use rusqlite::{Connection, Transaction};
