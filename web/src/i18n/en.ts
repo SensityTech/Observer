@@ -4,6 +4,8 @@
 import type { ActorKind } from '../api/generated/ActorKind';
 import type { AuditAction } from '../api/generated/AuditAction';
 import type { ErrorCode } from '../api/generated/ErrorCode';
+import type { LaunchProblem } from '../api/generated/LaunchProblem';
+import type { OneSync } from '../api/generated/OneSync';
 import type { Outcome } from '../api/generated/Outcome';
 import type { PermissionArea } from '../api/generated/PermissionArea';
 import { parsePermissions, permissionKeys, type PermissionKey } from '../auth/permissions';
@@ -80,6 +82,7 @@ export const en = {
         close: 'Close the menu',
         overview: 'Overview',
         administration: 'Administration',
+        server: 'Server',
         users: 'Users',
         audit: 'Audit log',
     },
@@ -136,6 +139,8 @@ export const en = {
         gloss: 'This page is not for your account.',
         body: (permission: string) =>
             `It needs a permission your account does not hold: ${permission}. Whoever manages users can grant it.`,
+        ownerOnly:
+            'Only the owner opens this page: how FXServer starts decides what runs on the host, which no permission grants.',
         back: 'Open my account',
     },
     signIn: {
@@ -248,6 +253,60 @@ export const en = {
         body: 'This change needs your password again. Once confirmed, it is not asked again for 10 minutes.',
         password: 'Password',
         submit: 'Confirm',
+    },
+    server: {
+        title: 'Server',
+        gloss: 'How Observer starts FXServer.',
+        nextStart: 'Changes apply at the next start of FXServer',
+        loadFailed: 'The launch settings could not be loaded.',
+        unsaved: 'Nothing is saved yet: Observer needs these settings to start FXServer.',
+        files: 'Files',
+        buildPath: 'FXServer build folder',
+        buildPathHint: 'The folder of FXServer.exe on Windows, or the one holding alpine on Linux.',
+        dataPath: 'Server data folder',
+        dataPathHint: 'The folder of your resources and cfg. FXServer runs from it.',
+        cfgFile: 'Config file',
+        cfgFileHint: 'Relative to the server data folder, such as server.cfg or configs/live.cfg.',
+        start: 'Start',
+        onesync: 'OneSync',
+        onesyncModes: { off: 'Off', on: 'On', legacy: 'Legacy' } satisfies Record<OneSync, string>,
+        onesyncHint: 'Set after your cfg on the command line, so it wins over the cfg.',
+        autoStart: 'Start FXServer with Observer',
+        autoStartHint: 'When Observer starts, FXServer starts too.',
+        txadminEvents: "Send txAdmin's events too",
+        txadminEventsHint:
+            "Resources written for txAdmin also receive txAdmin's events, such as txAdmin:events:scheduledRestart, next to Observer's.",
+        arguments: 'Extra arguments',
+        argumentsMeta: 'Each one goes on the command line as +set <name> <value>, after the cfg.',
+        argument: (position: number) => `Argument ${formatNumber('en', position)}`,
+        argumentName: 'Name',
+        argumentValue: 'Value',
+        removeArgument: (position: number) => `Remove argument ${formatNumber('en', position)}`,
+        addArgument: 'Add an argument',
+        noArguments: 'No extra argument.',
+        notSaved: 'Not saved yet',
+        changes: (value: number) => `${count(value, { one: 'unsaved change', other: 'unsaved changes' })}`,
+        discard: 'Discard',
+        save: 'Save',
+        saved: 'Saved. FXServer uses these settings from its next start.',
+        problems: {
+            required: 'Fill this in.',
+            tooLong: 'Too long: 1,024 characters at most.',
+            notAbsolute: 'Use a full path, from a drive letter such as C:\\ on Windows or from / on Linux.',
+            networkPath: 'Use a folder of this host: network paths are not supported.',
+            devicePath: 'This names a device, not a folder or a file.',
+            controlCharacter: 'Remove the line breaks, tabs and other control characters.',
+            fxdk: '-fxdk is refused: it would start FXServer for the development kit, outside Observer.',
+            invalidCfgFile:
+                'Use a path inside the server data folder, with letters, digits, dots, dashes, underscores and / between folders.',
+            invalidName: 'Use 1 to 64 letters, digits or underscores.',
+            forbiddenCharacter:
+                'Remove the quotes, semicolons and backslashes: FXServer reads them as commands.',
+            reserved: 'Observer sets this one itself, or it would break supervision.',
+            secret: 'This holds a secret: set it in the cfg, never on the command line, which anyone on the host can read.',
+            duplicate: 'An argument above already sets this name.',
+            tooMany: 'At most 64 extra arguments.',
+        } satisfies Record<LaunchProblem, string>,
     },
     users: {
         title: 'Users',
@@ -405,6 +464,10 @@ export const en = {
         // A failed sign-in whose username names no account: it may have been a password.
         unknownUsername: 'Unknown username',
         noPermission: 'none',
+        noArgument: 'none',
+        unset: 'not set',
+        yes: 'yes',
+        no: 'no',
         detail: {
             userId: 'Account id',
             sessionId: 'Session id',
@@ -427,6 +490,14 @@ export const en = {
             outcome: 'Outcome',
             from: 'From',
             to: 'Until',
+            ownerOnly: 'Owner only',
+            buildPath: 'Build folder',
+            dataPath: 'Data folder',
+            cfgFile: 'Config file',
+            onesync: 'OneSync',
+            autoStart: 'Start with Observer',
+            txadminEvents: 'txAdmin events',
+            extraArguments: 'Extra arguments',
         },
         refusals: {
             escalation: 'Permissions they do not hold',

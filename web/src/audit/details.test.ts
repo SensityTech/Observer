@@ -38,6 +38,21 @@ describe('auditDetails', () => {
         );
     });
 
+    it('should show a changed setting as its value before and after', () => {
+        expect(
+            auditDetails(en, format, {
+                buildPath: { before: null, after: 'C:\\FXServer\\build' },
+                onesync: { before: 'on', after: 'legacy' },
+                autoStart: { before: false, after: true },
+                extraArguments: { before: [], after: [{ name: 'sv_enforceGameBuild', value: '3258' }] },
+            }),
+        ).toBe(
+            'Build folder: not set → C:\\FXServer\\build · OneSync: on → legacy · Start with Observer: no → yes · ' +
+                'Extra arguments: none → sv_enforceGameBuild 3258',
+        );
+        expect(auditDetails(en, format, { ownerOnly: true })).toBe('Owner only: yes');
+    });
+
     it('should show what it does not know as the log stores it', () => {
         expect(auditDetails(en, format, { reason: 'manual', refusal: 'unheard_of', extra: { a: 1 } })).toBe(
             'reason: manual · Reason: unheard_of · extra: {"a":1}',

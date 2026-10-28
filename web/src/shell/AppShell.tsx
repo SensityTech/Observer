@@ -1,6 +1,14 @@
 import { useQuery } from '@tanstack/react-query';
 import { Link, Outlet } from '@tanstack/react-router';
-import { LayoutDashboard, Menu as MenuIcon, ScrollText, Users, X, type LucideIcon } from 'lucide-react';
+import {
+    LayoutDashboard,
+    Menu as MenuIcon,
+    ScrollText,
+    Server,
+    Users,
+    X,
+    type LucideIcon,
+} from 'lucide-react';
 import { useEffect, useState } from 'react';
 
 import { meQuery } from '../api/auth';
@@ -16,7 +24,13 @@ import { StatusBar } from './StatusBar';
 import { ThemeSwitch } from './ThemeSwitch';
 import { UserMenu } from './UserMenu';
 
-type NavEntry = { to: '/' | '/users' | '/audit'; label: string; icon: LucideIcon; permission: bigint };
+type NavEntry = {
+    to: '/' | '/server' | '/users' | '/audit';
+    label: string;
+    icon: LucideIcon;
+    /** A permission, or the owner alone for what no permission grants. */
+    access: bigint | 'owner';
+};
 
 export function AppShell() {
     const { t } = useI18n();
@@ -56,11 +70,12 @@ export function AppShell() {
     }
 
     const main: NavEntry[] = [
-        { to: '/', label: t.nav.overview, icon: LayoutDashboard, permission: Permission.DashboardView },
+        { to: '/', label: t.nav.overview, icon: LayoutDashboard, access: Permission.DashboardView },
     ];
     const administration: NavEntry[] = [
-        { to: '/users', label: t.nav.users, icon: Users, permission: Permission.UsersManage },
-        { to: '/audit', label: t.nav.audit, icon: ScrollText, permission: Permission.AuditView },
+        { to: '/server', label: t.nav.server, icon: Server, access: 'owner' },
+        { to: '/users', label: t.nav.users, icon: Users, access: Permission.UsersManage },
+        { to: '/audit', label: t.nav.audit, icon: ScrollText, access: Permission.AuditView },
     ];
 
     return (
@@ -145,7 +160,9 @@ function NavEntries({
     group?: string;
     onNavigate: () => void;
 }) {
-    const allowed = entries.filter((entry) => allows(me, entry.permission));
+    const allowed = entries.filter((entry) =>
+        entry.access === 'owner' ? me.isOwner : allows(me, entry.access),
+    );
     if (allowed.length === 0) {
         return null;
     }
