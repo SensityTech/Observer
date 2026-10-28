@@ -124,6 +124,33 @@ every archive entry must stay inside the build. A build past its end of life nee
 Observer runs. Cfx.re's [Platform License Agreement](https://fivem.net/terms) covers the server
 artifacts you download.
 
+FXServer always runs one of the builds in `data/artifacts/`, the one selected on the **Artifacts**
+page of the panel. The page lists the catalog, installs a build with each step shown as it happens
+(cancellable until the build is being installed), and lists what is installed. The first build
+installed is selected; until one is, FXServer does not start.
+
+A build is never swapped under a running server. Choosing one applies it in one of three ways:
+
+- **Restart now**, which also takes the right to control the server;
+- **at the next start**, whatever starts FXServer next, a restart after a crash included;
+- **at the next scheduled restart**, the schedule's own times or a single restart planned.
+
+Going below build 6449 after a newer build ran asks for the number typed: FXServer may delete the
+server's KVP data that far back. A build past its end of life asks for a checkbox.
+
+A new build is on **probation**: once its run is ready, it must stay up 10 minutes to become the
+last healthy build. If it crashes or stops answering before then, FXServer goes back to the last
+healthy build and starts on it, and the page says so; the return never crosses build 6449, and it
+can be turned off in the page's settings. A port already taken or a refused licence key says nothing
+about the build and leaves the probation open.
+
+**Clean up** removes old builds after a preview, keeping 3 besides the ones in use (selected,
+pending, running, last healthy, on probation), and refuses a build any process still runs from.
+The owner can **import** a build folder of the host by copy: Observer names it by the build number
+the owner gives, checks it as an install, leaves out crash dumps and its own bridge, and never
+changes the original. A build folder of the launch settings from before this version is imported the
+same way, unless it already lies in `data/artifacts/`, where it is selected at start.
+
 ## License
 
 No license has been chosen yet. Until one is, all rights are reserved.
