@@ -8,7 +8,7 @@ use rust_embed::RustEmbed;
 
 /// The built panel (`web/dist`). Debug builds read it from disk; release builds carry it.
 #[derive(RustEmbed)]
-#[folder = "$CARGO_MANIFEST_DIR/../../web/dist"]
+#[folder = "../../web/dist"]
 #[allow_missing = true]
 struct Assets;
 
