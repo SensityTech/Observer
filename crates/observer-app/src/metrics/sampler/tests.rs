@@ -31,7 +31,7 @@ fn perf(count: u32, ms: u32) -> TickReport {
 
 fn list(players: &[(u32, u32)]) -> PlayerList {
     PlayerList {
-        players: players.to_vec(),
+        players: players.iter().map(|&(id, ping)| (id, Some(ping))).collect(),
         anonymous: false,
     }
 }
@@ -499,6 +499,43 @@ fn the_p95_ping_is_the_nearest_rank() {
     let values = sample_at(&mut assembler, start, 2, slot(2, 20), Measures::default());
 
     assert_eq!(values.get(Column::PingP95Ms), Some(38.0));
+}
+
+#[test]
+fn a_player_without_a_ping_counts_in_joins_and_leaves_but_not_in_the_pings() {
+    let start = Instant::now();
+    let mut assembler = Assembler::new(start);
+    let slot = |slot: u32, ticks, players: Vec<(u32, Option<u32>)>| {
+        Some(run(
+            1,
+            Readings {
+                perf: Some(at(mid_slot(start, slot), perf(ticks, 1))),
+                players: Some(at(
+                    mid_slot(start, slot),
+                    PlayerList {
+                        players,
+                        anonymous: false,
+                    },
+                )),
+                ..no_readings()
+            },
+        ))
+    };
+    let first = slot(1, 10, vec![(3, Some(40))]);
+    sample_at(&mut assembler, start, 1, first, Measures::default());
+
+    let joined = slot(2, 20, vec![(3, Some(40)), (4, None)]);
+    let joined = sample_at(&mut assembler, start, 2, joined, Measures::default());
+    let unpinged = slot(3, 30, vec![(4, None)]);
+    let unpinged = sample_at(&mut assembler, start, 3, unpinged, Measures::default());
+
+    assert_eq!(joined.get(Column::Joins), Some(1.0));
+    assert_eq!(
+        (joined.get(Column::PingAvgMs), joined.get(Column::PingMaxMs)),
+        (Some(40.0), Some(40.0))
+    );
+    assert_eq!(unpinged.get(Column::Leaves), Some(1.0));
+    assert_eq!(unpinged.get(Column::PingAvgMs), None, "no ping to average");
 }
 
 #[test]

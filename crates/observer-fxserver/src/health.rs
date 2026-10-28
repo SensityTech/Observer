@@ -210,7 +210,8 @@ pub struct Players {
 /// are never kept.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct PlayerList {
-    pub players: Vec<(u32, u32)>,
+    /// The ping is `None` for a client FXServer has no network peer for: it lists it with `-1`.
+    pub players: Vec<(u32, Option<u32>)>,
     /// FXServer did not honour the token and answered the public list, whose ids and pings are 0.
     pub anonymous: bool,
 }
@@ -483,7 +484,7 @@ fn parse_players(body: &[u8]) -> Result<PlayerList, ProbeError> {
     #[derive(Deserialize)]
     struct Entry {
         id: u32,
-        ping: u32,
+        ping: i64,
     }
     let entries: Vec<Entry> = serde_json::from_slice(body)
         .map_err(|_| ProbeError::Invalid("/players.json is not a list of players".to_owned()))?;
@@ -491,7 +492,10 @@ fn parse_players(body: &[u8]) -> Result<PlayerList, ProbeError> {
         return Ok(PlayerList::anonymous());
     }
     Ok(PlayerList {
-        players: entries.into_iter().map(|entry| (entry.id, entry.ping)).collect(),
+        players: entries
+            .into_iter()
+            .map(|entry| (entry.id, u32::try_from(entry.ping).ok()))
+            .collect(),
         anonymous: false,
     })
 }
@@ -713,11 +717,24 @@ mod tests {
         assert_eq!(
             parse_players(body),
             Ok(PlayerList {
-                players: vec![(3, 42), (7, 120)],
+                players: vec![(3, Some(42)), (7, Some(120))],
                 anonymous: false
             })
         );
         assert_eq!(parse_players(b"[]"), Ok(PlayerList::default()));
+    }
+
+    #[test]
+    fn a_player_without_a_network_peer_stays_in_the_list_without_a_ping() {
+        let body = br#"[{"id":3,"name":"Ada","ping":42},{"id":4,"name":"Grace","ping":-1}]"#;
+
+        assert_eq!(
+            parse_players(body),
+            Ok(PlayerList {
+                players: vec![(3, Some(42)), (4, None)],
+                anonymous: false
+            })
+        );
     }
 
     #[test]

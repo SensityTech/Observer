@@ -326,7 +326,7 @@ async fn the_readings_hold_what_the_probes_read_of_the_running_server_only() {
     assert_eq!(run.dynamic.unwrap().value.clients, 3);
     assert_eq!(
         run.players.unwrap().value.players,
-        [(1, 25), (2, 30), (3, 35)],
+        [(1, Some(25)), (2, Some(30)), (3, Some(35))],
         "the token Observer set is honoured"
     );
     let main = run.perf.unwrap().value.thread(Thread::Main).cloned().unwrap();

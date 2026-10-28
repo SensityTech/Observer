@@ -551,7 +551,7 @@ impl Assembler {
         if main_ticks.is_none_or(|ticks| ticks == 0) {
             return;
         }
-        let mut pings: Vec<u32> = list.value.players.iter().map(|&(_, ping)| ping).collect();
+        let mut pings: Vec<u32> = list.value.players.iter().filter_map(|&(_, ping)| ping).collect();
         pings.sort_unstable();
         if let Some(&max) = pings.last() {
             let count = pings.len();
