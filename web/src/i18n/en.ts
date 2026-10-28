@@ -805,6 +805,14 @@ export const en = {
         unknownUsername: 'Unknown username',
         noPermission: 'none',
         unset: 'not set',
+        // A schedule with no zone of its own follows the host's.
+        hostZone: "the host's zone",
+        minutes: (value: string) => `${value} min`,
+        // What a change of the schedule's settings took away with the occurrence it removed.
+        dropped: {
+            skip: 'a skip',
+            delay: 'a delay',
+        },
         // A launch setting only the owner may read: the log says it changed, never what it holds.
         changed: 'changed',
         argumentsSet: (names: string) => `set ${names}`,

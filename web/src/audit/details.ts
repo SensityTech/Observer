@@ -22,6 +22,8 @@ const ACTIONS = new Set<string>(['attempted', 'action']);
 /** The schedule's lists, and the nested entries of its audit details. */
 const LISTS = new Set<string>(['times', 'warnings', 'dropped']);
 const NESTED = new Set<string>(['scheduled', 'dropped']);
+/** The schedule's settings counted in minutes. */
+const MINUTES = new Set<string>(['intervalMinutes', 'skipAfterStart', 'warnings']);
 
 const has = <T extends object>(record: T, key: unknown): key is keyof T =>
     typeof key === 'string' && Object.hasOwn(record, key);
@@ -72,7 +74,7 @@ const word = (t: Messages, format: Format, key: string, value: unknown): string 
         return `${word(t, format, key, value.before)} → ${word(t, format, key, value.after)}`;
     }
     if (value === null) {
-        return t.audit.unset;
+        return key === 'timeZone' ? t.audit.hostZone : t.audit.unset;
     }
     if (HIDDEN.has(key) && value === true) {
         return t.audit.changed;
@@ -90,6 +92,9 @@ const word = (t: Messages, format: Format, key: string, value: unknown): string 
     if (typeof value === 'number') {
         if (key === 'lateBySeconds') {
             return t.audit.seconds(format.number(value));
+        }
+        if (MINUTES.has(key)) {
+            return t.audit.minutes(format.number(value));
         }
         return IDS.has(key) ? String(value) : format.number(value);
     }
@@ -137,6 +142,9 @@ const word = (t: Messages, format: Format, key: string, value: unknown): string 
     }
     if (key === 'source' && has(t.audit.sources, value)) {
         return t.audit.sources[value];
+    }
+    if (key === 'kind' && has(t.audit.dropped, value)) {
+        return t.audit.dropped[value];
     }
     if (key === 'mode' && has(t.schedule.modes, value)) {
         return t.schedule.modes[value];

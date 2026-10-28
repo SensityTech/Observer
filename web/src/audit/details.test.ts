@@ -50,6 +50,22 @@ describe('auditDetails', () => {
         );
     });
 
+    it('should word the schedule settings in minutes, a zone left unset as the host one, and what a change dropped', () => {
+        expect(
+            auditDetails(en, format, {
+                intervalMinutes: { before: 360, after: 420 },
+                skipAfterStart: { before: 120, after: 60 },
+                warnings: { before: [30, 15], after: [15, 5, 1] },
+                timeZone: { before: null, after: 'America/New_York' },
+                dropped: [{ kind: 'skip', by: 'ada' }],
+            }),
+        ).toBe(
+            'Interval: 360 min → 420 min · Skip after a start: 120 min → 60 min · ' +
+                'Warnings: 30 min, 15 min → 15 min, 5 min, 1 min · ' +
+                "Time zone: the host's zone → America/New_York · Dropped: (Kind: a skip, By: ada)",
+        );
+    });
+
     it('should word refused attempts from the catalog', () => {
         expect(
             auditDetails(en, format, {
