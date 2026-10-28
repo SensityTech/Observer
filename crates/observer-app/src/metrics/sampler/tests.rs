@@ -1,11 +1,15 @@
 use std::sync::Weak;
 
+use jiff::{SignedDuration, Timestamp};
 use observer_domain::server::ServerState;
 use observer_fxserver::health::{PlayerList, Players};
 use observer_fxserver::supervisor::Stamped;
 use observer_platform::{Member, Memory};
+use observer_store::{Database, StoreError};
+use tokio::sync::{oneshot, watch};
 
 use super::*;
+use crate::{Accounts, Clock, MetricsSetup, PasswordCost, Servers, Setup, Supervision};
 
 const SLOT: Duration = Duration::from_secs(5);
 
@@ -836,4 +840,93 @@ fn a_database_s_size_includes_its_write_ahead_log() {
 
     assert_eq!(database_size(&path), Some(5096));
     assert_eq!(database_size(&dir.path().join("missing.sqlite3")), None);
+}
+
+#[tokio::test]
+async fn a_write_that_outlasts_the_next_slot_does_not_cost_that_slot() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = dir.path().join("observer.sqlite3");
+    let db = Database::open(&state, dir.path().join("backups")).await.unwrap();
+    let services = Clock::manual("2025-01-06T09:00:00Z".parse().unwrap());
+    let accounts = Accounts::new(db.clone(), services.clone(), PasswordCost::TEST)
+        .await
+        .unwrap();
+    let (supervision, _running) = Supervision::start(
+        Setup {
+            servers: Servers::new(db.clone(), services.clone()),
+            db,
+            clock: services,
+            accounts,
+            data_dir: dir.path().join("data"),
+            console_logs: dir.path().join("data/logs/console"),
+            log: None,
+        },
+        |_| {},
+    )
+    .await
+    .unwrap();
+    let slot_end: Timestamp = "2025-01-06T09:00:00Z".parse().unwrap();
+    // A millisecond before the slot ends: the sampler sleeps 101 ms at a time until the clock moves.
+    let clock = Clock::manual(slot_end - SignedDuration::from_millis(1));
+    let path = dir.path().join("metrics.sqlite3");
+    let metrics = Metrics::open(MetricsSetup {
+        path: path.clone(),
+        clock: clock.clone(),
+    })
+    .await
+    .unwrap();
+    let (_, mut live) = metrics.live();
+    let (_sockets, sockets) = watch::channel(0);
+    let sampling = metrics.start(Sources {
+        supervision,
+        sockets,
+        data_dir: dir.path().to_path_buf(),
+        databases: DatabaseFiles { state, metrics: path },
+    });
+    let (release, held) = std::sync::mpsc::channel::<()>();
+    let (begun, holding) = oneshot::channel();
+    let write = tokio::spawn({
+        let db = metrics.inner.db.clone();
+        async move {
+            db.write(move |_| -> Result<(), StoreError> {
+                let _ = begun.send(());
+                let _ = held.recv();
+                Ok(())
+            })
+            .await
+        }
+    });
+    holding.await.unwrap();
+
+    clock.advance(SignedDuration::from_millis(101));
+    // The sampler's timer goes off before this one, on the same thread: it takes the slot that
+    // just ended and waits behind the held write, which then outlasts the next slot's end.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    clock.advance(SignedDuration::from_secs(6));
+    release.send(()).unwrap();
+    write.await.unwrap().unwrap();
+    let mut published = Vec::new();
+    for _ in 0..2 {
+        let sample = tokio::time::timeout(SLOT, live.recv())
+            .await
+            .expect("the slot after the held write was not sampled")
+            .unwrap();
+        published.push(sample.ts);
+    }
+    sampling.close().await;
+    let written = metrics
+        .inner
+        .db
+        .read(|conn| -> Result<Vec<i64>, StoreError> {
+            let mut statement = conn.prepare("SELECT ts FROM sample_5s ORDER BY ts")?;
+            let rows = statement.query_map([], |row| row.get(0))?;
+            Ok(rows.collect::<Result<_, _>>()?)
+        })
+        .await
+        .unwrap();
+    metrics.close().await.unwrap();
+
+    let slots = [slot_end.as_second() - 5, slot_end.as_second()];
+    assert_eq!(published, slots);
+    assert_eq!(written, slots);
 }
