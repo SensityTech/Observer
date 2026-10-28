@@ -25,6 +25,7 @@ use observer_domain::live::{
     CLOSE_SESSION_ENDED, CONTRACT, ClientMessage, PROTOCOL, ServerMessage, Topic, UnsubscribeReason,
 };
 use tokio::sync::mpsc::{self, error::TrySendError};
+use tokio::sync::watch;
 use tokio::task::{AbortHandle, JoinHandle, JoinSet};
 use tokio::time::{Instant, interval_at, sleep, sleep_until, timeout};
 use tokio_util::sync::CancellationToken;
@@ -65,6 +66,8 @@ pub struct Live {
     connections: Arc<AtomicU64>,
     /// How many sockets each session holds open.
     open: Arc<Mutex<HashMap<i64, usize>>>,
+    /// All of them together, for the statistics.
+    count: Arc<watch::Sender<usize>>,
     started_at: Timestamp,
 }
 
@@ -75,8 +78,14 @@ impl Live {
             sockets: TaskTracker::new(),
             connections: Arc::default(),
             open: Arc::default(),
+            count: Arc::new(watch::channel(0).0),
             started_at: Timestamp::now(),
         }
+    }
+
+    /// The open sockets, as their count changes.
+    pub fn sockets(&self) -> watch::Receiver<usize> {
+        self.count.subscribe()
     }
 
     /// Closes every socket as going away, which tells the panel to reconnect later, and returns
@@ -95,8 +104,10 @@ impl Live {
             return None;
         }
         *count += 1;
+        self.count.send_replace(open.values().sum());
         Some(Place {
             open: Arc::clone(&self.open),
+            count: Arc::clone(&self.count),
             session_id,
         })
     }
@@ -105,6 +116,7 @@ impl Live {
 /// A socket counted against its session until it ends, or until its upgrade fails.
 struct Place {
     open: Arc<Mutex<HashMap<i64, usize>>>,
+    count: Arc<watch::Sender<usize>>,
     session_id: i64,
 }
 
@@ -117,6 +129,7 @@ impl Drop for Place {
                 count.remove();
             }
         }
+        self.count.send_replace(open.values().sum());
     }
 }
 

@@ -2,13 +2,17 @@
 //! `+ensure`), prints lines shaped like FXServer 35245's, runs the commands it reads on stdin from
 //! its main loop, writes structured traces on fd 3 and serves `/dynamic.json`, `/perf/`,
 //! `/players.json` and `/info.json` on the cfg's `endpoint_add_tcp`. With `+ensure observer` it
-//! also plays the bridge: `ready` once, then a heartbeat.
+//! also plays the bridge: `ready` and the started resources once, then a heartbeat and the heap.
 //!
 //! Failures on demand, through convars (`+set fake_x y`, or in the cfg) or console commands:
 //! - `fake_quit_delay_ms` (500): time between `quit` and the end, which is what FXServer 35245 does:
 //!   exit code 1 on Windows, SIGSEGV on Linux;
 //! - `fake_ignore_quit 1`: `quit` does nothing;
 //! - `fake_heartbeat_ms` (3000): the bridge heartbeat period;
+//! - `fake_heap_ms` (10000): how often the bridge reports the JS heap;
+//! - `fake_players <n>`: `/dynamic.json` counts `n` clients and `/players.json` lists ids 1 to `n`
+//!   with a ping of `20 + 5 × id`, or the anonymised public list without the right token;
+//! - `fake_tick_ms <ms>` (0): how long each svMain tick is observed to take in `/perf/`;
 //! - `fake_crash_after_ms`, `fake_hang_after_ms`: crash or hang the main loop on a timer;
 //! - `fake_bind_error 1`: report the port as taken, as when it really is;
 //! - `fake_license missing|invalid`: refuse to run for want of a valid licence key, with FXServer's
@@ -54,6 +58,8 @@ const HOLD_PIPES: &str = "--fake-hold-pipes";
 pub struct Server {
     convars: Mutex<HashMap<String, String>>,
     main_ticks: AtomicU64,
+    /// What svMain's ticks were observed to take, as `/perf/` reports it.
+    main_observed: Mutex<Observed>,
     started: Instant,
     /// Uptime in milliseconds until which stdin is left unread.
     input_stalled_until: AtomicU64,
@@ -87,13 +93,49 @@ impl Server {
         self.main_ticks.load(Ordering::Relaxed)
     }
 
+    pub fn main_observed(&self) -> Observed {
+        self.main_observed
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    fn tick(&self) {
+        let ms = self.number("fake_tick_ms").unwrap_or(0);
+        let mut observed = self.main_observed.lock().unwrap_or_else(PoisonError::into_inner);
+        observed.observe(ms);
+        self.main_ticks.fetch_add(1, Ordering::Relaxed);
+    }
+
     pub fn uptime_ms(&self) -> u64 {
         u64::try_from(self.started.elapsed().as_millis()).unwrap_or(u64::MAX)
     }
 }
 
+/// One thread's tick histogram in FXServer 35245's bounds.
+#[derive(Clone, Default)]
+pub struct Observed {
+    pub count: u64,
+    /// Ticks at or under each bound of [`http::BUCKETS`].
+    pub within: [u64; http::BUCKETS.len()],
+    pub sum_ms: u64,
+}
+
+impl Observed {
+    fn observe(&mut self, ms: u64) {
+        self.count += 1;
+        self.sum_ms += ms;
+        for (within, (_, bound_ms)) in self.within.iter_mut().zip(http::BUCKETS) {
+            if ms <= bound_ms {
+                *within += 1;
+            }
+        }
+    }
+}
+
 struct Bridge {
     next_heartbeat: Instant,
+    next_heap: Instant,
     ready: bool,
 }
 
@@ -102,6 +144,8 @@ struct Fake {
     traces: Traces,
     endpoint: Option<String>,
     bridge: Option<Bridge>,
+    /// Every resource started, in order.
+    started: Vec<String>,
     quit_at: Option<Instant>,
 }
 
@@ -117,12 +161,14 @@ fn main() {
         server: Arc::new(Server {
             convars: Mutex::new(HashMap::new()),
             main_ticks: AtomicU64::new(0),
+            main_observed: Mutex::default(),
             started: Instant::now(),
             input_stalled_until: AtomicU64::new(0),
         }),
         traces,
         endpoint: None,
         bridge: None,
+        started: Vec::new(),
         quit_at: None,
     };
     fake.boot(&command_line(std::env::args().skip(1)));
@@ -192,7 +238,7 @@ impl Fake {
                 }
             }
             self.beat(now);
-            self.server.main_ticks.fetch_add(1, Ordering::Relaxed);
+            self.server.tick();
             thread::sleep(TICK);
         }
     }
@@ -221,6 +267,7 @@ impl Fake {
             }
             ("stop", Some(resource)) => {
                 stop(resource);
+                self.started.retain(|started| started != resource);
                 if resource == "observer" {
                     self.bridge = None;
                 }
@@ -265,9 +312,14 @@ impl Fake {
     fn start(&mut self, resource: &str) {
         console::line(SCRIPTING, &format!("Creating script environments for {resource}"));
         console::line(RESOURCES, &format!("Started resource {resource}"));
+        if !self.started.iter().any(|started| started == resource) {
+            self.started.push(resource.to_owned());
+        }
         if resource == "observer" {
+            let heap_period = Duration::from_millis(self.server.number("fake_heap_ms").unwrap_or(10_000));
             self.bridge = Some(Bridge {
                 next_heartbeat: Instant::now(),
+                next_heap: Instant::now() + heap_period,
                 ready: false,
             });
         }
@@ -285,11 +337,23 @@ impl Fake {
                 "observer",
                 &json!({ "type": "observer", "kind": "ready", "contractVersion": 1 }),
             );
+            self.traces.script(
+                "observer",
+                &json!({ "type": "observer", "kind": "resources", "started": self.started }),
+            );
         }
         if now >= bridge.next_heartbeat {
             bridge.next_heartbeat = now + period;
             self.traces
                 .script("observer", &json!({ "type": "observer", "kind": "hb" }));
+        }
+        if now >= bridge.next_heap {
+            bridge.next_heap =
+                now + Duration::from_millis(self.server.number("fake_heap_ms").unwrap_or(10_000));
+            self.traces.script(
+                "observer",
+                &json!({ "type": "observer", "kind": "heap", "heapUsed": 18_874_368, "heapTotal": 25_165_824, "rss": 62_914_560, "external": 2_097_152 }),
+            );
         }
     }
 

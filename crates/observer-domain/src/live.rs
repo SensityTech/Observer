@@ -8,6 +8,7 @@ use ts_rs::TS;
 
 use crate::audit::AuditEntry;
 use crate::error::ErrorCode;
+use crate::metrics::{LiveSample, MetricsSnapshot};
 use crate::schedule::ScheduleStatus;
 use crate::server::{ConsoleBatch, ConsoleSnapshot, ServerStatus};
 
@@ -41,6 +42,9 @@ pub enum Topic {
     /// FXServer's console, resumed from `since`, the number of the last line the panel holds.
     /// Needs the console permission.
     Console,
+    /// A sample of the statistics every five seconds. Needs the dashboard permission.
+    #[serde(rename = "metrics.live")]
+    MetricsLive,
     /// FXServer's restart schedule and its next restart. Needs the dashboard, schedule or server
     /// control permission.
     #[serde(rename = "server.schedule")]
@@ -48,11 +52,12 @@ pub enum Topic {
 }
 
 impl Topic {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::Status,
         Self::Audit,
         Self::ServerStatus,
         Self::Console,
+        Self::MetricsLive,
         Self::ServerSchedule,
     ];
 }
@@ -117,6 +122,8 @@ pub enum TopicSnapshot {
     #[serde(rename = "server.status")]
     ServerStatus(ServerStatus),
     Console(ConsoleSnapshot),
+    #[serde(rename = "metrics.live")]
+    MetricsLive(MetricsSnapshot),
     #[serde(rename = "server.schedule")]
     ServerSchedule(ScheduleStatus),
 }
@@ -130,6 +137,8 @@ pub enum TopicEvent {
     #[serde(rename = "server.status")]
     ServerStatus(ServerStatus),
     Console(ConsoleBatch),
+    #[serde(rename = "metrics.live")]
+    MetricsLive(LiveSample),
     /// The whole schedule status again, whenever any of it changes.
     #[serde(rename = "server.schedule")]
     ServerSchedule(ScheduleStatus),
@@ -238,6 +247,13 @@ mod tests {
             parse(r#"{"type":"sub","topic":"server.status"}"#),
             Some(ClientMessage::Sub {
                 topic: Topic::ServerStatus,
+                since: None
+            })
+        );
+        assert_eq!(
+            parse(r#"{"type":"sub","topic":"metrics.live"}"#),
+            Some(ClientMessage::Sub {
+                topic: Topic::MetricsLive,
                 since: None
             })
         );

@@ -1,0 +1,370 @@
+//! The statistics' own database, `metrics.sqlite3`: samples every five seconds, their minute and
+//! hour aggregates, and FXServer's runs. It is not Observer's state: a file that cannot be read
+//! is set aside and a new one started, and it is never backed up.
+
+mod columns;
+pub mod rollups;
+pub mod runs;
+pub mod samples;
+pub mod series;
+
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+use rusqlite::config::DbConfig;
+use rusqlite::{Connection, ErrorCode, OpenFlags, Transaction, TransactionBehavior};
+use rusqlite_migration::{M, Migrations, SchemaVersion};
+use tracing::warn;
+
+use crate::database::StoreError;
+
+pub use columns::{Affinity, Column, Kind, Values};
+
+const MIGRATIONS: &[M<'static>] = &[M::up(include_str!("../../migrations/metrics/0001_samples.sql"))];
+
+/// The metrics database. One connection writes, as for the state database; reads have their own
+/// beside it, which the write-ahead log allows, so that a burst of them never holds up a sample.
+#[derive(Clone)]
+pub struct MetricsDatabase {
+    conn: tokio_rusqlite::Connection,
+    reader: tokio_rusqlite::Connection,
+}
+
+impl MetricsDatabase {
+    /// Opens or creates the database and migrates it. A corrupt file, or one a newer Observer
+    /// wrote, is renamed `metrics.sqlite3.set-aside-<time>` with its journal files, and a new one
+    /// takes its place.
+    pub async fn open(path: impl Into<PathBuf>) -> Result<Self, StoreError> {
+        let path = path.into();
+        let (conn, reader) = tokio::task::spawn_blocking(move || {
+            let conn = match open_blocking(&path) {
+                Err(error) if unreadable(&error) => {
+                    let aside = set_aside(&path)?;
+                    warn!(%error, set_aside = %aside.display(), "the metrics database could not be read; starting a new one");
+                    open_blocking(&path)
+                }
+                opened => opened,
+            }?;
+            Ok::<_, StoreError>((conn, open_reader(&path)?))
+        })
+        .await
+        .map_err(|_| StoreError::Closed)??;
+        Ok(Self {
+            conn: conn.into(),
+            reader: reader.into(),
+        })
+    }
+
+    /// Runs `function` in one transaction, committed when it returns `Ok`.
+    pub async fn write<R, E, F>(&self, function: F) -> Result<R, E>
+    where
+        R: Send + 'static,
+        E: From<StoreError> + Send + 'static,
+        F: FnOnce(&Transaction<'_>) -> Result<R, E> + Send + 'static,
+    {
+        call(&self.conn, move |conn| {
+            let transaction = conn
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .map_err(StoreError::from)?;
+            let value = function(&transaction)?;
+            transaction.commit().map_err(StoreError::from)?;
+            Ok(value)
+        })
+        .await
+    }
+
+    /// Runs `function` on the read-only connection, which sees what was committed last.
+    pub async fn read<R, E, F>(&self, function: F) -> Result<R, E>
+    where
+        R: Send + 'static,
+        E: From<StoreError> + Send + 'static,
+        F: FnOnce(&Connection) -> Result<R, E> + Send + 'static,
+    {
+        call(&self.reader, move |conn| function(conn)).await
+    }
+
+    pub async fn close(self) -> Result<(), StoreError> {
+        // The writer goes last: closing it checkpoints the log into the file.
+        self.reader.close().await.map_err(|_| StoreError::Closed)?;
+        self.conn.close().await.map_err(|_| StoreError::Closed)
+    }
+}
+
+async fn call<R, E, F>(conn: &tokio_rusqlite::Connection, function: F) -> Result<R, E>
+where
+    R: Send + 'static,
+    E: From<StoreError> + Send + 'static,
+    F: FnOnce(&mut Connection) -> Result<R, E> + Send + 'static,
+{
+    conn.call(function).await.map_err(|error| match error {
+        tokio_rusqlite::Error::Error(error) => error,
+        _ => StoreError::Closed.into(),
+    })
+}
+
+fn open_blocking(path: &Path) -> Result<Connection, StoreError> {
+    let flags =
+        OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE | OpenFlags::SQLITE_OPEN_NO_MUTEX;
+    let mut conn = Connection::open_with_flags(path, flags)?;
+    // Only takes effect before the first table exists, which is the point: the hourly upkeep
+    // gives back the pages the retention frees.
+    conn.pragma_update(None, "auto_vacuum", "INCREMENTAL")?;
+    conn.set_db_config(DbConfig::SQLITE_DBCONFIG_DEFENSIVE, true)?;
+    conn.pragma_update_and_check(None, "journal_mode", "WAL", |row| row.get::<_, String>(0))?;
+    // Losing the last samples to a power cut is acceptable; a sync on every one of them is not.
+    conn.pragma_update(None, "synchronous", "NORMAL")?;
+    conn.pragma_update(None, "trusted_schema", false)?;
+    conn.pragma_update(None, "journal_size_limit", 64 * 1024 * 1024)?;
+    conn.busy_timeout(Duration::from_secs(5))?;
+    let verdict: String = conn.query_row("PRAGMA quick_check", [], |row| row.get(0))?;
+    if verdict != "ok" {
+        return Err(StoreError::Corrupt(verdict));
+    }
+    let migrations = Migrations::from_slice(MIGRATIONS);
+    if let SchemaVersion::Outside(found) = migrations.current_version(&conn)? {
+        return Err(StoreError::TooNew {
+            found: found.get(),
+            known: MIGRATIONS.len(),
+        });
+    }
+    migrations.to_latest(&mut conn)?;
+    Ok(conn)
+}
+
+/// Opened once the writer has migrated the file.
+fn open_reader(path: &Path) -> Result<Connection, StoreError> {
+    let conn = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )?;
+    conn.set_db_config(DbConfig::SQLITE_DBCONFIG_DEFENSIVE, true)?;
+    conn.pragma_update(None, "trusted_schema", false)?;
+    conn.busy_timeout(Duration::from_secs(5))?;
+    Ok(conn)
+}
+
+/// What makes the file useless to this build, as opposed to a folder it cannot write to.
+fn unreadable(error: &StoreError) -> bool {
+    match error {
+        StoreError::Corrupt(_) | StoreError::TooNew { .. } => true,
+        StoreError::Sqlite(error) => matches!(
+            error.sqlite_error_code(),
+            Some(ErrorCode::NotADatabase | ErrorCode::DatabaseCorrupt)
+        ),
+        _ => false,
+    }
+}
+
+fn set_aside(path: &Path) -> Result<PathBuf, StoreError> {
+    let stamp = jiff::Timestamp::now().strftime("%Y%m%d-%H%M%S").to_string();
+    let aside = path.with_file_name(format!(
+        "{}.set-aside-{stamp}",
+        path.file_name().unwrap_or_default().to_string_lossy()
+    ));
+    std::fs::rename(path, &aside)?;
+    for suffix in ["-wal", "-shm"] {
+        let mut journal = path.as_os_str().to_owned();
+        journal.push(suffix);
+        let mut moved = aside.as_os_str().to_owned();
+        moved.push(suffix);
+        match std::fs::rename(&journal, &moved) {
+            Err(error) if error.kind() != std::io::ErrorKind::NotFound => return Err(error.into()),
+            _ => {}
+        }
+    }
+    Ok(aside)
+}
+
+/// A migrated in-memory metrics database, for the tests.
+#[cfg(test)]
+pub(crate) fn memory() -> Connection {
+    let mut conn = Connection::open_in_memory().unwrap();
+    conn.pragma_update(None, "auto_vacuum", "INCREMENTAL").unwrap();
+    Migrations::from_slice(MIGRATIONS).to_latest(&mut conn).unwrap();
+    conn
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn migrations_are_valid() {
+        Migrations::from_slice(MIGRATIONS).validate().unwrap();
+    }
+
+    fn table_columns(conn: &Connection, table: &str) -> Vec<(String, String)> {
+        let mut statement = conn
+            .prepare(&format!(
+                "SELECT name, type FROM pragma_table_info('{table}') ORDER BY cid"
+            ))
+            .unwrap();
+        statement
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect()
+    }
+
+    fn sql_type(affinity: Affinity) -> &'static str {
+        match affinity {
+            Affinity::Integer => "INTEGER",
+            Affinity::Real => "REAL",
+        }
+    }
+
+    #[test]
+    fn the_column_list_matches_the_three_tables() {
+        let conn = memory();
+        let pair = |name: String, kind: &str| (name, kind.to_owned());
+
+        let mut raw = vec![pair("ts".into(), "INTEGER"), pair("state".into(), "TEXT")];
+        raw.extend(Column::ALL.map(|column| pair(column.name().into(), sql_type(column.affinity()))));
+        assert_eq!(table_columns(&conn, "sample_5s"), raw);
+
+        let mut aggregates = vec![
+            pair("ts".into(), "INTEGER"),
+            pair("samples".into(), "INTEGER"),
+            pair("online".into(), "INTEGER"),
+        ];
+        for column in Column::ALL {
+            let name = column.name();
+            match column.kind() {
+                Kind::Gauge => aggregates.extend([
+                    pair(format!("{name}_avg"), "REAL"),
+                    pair(format!("{name}_min"), "REAL"),
+                    pair(format!("{name}_max"), "REAL"),
+                    pair(format!("{name}_n"), "INTEGER"),
+                ]),
+                Kind::Count => aggregates.extend([
+                    pair(format!("{name}_sum"), "INTEGER"),
+                    pair(format!("{name}_n"), "INTEGER"),
+                ]),
+            }
+        }
+        assert_eq!(table_columns(&conn, "sample_1m"), aggregates);
+        assert_eq!(table_columns(&conn, "sample_1h"), aggregates);
+    }
+
+    #[tokio::test]
+    async fn a_new_database_is_in_wal_mode_with_incremental_vacuum() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("metrics.sqlite3");
+
+        MetricsDatabase::open(&path).await.unwrap().close().await.unwrap();
+
+        let conn = Connection::open(&path).unwrap();
+        let journal: String = conn
+            .pragma_query_value(None, "journal_mode", |row| row.get(0))
+            .unwrap();
+        let vacuum: i64 = conn
+            .pragma_query_value(None, "auto_vacuum", |row| row.get(0))
+            .unwrap();
+        assert_eq!(journal, "wal");
+        assert_eq!(vacuum, 2, "incremental");
+    }
+
+    #[tokio::test]
+    async fn a_read_does_not_wait_for_a_write_under_way() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = MetricsDatabase::open(dir.path().join("metrics.sqlite3"))
+            .await
+            .unwrap();
+        let (release, held) = std::sync::mpsc::channel::<()>();
+        let (begun, writing) = tokio::sync::oneshot::channel();
+        let write = tokio::spawn({
+            let db = db.clone();
+            async move {
+                db.write(move |tx| -> Result<(), StoreError> {
+                    tx.execute(
+                        "INSERT INTO sample_5s (ts, state) VALUES (1761642000, 'online')",
+                        [],
+                    )?;
+                    let _ = begun.send(());
+                    let _ = held.recv();
+                    Ok(())
+                })
+                .await
+            }
+        });
+        writing.await.unwrap();
+
+        let read = tokio::time::timeout(
+            Duration::from_secs(2),
+            db.read(|conn| -> Result<i64, StoreError> {
+                Ok(conn.query_row("SELECT count(*) FROM sample_5s", [], |row| row.get(0))?)
+            }),
+        )
+        .await;
+        release.send(()).unwrap();
+        write.await.unwrap().unwrap();
+
+        assert_eq!(
+            read.expect("the read waited for the write").unwrap(),
+            0,
+            "the write is not committed yet"
+        );
+        db.close().await.unwrap();
+    }
+
+    fn set_aside_files(dir: &Path) -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|name| name.contains(".set-aside-"))
+            .collect();
+        names.sort();
+        names
+    }
+
+    #[tokio::test]
+    async fn a_file_that_is_not_a_database_is_set_aside_and_replaced() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("metrics.sqlite3");
+        std::fs::write(&path, vec![0x42; 8192]).unwrap();
+
+        let db = MetricsDatabase::open(&path).await.unwrap();
+
+        let rows: i64 = db
+            .read(|conn| {
+                Ok::<_, StoreError>(conn.query_row("SELECT count(*) FROM sample_5s", [], |row| row.get(0))?)
+            })
+            .await
+            .unwrap();
+        assert_eq!(rows, 0);
+        let aside = set_aside_files(dir.path());
+        assert_eq!(aside.len(), 1, "{aside:?}");
+        assert!(aside[0].starts_with("metrics.sqlite3.set-aside-"));
+        assert_eq!(
+            std::fs::read(dir.path().join(&aside[0])).unwrap(),
+            vec![0x42; 8192]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_database_from_a_newer_observer_is_set_aside() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("metrics.sqlite3");
+        MetricsDatabase::open(&path).await.unwrap().close().await.unwrap();
+        Connection::open(&path)
+            .unwrap()
+            .pragma_update(None, "user_version", 99)
+            .unwrap();
+
+        MetricsDatabase::open(&path).await.unwrap().close().await.unwrap();
+
+        let aside = set_aside_files(dir.path());
+        let database = aside
+            .iter()
+            .find(|name| !name.ends_with("-wal") && !name.ends_with("-shm"))
+            .expect("the newer database is kept aside");
+        let version = |path: &Path| -> u32 {
+            Connection::open(path)
+                .unwrap()
+                .pragma_query_value(None, "user_version", |row| row.get(0))
+                .unwrap()
+        };
+        assert_eq!(version(&dir.path().join(database)), 99);
+        assert_eq!(version(&path), 1);
+    }
+}

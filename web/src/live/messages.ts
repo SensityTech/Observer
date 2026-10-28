@@ -6,10 +6,12 @@ import type { HangCause } from '../api/generated/HangCause';
 import type { HealthProblem } from '../api/generated/HealthProblem';
 import type { LaunchReadiness } from '../api/generated/LaunchReadiness';
 import type { LineKind } from '../api/generated/LineKind';
+import type { LiveSample } from '../api/generated/LiveSample';
 import type { Outcome } from '../api/generated/Outcome';
 import type { RestartSource } from '../api/generated/RestartSource';
 import type { ScheduleMode } from '../api/generated/ScheduleMode';
 import type { ScheduleStatus } from '../api/generated/ScheduleStatus';
+import type { Series } from '../api/generated/Series';
 import type { ServerMessage } from '../api/generated/ServerMessage';
 import type { ServerState } from '../api/generated/ServerState';
 import type { ServerStatus } from '../api/generated/ServerStatus';
@@ -26,8 +28,58 @@ const TOPICS = {
     audit: true,
     'server.status': true,
     console: true,
+    'metrics.live': true,
     'server.schedule': true,
 } satisfies Record<Topic, true>;
+
+export const SERIES = {
+    players: true,
+    slots: true,
+    pingAvg: true,
+    pingP95: true,
+    pingMax: true,
+    joins: true,
+    leaves: true,
+    mainTick: true,
+    networkTick: true,
+    syncTick: true,
+    mainOverBudget: true,
+    networkOverBudget: true,
+    syncOverBudget: true,
+    hitchesMain: true,
+    hitchesNetwork: true,
+    hitchesSync: true,
+    barks: true,
+    hitchMax: true,
+    resources: true,
+    jsHeapUsed: true,
+    jsHeapTotal: true,
+    fxsCpu: true,
+    fxsWorkingSet: true,
+    fxsPrivate: true,
+    fxsThreads: true,
+    fxsHandles: true,
+    fxsRead: true,
+    fxsWrite: true,
+    children: true,
+    childrenCpu: true,
+    childrenWorkingSet: true,
+    childrenPrivate: true,
+    hostCpu: true,
+    hostMemoryUsed: true,
+    hostMemoryTotal: true,
+    hostDiskFree: true,
+    hostDiskTotal: true,
+    hostReceive: true,
+    hostSend: true,
+    observerCpu: true,
+    observerWorkingSet: true,
+    observerPrivate: true,
+    stateDatabase: true,
+    metricsDatabase: true,
+    dashboardClients: true,
+    sampleTime: true,
+} satisfies Record<Series, true>;
 
 const ACTOR_KINDS = {
     user: true,
@@ -145,6 +197,9 @@ const isId = (value: unknown): value is number => Number.isSafeInteger(value);
 const isText = (value: unknown): value is string => typeof value === 'string';
 
 const isTimestamp = (value: unknown): value is string => isText(value) && !Number.isNaN(Date.parse(value));
+
+const isFiniteNumber = (value: unknown): value is number =>
+    typeof value === 'number' && Number.isFinite(value);
 
 const orNull =
     <T>(check: (value: unknown) => value is T) =>
@@ -276,6 +331,30 @@ export const isAuditEntry = (value: unknown): value is AuditEntry =>
     oneOf<Outcome>(OUTCOMES)(value.outcome) &&
     isRecord(value.details);
 
+/** Every key a known series, every value a finite number. */
+const isSeriesValues = (value: unknown) =>
+    isRecord(value) &&
+    Object.entries(value).every(
+        ([series, measured]) => Object.hasOwn(SERIES, series) && isFiniteNumber(measured),
+    );
+
+const isChildProcess = (value: unknown) =>
+    isRecord(value) &&
+    isCount(value.pid) &&
+    isText(value.name) &&
+    orNull(isFiniteNumber)(value.cpu) &&
+    isCount(value.workingSet) &&
+    isCount(value.private);
+
+export const isLiveSample = (value: unknown): value is LiveSample =>
+    isRecord(value) &&
+    isId(value.ts) &&
+    oneOf<ServerState>(SERVER_STATES)(value.state) &&
+    isSeriesValues(value.values) &&
+    Array.isArray(value.children) &&
+    value.children.every(isChildProcess) &&
+    (value.cores === null || (isCount(value.cores) && value.cores > 0));
+
 const isSnapshotData = (topic: Topic, data: unknown) => {
     if (!isRecord(data)) {
         return false;
@@ -294,6 +373,8 @@ const isSnapshotData = (topic: Topic, data: unknown) => {
                 typeof data.restarted === 'boolean' &&
                 isCount(data.last)
             );
+        case 'metrics.live':
+            return orNull(isLiveSample)(data.latest);
         case 'server.schedule':
             return isScheduleStatus(data);
     }
@@ -309,6 +390,8 @@ const isEventData = (topic: Topic, data: unknown) => {
             return isServerStatus(data);
         case 'console':
             return isRecord(data) && isLines(data.lines);
+        case 'metrics.live':
+            return isLiveSample(data);
         case 'server.schedule':
             return isScheduleStatus(data);
     }

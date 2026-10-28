@@ -1,11 +1,13 @@
 //! The services that own Observer's rules: accounts and sessions, first-run setup, login
-//! throttling, the audit log, how servers are launched, their supervision and their restart
-//! schedule. They know nothing of HTTP; the web layer and the command line both call them.
+//! throttling, the audit log, how servers are launched, their supervision, their statistics and
+//! their restart schedule. They know nothing of HTTP; the web layer and the command line both call
+//! them.
 
 mod accounts;
 mod audit;
 mod clock;
 mod error;
+mod metrics;
 mod passwords;
 mod schedule;
 mod secrets;
@@ -23,6 +25,7 @@ pub use accounts::Accounts;
 pub use audit::AuditLog;
 pub use clock::Clock;
 pub use error::Error;
+pub use metrics::{DatabaseFiles, Metrics, MetricsSetup, Sampling, Sources};
 pub use passwords::PasswordCost;
 pub use schedule::{Schedule, ScheduleSetup, ScheduleTask, ScheduleTimings};
 pub use servers::Servers;

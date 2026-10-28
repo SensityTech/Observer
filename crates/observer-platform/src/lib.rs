@@ -1,12 +1,14 @@
 //! What Observer needs from the operating system to run FXServer: spawning it with stdin, stdout,
 //! stderr and file descriptor 3, owning its whole process tree, and the console and signal plumbing
 //! around it; and for installing builds, the free space of a volume and the signature check of
-//! FXServer.exe. The only crate allowed to use `unsafe` outside test tools.
+//! FXServer.exe; for the statistics, what the tree, Observer and the host use. The only crate
+//! allowed to use `unsafe` outside test tools.
 #![allow(unsafe_code)]
 
 mod stream;
 #[cfg(unix)]
 mod unix;
+mod usage;
 #[cfg(windows)]
 mod windows;
 
@@ -22,6 +24,7 @@ pub use stream::{Output, Stdin};
 pub use unix::ProcessTree;
 #[cfg(unix)]
 pub use unix::leftovers::{PidFile, Sweep};
+pub use usage::{CpuTimes, HostUsage, Interface, Member, Memory, Space, TreeUsage, Usage};
 #[cfg(windows)]
 pub use windows::ProcessTree;
 #[cfg(windows)]
@@ -83,13 +86,42 @@ pub fn spawn(launch: &Launch) -> Result<Spawned, SpawnError> {
 
 /// The bytes this user may still write on the volume that holds `dir`.
 pub fn available_space(dir: &Path) -> io::Result<u64> {
+    Ok(volume_space(dir)?.available)
+}
+
+/// The free and total bytes of the volume that holds `dir`.
+pub fn volume_space(dir: &Path) -> io::Result<Space> {
     #[cfg(windows)]
     {
-        windows::available_space(dir)
+        windows::usage::volume_space(dir)
     }
     #[cfg(unix)]
     {
-        unix::available_space(dir)
+        unix::usage::volume_space(dir)
+    }
+}
+
+/// What Observer's own process uses.
+pub fn own_usage() -> io::Result<Usage> {
+    #[cfg(windows)]
+    {
+        windows::usage::own_usage()
+    }
+    #[cfg(unix)]
+    {
+        unix::usage::own_usage()
+    }
+}
+
+/// The machine's processors, memory and physical network adapters.
+pub fn host_usage() -> HostUsage {
+    #[cfg(windows)]
+    {
+        windows::usage::host_usage()
+    }
+    #[cfg(unix)]
+    {
+        unix::usage::host_usage()
     }
 }
 

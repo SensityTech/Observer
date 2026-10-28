@@ -3,7 +3,7 @@
 
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant};
 
 use observer_domain::launch::LaunchSettings;
@@ -19,9 +19,10 @@ use crate::bridge::{self, BridgeEvent, Report, StopReason};
 use crate::console::{ConsoleHub, LineAssembler, LineFlags, LineKind, plain, sanitize};
 use crate::crashes::{self, DumpLimits};
 use crate::exit;
-use crate::health::{self, HangCause, Health, HealthLimits, Players, Probe, Problem, Verdict};
+use crate::health::{self, HangCause, Health, HealthLimits, PlayerList, Players, Probe, Problem, Verdict};
 use crate::launch::{self, CfgWarning};
 use crate::layout::{Flavour, Layout};
+use crate::perf::TickReport;
 use crate::recovery::{Next, Recovery, RecoveryPolicy};
 use crate::stdin::{CommandRefusal, Credentials, StdinError, StdinWriter, SystemLine, UserCommand, Write};
 use crate::trace::{self, Trace, TraceDecoder, TraceKind};
@@ -271,6 +272,32 @@ pub struct Status {
     pub build: Option<u32>,
 }
 
+/// What the probes read last of the server that runs now, for the statistics. It changes every
+/// second and holds what the panel never sees, so it stays out of [`Status`].
+#[derive(Debug, Clone, Default)]
+pub struct Readings {
+    pub run: Option<RunReadings>,
+}
+
+#[derive(Debug, Clone)]
+pub struct RunReadings {
+    pub generation: u32,
+    pub started_ms: i64,
+    /// Upgraded only for one measurement at a time, so that the tree never outlives its run for
+    /// longer than that.
+    pub tree: Weak<ProcessTree>,
+    pub dynamic: Option<Stamped<Players>>,
+    pub perf: Option<Stamped<TickReport>>,
+    pub players: Option<Stamped<PlayerList>>,
+}
+
+/// A probe's answer and when it came.
+#[derive(Debug, Clone)]
+pub struct Stamped<T> {
+    pub at: Instant,
+    pub value: T,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ControlError {
     #[error("the server is already running")]
@@ -329,6 +356,7 @@ pub struct Supervisor {
     requests: mpsc::Sender<Request>,
     events: broadcast::Sender<Event>,
     status: watch::Receiver<Status>,
+    readings: watch::Receiver<Readings>,
 }
 
 impl Supervisor {
@@ -348,6 +376,7 @@ impl Supervisor {
             build: None,
         };
         let (status_tx, status) = watch::channel(initial);
+        let (readings_tx, readings) = watch::channel(Readings::default());
         let (traces_tx, traces) = mpsc::channel(CHANNEL);
         let (signals_tx, signals) = mpsc::channel(CHANNEL);
         let (probes_tx, probes) = mpsc::channel(CHANNEL);
@@ -357,6 +386,7 @@ impl Supervisor {
             console,
             events: events.clone(),
             status: status_tx,
+            readings: readings_tx,
             requests: requests_rx,
             traces_tx,
             traces,
@@ -382,6 +412,7 @@ impl Supervisor {
                 requests,
                 events,
                 status,
+                readings,
             },
             task,
         )
@@ -460,6 +491,10 @@ impl Supervisor {
 
     pub fn status(&self) -> watch::Receiver<Status> {
         self.status.clone()
+    }
+
+    pub fn readings(&self) -> watch::Receiver<Readings> {
+        self.readings.clone()
     }
 
     async fn ask<T>(&self, request: impl FnOnce(Reply<T>) -> Request) -> Result<T, ControlError> {
@@ -580,7 +615,7 @@ struct Run {
     build: Option<u32>,
     layout: Layout,
     exit: ExitWatch,
-    tree: ProcessTree,
+    tree: Arc<ProcessTree>,
     stdin: StdinWriter,
     stdin_task: JoinHandle<()>,
     cancel: CancellationToken,
@@ -625,6 +660,7 @@ struct Actor {
     console: Arc<ConsoleHub>,
     events: broadcast::Sender<Event>,
     status: watch::Sender<Status>,
+    readings: watch::Sender<Readings>,
     requests: mpsc::Receiver<Request>,
     traces_tx: mpsc::Sender<Trace>,
     traces: mpsc::Receiver<Trace>,
@@ -672,7 +708,7 @@ impl Actor {
                 Wake::Exit(exit) => self.exited(exit).await,
                 Wake::Trace(trace) => self.trace(trace),
                 Wake::Signal(generation, signal) => self.signal(generation, signal),
-                Wake::Probe(generation, probe) => self.probed(generation, &probe),
+                Wake::Probe(generation, probe) => self.probed(generation, probe),
                 Wake::Tick => self.tick().await,
             }
         }
@@ -725,12 +761,13 @@ impl Actor {
         }
     }
 
-    fn probed(&mut self, generation: u32, probe: &Probe) {
+    fn probed(&mut self, generation: u32, probe: Probe) {
         let Some(run) = self.run.as_mut().filter(|run| run.generation == generation) else {
             return;
         };
-        run.health.probed(probe, Instant::now());
-        let changed = match probe {
+        let now = Instant::now();
+        run.health.probed(&probe, now);
+        let changed = match &probe {
             Probe::Dynamic(Ok(players)) if run.players != Some(*players) => {
                 run.players = Some(*players);
                 true
@@ -744,6 +781,18 @@ impl Actor {
         if changed {
             self.publish_status();
         }
+        self.readings.send_if_modified(|readings| {
+            let Some(run) = readings.run.as_mut().filter(|run| run.generation == generation) else {
+                return false;
+            };
+            match probe {
+                Probe::Dynamic(Ok(value)) => run.dynamic = Some(Stamped { at: now, value }),
+                Probe::Perf(Ok(value)) => run.perf = Some(Stamped { at: now, value }),
+                Probe::Players(Ok(value)) => run.players = Some(Stamped { at: now, value }),
+                _ => return false,
+            }
+            true
+        });
     }
 
     async fn start(&mut self, by: String) -> Result<(), ControlError> {
@@ -1189,6 +1238,16 @@ impl Actor {
         match self.launch().await {
             Ok((run, probe, warnings)) => {
                 let pid = run.pid;
+                self.readings.send_replace(Readings {
+                    run: Some(RunReadings {
+                        generation: run.generation,
+                        started_ms: run.started_ms,
+                        tree: Arc::downgrade(&run.tree),
+                        dynamic: None,
+                        perf: None,
+                        players: None,
+                    }),
+                });
                 self.run = Some(run);
                 self.phase = Phase::Running;
                 self.last_tick = Instant::now();
@@ -1292,7 +1351,7 @@ impl Actor {
             build: None,
             layout,
             exit: spawned.exit,
-            tree: spawned.tree,
+            tree: Arc::new(spawned.tree),
             stdin,
             stdin_task,
             cancel,
@@ -1367,6 +1426,7 @@ impl Actor {
         let Some(run) = self.run.take() else {
             return;
         };
+        self.readings.send_replace(Readings::default());
         self.collect_dumps(&run.layout).await;
         let Run { after, ending, .. } = run;
 

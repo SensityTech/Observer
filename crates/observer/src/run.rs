@@ -1,10 +1,13 @@
+use std::io;
 use std::net::SocketAddr;
 use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::Context;
+use axum::Router;
 use jiff::tz::TimeZone;
 use observer_app::{
-    Accounts, AuditLog, Clock, PasswordCost, Running, Schedule, ScheduleSetup, Servers, Setup, Supervision,
+    Accounts, AuditLog, Clock, DatabaseFiles, Metrics, MetricsSetup, PasswordCost, Running, Schedule,
+    ScheduleSetup, ScheduleTask, Servers, Setup, Sources, Supervision,
 };
 use observer_fxserver::console::{ConsoleLog, LogLimits};
 use observer_store::{BackupKind, Database};
@@ -64,6 +67,12 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
         |_| {},
     )
     .await?;
+    let metrics = Metrics::open(MetricsSetup {
+        path: paths.metrics.clone(),
+        clock: Clock::system(),
+    })
+    .await
+    .with_context(|| format!("cannot open {}", paths.metrics.display()))?;
 
     let listener = TcpListener::bind(config.http.listen)
         .await
@@ -72,26 +81,27 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
     setup::offer_link(&accounts, config.http.listen).await?;
 
     let stop = CancellationToken::new();
-    let state = observer_web::AppState::new(
-        VERSION,
-        accounts.clone(),
-        audit.clone(),
+    let services = observer_web::Services {
+        accounts: accounts.clone(),
+        audit: audit.clone(),
         servers,
-        supervision.clone(),
+        supervision: supervision.clone(),
+        metrics: metrics.clone(),
         schedule,
-        &instance_id,
-        &config.http.hosts,
-    );
+    };
+    let state = observer_web::AppState::new(VERSION, services, &instance_id, &config.http.hosts);
     let live = state.live.clone();
-    let app = observer_web::router(state);
-    let server = tokio::spawn({
-        let stop = stop.clone();
-        async move {
-            axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
-                .with_graceful_shutdown(stop.cancelled_owned())
-                .await
-        }
+    // Before FXServer starts with Observer, so that the first samples show its start.
+    let sampling = metrics.start(Sources {
+        supervision: supervision.clone(),
+        sockets: live.sockets(),
+        data_dir: paths.root.clone(),
+        databases: DatabaseFiles {
+            state: paths.database.clone(),
+            metrics: paths.metrics.clone(),
+        },
     });
+    let server = tokio::spawn(serve(listener, observer_web::router(state), stop.clone()));
     let backups = tokio::spawn(daily_backups(db.clone(), stop.clone()));
     let upkeep = tokio::spawn(upkeep(accounts, audit.clone(), stop.clone()));
     let audit_feed = tokio::spawn(publish_audit(audit, stop.clone()));
@@ -99,13 +109,10 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
         error!(%error, "cannot start FXServer with Observer");
     }
 
-    // The panel keeps serving while FXServer stops, so that it shows the stop as it happens.
-    let shortened = signals.next().await == Shutdown::Shortened;
-    info!(shortened, "stopping Observer");
-    // The schedule goes first: it must not restart a server Observer is stopping.
-    scheduling.close().await;
-    stop_fxserver(&supervision, &mut supervised, &mut signals, shortened).await;
+    stop_fxserver(&supervision, scheduling, &mut supervised, &mut signals).await;
     supervised.close().await;
+    // After the supervision, so that FXServer's stop is in the statistics.
+    sampling.close().await;
     stop.cancel();
     live.shutdown().await;
 
@@ -116,6 +123,10 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
     upkeep.await.context("the upkeep task failed")?;
     audit_feed.await.context("the audit feed task failed")?;
     console_log.close().await;
+    metrics
+        .close()
+        .await
+        .context("cannot close the metrics database")?;
     db.close().await.context("cannot close the database")?;
 
     info!("Observer stopped");
@@ -124,19 +135,29 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Stops FXServer for good. A console closed during a graceful stop leaves Windows' few seconds
-/// only, so the stop is shortened then.
+async fn serve(listener: TcpListener, app: Router, stop: CancellationToken) -> io::Result<()> {
+    axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
+        .with_graceful_shutdown(stop.cancelled_owned())
+        .await
+}
+
+/// Waits for a stop request, then stops FXServer for good. The panel keeps serving meanwhile, so
+/// that it shows the stop as it happens.
 async fn stop_fxserver(
     supervision: &Supervision,
+    scheduling: ScheduleTask,
     supervised: &mut Running,
     signals: &mut Signals,
-    shortened: bool,
 ) {
-    let mut shortened = shortened;
+    let mut shortened = signals.next().await == Shutdown::Shortened;
+    info!(shortened, "stopping Observer");
+    // The schedule goes first: it must not restart a server Observer is stopping.
+    scheduling.close().await;
     supervision.shutdown(shortened).await;
     loop {
         tokio::select! {
             () = supervised.stopped() => return,
+            // A console closed during a graceful stop leaves Windows' few seconds only.
             shutdown = signals.next(), if !shortened => {
                 if shutdown == Shutdown::Shortened {
                     shortened = true;

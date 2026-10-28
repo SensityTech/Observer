@@ -15,6 +15,7 @@ use observer_domain::server::SpawnFailure;
 use observer_fxserver::bridge::BridgeEvent;
 use observer_fxserver::console::{ConsoleHub, LineKind, plain};
 use observer_fxserver::health::{HangCause, HealthLimits, Problem};
+use observer_fxserver::perf::Thread;
 use observer_fxserver::recovery::RecoveryPolicy;
 use observer_fxserver::stdin::{StdinError, UserCommand};
 use observer_fxserver::supervisor::{
@@ -294,6 +295,52 @@ async fn the_status_tells_the_players_the_build_and_when_the_server_started() {
     assert_eq!(
         (stopped.players, stopped.build, stopped.started_ms),
         (None, None, None)
+    );
+    lab.shut_down(false).await;
+}
+
+#[tokio::test]
+async fn the_readings_hold_what_the_probes_read_of_the_running_server_only() {
+    let mut lab = Lab::online(&[("fake_players", "3"), ("fake_tick_ms", "12")]).await;
+    let mut readings = lab.supervisor.readings();
+
+    let run = timeout(
+        WAIT,
+        readings.wait_for(|readings| {
+            readings
+                .run
+                .as_ref()
+                .is_some_and(|run| run.dynamic.is_some() && run.perf.is_some() && run.players.is_some())
+        }),
+    )
+    .await
+    .expect("the probes never filled the readings")
+    .unwrap()
+    .run
+    .clone()
+    .unwrap();
+
+    assert_eq!(run.generation, lab.generation());
+    assert!(
+        run.tree.upgrade().is_some(),
+        "the tree is there while the run lasts"
+    );
+    assert_eq!(run.dynamic.unwrap().value.clients, 3);
+    assert_eq!(
+        run.players.unwrap().value.players,
+        [(1, Some(25)), (2, Some(30)), (3, Some(35))],
+        "the token Observer set is honoured"
+    );
+    let main = run.perf.unwrap().value.thread(Thread::Main).cloned().unwrap();
+    assert!(main.count > 0);
+    let ticks = f64::from(u32::try_from(main.count).unwrap());
+    assert!((main.sum * 1000.0 - 12.0 * ticks).abs() < 1e-6, "{main:?}");
+    lab.supervisor.stop("test").await.unwrap();
+    lab.state(State::Stopped).await;
+    assert!(lab.supervisor.readings().borrow().run.is_none());
+    assert!(
+        run.tree.upgrade().is_none(),
+        "nothing holds the tree once the run is over"
     );
     lab.shut_down(false).await;
 }

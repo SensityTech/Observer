@@ -9,23 +9,23 @@ use serde_json::json;
 
 use crate::Server;
 
-/// The bounds FXServer 35245 prints for its tick histograms, as it prints them.
-const BUCKETS: [&str; 15] = [
-    "0.001",
-    "0.002",
-    "0.004",
-    "0.006",
-    "0.008",
-    "0.01",
-    "0.015",
-    "0.02",
-    "0.03",
-    "0.05",
-    "0.07000000000000001",
-    "0.1",
-    "0.15",
-    "0.25",
-    "+Inf",
+/// The finite bounds FXServer 35245 prints for its tick histograms, as it prints them, with their
+/// value in milliseconds.
+pub const BUCKETS: [(&str, u64); 14] = [
+    ("0.001", 1),
+    ("0.002", 2),
+    ("0.004", 4),
+    ("0.006", 6),
+    ("0.008", 8),
+    ("0.01", 10),
+    ("0.015", 15),
+    ("0.02", 20),
+    ("0.03", 30),
+    ("0.05", 50),
+    ("0.07000000000000001", 70),
+    ("0.1", 100),
+    ("0.15", 150),
+    ("0.25", 250),
 ];
 
 /// Serves the endpoints from threads of their own, so they keep answering while the main loop is
@@ -49,21 +49,28 @@ fn respond(mut stream: TcpStream, server: &Server) -> io::Result<()> {
         .next()
         .and_then(|line| line.split(' ').nth(1))
         .unwrap_or("/");
-    let authorization = lines
+    let headers: Vec<(&str, &str)> = lines
         .filter_map(|line| line.split_once(':'))
-        .find(|(name, _)| name.trim().eq_ignore_ascii_case("authorization"))
-        .map(|(_, value)| value.trim().to_owned());
+        .map(|(name, value)| (name.trim(), value.trim()))
+        .collect();
+    let header = |wanted: &str| {
+        headers
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case(wanted))
+            .map(|&(_, value)| value)
+    };
+    let authorization = header("authorization");
     // FXServer routes by case-insensitive prefix: `/perf/` reaches the `/perf` handler.
     let path = target.split('?').next().unwrap_or_default().to_ascii_lowercase();
 
     let (status, body) = if path.starts_with("/dynamic.json") {
         ("200 OK", dynamic(server))
     } else if path.starts_with("/players.json") {
-        ("200 OK", "[]".to_owned())
+        ("200 OK", players(server, header("x-players-token")))
     } else if path.starts_with("/info.json") {
         ("200 OK", info())
     } else if path.starts_with("/perf") {
-        if authorized(server, authorization.as_deref()) {
+        if authorized(server, authorization) {
             ("200 OK", perf(server))
         } else {
             ("401 Unauthorized", "Unauthorized.".to_owned())
@@ -93,7 +100,7 @@ fn read_head(stream: &mut TcpStream) -> io::Result<String> {
 
 fn dynamic(server: &Server) -> String {
     json!({
-        "clients": 0,
+        "clients": server.number("fake_players").unwrap_or(0),
         "gametype": "",
         "hostname": server.convar("sv_hostname").unwrap_or_else(|| "FXServer, but unconfigured".to_owned()),
         "iv": "0",
@@ -101,6 +108,20 @@ fn dynamic(server: &Server) -> String {
         "sv_maxclients": server.convar("sv_maxclients").unwrap_or_else(|| "48".to_owned()),
     })
     .to_string()
+}
+
+/// Ids 1 to `fake_players`, given the token Observer set in `sv_playersToken`; otherwise the
+/// public list, whose ids and pings are 0.
+fn players(server: &Server, token: Option<&str>) -> String {
+    let count = server.number("fake_players").unwrap_or(0);
+    let honoured = token.is_some_and(|token| server.convar("sv_playersToken").as_deref() == Some(token));
+    let players: Vec<serde_json::Value> = (1..=count)
+        .map(|id| {
+            let (id, ping) = if honoured { (id, 20 + 5 * id) } else { (0, 0) };
+            json!({ "endpoint": "127.0.0.1", "id": id, "identifiers": ["license:fake"], "name": format!("player {id}"), "ping": ping })
+        })
+        .collect();
+    serde_json::Value::from(players).to_string()
 }
 
 /// The build is FXServer 35245's, whose formats the fake follows.
@@ -130,8 +151,8 @@ fn authorized(server: &Server, authorization: Option<&str>) -> bool {
         ))
 }
 
-/// The tick histograms. Fake ticks take no time, so every tick lands in the first bucket.
-/// `svMain` counts main loop ticks and stops while it is hung; the other two run on their own.
+/// The tick histograms. `svMain` counts main loop ticks, each taking `fake_tick_ms`, and stops
+/// while it is hung; the other two run on their own and take no time.
 fn perf(server: &Server) -> String {
     let elapsed = server.uptime_ms();
     let mut body = String::from(
@@ -139,19 +160,27 @@ fn perf(server: &Server) -> String {
 # TYPE tickTime histogram
 ",
     );
-    for (thread, count) in [
-        ("svNetwork", elapsed / 10),
-        ("svSync", elapsed / 8),
-        ("svMain", server.main_ticks()),
+    let main = server.main_observed();
+    let quick = |count: u64| (count, 0, [count; BUCKETS.len()]);
+    for (thread, (count, sum_ms, within)) in [
+        ("svNetwork", quick(elapsed / 10)),
+        ("svSync", quick(elapsed / 8)),
+        ("svMain", (main.count, main.sum_ms, main.within)),
     ] {
         let _ = writeln!(body, "tickTime_count{{name=\"{thread}\"}} {count}");
-        let _ = writeln!(body, "tickTime_sum{{name=\"{thread}\"}} 0");
-        for bound in BUCKETS {
+        let _ = writeln!(
+            body,
+            "tickTime_sum{{name=\"{thread}\"}} {}.{:03}",
+            sum_ms / 1000,
+            sum_ms % 1000
+        );
+        for ((bound, _), within) in BUCKETS.into_iter().zip(within) {
             let _ = writeln!(
                 body,
-                "tickTime_bucket{{name=\"{thread}\",le=\"{bound}\"}} {count}"
+                "tickTime_bucket{{name=\"{thread}\",le=\"{bound}\"}} {within}"
             );
         }
+        let _ = writeln!(body, "tickTime_bucket{{name=\"{thread}\",le=\"+Inf\"}} {count}");
     }
     body
 }

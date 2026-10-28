@@ -11,7 +11,7 @@ import {
     X,
     type LucideIcon,
 } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { Suspense, useEffect, useState } from 'react';
 
 import { meQuery } from '../api/auth';
 import { Permission } from '../api/generated/Permission';
@@ -163,13 +163,26 @@ export function AppShell() {
                                 <ServerControls />
                             </header>
                             <main className="content" id="content" tabIndex={-1}>
-                                <Outlet />
+                                <Suspense fallback={<PageLoading />}>
+                                    <Outlet />
+                                </Suspense>
                             </main>
                         </div>
                     </div>
                 </ScheduleProvider>
             </ServerStatusProvider>
         </MeContext>
+    );
+}
+
+/** A page whose code is still loading: its heading and a card, in their places. */
+function PageLoading() {
+    const { t } = useI18n();
+    return (
+        <div className="flex flex-col gap-3" aria-busy="true" aria-label={t.common.loading}>
+            <div className="skeleton h-7 w-48" />
+            <div className="skeleton h-64 w-full rounded-card" />
+        </div>
     );
 }
 

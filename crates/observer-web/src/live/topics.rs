@@ -9,6 +9,7 @@ use futures_util::stream;
 use observer_app::{ConsoleLines, Error};
 use observer_domain::audit::AuditEntry;
 use observer_domain::live::{AuditSnapshot, ObserverStatus, Topic, TopicEvent, TopicSnapshot};
+use observer_domain::metrics::{LiveSample, MetricsSnapshot};
 use observer_domain::permissions::Permissions;
 use observer_domain::server::ConsoleBatch;
 use tokio::sync::broadcast::{self, error::RecvError};
@@ -36,7 +37,7 @@ pub(super) struct Feed {
 pub(super) fn allows(topic: Topic, held: Permissions) -> bool {
     let any = |permissions: &[Permissions]| permissions.iter().any(|&permission| held.contains(permission));
     match topic {
-        Topic::Status => any(&[Permissions::DASHBOARD_VIEW]),
+        Topic::Status | Topic::MetricsLive => any(&[Permissions::DASHBOARD_VIEW]),
         Topic::ServerStatus => any(&[
             Permissions::DASHBOARD_VIEW,
             Permissions::CONSOLE_VIEW,
@@ -94,7 +95,27 @@ pub(super) async fn open(topic: Topic, since: Option<u64>, state: &AppState) -> 
                 events: Some(console_events(lines)),
             })
         }
+        Topic::MetricsLive => {
+            let (latest, samples) = state.metrics.live();
+            Ok(Feed {
+                snapshot: TopicSnapshot::MetricsLive(MetricsSnapshot { latest }),
+                events: Some(metrics_events(samples)),
+            })
+        }
     }
+}
+
+/// Each sample as it is taken. One that falls more than a few samples behind starts over from the
+/// newest.
+fn metrics_events(samples: broadcast::Receiver<LiveSample>) -> Events {
+    Box::pin(stream::unfold(samples, |mut samples| async move {
+        let delivery = match samples.recv().await {
+            Ok(sample) => Delivery::Event(Box::new(TopicEvent::MetricsLive(sample))),
+            Err(RecvError::Lagged(_)) => Delivery::Missed,
+            Err(RecvError::Closed) => return None,
+        };
+        Some((delivery, samples))
+    }))
 }
 
 /// The whole status each time it changes. A client too slow to see every change only misses the
@@ -133,4 +154,40 @@ fn audit_events(entries: broadcast::Receiver<Arc<AuditEntry>>, latest_id: Option
             return Some((delivery, entries));
         }
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use futures_util::StreamExt;
+    use observer_domain::server::ServerState;
+
+    use super::*;
+
+    fn sample(ts: i64) -> LiveSample {
+        LiveSample {
+            ts,
+            state: ServerState::Online,
+            values: std::collections::BTreeMap::new(),
+            children: Vec::new(),
+            cores: Some(8),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_socket_that_fell_behind_the_samples_starts_over() {
+        let (samples, receiver) = broadcast::channel(2);
+        for ts in [0, 5, 10] {
+            samples.send(sample(ts)).unwrap();
+        }
+        let mut events = metrics_events(receiver);
+
+        assert!(matches!(events.next().await, Some(Delivery::Missed)));
+        assert!(matches!(
+            events.next().await,
+            Some(Delivery::Event(event)) if matches!(*event, TopicEvent::MetricsLive(LiveSample { ts: 5, .. }))
+        ));
+        drop(samples);
+        assert!(events.next().await.is_some(), "the last one queued");
+        assert!(events.next().await.is_none(), "the samples ended");
+    }
 }

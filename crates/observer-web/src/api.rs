@@ -5,6 +5,7 @@
 mod account;
 mod audit;
 mod auth;
+mod metrics;
 mod schedule;
 mod servers;
 mod setup;
@@ -57,6 +58,7 @@ pub(crate) fn routes() -> Vec<Route> {
     // restart are operations, and so is a single restart, which is the server control's.
     let plan = Permission(P::SCHEDULE_MANAGE);
     let edit_schedule = Reauthenticated(P::SCHEDULE_MANAGE);
+    let dashboard = Permission(P::DASHBOARD_VIEW);
     vec![
         route(M::GET,    "/health",                     Public,       health),
         route(M::GET,    "/setup",                      Public,       setup::status),
@@ -93,6 +95,7 @@ pub(crate) fn routes() -> Vec<Route> {
         route(M::POST,   "/servers/default/schedule/delay", plan,          schedule::delay),
         route(M::PUT,    "/servers/default/schedule/once",  control,       schedule::restart_once),
         route(M::DELETE, "/servers/default/schedule/once",  control,       schedule::cancel_once),
+        route(M::GET,    "/metrics/series",             dashboard,    metrics::series),
     ]
 }
 
