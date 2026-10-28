@@ -2,7 +2,7 @@ import { useInfiniteQuery, useMutation } from '@tanstack/react-query';
 import { ChevronDown, Clock, Download, Filter } from 'lucide-react';
 import { useId, useRef, useState, type FormEvent, type ReactNode } from 'react';
 
-import { auditQuery, downloadAuditExport, matchesFilter, withLive } from '../api/audit';
+import { auditQuery, auditSearch, downloadAuditExport, matchesFilter, withLive } from '../api/audit';
 import { auditDetails } from '../audit/details';
 import type { AuditAction } from '../api/generated/AuditAction';
 import type { AuditEntry } from '../api/generated/AuditEntry';
@@ -67,9 +67,14 @@ export function AuditPage() {
 
     const exporting = useMutation({ mutationFn: () => downloadAuditExport(filter) });
 
+    // The same filter keeps its object: the entries that came live are kept while their filter is
+    // the one shown, and the query, already up to date, would not read the log again for them.
+    const show = (next: AuditFilter) =>
+        setFilter((current) => (auditSearch(current) === auditSearch(next) ? current : next));
+
     const apply = (event: FormEvent) => {
         event.preventDefault();
-        setFilter(toFilter(draft));
+        show(toFilter(draft));
     };
 
     return (
@@ -171,7 +176,7 @@ export function AuditPage() {
                             tone="ghost"
                             onClick={() => {
                                 setDraft(EMPTY);
-                                setFilter({});
+                                show({});
                             }}
                         >
                             {t.audit.clear}
