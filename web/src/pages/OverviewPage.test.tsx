@@ -176,6 +176,19 @@ describe('OverviewPage', () => {
         live.stop();
     });
 
+    it('should stop showing the last sample as current once the link to Observer is gone', async () => {
+        const { say, drop, live } = await page();
+        say({ type: 'snapshot', topic: 'metrics.live', data: { latest: SAMPLE } });
+        expect(tile(en.tiles.players.label).queryByText('187')).not.toBeNull();
+
+        drop();
+
+        expect(tile(en.tiles.players.label).queryByText('187')).toBeNull();
+        expect(tile(en.tiles.host.label).queryByText('41%')).toBeNull();
+        expect(tile(en.tiles.host.label).getByRole('img', { name: en.tiles.host.trend })).not.toBeNull();
+        live.stop();
+    });
+
     it('should stop showing when Observer started once the link to it is gone', async () => {
         const { drop, live } = await page();
         expect(tile(en.tiles.observer.label).queryByText(/^0\.1\.0 · up \d min$/)).not.toBeNull();

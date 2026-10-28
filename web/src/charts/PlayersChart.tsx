@@ -100,7 +100,7 @@ export default function PlayersChart() {
     const { t, format } = useI18n();
     const [range, setRange] = useState<Range>('24h');
     const query = useQuery({ ...seriesQuery(range, SERIES), placeholderData: keepPreviousData });
-    const { recent } = useLiveMetrics();
+    const { recent, latest } = useLiveMetrics();
     const page = useMemo(() => (query.data ? mergeLive(query.data, recent) : null), [query.data, recent]);
     const rows = useMemo(() => (page ? buckets(page) : []), [page]);
     const measured = rows.filter((row) => row.players !== null);
@@ -117,7 +117,7 @@ export default function PlayersChart() {
     let summary: string | null = null;
     if (page !== null && peak !== null && peak.players !== null) {
         const average = measured.reduce((sum, row) => sum + (row.players ?? 0), 0) / measured.length;
-        const newest = recent.at(-1)?.values.players ?? null;
+        const newest = latest?.values.players ?? null;
         const at =
             page.step >= 900
                 ? formatTimestamp(new Date(peak.time * 1000), { seconds: false })

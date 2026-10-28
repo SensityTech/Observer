@@ -5,8 +5,9 @@ import { useTopic } from '../live/context';
 import { keepLive } from './merge';
 
 type LiveMetrics = {
+    /** How things stand: none before the first sample, nor while the link is down. */
     latest: LiveSample | null;
-    /** The newest samples, oldest first. */
+    /** The newest samples, oldest first, which still fill the trends while the link is down. */
     recent: LiveSample[];
     /** The session does not hold the dashboard permission. */
     refused: boolean;
@@ -18,9 +19,11 @@ const LiveMetricsContext = createContext<LiveMetrics | null>(null);
 export function LiveMetricsProvider({ children }: { children: ReactNode }) {
     const [recent, setRecent] = useState<LiveSample[]>([]);
     const [refused, setRefused] = useState(false);
+    const [cleared, setCleared] = useState(false);
     useTopic('metrics.live', {
         snapshot: ({ latest }) => {
             setRefused(false);
+            setCleared(false);
             if (latest !== null) {
                 setRecent((kept) => keepLive(kept, latest));
             }
@@ -30,8 +33,12 @@ export function LiveMetricsProvider({ children }: { children: ReactNode }) {
             setRefused(true);
             setRecent([]);
         },
+        cleared: () => setCleared(true),
     });
-    const value = useMemo(() => ({ latest: recent.at(-1) ?? null, recent, refused }), [recent, refused]);
+    const value = useMemo(
+        () => ({ latest: cleared ? null : (recent.at(-1) ?? null), recent, refused }),
+        [recent, refused, cleared],
+    );
     return <LiveMetricsContext value={value}>{children}</LiveMetricsContext>;
 }
 
