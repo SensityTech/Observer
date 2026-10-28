@@ -664,7 +664,7 @@ fn wire(line: &fx_console::ConsoleLine) -> ConsoleLine {
 
 /// A command as the console and the audit log may show it.
 fn masked(line: &str) -> String {
-    fx_console::mask(line).unwrap_or_else(|| line.to_owned())
+    fx_console::mask_command(line).unwrap_or_else(|| line.to_owned())
 }
 
 fn command_refusal(refusal: stdin::CommandRefusal) -> CommandRefusal {

@@ -15,7 +15,9 @@ use observer_app::{
 use observer_domain::audit::{ActorKind, AuditAction, AuditEntry, AuditFilter, Outcome};
 use observer_domain::error::ErrorCode;
 use observer_domain::launch::{ExtraArgument, LaunchSettings, OneSync};
-use observer_domain::server::{ConsoleLine, Delivery, LineKind, ServerState, ServerStatus, StateCause};
+use observer_domain::server::{
+    ConsoleLine, Delivery, LINE_MASKED, LineKind, ServerState, ServerStatus, StateCause,
+};
 use observer_fxserver::console::plain;
 use observer_fxserver::health::HealthLimits;
 use observer_fxserver::recovery::RecoveryPolicy;
@@ -467,5 +469,37 @@ async fn a_tripped_crash_loop_breaker_is_audited() {
     );
     assert_eq!(tripped[0].target.as_deref(), Some("default"));
     assert_eq!(tripped[0].details, json!({ "failures": 5 }));
+    observer.stop_observer().await;
+}
+
+#[tokio::test]
+async fn a_secret_set_in_an_unusual_spelling_is_masked_in_the_echo_and_the_audit_log() {
+    let mut observer = Observer::new(false).await;
+    observer.supervision.start_server(&observer.owner).await.unwrap();
+    observer.state(ServerState::Online).await;
+
+    observer
+        .supervision
+        .command(
+            &observer.owner,
+            "set sv_tebexSecret\"hunter2\"; set /**/rcon_password hunter2",
+            CONSOLE_ROUTE.0,
+            CONSOLE_ROUTE.1,
+        )
+        .await
+        .unwrap();
+    let echo = observer.console_until("sv_tebexSecret").await;
+
+    assert_eq!(
+        echo.5,
+        "set sv_tebexSecret [REDACTED]; set rcon_password [REDACTED]"
+    );
+    assert_eq!(echo.6 & LINE_MASKED, LINE_MASKED);
+    let commands = observer.audited(AuditAction::ConsoleCommandSent).await;
+    assert_eq!(
+        commands[0].details,
+        json!({ "command": "set sv_tebexSecret [REDACTED]; set rcon_password [REDACTED]" })
+    );
+    assert!(!format!("{:?}", observer.console()).contains("hunter2"));
     observer.stop_observer().await;
 }

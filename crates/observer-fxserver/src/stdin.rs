@@ -13,7 +13,7 @@ use tokio::task::JoinHandle;
 
 use crate::bridge::{BridgeEvent, StopReason};
 use crate::command;
-use crate::console::{ConsoleHub, LineFlags, LineKind};
+use crate::console::{ConsoleHub, LineFlags, LineKind, mask_command};
 
 pub const MAX_COMMAND: usize = 1024;
 const BRIDGE_COMMAND: &str = "observer_cmd";
@@ -275,16 +275,16 @@ async fn own(stdin: Stdin, mut queue: mpsc::Receiver<Request>, generation: u32, 
                     let _ = reply.send(Err(StdinError::NotAllowed));
                     continue;
                 }
-                (text, line.echo().map(|echo| (LineKind::Observer, None, echo)))
+                let echo = line.echo().map(|echo| (LineKind::Observer, None, echo, false));
+                (text, echo)
             }
-            Write::User { command, actor } => (
-                command.as_str().to_owned(),
-                Some((
-                    LineKind::Command,
-                    Some(actor.clone()),
-                    command.as_str().to_owned(),
-                )),
-            ),
+            Write::User { command, actor } => {
+                let shown = mask_command(command.as_str());
+                let masked = shown.is_some();
+                let shown = shown.unwrap_or_else(|| command.as_str().to_owned());
+                let echo = (LineKind::Command, Some(actor.clone()), shown, masked);
+                (command.as_str().to_owned(), Some(echo))
+            }
         };
         let writing = stdin.write(format!("{line}\n").into_bytes());
         tokio::pin!(writing);
@@ -309,9 +309,13 @@ async fn own(stdin: Stdin, mut queue: mpsc::Receiver<Request>, generation: u32, 
         };
         let result = written.map_err(|_| StdinError::Closed);
         if result.is_ok()
-            && let Some((kind, actor, text)) = echo
+            && let Some((kind, actor, text, masked)) = echo
         {
-            console.push(generation, kind, actor, text, LineFlags::default());
+            let flags = LineFlags {
+                masked,
+                ..LineFlags::default()
+            };
+            console.push(generation, kind, actor, text, flags);
         }
         if let Some(reply) = reply {
             let _ = reply.send(result);

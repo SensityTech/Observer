@@ -2,10 +2,17 @@
 //! words. Observer reads commands the way FXServer will before it lets one through or warns about
 //! a cfg.
 
+use std::ops::Range;
+
 /// Cuts a console buffer into the commands FXServer runs: at `;` outside quotes and at every CR or
 /// LF. Quotes toggle without regard to `\`, so after an odd number of `\"` a `;` separates again.
 /// Blank commands are left out.
 pub fn split(buffer: &str) -> Vec<&str> {
+    spans(buffer).into_iter().map(|span| &buffer[span]).collect()
+}
+
+/// Where each command of [`split`] lies in the buffer.
+pub fn spans(buffer: &str) -> Vec<Range<usize>> {
     let mut commands = Vec::new();
     let mut quoted = false;
     let mut start = 0;
@@ -20,14 +27,14 @@ pub fn split(buffer: &str) -> Vec<&str> {
             _ => false,
         };
         if ends {
-            commands.push(&buffer[start..index]);
+            commands.push(start..index);
             start = index + 1;
             // FXServer scans each command afresh, so a quote left open does not carry over a line end.
             quoted = false;
         }
     }
-    commands.push(&buffer[start..]);
-    commands.retain(|command| !words(command).is_empty());
+    commands.push(start..buffer.len());
+    commands.retain(|command| !words(&buffer[command.clone()]).is_empty());
     commands
 }
 
