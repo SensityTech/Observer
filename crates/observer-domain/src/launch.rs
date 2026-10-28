@@ -323,7 +323,15 @@ fn unix_path_problem(path: &str) -> Option<LaunchProblem> {
             name => components.push(name),
         }
     }
-    (components.first() == Some(&"dev")).then_some(LaunchProblem::DevicePath)
+    if components.first() == Some(&"dev") {
+        Some(LaunchProblem::DevicePath)
+    } else if path.starts_with("//") {
+        // Linux reads it as `/`, but POSIX leaves a leading `//` to the system, and some read it
+        // as a network path: as on Windows, it is refused.
+        Some(LaunchProblem::NetworkPath)
+    } else {
+        None
+    }
 }
 
 /// The cfg becomes `+exec <cfg>`, read from the data folder: a plain relative path is all it needs.
@@ -520,6 +528,15 @@ mod tests {
                 "{path:?}"
             );
         }
+        let unix = LaunchSettings {
+            data_path: "//server/share/data".to_owned(),
+            ..settings()
+        }
+        .issues(Platform::Unix);
+        assert!(
+            unix.contains(&issue(LaunchField::DataPath, None, LaunchProblem::NetworkPath)),
+            "{unix:?}"
+        );
     }
 
     #[test]
@@ -533,6 +550,8 @@ mod tests {
             ("/./dev/sda1", LaunchProblem::DevicePath),
             ("/srv/../dev/sda1", LaunchProblem::DevicePath),
             ("/../dev/shm/x", LaunchProblem::DevicePath),
+            ("//server/share/fx", LaunchProblem::NetworkPath),
+            ("///opt/fx", LaunchProblem::NetworkPath),
             (r"/opt/fx\server", LaunchProblem::ForbiddenCharacter),
             ("/opt/fx;server", LaunchProblem::ForbiddenCharacter),
         ] {
