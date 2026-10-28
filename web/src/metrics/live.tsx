@@ -3,6 +3,7 @@ import { createContext, use, useMemo, useState, type ReactNode } from 'react';
 import type { LiveSample } from '../api/generated/LiveSample';
 import { useTopic } from '../live/context';
 import { keepLive } from './merge';
+import { useRefetchOnChange } from './refetch';
 
 type LiveMetrics = {
     /** How things stand: none before the first sample, nor while the link is down. */
@@ -20,6 +21,7 @@ export function LiveMetricsProvider({ children }: { children: ReactNode }) {
     const [recent, setRecent] = useState<LiveSample[]>([]);
     const [refused, setRefused] = useState(false);
     const [cleared, setCleared] = useState(false);
+    useRefetchOnChange();
     useTopic('metrics.live', {
         // A snapshot without a sample comes from an Observer that has just started: the samples
         // kept from before the drop are history, not how things stand.

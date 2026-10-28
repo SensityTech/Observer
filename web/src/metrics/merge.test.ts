@@ -131,3 +131,41 @@ describe('mergeLive', () => {
         expect(merged.series[0]?.values).toEqual([182, null, 90]);
     });
 });
+
+describe('mergeLive coverage', () => {
+    it('should count each sample in its bucket, and among the online ones when it was', () => {
+        const merged = mergeLive(grouped(), [
+            sample(1_000_100, {}),
+            { ...sample(1_000_105, {}), state: 'starting' },
+            { ...sample(1_000_110, {}), state: 'degraded' },
+        ]);
+
+        expect(merged.observed).toEqual([6, 0, 0, 4]);
+        expect(merged.online).toEqual([6, 0, 0, 3]);
+    });
+
+    it('should move the coverage on with the grid', () => {
+        const merged = mergeLive(grouped(), [{ ...sample(1_000_125, {}), state: 'stopped' }]);
+
+        expect(merged.observed).toEqual([0, 0, 1, 1]);
+        expect(merged.online).toEqual([0, 0, 1, 0]);
+    });
+
+    it('should add up the slot counts of faults, processes started and disk transfers', () => {
+        const counts: MetricsSeries = {
+            ...grouped(),
+            series: [
+                { series: 'fxsFaults', values: [10, null, null, 100] },
+                { series: 'treeStarted', values: [null, null, null, 1] },
+                { series: 'hostDiskTransfers', values: [null, null, null, 40] },
+                { series: 'fxsHardFaults', values: [null, null, null, null] },
+            ],
+        };
+
+        const merged = mergeLive(counts, [
+            sample(1_000_100, { fxsFaults: 50, treeStarted: 2, hostDiskTransfers: 9, fxsHardFaults: 1 }),
+        ]);
+
+        expect(merged.series.map((data) => data.values[3])).toEqual([150, 3, 49, 1]);
+    });
+});
