@@ -3,4 +3,10 @@
 /**
  * `POST /api/auth/login`.
  */
-export type LoginRequest = { username: string, password: string, };
+export type LoginRequest = { username: string, password: string, 
+/**
+ * Keep the session cookie after the browser closes. Without it the cookie lasts as long as the
+ * browser does, so a sign-in on a shared computer ends with it. The session's own lifetimes
+ * are the same either way.
+ */
+remember: boolean, };

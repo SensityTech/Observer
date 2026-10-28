@@ -282,7 +282,10 @@ async fn setup_signs_the_owner_in_with_a_strict_http_only_cookie() {
     assert!(cookie.contains("; HttpOnly"));
     assert!(cookie.contains("; SameSite=Strict"));
     assert!(cookie.contains("; Path=/"));
-    assert!(cookie.contains(&format!("; Max-Age={}", 7 * 24 * 3600)));
+    assert!(
+        !cookie.contains("Max-Age"),
+        "unasked, the cookie ends with the browser"
+    );
     let session = reply.json();
     assert_eq!(session["sessionKey"].as_str().unwrap().len(), 64);
     assert_eq!(session["me"]["username"], "ada");
@@ -717,4 +720,32 @@ async fn an_audit_filter_naming_no_possible_user_is_refused_before_it_is_recorde
         )
         .await;
     assert_eq!(audit.json()["entries"], json!([]));
+}
+
+#[tokio::test]
+async fn the_session_cookie_outlives_the_browser_only_when_asked() {
+    let server = Server::new().await;
+    server.owner().await;
+    let login = |remember: Option<bool>| {
+        let mut body = json!({ "username": "ada", "password": OWNER_PASSWORD });
+        if let Some(remember) = remember {
+            body["remember"] = json!(remember);
+        }
+        Server::request(Method::POST, "/api/auth/login", None, Some(body))
+    };
+
+    let mut cookies = Vec::new();
+    for remember in [None, Some(false), Some(true)] {
+        server.clock.advance(SignedDuration::from_secs(2));
+        let reply = server.send(login(remember)).await;
+        assert_eq!(reply.status, StatusCode::OK, "{}", reply.text);
+        cookies.push(reply.headers[header::SET_COOKIE].to_str().unwrap().to_owned());
+    }
+
+    for browser_only in &cookies[..2] {
+        assert!(!browser_only.contains("Max-Age"), "{browser_only}");
+        assert!(!browser_only.contains("Expires"), "{browser_only}");
+        assert!(browser_only.contains("; HttpOnly; SameSite=Strict"));
+    }
+    assert!(cookies[2].ends_with(&format!("; Max-Age={}", 7 * 24 * 3600)));
 }

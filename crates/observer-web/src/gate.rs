@@ -102,13 +102,17 @@ fn cookie<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
 
 /// The session cookie. It is `HttpOnly` so scripts never see it, and `SameSite=Strict` so other
 /// sites never send it. `Secure` and the `__Host-` prefix come with TLS, which Observer does not
-/// serve yet.
-pub(crate) fn session_cookie(name: &str, token: &str, max_age_seconds: i64) -> String {
-    format!("{name}={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age={max_age_seconds}")
+/// serve yet. Without a `Max-Age`, the browser drops it when it closes.
+pub(crate) fn session_cookie(name: &str, token: &str, max_age_seconds: Option<i64>) -> String {
+    let cookie = format!("{name}={token}; Path=/; HttpOnly; SameSite=Strict");
+    match max_age_seconds {
+        Some(seconds) => format!("{cookie}; Max-Age={seconds}"),
+        None => cookie,
+    }
 }
 
 pub(crate) fn expired_cookie(name: &str) -> String {
-    session_cookie(name, "", 0)
+    session_cookie(name, "", Some(0))
 }
 
 #[cfg(test)]

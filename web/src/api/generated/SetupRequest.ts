@@ -3,4 +3,8 @@
 /**
  * `POST /api/setup`. The token comes from the setup link's fragment.
  */
-export type SetupRequest = { token: string, username: string, password: string, };
+export type SetupRequest = { token: string, username: string, password: string, 
+/**
+ * See `LoginRequest::remember`.
+ */
+remember: boolean, };

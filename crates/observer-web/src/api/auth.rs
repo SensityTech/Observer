@@ -19,12 +19,24 @@ pub(crate) async fn login(
         .accounts
         .login(&request.username, request.password, &client)
         .await?;
-    Ok(self::signed_in(&state, StatusCode::OK, signed_in))
+    Ok(self::signed_in(
+        &state,
+        StatusCode::OK,
+        signed_in,
+        request.remember,
+    ))
 }
 
-/// The cookie takes the session's token; the body hands the panel its key, once.
-pub(crate) fn signed_in(state: &AppState, status: StatusCode, signed_in: SignedIn) -> Response {
-    let cookie = gate::session_cookie(&state.cookie, &signed_in.token, signed_in.lifetime.as_secs());
+/// The cookie takes the session's token; the body hands the panel its key, once. A remembered
+/// cookie lasts as long as the session can.
+pub(crate) fn signed_in(
+    state: &AppState,
+    status: StatusCode,
+    signed_in: SignedIn,
+    remember: bool,
+) -> Response {
+    let max_age = remember.then(|| signed_in.lifetime.as_secs());
+    let cookie = gate::session_cookie(&state.cookie, &signed_in.token, max_age);
     let body = LoginResponse {
         session_key: signed_in.key,
         me: signed_in.me,

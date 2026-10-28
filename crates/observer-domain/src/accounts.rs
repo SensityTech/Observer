@@ -22,6 +22,9 @@ pub struct SetupRequest {
     pub token: String,
     pub username: String,
     pub password: String,
+    /// See `LoginRequest::remember`.
+    #[serde(default)]
+    pub remember: bool,
 }
 
 /// `POST /api/auth/login`.
@@ -31,6 +34,11 @@ pub struct SetupRequest {
 pub struct LoginRequest {
     pub username: String,
     pub password: String,
+    /// Keep the session cookie after the browser closes. Without it the cookie lasts as long as the
+    /// browser does, so a sign-in on a shared computer ends with it. The session's own lifetimes
+    /// are the same either way.
+    #[serde(default)]
+    pub remember: bool,
 }
 
 /// The answer to a login or a completed setup, next to the session cookie.

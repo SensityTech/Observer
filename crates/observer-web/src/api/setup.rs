@@ -24,5 +24,10 @@ pub(crate) async fn complete(
         .accounts
         .complete_setup(&request.token, &request.username, request.password, &client)
         .await?;
-    Ok(auth::signed_in(&state, StatusCode::CREATED, signed_in))
+    Ok(auth::signed_in(
+        &state,
+        StatusCode::CREATED,
+        signed_in,
+        request.remember,
+    ))
 }
