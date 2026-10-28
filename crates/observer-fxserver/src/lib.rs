@@ -8,6 +8,7 @@ pub mod exit;
 pub mod health;
 pub mod launch;
 pub mod layout;
+pub mod perf;
 pub mod recovery;
 pub mod stdin;
 pub mod supervisor;

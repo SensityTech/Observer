@@ -1,6 +1,7 @@
 //! How Observer tells a running FXServer from a stuck one: its HTTP endpoints, answered off the
 //! main thread, the main thread's tick count in `/perf/`, and the bridge's heartbeat, which only
-//! comes while the main loop runs.
+//! comes while the main loop runs. The same probes feed the statistics: `/perf/` and
+//! `/players.json` are read in the middle of each five-second slot, once for both.
 
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
@@ -10,23 +11,28 @@ use hyper::body::Bytes;
 use hyper::header::{AUTHORIZATION, HOST, USER_AGENT};
 use hyper::{Request, StatusCode};
 use hyper_util::rt::TokioIo;
-use serde::Serialize;
+use observer_domain::metrics;
+use serde::{Deserialize, Serialize};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
+use crate::perf::TickReport;
 use crate::stdin::{Credentials, PERF_USER};
 
 const DYNAMIC_EVERY: Duration = Duration::from_secs(1);
 const DYNAMIC_TIMEOUT: Duration = Duration::from_millis(1500);
-const PERF_EVERY: Duration = Duration::from_secs(5);
-const PERF_TIMEOUT: Duration = Duration::from_secs(3);
+/// Fired at the middle of a slot, they have answered before its end.
+const SLOT_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 /// `/info.json` is asked until it answers once: the build does not change while the server runs.
 const INFO_EVERY: Duration = Duration::from_secs(5);
 const INFO_TIMEOUT: Duration = Duration::from_secs(3);
 /// `/perf/` is a few kilobytes; anything much bigger is not FXServer.
 const MAX_BODY: usize = 256 * 1024;
+/// A full server's `/players.json` lists every player's identifiers: about 1 KiB each.
+const MAX_PLAYERS_BODY: usize = 4 * 1024 * 1024;
+const PLAYERS_TOKEN_HEADER: &str = "x-players-token";
 
 /// When a silent signal makes the server degraded, then hung. The defaults are txAdmin's.
 #[derive(Debug, Clone, Copy)]
@@ -124,9 +130,13 @@ impl Health {
     pub fn probed(&mut self, probe: &Probe, now: Instant) {
         match probe {
             Probe::Dynamic(Ok(_)) => self.http = Some(now),
-            Probe::Perf(Ok(ticks)) => {
-                self.stalled = self.ticks == Some(*ticks);
-                self.ticks = Some(*ticks);
+            Probe::Perf(Ok(report)) => {
+                // A report without svMain says nothing of the main loop.
+                let Some(ticks) = report.main_ticks() else {
+                    return;
+                };
+                self.stalled = self.ticks == Some(ticks);
+                self.ticks = Some(ticks);
                 self.unauthorized = false;
                 self.refusals = 0;
             }
@@ -138,7 +148,7 @@ impl Health {
                 self.unauthorized = self.ticks.is_some() || self.refusals > 1;
             }
             // Silence is measured from the last answer, so a failure has nothing to add.
-            Probe::Dynamic(Err(_)) | Probe::Perf(Err(_)) | Probe::Info(_) => {}
+            Probe::Dynamic(Err(_)) | Probe::Perf(Err(_)) | Probe::Players(_) | Probe::Info(_) => {}
         }
     }
 
@@ -179,11 +189,12 @@ impl Health {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Probe {
     Dynamic(Result<Players, ProbeError>),
-    /// The `svMain` tick count.
-    Perf(Result<u64, ProbeError>),
+    /// The tick time histograms.
+    Perf(Result<TickReport, ProbeError>),
+    Players(Result<PlayerList, ProbeError>),
     /// The build number, from `/info.json`.
     Info(Result<u32, ProbeError>),
 }
@@ -193,6 +204,24 @@ pub enum Probe {
 pub struct Players {
     pub clients: u64,
     pub max_clients: Option<u64>,
+}
+
+/// The players `/players.json` lists, as `(net id, ping in ms)`. Names, identifiers and endpoints
+/// are never kept.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct PlayerList {
+    pub players: Vec<(u32, u32)>,
+    /// FXServer did not honour the token and answered the public list, whose ids and pings are 0.
+    pub anonymous: bool,
+}
+
+impl PlayerList {
+    pub fn anonymous() -> Self {
+        Self {
+            players: Vec::new(),
+            anonymous: true,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -209,19 +238,21 @@ pub enum ProbeError {
     Invalid(String),
 }
 
-/// Polls `/dynamic.json` every second and `/perf/` every five, each with one request in flight,
-/// until `cancel`, and `/info.json` until it answers. Results go to `sink` tagged with `generation`.
+/// Polls `/dynamic.json` every second, `/perf/` and `/players.json` in the middle of every slot,
+/// each with one request in flight, until `cancel`, and `/info.json` until it answers. Results go
+/// to `sink` tagged with `generation`.
 pub(crate) fn start(
     address: SocketAddr,
     credentials: &Credentials,
     generation: u32,
     sink: mpsc::Sender<(u32, Probe)>,
     cancel: &CancellationToken,
-) -> [JoinHandle<()>; 3] {
+) -> [JoinHandle<()>; 4] {
     let authorization = format!(
         "Basic {}",
         base64(format!("{PERF_USER}:{}", credentials.perf_password).as_bytes())
     );
+    let token = credentials.players_token.clone();
     let dynamic = tokio::spawn(poll(cancel.clone(), DYNAMIC_EVERY, {
         let sink = sink.clone();
         move || {
@@ -232,14 +263,25 @@ pub(crate) fn start(
             }
         }
     }));
-    let perf = tokio::spawn(poll(cancel.clone(), PERF_EVERY, {
+    let perf = tokio::spawn(every_mid_slot(cancel.clone(), {
         let sink = sink.clone();
         move || {
             let sink = sink.clone();
             let authorization = authorization.clone();
             async move {
-                let result = timed(PERF_TIMEOUT, perf(address, &authorization)).await;
+                let result = timed(SLOT_PROBE_TIMEOUT, perf(address, &authorization)).await;
                 let _ = sink.send((generation, Probe::Perf(result))).await;
+            }
+        }
+    }));
+    let players = tokio::spawn(every_mid_slot(cancel.clone(), {
+        let sink = sink.clone();
+        move || {
+            let sink = sink.clone();
+            let token = token.clone();
+            async move {
+                let result = timed(SLOT_PROBE_TIMEOUT, players(address, &token)).await;
+                let _ = sink.send((generation, Probe::Players(result))).await;
             }
         }
     }));
@@ -263,7 +305,29 @@ pub(crate) fn start(
             }
         }
     });
-    [dynamic, perf, info]
+    [dynamic, perf, players, info]
+}
+
+/// Runs `probe` at the middle of every slot of the wall clock. The next one is found from the
+/// clock each time, so a clock that steps realigns at once, and a slow answer skips a slot rather
+/// than fire late.
+async fn every_mid_slot<F, R>(cancel: CancellationToken, mut probe: F)
+where
+    F: FnMut() -> R,
+    R: Future<Output = ()>,
+{
+    loop {
+        let now = jiff::Timestamp::now().as_millisecond();
+        let wait = u64::try_from(metrics::next_mid_slot(now) - now).unwrap_or(0);
+        tokio::select! {
+            () = cancel.cancelled() => return,
+            () = tokio::time::sleep(Duration::from_millis(wait)) => {}
+        }
+        tokio::select! {
+            () = cancel.cancelled() => return,
+            () = probe() => {}
+        }
+    }
 }
 
 async fn poll<F, R>(cancel: CancellationToken, every: Duration, mut probe: F)
@@ -297,7 +361,7 @@ async fn timed<T>(
 }
 
 async fn dynamic(address: SocketAddr) -> Result<Players, ProbeError> {
-    let (status, body) = get(address, "/dynamic.json", None).await?;
+    let (status, body) = get(address, "/dynamic.json", &[], MAX_BODY).await?;
     if status != StatusCode::OK {
         return Err(ProbeError::Status(status.as_u16()));
     }
@@ -307,20 +371,32 @@ async fn dynamic(address: SocketAddr) -> Result<Players, ProbeError> {
 /// Only the build is read: the rest of `/info.json` lists the server's convars, one of them derived
 /// from the licence key.
 async fn info(address: SocketAddr) -> Result<u32, ProbeError> {
-    let (status, body) = get(address, "/info.json", None).await?;
+    let (status, body) = get(address, "/info.json", &[], MAX_BODY).await?;
     if status != StatusCode::OK {
         return Err(ProbeError::Status(status.as_u16()));
     }
     parse_build(&body)
 }
 
-async fn perf(address: SocketAddr, authorization: &str) -> Result<u64, ProbeError> {
-    let (status, body) = get(address, "/perf/", Some(authorization)).await?;
+async fn perf(address: SocketAddr, authorization: &str) -> Result<TickReport, ProbeError> {
+    let headers = [(AUTHORIZATION.as_str(), authorization)];
+    let (status, body) = get(address, "/perf/", &headers, MAX_BODY).await?;
     match status {
-        StatusCode::OK => main_ticks(&String::from_utf8_lossy(&body)),
+        StatusCode::OK => TickReport::parse(&String::from_utf8_lossy(&body))
+            .ok_or_else(|| ProbeError::Invalid("/perf/ has no tick time histogram".to_owned())),
         StatusCode::UNAUTHORIZED => Err(ProbeError::Unauthorized),
         status => Err(ProbeError::Status(status.as_u16())),
     }
+}
+
+/// The token goes in a header: in the query string it would end up in logs.
+async fn players(address: SocketAddr, token: &str) -> Result<PlayerList, ProbeError> {
+    let headers = [(PLAYERS_TOKEN_HEADER, token)];
+    let (status, body) = get(address, "/players.json", &headers, MAX_PLAYERS_BODY).await?;
+    if status != StatusCode::OK {
+        return Err(ProbeError::Status(status.as_u16()));
+    }
+    parse_players(&body)
 }
 
 /// One request on a fresh connection, as a plain client: FXServer blocks requests that carry
@@ -328,7 +404,8 @@ async fn perf(address: SocketAddr, authorization: &str) -> Result<u64, ProbeErro
 async fn get(
     address: SocketAddr,
     path: &str,
-    authorization: Option<&str>,
+    headers: &[(&str, &str)],
+    limit: usize,
 ) -> Result<(StatusCode, Bytes), ProbeError> {
     let http = |error: hyper::Error| ProbeError::Unreachable(error.to_string());
     let stream = TcpStream::connect(address)
@@ -340,8 +417,8 @@ async fn get(
     let mut request = Request::get(path)
         .header(HOST, address.to_string())
         .header(USER_AGENT, "observer");
-    if let Some(authorization) = authorization {
-        request = request.header(AUTHORIZATION, authorization);
+    for &(name, value) in headers {
+        request = request.header(name, value);
     }
     let request = request
         .body(Empty::<Bytes>::new())
@@ -349,7 +426,7 @@ async fn get(
     let exchange = async move {
         let response = sender.send_request(request).await.map_err(http)?;
         let status = response.status();
-        let body = Limited::new(response.into_body(), MAX_BODY)
+        let body = Limited::new(response.into_body(), limit)
             .collect()
             .await
             .map_err(|error| ProbeError::Invalid(error.to_string()))?
@@ -400,11 +477,23 @@ fn parse_build(body: &[u8]) -> Result<u32, ProbeError> {
         .ok_or_else(invalid)
 }
 
-fn main_ticks(text: &str) -> Result<u64, ProbeError> {
-    text.lines()
-        .find_map(|line| line.strip_prefix("tickTime_count{name=\"svMain\"} "))
-        .and_then(|count| count.trim().parse().ok())
-        .ok_or_else(|| ProbeError::Invalid("/perf/ has no svMain tick count".to_owned()))
+/// A JSON array of players, each with a numeric `id` and `ping`. The public list FXServer answers
+/// without the token has every id at 0.
+fn parse_players(body: &[u8]) -> Result<PlayerList, ProbeError> {
+    #[derive(Deserialize)]
+    struct Entry {
+        id: u32,
+        ping: u32,
+    }
+    let entries: Vec<Entry> = serde_json::from_slice(body)
+        .map_err(|_| ProbeError::Invalid("/players.json is not a list of players".to_owned()))?;
+    if entries.iter().any(|entry| entry.id == 0) {
+        return Ok(PlayerList::anonymous());
+    }
+    Ok(PlayerList {
+        players: entries.into_iter().map(|entry| (entry.id, entry.ping)).collect(),
+        anonymous: false,
+    })
 }
 
 fn base64(bytes: &[u8]) -> String {
@@ -514,12 +603,21 @@ mod tests {
         );
     }
 
+    /// A `/perf/` answer whose svMain has ticked `count` times.
+    fn perf(count: u64) -> Probe {
+        let text = format!(
+            "tickTime_count{{name=\"svMain\"}} {count}\ntickTime_sum{{name=\"svMain\"}} 0\n\
+             tickTime_bucket{{name=\"svMain\",le=\"0.05\"}} {count}\ntickTime_bucket{{name=\"svMain\",le=\"+Inf\"}} {count}\n"
+        );
+        Probe::Perf(Ok(TickReport::parse(&text).unwrap()))
+    }
+
     #[test]
     fn a_stalled_tick_count_an_unauthorized_probe_and_a_bark_degrade_the_server() {
         let start = Instant::now();
         let mut health = ready(start);
-        health.probed(&Probe::Perf(Ok(388)), start + secs(3));
-        health.probed(&Probe::Perf(Ok(388)), start + secs(8));
+        health.probed(&perf(388), start + secs(3));
+        health.probed(&perf(388), start + secs(8));
         health.probed(&Probe::Perf(Err(ProbeError::Unauthorized)), start + secs(8));
         health.bark();
 
@@ -532,7 +630,7 @@ mod tests {
             ])
         );
 
-        health.probed(&Probe::Perf(Ok(400)), start + secs(9));
+        health.probed(&perf(400), start + secs(9));
         health.heartbeat(start + secs(9));
         assert_eq!(health.verdict(start + secs(9), &LIMITS), Verdict::Healthy);
     }
@@ -544,7 +642,7 @@ mod tests {
         health.probed(&Probe::Perf(Err(ProbeError::Unauthorized)), start + secs(1));
         assert_eq!(health.verdict(start + secs(1), &LIMITS), Verdict::Healthy);
 
-        health.probed(&Probe::Perf(Ok(12)), start + secs(5));
+        health.probed(&perf(12), start + secs(5));
         health.probed(&Probe::Perf(Err(ProbeError::Unauthorized)), start + secs(10));
         assert_eq!(
             health.verdict(start + secs(10), &LIMITS),
@@ -591,15 +689,79 @@ mod tests {
     }
 
     #[test]
-    fn the_main_tick_count_is_read_from_perf() {
-        let perf = "# HELP tickTime Time spent on server ticks\n\
-                    # TYPE tickTime histogram\n\
-                    tickTime_count{name=\"svNetwork\"} 9000\n\
-                    tickTime_count{name=\"svMain\"} 388\n\
-                    tickTime_bucket{name=\"svMain\",le=\"0.07000000000000001\"} 388\n";
+    fn a_perf_answer_without_svmain_says_nothing_of_the_main_loop() {
+        let start = Instant::now();
+        let mut health = ready(start);
+        health.probed(&perf(388), start + secs(3));
+        let sync_only = "tickTime_count{name=\"svSync\"} 1\ntickTime_sum{name=\"svSync\"} 0\n\
+                         tickTime_bucket{name=\"svSync\",le=\"0.008\"} 1\ntickTime_bucket{name=\"svSync\",le=\"+Inf\"} 1\n";
+        let report = TickReport::parse(sync_only).unwrap();
 
-        assert_eq!(main_ticks(perf), Ok(388));
-        assert!(main_ticks("tickTime_count{name=\"svSync\"} 1\n").is_err());
+        health.probed(&Probe::Perf(Ok(report.clone())), start + secs(8));
+        health.probed(&Probe::Perf(Ok(report)), start + secs(13));
+        health.heartbeat(start + secs(13));
+        health.probed(&http_ok(), start + secs(13));
+
+        assert_eq!(health.verdict(start + secs(13), &LIMITS), Verdict::Healthy);
+    }
+
+    #[test]
+    fn the_player_list_keeps_ids_and_pings_only() {
+        let body = br#"[{"endpoint":"127.0.0.1","id":3,"identifiers":["license:abc","discord:1"],"name":"Ada","ping":42},
+                        {"endpoint":"10.0.0.2","id":7,"identifiers":[],"name":"Grace","ping":120}]"#;
+
+        assert_eq!(
+            parse_players(body),
+            Ok(PlayerList {
+                players: vec![(3, 42), (7, 120)],
+                anonymous: false
+            })
+        );
+        assert_eq!(parse_players(b"[]"), Ok(PlayerList::default()));
+    }
+
+    #[test]
+    fn the_public_list_without_ids_is_anonymous() {
+        let body = br#"[{"endpoint":"","id":0,"identifiers":[],"name":"Ada","ping":0},{"id":0,"ping":0}]"#;
+
+        assert_eq!(parse_players(body), Ok(PlayerList::anonymous()));
+    }
+
+    #[test]
+    fn a_player_list_that_is_not_a_list_of_numbered_players_is_invalid() {
+        for body in [
+            &b"<html><body>Not found</body></html>"[..],
+            br#"{"players":[]}"#,
+            br#"[{"id":"3","ping":42}]"#,
+            br#"[{"id":3}]"#,
+            br#"[{"id":-1,"ping":2}]"#,
+            b"",
+        ] {
+            assert!(
+                matches!(parse_players(body), Err(ProbeError::Invalid(_))),
+                "{}",
+                String::from_utf8_lossy(body)
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn an_answer_past_the_size_limit_is_refused() {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut head = [0; 1024];
+            let _ = stream.read(&mut head).unwrap();
+            let body = format!("[{}]", vec![r#"{"id":1,"ping":1}"#; 300_000].join(","));
+            let response = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{body}", body.len());
+            let _ = stream.write_all(response.as_bytes());
+        });
+
+        let result = players(address, "token").await;
+
+        assert!(matches!(result, Err(ProbeError::Invalid(_))), "{result:?}");
     }
 
     #[test]
