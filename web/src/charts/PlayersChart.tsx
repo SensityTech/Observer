@@ -219,6 +219,7 @@ function Plot({
     const [layout, setLayout] = useState<Side[]>([]);
     const labels = useRef<(HTMLSpanElement | null)[]>([]);
     const band = useRef<HTMLDivElement>(null);
+    const tip = useRef<HTMLSpanElement>(null);
 
     const place = useCallback(() => {
         const api = chart.current;
@@ -382,6 +383,18 @@ function Plot({
         setLayout((current) => (current.join() === next.join() ? current : next));
     }, [overlay]);
 
+    // Centred on the pointer, but never past either side of the plot: at phone width the newest
+    // bucket is close enough to the edge to scroll the page.
+    useLayoutEffect(() => {
+        const element = tip.current;
+        const plot = host.current;
+        if (tooltip === null || element === null || plot === null) {
+            return;
+        }
+        const half = element.offsetWidth / 2;
+        element.style.left = `${Math.max(half, Math.min(tooltip.x, plot.clientWidth - half))}px`;
+    }, [tooltip]);
+
     const label = (marker: RunMarker) => {
         const word = t.charts.markers[marker.kind];
         const time = clock(marker.at);
@@ -454,8 +467,8 @@ function Plot({
                     )}
                     {tooltip && (
                         <span
+                            ref={tip}
                             className="absolute top-2 flex -translate-x-1/2 flex-col rounded-sm border border-line-strong bg-surface px-2.5 py-1.5 whitespace-nowrap shadow-pop"
-                            style={{ left: tooltip.x }}
                         >
                             <span className="text-ui font-semibold text-ink">
                                 {t.charts.players.tooltip(Math.round(tooltip.players))}
