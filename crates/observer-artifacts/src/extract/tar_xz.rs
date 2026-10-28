@@ -8,7 +8,7 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs::{self, File};
-use std::io::{BufReader, Read, Seek};
+use std::io::{self, BufReader, Read, Seek};
 use std::path::Path;
 
 use lzma_rust2::XzReader;
@@ -84,6 +84,9 @@ pub(crate) fn extract(archive: &Path, into: &Path) -> Result<(), Error> {
             other => return Err(refuse(Refusal::EntryType(describe(other)))),
         }
     }
+    // The tar ends before the xz stream does: only reading the rest checks the last block's CRC,
+    // the index and the footer, the one guard a Linux build has against a damaged download.
+    io::copy(&mut tar.into_inner(), &mut io::sink()).map_err(|error| damaged(&error))?;
 
     for (path, link) in confine(&tree.links)? {
         create_link(&link, &into.join(path))?;
@@ -254,7 +257,7 @@ fn describe(kind: EntryType) -> String {
     }
 }
 
-fn damaged(error: &std::io::Error) -> Error {
+fn damaged(error: &io::Error) -> Error {
     Error::Damaged(error.to_string())
 }
 
@@ -486,6 +489,41 @@ mod tests {
         fs::write(&archive, &bytes[..bytes.len() / 2]).unwrap();
 
         let error = extract(&archive, &dir.path().join("tree")).unwrap_err();
+
+        assert!(matches!(error, Error::Damaged(_)), "{error}");
+    }
+
+    fn extracted_bytes(bytes: &[u8]) -> Result<(), Error> {
+        let dir = tempfile::tempdir().unwrap();
+        let archive = dir.path().join("fx.tar.xz");
+        fs::write(&archive, bytes).unwrap();
+        extract(&archive, &dir.path().join("tree"))
+    }
+
+    #[test]
+    fn a_byte_changed_in_the_last_block_is_damaged() {
+        // Noise does not compress, so LZMA2 stores the chunks in the middle of it as they are and
+        // the changed byte reaches the file; only the block's CRC64, at the end of the stream, tells.
+        let data = noise(300_000);
+        let mut bytes = tar_xz(&[TarEntry::File("alpine/opt/cfx-server/FXServer", &data, 0o755)]);
+        let at = bytes
+            .windows(64)
+            .position(|window| window == &data[150_000..150_064])
+            .unwrap();
+        bytes[at] ^= 1;
+
+        let error = extracted_bytes(&bytes).unwrap_err();
+
+        assert!(matches!(error, Error::Damaged(_)), "{error}");
+    }
+
+    #[test]
+    fn a_broken_xz_footer_is_damaged() {
+        let mut bytes = tar_xz(&[TarEntry::File("run.sh", b"#!/bin/bash", 0o755)]);
+        let end = bytes.len();
+        bytes[end - 2..].copy_from_slice(b"XX");
+
+        let error = extracted_bytes(&bytes).unwrap_err();
 
         assert!(matches!(error, Error::Damaged(_)), "{error}");
     }
