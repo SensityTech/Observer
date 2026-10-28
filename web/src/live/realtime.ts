@@ -34,12 +34,15 @@ export type TopicHandlers<T extends Topic> = {
     event?: (data: EventOf<T>) => void;
     /** The session does not hold the topic's permission. */
     refused?: () => void;
+    /** The link went down: the last snapshot no longer says how things stand. */
+    cleared?: () => void;
 };
 
 type Handlers = {
     snapshot?: (data: unknown) => void;
     event?: (data: unknown) => void;
     refused?: () => void;
+    cleared?: () => void;
 };
 
 /** One socket as the module drives it. */
@@ -264,7 +267,7 @@ export class Realtime {
     #down() {
         this.#live = false;
         this.#missed = true;
-        this.#snapshots.clear();
+        this.#forgetSnapshots();
         clearInterval(this.#heartbeat);
         this.#heartbeat = undefined;
         if (this.#offline === undefined && this.#poll === undefined) {
@@ -295,9 +298,17 @@ export class Realtime {
     #dropSocket() {
         this.#generation += 1;
         this.#live = false;
-        this.#snapshots.clear();
+        this.#forgetSnapshots();
         this.#socket?.close();
         this.#socket = null;
+    }
+
+    #forgetSnapshots() {
+        const topics = [...this.#snapshots.keys()];
+        this.#snapshots.clear();
+        for (const topic of topics) {
+            this.#each(topic, (watcher) => watcher.cleared?.());
+        }
     }
 
     #clearTimers() {

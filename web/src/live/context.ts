@@ -31,14 +31,19 @@ export const useTopic = <T extends Topic>(topic: T, handlers: TopicHandlers<T>) 
                 snapshot: (data) => latest.current.snapshot?.(data),
                 event: (data) => latest.current.event?.(data),
                 refused: () => latest.current.refused?.(),
+                cleared: () => latest.current.cleared?.(),
             }),
         [live, topic],
     );
 };
 
-/** A topic's latest snapshot, or null until one arrives. */
+/** A topic's latest snapshot, or null while none holds: until one arrives, and while the link is down. */
 export const useSnapshot = <T extends Topic>(topic: T) => {
     const [snapshot, setSnapshot] = useState<SnapshotOf<T> | null>(null);
-    useTopic(topic, { snapshot: setSnapshot });
+    useTopic(topic, {
+        snapshot: setSnapshot,
+        refused: () => setSnapshot(null),
+        cleared: () => setSnapshot(null),
+    });
     return snapshot;
 };

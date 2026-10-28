@@ -35,6 +35,7 @@ export function OverviewPage() {
                 </div>
                 <div className="card-body flex flex-col gap-1.5">
                     {health.isPending && <p className="text-ink-3">{t.overview.loading}</p>}
+                    {/* A failed check keeps the last answer: it no longer says Observer runs. */}
                     {health.isError && (
                         <>
                             <p className="flex items-center gap-2.5 text-state text-ink">
@@ -44,7 +45,7 @@ export function OverviewPage() {
                             <p className="text-ink-3">{t.overview.unreachableHint}</p>
                         </>
                     )}
-                    {health.data && (
+                    {!health.isError && health.data && (
                         <>
                             <p className="flex items-center gap-2.5 text-state text-ink">
                                 <span className="led led-live" aria-hidden="true" />

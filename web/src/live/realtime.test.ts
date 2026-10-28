@@ -198,6 +198,21 @@ describe('Realtime', () => {
         expect(refetch).toHaveBeenCalledOnce();
     });
 
+    it('should tell a watcher its snapshot no longer holds once the link drops', async () => {
+        const { live, last } = setup();
+        const cleared = vi.fn();
+        live.watch('status', { cleared });
+        live.start();
+        await after(0);
+        last().hello();
+        last().receive({ type: 'snapshot', topic: 'status', data: STATUS });
+        expect(cleared).not.toHaveBeenCalled();
+
+        last().drop();
+
+        expect(cleared).toHaveBeenCalledOnce();
+    });
+
     it('should start a topic over when Observer says it fell behind', async () => {
         const { live, last } = setup();
         live.watch('audit', {});
