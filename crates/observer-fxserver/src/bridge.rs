@@ -114,6 +114,8 @@ pub enum BridgeEvent {
         previous_at: i64,
         by: String,
     },
+    /// Raised again, with the time left, when a stop overtakes a restart before `quit`: the
+    /// latest one says what follows.
     ShuttingDown {
         delay_ms: u64,
         reason: StopReason,

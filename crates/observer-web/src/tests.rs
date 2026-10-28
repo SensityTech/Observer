@@ -2,6 +2,7 @@
 //! database in a temporary directory.
 
 mod live;
+mod servers;
 
 use std::net::SocketAddr;
 
@@ -11,7 +12,7 @@ use axum::extract::connect_info::MockConnectInfo;
 use axum::http::{HeaderMap, Method, Request, StatusCode, header};
 use http_body_util::BodyExt;
 use jiff::SignedDuration;
-use observer_app::{Accounts, AuditLog, Clock, PasswordCost, Servers};
+use observer_app::{Accounts, AuditLog, Clock, PasswordCost, Running, Servers, Setup, Supervision};
 use observer_domain::audit::ActorKind;
 use observer_store::Database;
 use serde_json::{Value, json};
@@ -27,13 +28,15 @@ const ORIGIN: &str = "http://observer.test:40125";
 const OWNER_PASSWORD: &str = "correct horse battery staple";
 
 struct Server {
-    _dir: TempDir,
+    dir: TempDir,
     app: Router,
     clock: Clock,
     accounts: Accounts,
     audit: AuditLog,
     db: Database,
     live: Live,
+    supervision: Supervision,
+    _supervised: Running,
     cookie_name: String,
 }
 
@@ -81,25 +84,42 @@ impl Server {
             .unwrap();
         let audit = AuditLog::new(db.clone(), clock.clone());
         let servers = Servers::new(db.clone(), clock.clone());
+        let (supervision, supervised) = Supervision::start(
+            Setup {
+                db: db.clone(),
+                clock: clock.clone(),
+                accounts: accounts.clone(),
+                servers: servers.clone(),
+                data_dir: dir.path().join("data"),
+                console_logs: dir.path().join("data/logs/console"),
+                log: None,
+            },
+            |_| {},
+        )
+        .await
+        .unwrap();
         let instance_id = db.instance_id().await.unwrap();
         let state = AppState::new(
             "0.0.0-test",
             accounts.clone(),
             audit.clone(),
             servers,
+            supervision.clone(),
             &instance_id,
             &["observer.test".to_owned()],
         );
         let live = state.live.clone();
         let app = router(state).layer(MockConnectInfo(SocketAddr::from(([203, 0, 113, 7], 50_000))));
         Self {
-            _dir: dir,
+            dir,
             app,
             clock,
             accounts,
             audit,
             db,
             live,
+            supervision,
+            _supervised: supervised,
             cookie_name: format!("observer_session_{instance_id}"),
         }
     }
@@ -222,7 +242,13 @@ async fn every_gated_route_refuses_a_request_without_a_session() {
     server.owner().await;
 
     for route in routes().into_iter().filter(|route| route.gate != Gate::Public) {
-        let path = format!("/api{}", route.path.replace("{id}", "1"));
+        let path = format!(
+            "/api{}",
+            route
+                .path
+                .replace("{id}", "1")
+                .replace("{name}", "console-2026-10-28.log")
+        );
         let reply = server
             .call(route.method.clone(), &path, None, Some(json!({})))
             .await;
@@ -249,7 +275,13 @@ async fn no_method_on_an_api_path_skips_the_gate() {
     ];
 
     for route in routes() {
-        let path = format!("/api{}", route.path.replace("{id}", "1"));
+        let path = format!(
+            "/api{}",
+            route
+                .path
+                .replace("{id}", "1")
+                .replace("{name}", "console-2026-10-28.log")
+        );
         for method in methods.clone() {
             if PUBLIC.contains(&(method.clone(), route.path))
                 || (method == Method::HEAD && PUBLIC.contains(&(Method::GET, route.path)))

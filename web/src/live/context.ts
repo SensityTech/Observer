@@ -32,6 +32,7 @@ export const useTopic = <T extends Topic>(topic: T, handlers: TopicHandlers<T>) 
                 event: (data) => latest.current.event?.(data),
                 refused: () => latest.current.refused?.(),
                 cleared: () => latest.current.cleared?.(),
+                since: () => latest.current.since?.() ?? null,
             }),
         [live, topic],
     );

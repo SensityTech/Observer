@@ -1,6 +1,7 @@
 //! What Observer needs from the operating system to run FXServer: spawning it with stdin, stdout,
 //! stderr and file descriptor 3, owning its whole process tree, and the console and signal plumbing
-//! around it. The only crate allowed to use `unsafe` outside test tools.
+//! around it; and for installing builds, the free space of a volume and the signature check of
+//! FXServer.exe. The only crate allowed to use `unsafe` outside test tools.
 #![allow(unsafe_code)]
 
 mod stream;
@@ -11,7 +12,7 @@ mod windows;
 
 use std::ffi::OsString;
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use tokio::sync::watch;
@@ -23,6 +24,8 @@ pub use unix::ProcessTree;
 pub use unix::leftovers::{PidFile, Sweep};
 #[cfg(windows)]
 pub use windows::ProcessTree;
+#[cfg(windows)]
+pub use windows::authenticode::verify_signature;
 #[cfg(windows)]
 pub use windows::console::{ConsoleEvent, ConsoleEvents};
 
@@ -78,6 +81,18 @@ pub fn spawn(launch: &Launch) -> Result<Spawned, SpawnError> {
     }
 }
 
+/// The bytes this user may still write on the volume that holds `dir`.
+pub fn available_space(dir: &Path) -> io::Result<u64> {
+    #[cfg(windows)]
+    {
+        windows::available_space(dir)
+    }
+    #[cfg(unix)]
+    {
+        unix::available_space(dir)
+    }
+}
+
 impl ProcessTree {
     /// Waits until no process is left in the tree, polling. Returns `false` if some still run
     /// after `timeout`.
@@ -127,5 +142,17 @@ impl ExitWatch {
             Ok(exit) => exit.unwrap_or(Exit::Unknown),
             Err(_) => Exit::Unknown,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_free_space_of_a_volume_is_known() {
+        let dir = tempfile::tempdir().unwrap();
+
+        assert!(available_space(dir.path()).unwrap() > 0);
     }
 }

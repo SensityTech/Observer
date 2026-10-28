@@ -15,7 +15,7 @@ rust-embed.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
-tokio-util = { workspace = true, features = ["rt"] }
+tokio-util = { workspace = true, features = ["io", "rt"] }
 tower-http.workspace = true
 tracing.workspace = true
 

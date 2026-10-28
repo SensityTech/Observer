@@ -8,6 +8,7 @@ use ts_rs::TS;
 
 use crate::audit::AuditEntry;
 use crate::error::ErrorCode;
+use crate::server::{ConsoleBatch, ConsoleSnapshot, ServerStatus};
 
 /// The websocket subprotocol. A change older panels cannot read takes a new one.
 pub const PROTOCOL: &str = "observer.v1";
@@ -33,10 +34,16 @@ pub enum Topic {
     Status,
     /// Audit entries as they are written. Needs the audit log permission.
     Audit,
+    /// FXServer under the supervisor. Needs the dashboard permission.
+    #[serde(rename = "server.status")]
+    ServerStatus,
+    /// FXServer's console, resumed from `since`, the number of the last line the panel holds.
+    /// Needs the console permission.
+    Console,
 }
 
 impl Topic {
-    pub const ALL: [Self; 2] = [Self::Status, Self::Audit];
+    pub const ALL: [Self; 4] = [Self::Status, Self::Audit, Self::ServerStatus, Self::Console];
 }
 
 /// What the panel sends.
@@ -96,6 +103,9 @@ pub enum ServerMessage {
 pub enum TopicSnapshot {
     Status(ObserverStatus),
     Audit(AuditSnapshot),
+    #[serde(rename = "server.status")]
+    ServerStatus(ServerStatus),
+    Console(ConsoleSnapshot),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, TS)]
@@ -103,6 +113,10 @@ pub enum TopicSnapshot {
 #[ts(export)]
 pub enum TopicEvent {
     Audit(AuditEntry),
+    /// The whole status again, whenever any of it changes.
+    #[serde(rename = "server.status")]
+    ServerStatus(ServerStatus),
+    Console(ConsoleBatch),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
@@ -196,6 +210,20 @@ mod tests {
         assert_eq!(
             parse(r#"{"type":"unsub","topic":"status"}"#),
             Some(ClientMessage::Unsub { topic: Topic::Status })
+        );
+        assert_eq!(
+            parse(r#"{"type":"sub","topic":"console","since":1761642000000001}"#),
+            Some(ClientMessage::Sub {
+                topic: Topic::Console,
+                since: Some(1_761_642_000_000_001)
+            })
+        );
+        assert_eq!(
+            parse(r#"{"type":"sub","topic":"server.status"}"#),
+            Some(ClientMessage::Sub {
+                topic: Topic::ServerStatus,
+                since: None
+            })
         );
         assert_eq!(parse(r#"{"type":"ping"}"#), Some(ClientMessage::Ping));
         for invalid in [

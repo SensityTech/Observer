@@ -32,10 +32,23 @@ pub enum AuditAction {
     /// The owner changed how FXServer is launched. `details` holds each changed setting with its
     /// value before and after.
     LaunchSettingsChanged,
+    /// Someone started FXServer, or Observer did as it started (`automatic`). A start that failed
+    /// is a failure, with the step that failed as its `reason`.
+    ServerStarted,
+    ServerStopped,
+    ServerRestarted,
+    /// Written before the command reaches FXServer, with the `command` as the console shows it,
+    /// secrets masked. `observer_cmd` is denied, with its `refusal`.
+    ConsoleCommandSent,
+    /// A console log file was downloaded; the target is its name.
+    ConsoleLogDownloaded,
+    /// FXServer failed too often in a row: Observer stopped restarting it until someone starts it.
+    /// `details` holds the `failures` counted.
+    ServerCrashLoop,
 }
 
 impl AuditAction {
-    pub const ALL: [Self; 16] = [
+    pub const ALL: [Self; 22] = [
         Self::SetupCompleted,
         Self::SetupLinkCreated,
         Self::LoginSucceeded,
@@ -52,6 +65,12 @@ impl AuditAction {
         Self::AuditExported,
         Self::Reauthenticated,
         Self::LaunchSettingsChanged,
+        Self::ServerStarted,
+        Self::ServerStopped,
+        Self::ServerRestarted,
+        Self::ConsoleCommandSent,
+        Self::ConsoleLogDownloaded,
+        Self::ServerCrashLoop,
     ];
 
     pub const fn as_str(self) -> &'static str {
@@ -72,6 +91,12 @@ impl AuditAction {
             Self::AuditExported => "audit_exported",
             Self::Reauthenticated => "reauthenticated",
             Self::LaunchSettingsChanged => "launch_settings_changed",
+            Self::ServerStarted => "server_started",
+            Self::ServerStopped => "server_stopped",
+            Self::ServerRestarted => "server_restarted",
+            Self::ConsoleCommandSent => "console_command_sent",
+            Self::ConsoleLogDownloaded => "console_log_downloaded",
+            Self::ServerCrashLoop => "server_crash_loop",
         }
     }
 

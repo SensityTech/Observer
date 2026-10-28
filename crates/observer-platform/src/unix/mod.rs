@@ -5,6 +5,7 @@ use std::io;
 use std::mem::ManuallyDrop;
 use std::os::fd::{AsRawFd, BorrowedFd, FromRawFd, OwnedFd};
 use std::os::unix::process::{CommandExt, ExitStatusExt};
+use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::{OnceLock, mpsc};
 use std::thread;
@@ -22,6 +23,11 @@ const TRACES_FD: i32 = 3;
 /// Set for FXServer and inherited by everything it starts, it finds the processes that left the
 /// process group: a detached Node child, a daemon with a session of its own.
 pub(crate) const TREE_VARIABLE: &str = "OBSERVER_TREE";
+
+pub(crate) fn available_space(dir: &Path) -> io::Result<u64> {
+    let stat = rustix::fs::statvfs(dir)?;
+    Ok(stat.f_bavail.saturating_mul(stat.f_frsize))
+}
 
 pub(crate) fn spawn(launch: &Launch) -> Result<Spawned, SpawnError> {
     let (traces, child_traces) =

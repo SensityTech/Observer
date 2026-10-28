@@ -1,7 +1,4 @@
-//! The two Windows calls artifacts need that take `unsafe`: the Authenticode check of FXServer.exe
-//! and the free space of a volume. They move to `observer-platform` once that crate exists.
-
-#![allow(unsafe_code)]
+//! The Authenticode check the artifacts installer runs on FXServer.exe before it keeps a build.
 
 use std::io;
 use std::os::windows::ffi::OsStrExt;
@@ -18,11 +15,6 @@ use windows_sys::Win32::Security::WinTrust::{
     WTD_STATEACTION_VERIFY, WTD_UI_NONE, WTHelperGetProvSignerFromChain, WTHelperProvDataFromStateData,
     WinVerifyTrust,
 };
-use windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
-
-fn wide(path: &Path) -> Vec<u16> {
-    path.as_os_str().encode_wide().chain([0]).collect()
-}
 
 /// The `\\?\` form of a path, which Win32 opens past 260 characters: a staged build can sit that
 /// deep under a long artifacts folder.
@@ -48,30 +40,10 @@ fn verbatim(path: &Path) -> io::Result<Vec<u16>> {
     Ok(prefixed.into_iter().chain([0]).collect())
 }
 
-pub(crate) fn available_space(dir: &Path) -> io::Result<u64> {
-    let path = wide(dir);
-    let mut available = 0;
-    // SAFETY: `path` is NUL-terminated and outlives the call, `available` is a writable u64, and
-    // the two totals we do not want may be null.
-    let succeeded = unsafe {
-        GetDiskFreeSpaceExW(
-            path.as_ptr(),
-            &raw mut available,
-            ptr::null_mut(),
-            ptr::null_mut(),
-        )
-    };
-    if succeeded == 0 {
-        Err(io::Error::last_os_error())
-    } else {
-        Ok(available)
-    }
-}
-
 /// Checks the Authenticode signature of `file` against the machine's trusted roots, then that the
 /// certificate that signed it was issued to `signer`. Revocation is not checked: that would need
 /// the network at install time, for an archive that already came from Cfx.re over HTTPS.
-pub(crate) fn verify_signature(file: &Path, signer: &str) -> Result<(), String> {
+pub fn verify_signature(file: &Path, signer: &str) -> Result<(), String> {
     let path = verbatim(file).map_err(|error| format!("its path cannot be resolved: {error}"))?;
     let mut file_info = WINTRUST_FILE_INFO {
         cbStruct: struct_size::<WINTRUST_FILE_INFO>(),
@@ -212,10 +184,5 @@ mod tests {
             verify_signature(&path, "Rockstar Games, Inc."),
             Err("it is not a Windows executable".to_owned())
         );
-    }
-
-    #[test]
-    fn the_free_space_of_the_system_volume_is_known() {
-        assert!(available_space(Path::new(r"C:\")).unwrap() > 0);
     }
 }

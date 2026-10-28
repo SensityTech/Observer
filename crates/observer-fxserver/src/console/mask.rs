@@ -1,8 +1,10 @@
 //! Secrets hidden from every console line before it is stored, logged or sent anywhere.
 
+use crate::command;
+
 /// Convars whose value is a secret: the user's, the ones FXServer derives from the licence key,
 /// and the credentials Observer gives FXServer on each launch.
-pub(crate) const SECRET_CONVARS: [&str; 10] = [
+const SECRET_CONVARS: [&str; 10] = [
     "sv_licenseKey",
     "sv_tebexSecret",
     "steam_webApiKey",
@@ -58,6 +60,54 @@ pub fn mask(text: &str) -> Option<String> {
     }
     masked.push_str(&text[copied..]);
     Some(masked)
+}
+
+/// A command line as the console and the audit log may show it. Each command that sets a secret
+/// convar as FXServer reads it loses all that follows the name, however the line spells it:
+/// `set rcon_password"x"`, `set rcon_password/**/x` or `set "mysql_connection\_string" x` give the
+/// text [`mask`] reads no secret in. The line then goes through [`mask`] too. `None` when nothing
+/// was masked.
+pub fn mask_command(line: &str) -> Option<String> {
+    let mut shown = String::with_capacity(line.len());
+    let mut copied = 0;
+    for span in command::spans(line) {
+        let words = command::words(&line[span.clone()]);
+        let Some(named) = sets_secret(&words) else {
+            continue;
+        };
+        let typed = &line[span.clone()];
+        let start = span.start + typed.len()
+            - typed
+                .trim_start_matches(|c: char| c <= ' ' || !c.is_ascii())
+                .len();
+        shown.push_str(&line[copied..start]);
+        shown.push_str(&words[..named].join(" "));
+        shown.push(' ');
+        shown.push_str(REDACTED);
+        copied = span.end;
+    }
+    if copied == 0 {
+        return mask(line);
+    }
+    shown.push_str(&line[copied..]);
+    Some(mask(&shown).unwrap_or(shown))
+}
+
+/// How many words name the secret convar a command sets, `set rcon_password` or `rcon_password`
+/// alone, when a value follows them.
+fn sets_secret(words: &[String]) -> Option<usize> {
+    let secret = |word: &str| SECRET_CONVARS.iter().any(|name| name.eq_ignore_ascii_case(word));
+    match words {
+        [set, name, _, ..]
+            if SET_COMMANDS
+                .iter()
+                .any(|command| command.eq_ignore_ascii_case(set)) =>
+        {
+            secret(name).then_some(2)
+        }
+        [name, _, ..] => secret(name).then_some(1),
+        _ => None,
+    }
 }
 
 fn convar_values(text: &str, lower: &str, secrets: &mut Vec<std::ops::Range<usize>>) {
@@ -275,6 +325,46 @@ mod tests {
             masked("The specified key (cfxk_abcdefghijklmnopqrstu_ABC123) does not exist."),
             "The specified key (cfxk_[REDACTED]) does not exist."
         );
+    }
+
+    #[test]
+    fn a_typed_command_setting_a_secret_is_masked_however_fxserver_reads_it() {
+        for (line, shown) in [
+            ("set sv_tebexSecret\"hunter2\"", "set sv_tebexSecret [REDACTED]"),
+            ("set rcon_password/**/hunter2", "set rcon_password [REDACTED]"),
+            ("set /**/rcon_password hunter2", "set rcon_password [REDACTED]"),
+            ("rcon_password\"hunter2\"", "rcon_password [REDACTED]"),
+            (
+                "set \"mysql_connection\\_string\" hunter2",
+                "set mysql_connection_string [REDACTED]",
+            ),
+            (
+                "say hi;  SETR Steam_WebApiKey\"k\"; status",
+                "say hi;  SETR Steam_WebApiKey [REDACTED]; status",
+            ),
+            (
+                "set sv_licenseKey cfxk_abcdefghijklmnopqrstu_ABC123",
+                "set sv_licenseKey [REDACTED]",
+            ),
+        ] {
+            assert_eq!(mask_command(line).as_deref(), Some(shown), "{line:?}");
+        }
+    }
+
+    #[test]
+    fn a_typed_command_keeps_the_text_masks_too() {
+        assert_eq!(
+            mask_command("say see https://discord.com/api/webhooks/1/x").as_deref(),
+            Some("say see https://discord.com/api/webhooks/[REDACTED]")
+        );
+        for line in [
+            "set sv_hostname \"Observer lab\"",
+            "set rcon_password",
+            "say rcon_password hunter2",
+            "ensure chat; status",
+        ] {
+            assert_eq!(mask_command(line), None, "{line:?}");
+        }
     }
 
     #[test]

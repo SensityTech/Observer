@@ -36,6 +36,11 @@ export type TopicHandlers<T extends Topic> = {
     refused?: () => void;
     /** The link went down: the last snapshot no longer says how things stand. */
     cleared?: () => void;
+    /**
+     * Where a topic whose events are numbered resumes: the number of the last one the watcher holds,
+     * asked again each time the topic is followed anew.
+     */
+    since?: () => number | null;
 };
 
 type Handlers = {
@@ -43,6 +48,7 @@ type Handlers = {
     event?: (data: unknown) => void;
     refused?: () => void;
     cleared?: () => void;
+    since?: () => number | null;
 };
 
 /** One socket as the module drives it. */
@@ -130,15 +136,17 @@ export class Realtime {
         const watcher = handlers as Handlers;
         let watchers = this.#watchers.get(topic);
         if (watchers === undefined) {
-            watchers = new Set();
+            watchers = new Set([watcher]);
             this.#watchers.set(topic, watchers);
             if (this.#live) {
-                this.#send({ type: 'sub', topic });
+                this.#follow(topic);
             }
-        } else if (this.#snapshots.has(topic)) {
-            watcher.snapshot?.(this.#snapshots.get(topic));
+        } else {
+            if (this.#snapshots.has(topic)) {
+                watcher.snapshot?.(this.#snapshots.get(topic));
+            }
+            watchers.add(watcher);
         }
-        watchers.add(watcher);
 
         const followed = watchers;
         return () => {
@@ -209,7 +217,7 @@ export class Realtime {
             case 'resync':
                 // Events of the topic were lost: a new subscription brings a fresh snapshot.
                 if (this.#watchers.has(message.topic)) {
-                    this.#send({ type: 'sub', topic: message.topic });
+                    this.#follow(message.topic);
                 }
                 break;
             case 'unsubscribed':
@@ -236,7 +244,7 @@ export class Realtime {
         this.#heartbeat = setInterval(() => this.#beat(), PING_EVERY);
         this.#setState('live');
         for (const topic of this.#watchers.keys()) {
-            this.#send({ type: 'sub', topic });
+            this.#follow(topic);
         }
         if (missed) {
             this.#options.refetch();
@@ -330,6 +338,15 @@ export class Realtime {
             this.#options.refetch();
         }
     };
+
+    /** Subscribes to a topic, from where its watchers stand when its events are numbered. */
+    #follow(topic: Topic) {
+        let since: number | null = null;
+        for (const watcher of this.#watchers.get(topic) ?? []) {
+            since ??= watcher.since?.() ?? null;
+        }
+        this.#send(since === null ? { type: 'sub', topic } : { type: 'sub', topic, since });
+    }
 
     #send(message: ClientMessage) {
         this.#socket?.send(JSON.stringify(message));

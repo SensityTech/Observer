@@ -13,9 +13,8 @@ use serde::Serialize;
 use tokio::sync::broadcast;
 
 pub use assemble::{Assembled, FLUSH_AFTER, LineAssembler, MAX_LINE};
-pub use log::{ConsoleLog, LogLimits};
-pub(crate) use mask::SECRET_CONVARS;
-pub use mask::mask;
+pub use log::{ConsoleLog, LogFile, LogLimits};
+pub use mask::{mask, mask_command};
 pub use sanitize::{plain, sanitize};
 
 use log::LogQueue;
@@ -67,6 +66,11 @@ pub struct Subscription {
     pub backlog: Vec<Arc<ConsoleLine>>,
     /// Lines the client asked for are gone from the ring.
     pub gap: bool,
+    /// The number the client resumes from is not one this hub gave: Observer restarted since.
+    pub restarted: bool,
+    /// The number of the newest line pushed, in the backlog or not: before the first line, the
+    /// one just below it.
+    pub last: u64,
     pub live: broadcast::Receiver<Arc<ConsoleLine>>,
 }
 
@@ -81,6 +85,8 @@ pub struct ConsoleHub {
 struct Ring {
     lines: VecDeque<Arc<ConsoleLine>>,
     bytes: usize,
+    /// The number of this hub's first line, pushed or to come.
+    first_seq: u64,
     next_seq: u64,
     max_lines: usize,
     max_bytes: usize,
@@ -97,6 +103,7 @@ impl ConsoleHub {
             ring: Mutex::new(Ring {
                 lines: VecDeque::new(),
                 bytes: 0,
+                first_seq,
                 next_seq: first_seq,
                 max_lines,
                 max_bytes,
@@ -151,17 +158,19 @@ impl ConsoleHub {
     }
 
     /// The lines after `since` still in the ring, and every line pushed from then on, with nothing
-    /// missed or repeated in between. `None` asks for the whole ring.
+    /// missed or repeated in between. `None` asks for the whole ring. A gap is only ever lines of
+    /// this hub's gone from the ring: a `since` it never gave comes from an Observer before it,
+    /// and everything is new to that client.
     pub fn subscribe_from(&self, since: Option<u64>) -> Subscription {
         let ring = self.lock();
         let live = self.live.subscribe();
         let last = ring.next_seq - 1;
         let first = ring.lines.front().map_or(ring.next_seq, |line| line.seq);
-        let (after, gap) = match since {
-            None => (0, false),
-            // Not a number of this Observer's: everything is new to the client.
-            Some(since) if since > last => (0, true),
-            Some(since) => (since, since + 1 < first),
+        let ours = |since: u64| (ring.first_seq - 1..=last).contains(&since);
+        let (after, gap, restarted) = match since {
+            None => (0, false, false),
+            Some(since) if ours(since) => (since, since + 1 < first, false),
+            Some(_) => (0, false, true),
         };
         let backlog = ring
             .lines
@@ -169,7 +178,13 @@ impl ConsoleHub {
             .filter(|line| line.seq > after)
             .cloned()
             .collect();
-        Subscription { backlog, gap, live }
+        Subscription {
+            backlog,
+            gap,
+            restarted,
+            last,
+            live,
+        }
     }
 
     fn lock(&self) -> MutexGuard<'_, Ring> {
@@ -267,21 +282,47 @@ mod tests {
 
         let behind = hub.subscribe_from(Some(1));
         let just_in_time = hub.subscribe_from(Some(3));
-        let from_another_run = hub.subscribe_from(Some(99));
 
         assert_eq!((seqs(&behind.backlog), behind.gap), (vec![4, 5], true));
         assert_eq!(
             (seqs(&just_in_time.backlog), just_in_time.gap),
             (vec![4, 5], false)
         );
-        assert_eq!(
-            (seqs(&from_another_run.backlog), from_another_run.gap),
-            (vec![4, 5], true)
-        );
+        assert!(!behind.restarted && !just_in_time.restarted);
     }
 
     #[test]
-    fn a_client_resuming_with_a_number_from_an_earlier_observer_is_told_of_the_gap() {
+    fn a_number_this_hub_never_gave_means_observer_restarted_and_none_of_its_lines_are_missing() {
+        let hub = ConsoleHub::with_bounds(None, 2, usize::MAX, 10);
+        for index in 0..3 {
+            push(&hub, &format!("line {index}"));
+        }
+
+        for since in [4, 99] {
+            let resumed = hub.subscribe_from(Some(since));
+            assert_eq!(
+                (seqs(&resumed.backlog), resumed.gap, resumed.restarted),
+                (vec![11, 12], false, true),
+                "{since}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_empty_console_gives_the_number_to_resume_from_so_that_nothing_reads_as_missing() {
+        let hub = ConsoleHub::with_bounds(None, RING_LINES, RING_BYTES, 10);
+
+        let first = hub.subscribe_from(None);
+        let again = hub.subscribe_from(Some(first.last));
+
+        assert_eq!((first.backlog.len(), first.last), (0, 9));
+        assert!(!again.gap && !again.restarted);
+        push(&hub, "first line");
+        assert_eq!(seqs(&hub.subscribe_from(Some(first.last)).backlog), [10]);
+    }
+
+    #[test]
+    fn a_client_resuming_with_a_number_from_an_earlier_observer_is_told_it_restarted() {
         let earlier = ConsoleHub::new(None);
         let mut last_seen = 0;
         for index in 0..5 {
@@ -297,7 +338,7 @@ mod tests {
 
         let resumed = hub.subscribe_from(Some(last_seen));
 
-        assert!(resumed.gap);
+        assert!(resumed.restarted && !resumed.gap);
         assert_eq!(resumed.backlog.len(), 8);
         assert_eq!(resumed.backlog[0].text, "line 0");
     }

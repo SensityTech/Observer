@@ -14,12 +14,16 @@ pub struct Signals {
     #[cfg(windows)]
     console: observer_platform::ConsoleEvents,
     #[cfg(unix)]
+    interrupt: tokio::signal::unix::Signal,
+    #[cfg(unix)]
     terminate: tokio::signal::unix::Signal,
     #[cfg(unix)]
     hangup: tokio::signal::unix::Signal,
 }
 
 impl Signals {
+    /// Listens from now on: a request that comes before the first [`Signals::next`] waits for it,
+    /// rather than end the process at once.
     pub fn listen() -> io::Result<Self> {
         #[cfg(windows)]
         {
@@ -32,6 +36,7 @@ impl Signals {
             use tokio::signal::unix::{SignalKind, signal};
 
             Ok(Self {
+                interrupt: signal(SignalKind::interrupt())?,
                 terminate: signal(SignalKind::terminate())?,
                 hangup: signal(SignalKind::hangup())?,
             })
@@ -52,7 +57,7 @@ impl Signals {
         #[cfg(unix)]
         {
             tokio::select! {
-                _ = tokio::signal::ctrl_c() => {}
+                _ = self.interrupt.recv() => {}
                 _ = self.terminate.recv() => {}
                 _ = self.hangup.recv() => {}
             }

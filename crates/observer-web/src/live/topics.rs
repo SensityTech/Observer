@@ -6,11 +6,13 @@ use std::sync::Arc;
 
 use futures_util::Stream;
 use futures_util::stream;
-use observer_app::Error;
+use observer_app::{ConsoleLines, Error};
 use observer_domain::audit::AuditEntry;
 use observer_domain::live::{AuditSnapshot, ObserverStatus, Topic, TopicEvent, TopicSnapshot};
 use observer_domain::permissions::Permissions;
+use observer_domain::server::{ConsoleBatch, ServerStatus};
 use tokio::sync::broadcast::{self, error::RecvError};
+use tokio::sync::watch;
 
 use crate::AppState;
 
@@ -29,16 +31,25 @@ pub(super) struct Feed {
     pub events: Option<Events>,
 }
 
-pub(super) fn permission(topic: Topic) -> Permissions {
+/// Whether `held` lets a user follow `topic`. FXServer's state is the dashboard's, and also what
+/// the console and the server controls go by to show whether they can act.
+pub(super) fn allows(topic: Topic, held: Permissions) -> bool {
+    let any = |permissions: &[Permissions]| permissions.iter().any(|&permission| held.contains(permission));
     match topic {
-        Topic::Status => Permissions::DASHBOARD_VIEW,
-        Topic::Audit => Permissions::AUDIT_VIEW,
+        Topic::Status => any(&[Permissions::DASHBOARD_VIEW]),
+        Topic::ServerStatus => any(&[
+            Permissions::DASHBOARD_VIEW,
+            Permissions::CONSOLE_VIEW,
+            Permissions::SERVER_CONTROL,
+        ]),
+        Topic::Audit => any(&[Permissions::AUDIT_VIEW]),
+        Topic::Console => any(&[Permissions::CONSOLE_VIEW]),
     }
 }
 
 /// Opens a topic for one socket. Its events are subscribed to before its snapshot is taken, so
-/// that nothing falls between the two.
-pub(super) async fn open(topic: Topic, state: &AppState) -> Result<Feed, Error> {
+/// that nothing falls between the two. `since` resumes the console after the line of that number.
+pub(super) async fn open(topic: Topic, since: Option<u64>, state: &AppState) -> Result<Feed, Error> {
     match topic {
         Topic::Status => Ok(Feed {
             snapshot: TopicSnapshot::Status(ObserverStatus {
@@ -55,7 +66,42 @@ pub(super) async fn open(topic: Topic, state: &AppState) -> Result<Feed, Error> 
                 events: Some(audit_events(entries, latest_id)),
             })
         }
+        Topic::ServerStatus => {
+            let mut status = state.supervision.status();
+            let snapshot = status.borrow_and_update().clone();
+            Ok(Feed {
+                snapshot: TopicSnapshot::ServerStatus(snapshot),
+                events: Some(status_events(status)),
+            })
+        }
+        Topic::Console => {
+            let (snapshot, lines) = state.supervision.console(since);
+            Ok(Feed {
+                snapshot: TopicSnapshot::Console(snapshot),
+                events: Some(console_events(lines)),
+            })
+        }
     }
+}
+
+/// The whole status each time it changes. A client too slow to see every change only misses the
+/// ones a newer status already replaced.
+fn status_events(status: watch::Receiver<ServerStatus>) -> Events {
+    Box::pin(stream::unfold(status, |mut status| async move {
+        status.changed().await.ok()?;
+        let current = status.borrow_and_update().clone();
+        Some((Delivery::Event(TopicEvent::ServerStatus(current)), status))
+    }))
+}
+
+fn console_events(lines: ConsoleLines) -> Events {
+    Box::pin(stream::unfold(lines, |mut lines| async move {
+        let delivery = match lines.next().await? {
+            Ok(lines) => Delivery::Event(TopicEvent::Console(ConsoleBatch { lines })),
+            Err(_) => Delivery::Missed,
+        };
+        Some((delivery, lines))
+    }))
 }
 
 /// The entries written after `latest_id`, which the snapshot already accounts for.

@@ -1,44 +1,74 @@
-import { useQuery } from '@tanstack/react-query';
-
-import { healthQuery } from '../api/health';
 import { useI18n } from '../i18n/I18nProvider';
 import { useLinkState } from '../live/context';
 import type { LinkState } from '../live/realtime';
 import { cn } from '../lib/cn';
+import { secondsSince, useNow } from '../lib/useNow';
+import { useServerStatus } from '../server/context';
+import { STATE_INK, STATE_LED, isRunning } from '../server/state';
 
-const LINK_LED = {
+export const LINK_LED = {
     connecting: 'led-pending',
     live: 'led-live',
     offline: 'led-down',
     refused: 'led-down',
 } satisfies Record<LinkState, string>;
 
-/** Observer's own state and the live link's for now; FXServer's joins them once Observer supervises a server. */
+/** FXServer's state, build and players, and the live link's, updated in place (DESIGN.md §7.3). */
 export function StatusBar() {
-    const { t } = useI18n();
-    const health = useQuery(healthQuery);
+    const { t, format } = useI18n();
     const link = useLinkState();
+    const { status } = useServerStatus();
+    const now = useNow();
+    const unknown = <span className="font-normal text-ink-3">{t.status.unknown}</span>;
 
-    const state = health.isPending ? 'pending' : health.isError ? 'down' : 'ok';
+    const uptime =
+        status !== null && isRunning(status.state) && status.startedAt !== null
+            ? t.status.upFor(format.duration(secondsSince(status.startedAt, now)))
+            : null;
+    const players = status?.players ?? null;
 
     return (
-        <dl className="status" aria-live="polite">
+        <dl className="status">
             <div className="status-cell">
-                <dt>{t.status.observer}</dt>
+                <dt className="md:sr-only">{t.status.state}</dt>
                 <dd>
-                    <span
-                        className={cn('led', state === 'ok' && 'led-live', state === 'down' && 'led-down')}
-                        aria-hidden="true"
-                    />
-                    {t.status[state]}
+                    {status === null ? (
+                        <>
+                            <span className="led led-off" aria-hidden="true" />
+                            {unknown}
+                        </>
+                    ) : (
+                        <>
+                            <span className={cn('led', STATE_LED[status.state])} aria-hidden="true" />
+                            <span className={cn('font-semibold', STATE_INK[status.state])}>
+                                {t.server_state.states[status.state]}
+                            </span>
+                            {uptime !== null && (
+                                <span className="font-normal text-ink-3 xl:max-[1261px]:hidden md:max-[941px]:hidden">
+                                    · {uptime}
+                                </span>
+                            )}
+                        </>
+                    )}
                 </dd>
             </div>
-            {health.data && (
-                <div className="status-cell">
-                    <dt>{t.status.version}</dt>
-                    <dd className="font-mono">{health.data.version}</dd>
-                </div>
-            )}
+            <div className="status-cell">
+                <dt>{t.status.build}</dt>
+                <dd className="font-mono text-[12.5px]">
+                    {status?.build == null ? unknown : String(status.build)}
+                </dd>
+            </div>
+            <div className="status-cell">
+                <dt>{t.status.players}</dt>
+                <dd className="tabular-nums">
+                    {players === null
+                        ? unknown
+                        : t.status.playerCount(
+                              format.number(players.online),
+                              players.max === null ? null : format.number(players.max),
+                          )}
+                </dd>
+            </div>
             <div className="status-cell">
                 <dt>{t.status.updates}</dt>
                 <dd>

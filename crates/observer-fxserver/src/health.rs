@@ -22,6 +22,9 @@ const DYNAMIC_EVERY: Duration = Duration::from_secs(1);
 const DYNAMIC_TIMEOUT: Duration = Duration::from_millis(1500);
 const PERF_EVERY: Duration = Duration::from_secs(5);
 const PERF_TIMEOUT: Duration = Duration::from_secs(3);
+/// `/info.json` is asked until it answers once: the build does not change while the server runs.
+const INFO_EVERY: Duration = Duration::from_secs(5);
+const INFO_TIMEOUT: Duration = Duration::from_secs(3);
 /// `/perf/` is a few kilobytes; anything much bigger is not FXServer.
 const MAX_BODY: usize = 256 * 1024;
 
@@ -89,6 +92,8 @@ pub struct Health {
     ticks: Option<u64>,
     stalled: bool,
     unauthorized: bool,
+    /// `/perf/` probes refused in a row.
+    refusals: u32,
     /// A watchdog bark since the last heartbeat.
     bark: bool,
 }
@@ -102,6 +107,7 @@ impl Health {
             ticks: None,
             stalled: false,
             unauthorized: false,
+            refusals: 0,
             bark: false,
         }
     }
@@ -122,12 +128,17 @@ impl Health {
                 self.stalled = self.ticks == Some(*ticks);
                 self.ticks = Some(*ticks);
                 self.unauthorized = false;
+                self.refusals = 0;
             }
-            // FXServer reads its credentials from stdin once it is up, so the first probes can be
-            // refused; a refusal only means something after it has accepted them.
-            Probe::Perf(Err(ProbeError::Unauthorized)) => self.unauthorized = self.ticks.is_some(),
+            // FXServer reads its credentials from stdin once it is up, so the first probe can be
+            // refused. A refusal means something once it has accepted them, or when the next probe
+            // is refused too: it reads them well within a probe period, so they were changed.
+            Probe::Perf(Err(ProbeError::Unauthorized)) => {
+                self.refusals += 1;
+                self.unauthorized = self.ticks.is_some() || self.refusals > 1;
+            }
             // Silence is measured from the last answer, so a failure has nothing to add.
-            Probe::Dynamic(Err(_)) | Probe::Perf(Err(_)) => {}
+            Probe::Dynamic(Err(_)) | Probe::Perf(Err(_)) | Probe::Info(_) => {}
         }
     }
 
@@ -173,10 +184,12 @@ pub enum Probe {
     Dynamic(Result<Players, ProbeError>),
     /// The `svMain` tick count.
     Perf(Result<u64, ProbeError>),
+    /// The build number, from `/info.json`.
+    Info(Result<u32, ProbeError>),
 }
 
 /// What `/dynamic.json` says about the players.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct Players {
     pub clients: u64,
     pub max_clients: Option<u64>,
@@ -197,14 +210,14 @@ pub enum ProbeError {
 }
 
 /// Polls `/dynamic.json` every second and `/perf/` every five, each with one request in flight,
-/// until `cancel`. Results go to `sink` tagged with `generation`.
+/// until `cancel`, and `/info.json` until it answers. Results go to `sink` tagged with `generation`.
 pub(crate) fn start(
     address: SocketAddr,
     credentials: &Credentials,
     generation: u32,
     sink: mpsc::Sender<(u32, Probe)>,
     cancel: &CancellationToken,
-) -> [JoinHandle<()>; 2] {
+) -> [JoinHandle<()>; 3] {
     let authorization = format!(
         "Basic {}",
         base64(format!("{PERF_USER}:{}", credentials.perf_password).as_bytes())
@@ -219,15 +232,38 @@ pub(crate) fn start(
             }
         }
     }));
-    let perf = tokio::spawn(poll(cancel.clone(), PERF_EVERY, move || {
+    let perf = tokio::spawn(poll(cancel.clone(), PERF_EVERY, {
         let sink = sink.clone();
-        let authorization = authorization.clone();
-        async move {
-            let result = timed(PERF_TIMEOUT, perf(address, &authorization)).await;
-            let _ = sink.send((generation, Probe::Perf(result))).await;
+        move || {
+            let sink = sink.clone();
+            let authorization = authorization.clone();
+            async move {
+                let result = timed(PERF_TIMEOUT, perf(address, &authorization)).await;
+                let _ = sink.send((generation, Probe::Perf(result))).await;
+            }
         }
     }));
-    [dynamic, perf]
+    let info = tokio::spawn({
+        let cancel = cancel.clone();
+        async move {
+            loop {
+                let result = tokio::select! {
+                    () = cancel.cancelled() => return,
+                    result = timed(INFO_TIMEOUT, info(address)) => result,
+                };
+                let answered = result.is_ok();
+                let _ = sink.send((generation, Probe::Info(result))).await;
+                if answered {
+                    return;
+                }
+                tokio::select! {
+                    () = cancel.cancelled() => return,
+                    () = tokio::time::sleep(INFO_EVERY) => {}
+                }
+            }
+        }
+    });
+    [dynamic, perf, info]
 }
 
 async fn poll<F, R>(cancel: CancellationToken, every: Duration, mut probe: F)
@@ -266,6 +302,16 @@ async fn dynamic(address: SocketAddr) -> Result<Players, ProbeError> {
         return Err(ProbeError::Status(status.as_u16()));
     }
     parse_dynamic(&body)
+}
+
+/// Only the build is read: the rest of `/info.json` lists the server's convars, one of them derived
+/// from the licence key.
+async fn info(address: SocketAddr) -> Result<u32, ProbeError> {
+    let (status, body) = get(address, "/info.json", None).await?;
+    if status != StatusCode::OK {
+        return Err(ProbeError::Status(status.as_u16()));
+    }
+    parse_build(&body)
 }
 
 async fn perf(address: SocketAddr, authorization: &str) -> Result<u64, ProbeError> {
@@ -334,6 +380,24 @@ fn parse_dynamic(body: &[u8]) -> Result<Players, ProbeError> {
         other => other.as_u64(),
     });
     Ok(Players { clients, max_clients })
+}
+
+/// `"server": "FXServer-master SERVER v1.0.0.35245 win32"`: the last part of the version.
+fn parse_build(body: &[u8]) -> Result<u32, ProbeError> {
+    let invalid = || ProbeError::Invalid("/info.json names no build".to_owned());
+    let value: serde_json::Value = serde_json::from_slice(body).map_err(|_| invalid())?;
+    let server = value
+        .get("server")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(invalid)?;
+    server
+        .split_whitespace()
+        .find_map(|word| {
+            let version = word.strip_prefix('v')?;
+            version.contains('.').then(|| version.rsplit('.').next())?
+        })
+        .and_then(|build| build.parse().ok())
+        .ok_or_else(invalid)
 }
 
 fn main_ticks(text: &str) -> Result<u64, ProbeError> {
@@ -489,6 +553,20 @@ mod tests {
     }
 
     #[test]
+    fn credentials_changed_before_any_accepted_probe_show_once_two_probes_in_a_row_are_refused() {
+        let start = Instant::now();
+        let mut health = ready(start);
+        health.probed(&Probe::Perf(Err(ProbeError::Unauthorized)), start + secs(5));
+        assert_eq!(health.verdict(start + secs(5), &LIMITS), Verdict::Healthy);
+
+        health.probed(&Probe::Perf(Err(ProbeError::Unauthorized)), start + secs(10));
+        assert_eq!(
+            health.verdict(start + secs(10), &LIMITS),
+            Verdict::Degraded(vec![Problem::ProbeUnauthorized])
+        );
+    }
+
+    #[test]
     fn dynamic_json_must_carry_a_player_count() {
         assert_eq!(
             parse_dynamic(br#"{"clients":0,"gametype":"","hostname":"Observer lab","iv":"311736622","mapname":"","sv_maxclients":"8"}"#),
@@ -525,6 +603,18 @@ mod tests {
     }
 
     #[test]
+    fn the_build_is_the_last_part_of_the_version_fxserver_reports() {
+        let info = br#"{"enhancedHostSupport":true,"resources":["hardcap","observer"],"server":"FXServer-master SERVER v1.0.0.35245 win32","vars":{"sv_maxClients":"8"},"version":311736622}"#;
+        let linux = br#"{"server":"FXServer-master SERVER v1.0.0.37872 linux"}"#;
+
+        assert_eq!(parse_build(info), Ok(35245));
+        assert_eq!(parse_build(linux), Ok(37872));
+        for invalid in [&br#"{"server":"FXServer"}"#[..], br#"{"version":1}"#, b"<html>"] {
+            assert!(parse_build(invalid).is_err());
+        }
+    }
+
+    #[test]
     fn base64_matches_the_standard_alphabet_and_padding() {
         assert_eq!(base64(b"observer:secret"), "b2JzZXJ2ZXI6c2VjcmV0");
         assert_eq!(base64(b"ab"), "YWI=");
@@ -534,7 +624,10 @@ mod tests {
 
     #[tokio::test]
     async fn a_port_nobody_listens_on_is_unreachable() {
-        let address = SocketAddr::from(([127, 0, 0, 1], 41929));
+        let address = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap();
 
         assert!(matches!(dynamic(address).await, Err(ProbeError::Unreachable(_))));
     }

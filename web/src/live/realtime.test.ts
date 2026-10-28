@@ -120,6 +120,28 @@ describe('Realtime', () => {
         expect(event).toHaveBeenCalledWith(auditEntry(42));
     });
 
+    it('should resume a numbered topic after what its watcher holds, each time it follows it anew', async () => {
+        const { live, last, sockets } = setup();
+        let held: number | null = null;
+        live.watch('console', { since: () => held });
+        live.start();
+        await after(0);
+        last().hello();
+
+        held = 41;
+        last().receive({ type: 'resync', topic: 'console' });
+        held = 57;
+        last().drop();
+        await after(1_000);
+        last().hello();
+
+        expect(sockets[0]?.sent).toEqual([
+            { type: 'sub', topic: 'console' },
+            { type: 'sub', topic: 'console', since: 41 },
+        ]);
+        expect(last().sent).toEqual([{ type: 'sub', topic: 'console', since: 57 }]);
+    });
+
     it('should share a topic between watchers and leave it with the last one', async () => {
         const { live, last } = setup();
         live.start();

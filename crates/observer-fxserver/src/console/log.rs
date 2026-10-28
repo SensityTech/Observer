@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, mpsc};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use jiff::civil::Date;
 use jiff::tz::TimeZone;
@@ -93,6 +93,33 @@ impl ConsoleLog {
 
     pub(super) fn queue(&self) -> LogQueue {
         self.queue.clone()
+    }
+
+    /// The files a console log wrote in `dir`, oldest first. Other files are left out, whatever
+    /// their name.
+    pub fn files(dir: &Path) -> io::Result<Vec<LogFile>> {
+        let mut files = Vec::new();
+        for entry in fs::read_dir(dir)? {
+            let entry = entry?;
+            let Some((date, index)) = entry.file_name().to_str().and_then(parse_name) else {
+                continue;
+            };
+            // Read from the file rather than the folder: on Windows the folder's copy of the size
+            // and the time lags behind a file still open for writing, as today's is.
+            let metadata = fs::metadata(entry.path())?;
+            if !metadata.is_file() {
+                continue;
+            }
+            files.push(LogFile {
+                date,
+                index,
+                size: metadata.len(),
+                modified: metadata.modified()?,
+                path: entry.path(),
+            });
+        }
+        files.sort_by_key(|file| (file.date, file.index));
+        Ok(files)
     }
 
     /// Writes what is queued, syncs the file and stops the writer.
@@ -254,31 +281,21 @@ impl LogFiles {
         }
     }
 
-    /// The log files in the folder, oldest first.
     fn files(&self) -> io::Result<Vec<LogFile>> {
-        let mut files = Vec::new();
-        for entry in fs::read_dir(&self.dir)? {
-            let entry = entry?;
-            let Some((date, index)) = entry.file_name().to_str().and_then(parse_name) else {
-                continue;
-            };
-            files.push(LogFile {
-                date,
-                index,
-                size: entry.metadata()?.len(),
-                path: entry.path(),
-            });
-        }
-        files.sort_by_key(|file| (file.date, file.index));
-        Ok(files)
+        ConsoleLog::files(&self.dir)
     }
 }
 
-struct LogFile {
-    date: Date,
-    index: u32,
-    size: u64,
-    path: PathBuf,
+/// One file of the console log.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LogFile {
+    /// The local day of its lines.
+    pub date: Date,
+    /// 0 for the day's first file, then 1, 2… after each rotation for size.
+    pub index: u32,
+    pub size: u64,
+    pub modified: SystemTime,
+    pub path: PathBuf,
 }
 
 fn format_line(stamp: &str, line: &ConsoleLine) -> String {
@@ -413,6 +430,39 @@ mod tests {
                  {day}T04:00:02.000+01:00 #13 OBS supervisor | FXServer started\n"
             )
         );
+    }
+
+    #[test]
+    fn the_listing_holds_only_log_files_with_the_size_of_one_still_being_written() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("console-2026-10-27.log"),
+            "older
+",
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("notes.txt"),
+            "not a log
+",
+        )
+        .unwrap();
+        fs::create_dir(dir.path().join("console-2026-10-29.log")).unwrap();
+        let mut today = File::create(dir.path().join("console-2026-10-28.log")).unwrap();
+        today.write_all(&[b'x'; 300]).unwrap();
+        today.flush().unwrap();
+
+        let files = ConsoleLog::files(dir.path()).unwrap();
+
+        let listed: Vec<_> = files
+            .iter()
+            .map(|file| (file.path.file_name().unwrap().to_str().unwrap(), file.size))
+            .collect();
+        assert_eq!(
+            listed,
+            [("console-2026-10-27.log", 6), ("console-2026-10-28.log", 300)]
+        );
+        drop(today);
     }
 
     #[tokio::test]

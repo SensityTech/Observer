@@ -21,7 +21,7 @@ const MAX_PATH: usize = 260;
 
 /// Refuses when `dir`'s volume has less than `needed` bytes free for this user.
 pub(crate) fn require_space(dir: &Path, needed: u64) -> Result<(), Error> {
-    let available = available(dir).map_err(io(dir))?;
+    let available = observer_platform::available_space(dir).map_err(io(dir))?;
     if available < needed {
         return Err(Error::DiskSpace {
             path: dir.to_path_buf(),
@@ -30,17 +30,6 @@ pub(crate) fn require_space(dir: &Path, needed: u64) -> Result<(), Error> {
         });
     }
     Ok(())
-}
-
-#[cfg(unix)]
-fn available(dir: &Path) -> io::Result<u64> {
-    let stat = rustix::fs::statvfs(dir)?;
-    Ok(stat.f_bavail.saturating_mul(stat.f_frsize))
-}
-
-#[cfg(windows)]
-fn available(dir: &Path) -> io::Result<u64> {
-    crate::windows::available_space(dir)
 }
 
 /// Runs a rename or a removal again while the file system reports it busy.

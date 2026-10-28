@@ -1,0 +1,403 @@
+/*
+ * The live console (DESIGN.md §8.11), ported from the mockup's console screen. No grain and nothing
+ * moving under the output: small mono text needs a quiet ground.
+ */
+
+@layer components {
+    /* The console takes the height the page leaves it: about 40 lines at 1440 x 900. */
+    .content:has(> .console) {
+        padding-bottom: 24px;
+    }
+    .console {
+        display: flex;
+        flex: 1 1 auto;
+        flex-direction: column;
+    }
+    .console-bar {
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 8px 10px;
+        padding: 12px 16px;
+        border-bottom: 1px solid var(--line);
+    }
+    .console-search {
+        position: relative;
+        flex: 0 1 260px;
+        min-width: 200px;
+    }
+    .console-search > svg {
+        position: absolute;
+        top: 50%;
+        left: 11px;
+        color: var(--ink-3);
+        transform: translateY(-50%);
+        pointer-events: none;
+    }
+    .filters {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        min-width: 0;
+    }
+    .filter {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        height: 28px;
+        padding: 0 10px 0 8px;
+        border: 1px solid var(--line);
+        border-radius: var(--r-pill);
+        color: var(--ink-3);
+        font-family: var(--mono);
+        font-size: 12px;
+        font-variant-ligatures: none;
+        transition:
+            background-color 0.15s,
+            border-color 0.15s,
+            color 0.15s;
+    }
+    .filter:hover {
+        color: var(--ink);
+        border-color: var(--line-strong);
+    }
+    .filter[aria-pressed='true'] {
+        border-color: var(--line-strong);
+        background: var(--surface-3);
+        color: var(--ink);
+    }
+    .console-tools {
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-left: auto;
+    }
+    .console-tools .console-tool {
+        height: 30px;
+    }
+    .live {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        height: 28px;
+        padding: 0 10px;
+        border: 1px solid var(--line);
+        border-radius: var(--r-pill);
+        background: var(--surface);
+        font-size: 12.5px;
+        font-weight: 500;
+        color: var(--ink-2);
+        white-space: nowrap;
+    }
+
+    .console-out {
+        position: relative;
+        flex: 1 1 0;
+        min-height: 360px;
+        padding: 8px 0 10px;
+        overflow-y: auto;
+        overscroll-behavior: contain;
+        background: var(--console-bg);
+        color: var(--term-fg);
+        font-family: var(--mono);
+        font-size: 12px;
+        line-height: 15px;
+        font-variant-ligatures: none;
+        scrollbar-width: thin;
+        scrollbar-color: var(--line-strong) transparent;
+    }
+    .console-out:focus-visible {
+        outline-offset: -2px;
+        border-radius: 0;
+    }
+    .ln {
+        display: grid;
+        grid-template-columns: 58px 72px minmax(0, 1fr);
+        column-gap: 10px;
+        padding: 0 16px;
+    }
+    .ln:hover {
+        background: var(--console-hover);
+    }
+    .ln-time {
+        color: var(--term-dim);
+    }
+    .ln-text {
+        min-width: 0;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+    }
+    .ln[data-kind='observer'] .ln-text {
+        color: var(--ink);
+    }
+    .ln[data-kind='stderr'] .ln-text {
+        color: var(--term-red);
+    }
+    .ln[data-kind='command'] .ln-text {
+        color: var(--ink);
+        font-weight: 500;
+    }
+    .ln-prompt {
+        color: var(--accent-ink);
+    }
+    .ln-gap {
+        padding: 4px 16px;
+        font-family: var(--font);
+        font-size: 12.5px;
+        color: var(--ink-3);
+    }
+    .tag {
+        display: inline-flex;
+        align-items: center;
+        max-width: 100%;
+        height: 13px;
+        margin-top: 1px;
+        padding: 0 5px;
+        overflow: hidden;
+        border: 1px solid var(--line-strong);
+        border-radius: 4px;
+        font-size: 10px;
+        font-weight: 500;
+        line-height: 1;
+        letter-spacing: 0.04em;
+        color: var(--ink-2);
+        vertical-align: top;
+        white-space: nowrap;
+        text-overflow: ellipsis;
+    }
+    .tag-observer {
+        background: var(--surface-3);
+        color: var(--ink);
+        text-transform: uppercase;
+    }
+    .tag-cmd {
+        border-style: dashed;
+        color: var(--ink);
+    }
+    .tag-err {
+        border-color: var(--danger);
+        color: var(--danger-ink);
+    }
+    .console-empty {
+        padding: 24px 16px;
+        font-family: var(--font);
+        font-size: 13px;
+        color: var(--ink-3);
+        text-align: center;
+    }
+
+    /* The pill floats over the output from the dock, so on a phone it stays in view with the command line. */
+    .console-dock {
+        position: relative;
+    }
+    .new-lines {
+        position: absolute;
+        left: 50%;
+        bottom: calc(100% + 14px);
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        height: 30px;
+        padding: 0 12px 0 10px;
+        border-radius: var(--r-pill);
+        background: var(--btn-bg);
+        color: var(--btn-ink);
+        box-shadow: var(--elev-pop);
+        font-size: 12.5px;
+        font-weight: 500;
+        white-space: nowrap;
+        transform: translateX(-50%);
+    }
+    .cmd {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        padding: 10px 16px;
+        border-top: 1px solid var(--line);
+    }
+    .cmd-field {
+        display: flex;
+        align-items: center;
+        flex: 1 1 auto;
+        min-width: 0;
+        height: 38px;
+        border: 1px solid var(--line-strong);
+        border-radius: var(--r);
+        background: var(--console-bg);
+        transition:
+            border-color 0.15s,
+            box-shadow 0.15s;
+    }
+    .cmd-field:focus-within {
+        border-color: var(--accent);
+        box-shadow: 0 0 0 3px var(--focus-ring);
+    }
+    .cmd-field:has(> input:disabled) {
+        background: var(--surface-2);
+    }
+    .cmd-prompt {
+        padding-left: 12px;
+        font-family: var(--mono);
+        font-size: 13px;
+        font-weight: 500;
+        color: var(--accent-ink);
+    }
+    .cmd-input {
+        flex: 1 1 auto;
+        min-width: 0;
+        height: 100%;
+        padding: 0 12px 0 8px;
+        border: 0;
+        background: none;
+        color: var(--ink);
+        font-family: var(--mono);
+        font-size: 13px;
+        font-variant-ligatures: none;
+        outline: 0;
+    }
+    .cmd-input::placeholder {
+        color: var(--ink-3);
+    }
+    .cmd-input:disabled {
+        cursor: not-allowed;
+    }
+    .cmd-hints {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        font-size: 12px;
+        color: var(--ink-3);
+        white-space: nowrap;
+    }
+    .cmd-hints > span {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+    }
+    .cmd-note,
+    .cmd-feedback {
+        padding: 10px 16px;
+        border-top: 1px solid var(--line);
+        font-size: 13px;
+        color: var(--ink-3);
+    }
+    .cmd-feedback {
+        padding-top: 0;
+        border-top: 0;
+    }
+    .cmd-feedback[data-tone='warning'] {
+        color: var(--warning);
+    }
+    .cmd-feedback[data-tone='danger'] {
+        color: var(--danger-ink);
+    }
+
+    /* Phones: 44px targets, the toolbar on two rows, and the command line kept in view. */
+    @media (max-width: 760px) {
+        .content:has(> .console) {
+            padding-bottom: 16px;
+        }
+        .filter,
+        .console-tools .console-tool {
+            height: 44px;
+        }
+        .console-bar {
+            display: grid;
+            grid-template-columns: auto minmax(0, 1fr) auto auto;
+            grid-template-areas: 'search search pause download' 'live filters filters filters';
+            gap: 8px;
+            padding: 12px;
+        }
+        .console-tools {
+            display: contents;
+        }
+        .console-search {
+            grid-area: search;
+            min-width: 0;
+        }
+        .console-pause {
+            grid-area: pause;
+        }
+        .console-download {
+            grid-area: download;
+        }
+        .console-tools > .live {
+            grid-area: live;
+            height: 44px;
+        }
+        /* The padding keeps the chips' focus ring inside the scroller, the margin gives it back. */
+        .filters {
+            grid-area: filters;
+            flex-wrap: nowrap;
+            margin: -4px -12px -4px -4px;
+            padding: 4px 12px 4px 4px;
+            overflow-x: auto;
+            overscroll-behavior-x: contain;
+            scrollbar-width: none;
+        }
+        .filter {
+            flex: none;
+        }
+        .console-tools .label-wide {
+            position: absolute;
+            width: 1px;
+            height: 1px;
+            overflow: hidden;
+            clip: rect(0 0 0 0);
+            white-space: nowrap;
+        }
+        .console-tools .console-tool {
+            width: 44px;
+            padding: 0;
+        }
+        /* Under the mobile bar, the toolbar, output and command line make one screen. */
+        .console-out {
+            flex: none;
+            height: calc(100dvh - 248px);
+            min-height: 280px;
+            font-size: 11.5px;
+        }
+        .console-dock {
+            position: sticky;
+            bottom: 0;
+            z-index: var(--z-dock);
+            border-radius: 0 0 calc(var(--r-card) - 1px) calc(var(--r-card) - 1px);
+            background: var(--surface);
+        }
+        /* One flow per line, wrapped rows hung under the text so the times still read as a column. */
+        .ln {
+            display: block;
+            padding: 1px 12px 1px calc(12px + 9ch);
+            text-indent: -9ch;
+        }
+        .ln .tag {
+            text-indent: 0;
+        }
+        .ln-time {
+            margin-right: 1ch;
+        }
+        .ln-tag {
+            margin-right: 6px;
+        }
+        .ln-tag:empty {
+            display: none;
+        }
+        .ln-text {
+            white-space: normal;
+        }
+        .cmd {
+            gap: 10px;
+            padding: 10px 12px;
+        }
+        .cmd-field {
+            height: 44px;
+        }
+        .cmd-input {
+            font-size: 16px;
+        }
+        .cmd-hints .label-wide {
+            display: none;
+        }
+    }
+}

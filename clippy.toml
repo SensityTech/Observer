@@ -1,7 +1,7 @@
 allow-expect-in-tests = true
 allow-unwrap-in-tests = true
 # Product names, not code.
-doc-valid-idents = ["FXServer", "FiveM", "RedM", ".."]
+doc-valid-idents = ["FXServer", "FiveM", "RedM", "OneSync", ".."]
 
 # Every API route comes from observer-web's route table, which gives it its gate. These are the
 # ways to serve a path without it; only the table's fold and the /api mount may call them.

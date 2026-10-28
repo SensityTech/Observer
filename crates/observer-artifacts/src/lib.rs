@@ -15,8 +15,6 @@ mod layout;
 mod samples;
 #[cfg(test)]
 mod test_server;
-#[cfg(windows)]
-mod windows;
 
 pub use archive::{ArchiveKind, Branch, CommitSha, Platform};
 pub use error::Error;

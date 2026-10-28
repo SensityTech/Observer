@@ -9,9 +9,10 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
+use observer_domain::launch::{ExtraArgument, LaunchSettings, OneSync};
+use observer_domain::server::SpawnFailure;
 use observer_fxserver::console::{ConsoleHub, LineKind, plain};
 use observer_fxserver::health::{HangCause, HealthLimits, Problem};
-use observer_fxserver::launch::LaunchSettings;
 use observer_fxserver::recovery::RecoveryPolicy;
 use observer_fxserver::stdin::{StdinError, UserCommand};
 use observer_fxserver::supervisor::{
@@ -30,8 +31,9 @@ const KILLED: Option<u32> = Some(1);
 #[cfg(unix)]
 const KILLED: Option<u32> = None;
 
-/// The ports tests may use, lent to one test at a time.
-static PORTS: LazyLock<Mutex<Vec<u16>>> = LazyLock::new(|| Mutex::new((41920..=41929).collect()));
+/// The ports tests may use, lent to one test at a time. 41929 and up belong to other Observers
+/// of the development host.
+static PORTS: LazyLock<Mutex<Vec<u16>>> = LazyLock::new(|| Mutex::new((41920..=41928).collect()));
 
 struct Port(u16);
 
@@ -54,6 +56,7 @@ impl Drop for Port {
 
 struct Lab {
     dir: TempDir,
+    launch: LaunchSettings,
     console: Arc<ConsoleHub>,
     supervisor: Supervisor,
     task: Option<JoinHandle<()>>,
@@ -80,22 +83,24 @@ impl Lab {
         )
         .unwrap();
 
-        let mut extra: Vec<(String, String)> = extra
+        let extra_arguments = extra
             .iter()
-            .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
+            .chain(&[("fake_heartbeat_ms", HEARTBEAT_MS)])
+            .map(|(name, value)| ExtraArgument {
+                name: (*name).to_owned(),
+                value: (*value).to_owned(),
+            })
             .collect();
-        extra.push(("fake_heartbeat_ms".to_owned(), HEARTBEAT_MS.to_owned()));
-        let mut settings = Settings::new(
-            LaunchSettings {
-                build: dir.path().join("build"),
-                data,
-                cfg: PathBuf::from("server.cfg"),
-                onesync: None,
-                txadmin_events: false,
-                extra,
-            },
-            dir.path().join("observer-data"),
-        );
+        let launch = LaunchSettings {
+            build_path: dir.path().join("build").to_str().unwrap().to_owned(),
+            data_path: data.to_str().unwrap().to_owned(),
+            cfg_file: "server.cfg".to_owned(),
+            onesync: OneSync::Off,
+            auto_start: false,
+            txadmin_events: false,
+            extra_arguments,
+        };
+        let mut settings = Settings::new(Some(launch.clone()), dir.path().join("observer-data"));
         settings.health = HealthLimits {
             boot_grace: Duration::from_secs(2),
             heartbeat_late: Duration::from_secs(1),
@@ -125,6 +130,7 @@ impl Lab {
         let events = supervisor.events();
         Self {
             dir,
+            launch,
             console,
             supervisor,
             task: Some(task),
@@ -259,6 +265,77 @@ fn starting(kind: &EventKind) -> bool {
 }
 
 #[tokio::test]
+async fn the_status_tells_the_players_the_build_and_when_the_server_started() {
+    let mut lab = Lab::online(&[]).await;
+    let mut status = lab.supervisor.status();
+
+    let running = timeout(
+        WAIT,
+        status.wait_for(|status| status.players.is_some() && status.build.is_some()),
+    )
+    .await
+    .expect("the probes never filled the status")
+    .unwrap()
+    .clone();
+
+    let players = running.players.unwrap();
+    assert_eq!((players.clients, players.max_clients), (0, Some(8)));
+    assert_eq!(running.build, Some(35245));
+    assert!(
+        running
+            .started_ms
+            .is_some_and(|started| started <= running.since_ms)
+    );
+    lab.supervisor.stop("test").await.unwrap();
+    lab.state(State::Stopped).await;
+    let stopped = lab.supervisor.status().borrow().clone();
+    assert_eq!(
+        (stopped.players, stopped.build, stopped.started_ms),
+        (None, None, None)
+    );
+    lab.shut_down(false).await;
+}
+
+#[tokio::test]
+async fn a_new_launch_applies_from_the_next_start() {
+    let mut lab = Lab::new(&[]).await;
+    // A cfg that leaves the player limit to the command line.
+    let cfg = lab.dir.path().join("server-data/server.cfg");
+    let text = fs::read_to_string(&cfg).unwrap().replace("sv_maxclients 8\n", "");
+    fs::write(&cfg, text).unwrap();
+    lab.supervisor.start("test").await.unwrap();
+    let mut launch = lab.launch.clone();
+    launch.extra_arguments.push(ExtraArgument {
+        name: "sv_maxclients".to_owned(),
+        value: "16".to_owned(),
+    });
+    let mut status = lab.supervisor.status();
+    let max_clients = |status: &observer_fxserver::supervisor::Status| {
+        status.players.and_then(|players| players.max_clients)
+    };
+    // FXServer's own default.
+    timeout(WAIT, status.wait_for(|status| max_clients(status) == Some(48)))
+        .await
+        .unwrap()
+        .unwrap();
+
+    lab.supervisor.configure(launch).await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(
+        max_clients(&status.borrow()),
+        Some(48),
+        "the running server keeps its launch"
+    );
+    lab.supervisor.restart("test").await.unwrap();
+
+    timeout(WAIT, status.wait_for(|status| max_clients(status) == Some(16)))
+        .await
+        .expect("the restart did not take the new launch")
+        .unwrap();
+    lab.shut_down(false).await;
+}
+
+#[tokio::test]
 async fn a_started_server_goes_online_then_stops_gracefully() {
     let mut lab = Lab::new(&[]).await;
 
@@ -347,19 +424,81 @@ async fn a_restart_stops_the_server_then_starts_a_new_generation() {
 
     assert_eq!(
         lab.state(State::Stopping).await,
-        Cause::Requested {
+        Cause::Restart {
             by: "test".to_owned()
         }
     );
     lab.console_until("-> Quitting: restart").await;
     assert_eq!(
         lab.state(State::Starting).await,
-        Cause::Requested {
+        Cause::Restart {
             by: "test".to_owned()
         }
     );
     lab.state(State::Online).await;
     assert_eq!(lab.generation(), 2);
+    lab.shut_down(false).await;
+}
+
+#[tokio::test]
+async fn a_stop_during_a_restart_ends_it_as_a_stop_by_whoever_asked() {
+    let mut lab = Lab::online(&[]).await;
+    lab.supervisor.restart("grace").await.unwrap();
+    lab.state(State::Stopping).await;
+
+    lab.supervisor.stop("ada").await.unwrap();
+
+    assert_eq!(
+        lab.state(State::Stopping).await,
+        Cause::Requested { by: "ada".to_owned() }
+    );
+    lab.state(State::Stopped).await;
+    lab.none_within(Duration::from_secs(1), starting).await;
+    assert_eq!(lab.generation(), 1);
+    // Resources heard of grace's restart first: they must also hear that the server stays down.
+    let console = lab.console();
+    let quitting = lab.console_index("-> Quitting: stop").unwrap();
+    let told: Vec<&str> = console[..quitting]
+        .iter()
+        .filter_map(|(_, _, text)| Some(text.split_once("observer:shuttingDown ")?.1))
+        .collect();
+    assert_eq!(told.len(), 2, "{console:#?}");
+    assert!(
+        told[0].contains(r#""reason":"restart""#) && told[0].contains(r#""by":"grace""#),
+        "{}",
+        told[0]
+    );
+    assert!(
+        told[1].contains(r#""reason":"stop""#) && told[1].contains(r#""by":"ada""#),
+        "{}",
+        told[1]
+    );
+    lab.shut_down(false).await;
+}
+
+#[tokio::test]
+async fn a_stop_while_one_is_under_way_changes_nothing_and_says_so() {
+    let mut lab = Lab::online(&[]).await;
+    lab.supervisor.stop("ada").await.unwrap();
+    lab.state(State::Stopping).await;
+
+    let again = lab.supervisor.stop("grace").await;
+    lab.state(State::Stopped).await;
+    let mut quitting = Lab::online(&[]).await;
+    quitting.type_command("quit", "kenji").await;
+    let after_a_quit = quitting.supervisor.stop("grace").await;
+    quitting.shut_down(false).await;
+    let mut stopping = Lab::online(&[]).await;
+    stopping.supervisor.shutdown(false).await;
+    let while_observer_stops = stopping.supervisor.stop("ada").await;
+
+    assert_eq!(again, Err(ControlError::Stopping));
+    assert_eq!(after_a_quit, Err(ControlError::Stopping));
+    assert_eq!(while_observer_stops, Err(ControlError::ShuttingDown));
+    timeout(WAIT, stopping.task.take().unwrap())
+        .await
+        .expect("the supervisor did not stop")
+        .unwrap();
     lab.shut_down(false).await;
 }
 
@@ -405,10 +544,14 @@ async fn a_respawn_that_fails_backs_off_and_tries_again() {
 
     lab.state(State::Crashed).await;
     let cause = lab.state(State::Crashed).await;
-    assert!(
-        matches!(&cause, Cause::SpawnFailed { error } if error.contains("server.cfg")),
-        "{cause:?}"
+    assert_eq!(
+        cause,
+        Cause::SpawnFailed {
+            reason: SpawnFailure::CfgUnreadable
+        }
     );
+    lab.console_until("cannot start FXServer: cannot read the server cfg")
+        .await;
     fs::rename(&aside, &cfg).unwrap();
     assert_eq!(lab.state(State::Starting).await, Cause::Recovery);
     lab.state(State::Online).await;

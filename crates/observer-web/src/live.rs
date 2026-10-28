@@ -6,7 +6,7 @@ mod topics;
 
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
@@ -16,8 +16,8 @@ use axum::extract::State;
 use axum::extract::ws::rejection::WebSocketUpgradeRejection;
 use axum::extract::ws::{CloseFrame, Message, Utf8Bytes, WebSocket, WebSocketUpgrade};
 use axum::response::{IntoResponse, Response};
-use futures_util::stream::{SplitSink, SplitStream};
-use futures_util::{SinkExt, StreamExt};
+use futures_util::stream::SplitStream;
+use futures_util::{Sink, SinkExt, StreamExt};
 use jiff::Timestamp;
 use observer_app::Caller;
 use observer_domain::error::ErrorCode;
@@ -37,6 +37,9 @@ use topics::{Delivery, Events};
 
 /// Frames waiting for one socket. A client that lets this many pile up reads too slowly to follow.
 const QUEUE_FRAMES: usize = 256;
+/// What those frames may weigh together. A console snapshot alone runs to megabytes, so a client
+/// that subscribes again and again without reading would otherwise make Observer hold gigabytes.
+const QUEUE_BYTES: usize = 16 * 1024 * 1024;
 /// Frames are written together, at most this often, rather than one write each.
 const BATCH_EVERY: Duration = Duration::from_millis(50);
 const PING_EVERY: Duration = Duration::from_secs(20);
@@ -149,8 +152,8 @@ pub(crate) async fn open(
 
 async fn serve(socket: WebSocket, state: AppState, caller: Caller, id: u64, _place: Place) {
     let (sink, mut inbound) = socket.split();
-    let (queue, outbound) = mpsc::channel(QUEUE_FRAMES);
-    let writer = tokio::spawn(write(sink, outbound));
+    let (queue, outbound) = Queue::new(QUEUE_FRAMES, QUEUE_BYTES);
+    let writer = tokio::spawn(write(sink, outbound, Arc::clone(&queue.held)));
     let mut connection = Connection {
         state,
         caller,
@@ -173,7 +176,7 @@ struct Connection {
     state: AppState,
     /// Rechecked on every `sub` and whenever sessions change, so its permissions are current.
     caller: Caller,
-    queue: mpsc::Sender<Message>,
+    queue: Queue,
     /// The topics followed, with the task forwarding their events when they have any.
     followed: HashMap<Topic, Option<AbortHandle>>,
     forwarders: JoinSet<()>,
@@ -206,7 +209,7 @@ impl Connection {
                     _ => Err(End::Drop),
                 },
                 Ok(()) = sessions.changed() => self.recheck().await,
-                _ = ping.tick() => match self.queue.try_send(Message::Ping(Bytes::new())) {
+                _ = ping.tick() => match self.queue.offer(Message::Ping(Bytes::new())) {
                     Ok(()) => self.recheck().await,
                     Err(_) => Err(End::Drop),
                 },
@@ -229,7 +232,7 @@ impl Connection {
             Message::Ping(_) | Message::Pong(_) => return Ok(()),
         };
         match serde_json::from_str::<ClientMessage>(text.as_str()) {
-            Ok(ClientMessage::Sub { topic, .. }) => self.follow(topic).await,
+            Ok(ClientMessage::Sub { topic, since }) => self.follow(topic, since).await,
             Ok(ClientMessage::Unsub { topic }) => {
                 self.unfollow(topic);
                 Ok(())
@@ -243,16 +246,16 @@ impl Connection {
 
     /// Starts a topic over: its permission against the session as it is now, then its snapshot,
     /// then its events.
-    async fn follow(&mut self, topic: Topic) -> Result<(), End> {
+    async fn follow(&mut self, topic: Topic, since: Option<u64>) -> Result<(), End> {
         self.recheck().await?;
         self.unfollow(topic);
-        if !self.caller.permissions.contains(topics::permission(topic)) {
+        if !topics::allows(topic, self.caller.permissions) {
             return self.send(&ServerMessage::Unsubscribed {
                 topic,
                 reason: UnsubscribeReason::Forbidden,
             });
         }
-        let feed = match topics::open(topic, &self.state).await {
+        let feed = match topics::open(topic, since, &self.state).await {
             Ok(feed) => feed,
             Err(failure) => {
                 error!(error = %failure, ?topic, "a live topic could not start");
@@ -291,7 +294,7 @@ impl Connection {
             .followed
             .keys()
             .copied()
-            .filter(|&topic| !self.caller.permissions.contains(topics::permission(topic)))
+            .filter(|&topic| !topics::allows(topic, self.caller.permissions))
             .collect();
         for topic in withdrawn {
             self.unfollow(topic);
@@ -305,7 +308,7 @@ impl Connection {
 
     /// Queues a message of the socket's own. A client that cannot take even those is dropped.
     fn send(&self, message: &ServerMessage) -> Result<(), End> {
-        self.queue.try_send(text(message)).map_err(|_| End::Drop)
+        self.queue.offer(text(message)).map_err(|_| End::Drop)
     }
 
     async fn end(mut self, end: End, writer: JoinHandle<()>) {
@@ -328,13 +331,13 @@ impl Connection {
 /// Hands a topic's events to the socket until they end. When the socket's queue is full, the
 /// client reads slower than events come: rather than keep them for it, or slow anyone else
 /// down, the topic stops with `resync`, and the client starts over from a fresh snapshot.
-async fn forward(topic: Topic, mut events: Events, queue: mpsc::Sender<Message>) {
+async fn forward(topic: Topic, mut events: Events, queue: Queue) {
     loop {
         match events.next().await {
-            Some(Delivery::Event(event)) => match queue.try_send(text(&ServerMessage::Event(event))) {
+            Some(Delivery::Event(event)) => match queue.offer(text(&ServerMessage::Event(event))) {
                 Ok(()) => {}
-                Err(TrySendError::Full(_)) => break,
-                Err(TrySendError::Closed(_)) => return,
+                Err(Refused::Full) => break,
+                Err(Refused::Closed) => return,
             },
             Some(Delivery::Missed) => break,
             None => return,
@@ -343,14 +346,85 @@ async fn forward(topic: Topic, mut events: Events, queue: mpsc::Sender<Message>)
     let _ = queue.send(text(&ServerMessage::Resync { topic })).await;
 }
 
-/// Writes what the socket's queue holds, a batch at a time.
-async fn write(mut sink: SplitSink<WebSocket, Message>, mut outbound: mpsc::Receiver<Message>) {
+/// A socket's outgoing frames, bounded by their count and by what they weigh. A frame weighs on
+/// the queue from the moment it is offered until the writer has flushed it to the client.
+#[derive(Clone)]
+struct Queue {
+    frames: mpsc::Sender<Message>,
+    held: Arc<AtomicUsize>,
+    max_bytes: usize,
+}
+
+enum Refused {
+    /// The client reads slower than frames come.
+    Full,
+    /// The writer is gone, and the socket with it.
+    Closed,
+}
+
+impl Queue {
+    fn new(max_frames: usize, max_bytes: usize) -> (Self, mpsc::Receiver<Message>) {
+        let (frames, outbound) = mpsc::channel(max_frames);
+        let queue = Self {
+            frames,
+            held: Arc::default(),
+            max_bytes,
+        };
+        (queue, outbound)
+    }
+
+    /// Queues the frame unless the queue is full. An empty queue takes a frame of any size, so
+    /// that a snapshot heavier than the whole budget still goes out alone.
+    fn offer(&self, message: Message) -> Result<(), Refused> {
+        let size = weight(&message);
+        let before = self.held.fetch_add(size, Ordering::AcqRel);
+        if before > 0 && before + size > self.max_bytes {
+            self.held.fetch_sub(size, Ordering::AcqRel);
+            return Err(Refused::Full);
+        }
+        self.frames.try_send(message).map_err(|error| {
+            self.held.fetch_sub(size, Ordering::AcqRel);
+            match error {
+                TrySendError::Full(_) => Refused::Full,
+                TrySendError::Closed(_) => Refused::Closed,
+            }
+        })
+    }
+
+    /// Queues a frame of the socket's own, a resync or a close, once there is room for it.
+    async fn send(&self, message: Message) -> Result<(), Refused> {
+        let size = weight(&message);
+        self.held.fetch_add(size, Ordering::AcqRel);
+        self.frames.send(message).await.map_err(|_| {
+            self.held.fetch_sub(size, Ordering::AcqRel);
+            Refused::Closed
+        })
+    }
+}
+
+fn weight(message: &Message) -> usize {
+    match message {
+        Message::Text(text) => text.len(),
+        Message::Binary(bytes) | Message::Ping(bytes) | Message::Pong(bytes) => bytes.len(),
+        Message::Close(_) => 0,
+    }
+}
+
+/// Writes what the socket's queue holds, a batch at a time, and takes what it wrote off the
+/// queue's weight.
+async fn write(
+    mut sink: impl Sink<Message> + Unpin,
+    mut outbound: mpsc::Receiver<Message>,
+    held: Arc<AtomicUsize>,
+) {
     while let Some(first) = outbound.recv().await {
         let mut closing = false;
+        let mut written = 0;
         let batch = timeout(WRITE_LIMIT, async {
             let mut next = Some(first);
             while let Some(message) = next.take() {
                 closing = matches!(message, Message::Close(_));
+                written += weight(&message);
                 sink.feed(message).await?;
                 if !closing {
                     next = outbound.try_recv().ok();
@@ -359,6 +433,7 @@ async fn write(mut sink: SplitSink<WebSocket, Message>, mut outbound: mpsc::Rece
             sink.flush().await
         })
         .await;
+        held.fetch_sub(written, Ordering::AcqRel);
         if closing || !matches!(batch, Ok(Ok(()))) {
             return;
         }
@@ -406,7 +481,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_full_queue_drops_the_rest_and_asks_for_a_resync_once_there_is_room() {
-        let (queue, mut frames) = mpsc::channel(2);
+        let (queue, mut frames) = Queue::new(2, QUEUE_BYTES);
         let events: Events = Box::pin(stream::iter((1..=5).map(entry)));
 
         let forwarder = tokio::spawn(forward(Topic::Audit, events, queue));
@@ -424,7 +499,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_topic_whose_events_were_lost_upstream_asks_for_a_resync() {
-        let (queue, mut frames) = mpsc::channel(8);
+        let (queue, mut frames) = Queue::new(8, QUEUE_BYTES);
         let events: Events = Box::pin(stream::iter([entry(1), Delivery::Missed, entry(3)]));
 
         forward(Topic::Audit, events, queue).await;
@@ -432,5 +507,56 @@ mod tests {
         assert_eq!(json(frames.recv().await.unwrap())["data"]["id"], 1);
         assert_eq!(json(frames.recv().await.unwrap())["type"], "resync");
         assert!(frames.recv().await.is_none());
+    }
+
+    /// A console snapshot of 4 MiB, the size of the whole ring.
+    fn snapshot() -> Message {
+        Message::Text("x".repeat(4 * 1024 * 1024).into())
+    }
+
+    #[test]
+    fn a_client_that_never_reads_holds_its_budget_however_often_it_subscribes() {
+        let (queue, _unread) = Queue::new(QUEUE_FRAMES, QUEUE_BYTES);
+
+        let taken = (0..QUEUE_FRAMES)
+            .take_while(|_| queue.offer(snapshot()).is_ok())
+            .count();
+
+        assert_eq!(taken, 4, "16 MiB of 4 MiB snapshots, not {QUEUE_FRAMES} of them");
+        assert_eq!(queue.held.load(Ordering::Acquire), QUEUE_BYTES);
+        assert!(
+            matches!(queue.offer(text(&ServerMessage::Pong)), Err(Refused::Full)),
+            "even a small frame waits for the client to read"
+        );
+    }
+
+    #[test]
+    fn an_empty_queue_takes_a_snapshot_heavier_than_its_budget() {
+        let (queue, _unread) = Queue::new(QUEUE_FRAMES, 1024 * 1024);
+
+        assert!(queue.offer(snapshot()).is_ok());
+        assert!(matches!(queue.offer(snapshot()), Err(Refused::Full)));
+    }
+
+    #[tokio::test]
+    async fn frames_weigh_on_the_queue_until_they_are_written() {
+        let (queue, frames) = Queue::new(QUEUE_FRAMES, QUEUE_BYTES);
+        while queue.offer(snapshot()).is_ok() {}
+
+        let writer = tokio::spawn(write(
+            futures_util::sink::drain(),
+            frames,
+            Arc::clone(&queue.held),
+        ));
+        timeout(Duration::from_secs(5), async {
+            while queue.held.load(Ordering::Acquire) > 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the written frames still weigh on the queue");
+
+        assert!(queue.offer(snapshot()).is_ok());
+        writer.abort();
     }
 }

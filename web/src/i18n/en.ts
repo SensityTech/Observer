@@ -3,11 +3,16 @@
 
 import type { ActorKind } from '../api/generated/ActorKind';
 import type { AuditAction } from '../api/generated/AuditAction';
+import type { CommandRefusal } from '../api/generated/CommandRefusal';
 import type { ErrorCode } from '../api/generated/ErrorCode';
+import type { HealthProblem } from '../api/generated/HealthProblem';
 import type { LaunchProblem } from '../api/generated/LaunchProblem';
+import type { LineKind } from '../api/generated/LineKind';
 import type { OneSync } from '../api/generated/OneSync';
 import type { Outcome } from '../api/generated/Outcome';
 import type { PermissionArea } from '../api/generated/PermissionArea';
+import type { ServerState } from '../api/generated/ServerState';
+import type { SpawnFailure } from '../api/generated/SpawnFailure';
 import { parsePermissions, permissionKeys, type PermissionKey } from '../auth/permissions';
 import type { LinkState } from '../live/realtime';
 import { formatDuration, formatNumber, plural } from './format';
@@ -59,6 +64,36 @@ const permissionNames = (hex: string) =>
 
 const isPermissionKey = (key: string): key is PermissionKey => Object.hasOwn(permissions, key);
 
+const commandRefusals = {
+    empty: 'Type a command first.',
+    tooLong: 'This command is too long: 1,024 bytes at most.',
+    controlCharacter: 'Remove the control characters from the command.',
+    reserved: 'observer_cmd is reserved to Observer: no account can send it.',
+} satisfies Record<CommandRefusal, string>;
+
+const isCommandRefusal = (key: string): key is CommandRefusal => Object.hasOwn(commandRefusals, key);
+
+// What failed, without the folders it names: those are the owner's, and the console has them.
+const spawnFailures = {
+    notConfigured: 'no launch settings are saved.',
+    invalidSettings: 'this host refuses its launch settings.',
+    notABuild: 'the build folder holds no FXServer program.',
+    missingData: 'the server data folder does not exist.',
+    cfgUnreadable: 'the server cfg cannot be read.',
+    bridge: 'the observer bridge could not be written into the build.',
+    spawn: 'the system refused to start the process.',
+} satisfies Record<SpawnFailure, string>;
+
+const isSpawnFailure = (key: string): key is SpawnFailure => Object.hasOwn(spawnFailures, key);
+
+const healthProblems = {
+    httpLate: 'its HTTP endpoint answers late',
+    heartbeatLate: 'the bridge heartbeat is late',
+    mainThreadStalled: 'its main thread stalled',
+    probeUnauthorized: 'its performance probe refuses Observer',
+    watchdogBark: 'its watchdog reported a stuck thread',
+} satisfies Record<HealthProblem, string>;
+
 export const en = {
     app: {
         name: 'Observer',
@@ -81,6 +116,7 @@ export const en = {
         open: 'Open the menu',
         close: 'Close the menu',
         overview: 'Overview',
+        console: 'Console',
         administration: 'Administration',
         server: 'Server',
         users: 'Users',
@@ -98,11 +134,13 @@ export const en = {
         menu: 'Languages',
     },
     status: {
-        observer: 'Observer',
-        version: 'Version',
-        ok: 'Running',
-        down: 'Unreachable',
-        pending: 'Checking',
+        label: 'Server status',
+        state: 'State',
+        build: 'Build',
+        players: 'Players',
+        playerCount: (online: string, max: string | null) => (max === null ? online : `${online} / ${max}`),
+        unknown: 'n/a',
+        upFor: (uptime: string) => `up ${uptime}`,
         updates: 'Updates',
         link: {
             connecting: 'Connecting',
@@ -121,14 +159,156 @@ export const en = {
     },
     overview: {
         title: 'Overview',
-        gloss: 'Observer, right now.',
-        stateTitle: 'State',
+        gloss: 'FXServer and Observer, right now.',
+        stateTitle: 'FXServer',
+        observerTitle: 'Observer',
         running: 'Observer is running.',
         version: (version: string) => `Version ${version}`,
         started: (time: string, uptime: string) => `Started ${time} · up ${uptime}`,
         unreachable: 'Observer cannot be reached.',
         unreachableHint: 'The panel keeps trying every few seconds.',
         loading: 'Checking Observer',
+        serverLoading: 'Reading the state of FXServer',
+        serverUnknown: 'The state of FXServer is not known while the live link is down.',
+        serverForbidden: 'Your account cannot see the state of FXServer.',
+        build: (build: string) => `Build ${build}`,
+        players: (players: string) => `${players} players`,
+        notConfigured: 'FXServer has no launch settings yet.',
+        notConfiguredOwner: 'Set the build and data folders on the Server page to start it.',
+        notConfiguredOther: 'The owner sets them on the Server page.',
+        invalid: 'This host refuses the stored launch settings.',
+        invalidOwner: 'Fix them on the Server page before the next start.',
+        invalidOther: 'The owner fixes them on the Server page.',
+        openServer: 'Open the Server page',
+    },
+    server_state: {
+        states: {
+            stopped: 'Stopped',
+            starting: 'Starting',
+            online: 'Online',
+            degraded: 'Degraded',
+            hung: 'Not responding',
+            stopping: 'Stopping',
+            crashed: 'Crashed',
+            crashLoop: 'Crash loop',
+        } satisfies Record<ServerState, string>,
+        started: (by: string) => `Started by ${by}.`,
+        stopped: (by: string) => `Stopped by ${by}.`,
+        stopping: (by: string) => `Stopped by ${by}: resources are told first, then FXServer quits.`,
+        restarting: (by: string) =>
+            `Restarting, as ${by} asked: resources are told first, then FXServer quits and starts again.`,
+        restarted: (by: string) => `Restarted by ${by}.`,
+        observer: 'Observer',
+        recovery: 'Started again after a failure.',
+        ready: 'Ready: its HTTP endpoint answers and the observer bridge reports in.',
+        recovered: 'Healthy again.',
+        unhealthy: (problems: string[]) => `Degraded: ${list(problems)}.`,
+        problems: healthProblems,
+        hangNoHeartbeat:
+            'Not responding: the observer bridge stopped reporting in, so its main loop is stuck.',
+        hangNoHttp: 'Not responding: its HTTP endpoint stopped answering.',
+        exited: (description: string) => `FXServer exited: ${description}.`,
+        fatalError: (message: string) => `FXServer reported a fatal error: ${message}`,
+        bindError: (address: string) => `${address} is already in use by another program.`,
+        licenceRejected: 'The licence key was refused. FXServer stays stopped until someone starts it again.',
+        consoleQuit: (by: string) => `${by} typed quit in the console.`,
+        shutdown: 'Observer is stopping, and FXServer with it.',
+        crashLoop: (failures: number) =>
+            `${count(failures, { one: 'failure', other: 'failures' })} in a row: automatic restarts are off until someone starts FXServer.`,
+        spawnFailed: (reason: SpawnFailure) => `FXServer could not start: ${spawnFailures[reason]}`,
+        restartIn: (delay: string) => `Restarting in ${delay}.`,
+    },
+    controls: {
+        label: 'Server actions',
+        start: 'Start',
+        stop: 'Stop',
+        restart: 'Restart',
+        notPermitted: 'Your account cannot start, stop or restart FXServer.',
+        unknown: 'The state of FXServer is not known yet.',
+        notConfigured: 'FXServer has no launch settings yet.',
+        invalid: 'The launch settings need fixing on the Server page.',
+        running: 'FXServer is already running.',
+        notRunning: 'FXServer is not running.',
+        stopping: 'FXServer is stopping.',
+        restartTitle: 'Restart FXServer?',
+        stopTitle: 'Stop FXServer?',
+        connected: (players: number) =>
+            players === 0
+                ? 'No player is connected.'
+                : `${count(players, { one: 'player is', other: 'players are' })} connected. They will be disconnected.`,
+        noticeFirst:
+            'Resources receive observer:shuttingDown first, then FXServer quits; whatever does not end in 15 seconds is killed.',
+        confirmRestart: 'Restart',
+        confirmStop: 'Stop server',
+        keepStoppedTitle: 'Keep FXServer stopped?',
+        keepStopped:
+            'FXServer is not running. Stopping it cancels any automatic restart and leaves it stopped until someone starts it.',
+        confirmKeepStopped: 'Keep it stopped',
+        failed: (action: string, reason: string) => `${action} failed. ${reason}`,
+        unavailable: (action: string, reason: string) => `${action} is not available. ${reason}`,
+        dismiss: 'Dismiss',
+    },
+    console: {
+        title: 'Console',
+        gloss: 'FXServer output, live.',
+        card: 'Console',
+        search: 'Search the output',
+        streams: 'Streams shown',
+        kinds: {
+            stdout: 'stdout',
+            stderr: 'stderr',
+            command: 'commands',
+            observer: 'observer',
+        } satisfies Record<LineKind, string>,
+        observerTag: 'observer',
+        stderrTag: 'stderr',
+        link: {
+            connecting: 'connecting',
+            live: 'streaming',
+            offline: 'offline',
+            refused: 'reload needed',
+        } satisfies Record<LinkState, string>,
+        paused: 'paused',
+        pause: 'Pause',
+        resume: 'Resume',
+        download: 'Download logs',
+        output: (lines: number) => `FXServer output, ${count(lines, { one: 'line', other: 'lines' })}`,
+        empty: 'No line matches the search and the streams shown.',
+        nothingYet: 'FXServer has printed nothing yet.',
+        gap: 'Earlier lines are no longer in Observer’s memory: the log files keep them.',
+        restarted:
+            'Observer restarted here: whatever the previous one printed after the line above is in the log files.',
+        newLines: (lines: number) => count(lines, { one: 'new line', other: 'new lines' }),
+        commandLabel: 'Command to send to FXServer',
+        enterKey: 'Enter',
+        send: 'to send',
+        history: 'history',
+        stopped: 'FXServer is stopped.',
+        notRunning: 'FXServer is not running.',
+        stopping: 'FXServer is stopping: it takes commands until it has quit.',
+        stateUnknown: 'The state of FXServer is not known: Observer answers when you send.',
+        readOnly: 'Read only: your account cannot send commands.',
+        sent: (command: string) => `Sent: ${command}`,
+        sentMasked: 'Sent. Its secret is masked in the console and the audit log.',
+        pending: 'FXServer has not read the command yet: it runs when the server reads its console again.',
+        busy: 'FXServer is not reading its console, so the command was not sent. Try again in a moment.',
+        summary: (lines: number, errors: number) =>
+            errors === 0
+                ? count(lines, { one: 'new line', other: 'new lines' })
+                : `${count(lines, { one: 'new line', other: 'new lines' })}, ${count(errors, { one: 'error', other: 'errors' })}`,
+        unavailable: 'The console shows again once the live link is back.',
+        logs: {
+            title: 'Console log files',
+            body: 'A file a day, continued in a new one past 256 MiB, without colours. The oldest go after 14 days, or sooner once all of them pass 2 GiB. The newest is first.',
+            caption: 'Console log files, newest first',
+            name: 'File',
+            size: 'Size',
+            modified: 'Last written',
+            actions: 'Actions',
+            download: (name: string) => `Download ${name}`,
+            none: 'No log file yet.',
+            loadFailed: 'The log files could not be listed.',
+        },
     },
     notFound: {
         title: 'This page does not exist.',
@@ -291,7 +471,7 @@ export const en = {
         discard: 'Discard',
         discarded: 'Changes discarded: the form shows the settings as stored.',
         save: 'Save',
-        saved: 'Saved. FXServer uses these settings from its next start.',
+        saved: 'Saved. FXServer uses these settings from its next start, a restart after a crash included.',
         problems: {
             required: 'Fill this in.',
             tooLong: 'Too long: 1,024 characters at most.',
@@ -454,6 +634,12 @@ export const en = {
             audit_exported: 'Audit log exported',
             reauthenticated: 'Password confirmed',
             launch_settings_changed: 'Launch settings changed',
+            server_started: 'Server started',
+            server_stopped: 'Server stopped',
+            server_restarted: 'Server restarted',
+            console_command_sent: 'Console command',
+            console_log_downloaded: 'Console log downloaded',
+            server_crash_loop: 'Crash loop: restarts stopped',
         } satisfies Record<AuditAction, string>,
         outcomes: {
             success: 'Success',
@@ -508,8 +694,21 @@ export const en = {
             autoStart: 'Start with Observer',
             txadminEvents: 'txAdmin events',
             extraArguments: 'Extra arguments',
+            command: 'Command',
+            automatic: 'With Observer',
+            reason: 'Reason',
         },
+        launchFailures: {
+            notConfigured: 'No launch settings',
+            invalidSettings: 'Settings this host refuses',
+            notABuild: 'Not an FXServer build',
+            missingData: 'No server data folder',
+            cfgUnreadable: 'Unreadable server cfg',
+            bridge: 'Bridge not written',
+            spawn: 'Refused by the system',
+        } satisfies Record<SpawnFailure, string>,
         refusals: {
+            reserved: 'Reserved to Observer',
             escalation: 'Permissions they do not hold',
             owner_protected: 'The owner account',
             hierarchy: 'An account holding more than they do',
@@ -573,6 +772,24 @@ export const en = {
         password_unchanged: 'Choose a password different from the current one.',
         unknown_permissions: 'This Observer does not know some of these permissions. Reload the page.',
         invalid_launch_settings: 'Some settings need fixing. Each one says why below its field.',
+        launch_not_configured:
+            'FXServer has no launch settings yet. The owner saves them on the Server page.',
+        launch_failed: (params) => {
+            const reason = stringParam(params, 'reason');
+            return isSpawnFailure(reason)
+                ? `FXServer could not start: ${spawnFailures[reason]}`
+                : 'FXServer could not start. The console says why.';
+        },
+        server_running: 'FXServer is already running.',
+        server_not_running: 'FXServer is not running.',
+        server_stopping: 'FXServer is stopping. Start it again once it has stopped.',
+        shutting_down: 'Observer is stopping, and FXServer with it.',
+        command_refused: (params) => {
+            const reason = stringParam(params, 'reason');
+            return isCommandRefusal(reason) ? commandRefusals[reason] : 'FXServer was not sent this command.';
+        },
+        too_many_commands: (params) =>
+            `Too many commands. Send the next one in ${formatDuration('en', numberParam(params, 'retryAfter'))}.`,
         already_set_up: 'Observer is already set up. Sign in instead.',
         invalid_setup_token:
             'This setup link has expired or was already used. Run observer setup-link on the host for a new one.',

@@ -47,6 +47,21 @@ pub enum ErrorCode {
     UnknownPermissions,
     /// Params: `issues`, the `LaunchIssue`s found, one per field at most.
     InvalidLaunchSettings,
+    /// FXServer cannot start before the owner saves its launch settings.
+    LaunchNotConfigured,
+    /// FXServer could not be started. Params: `reason`, the step that failed as a
+    /// [`SpawnFailure`](crate::server::SpawnFailure); the console has the full reason.
+    LaunchFailed,
+    ServerRunning,
+    ServerNotRunning,
+    /// FXServer is stopping; it can be started again once it has.
+    ServerStopping,
+    /// Observer is stopping, and FXServer with it.
+    ShuttingDown,
+    /// Params: `reason`, a `CommandRefusal`.
+    CommandRefused,
+    /// Params: `retryAfter`, in seconds.
+    TooManyCommands,
     AlreadySetUp,
     InvalidSetupToken,
     OriginMismatch,

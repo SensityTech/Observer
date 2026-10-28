@@ -6,6 +6,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use observer_domain::launch::LaunchSettings;
+use observer_domain::server::SpawnFailure;
 use observer_platform::{Exit, ExitWatch, Output, ProcessTree};
 use serde::Serialize;
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
@@ -17,8 +19,8 @@ use crate::bridge::{self, BridgeEvent, Report, StopReason};
 use crate::console::{ConsoleHub, LineAssembler, LineFlags, LineKind, plain, sanitize};
 use crate::crashes::{self, DumpLimits};
 use crate::exit;
-use crate::health::{self, HangCause, Health, HealthLimits, Probe, Problem, Verdict};
-use crate::launch::{self, CfgWarning, LaunchSettings};
+use crate::health::{self, HangCause, Health, HealthLimits, Players, Probe, Problem, Verdict};
+use crate::launch::{self, CfgWarning};
 use crate::layout::{Flavour, Layout};
 use crate::recovery::{Next, Recovery, RecoveryPolicy};
 use crate::stdin::{CommandRefusal, Credentials, StdinError, StdinWriter, SystemLine, UserCommand, Write};
@@ -62,7 +64,8 @@ pub enum State {
 
 #[derive(Debug, Clone)]
 pub struct Settings {
-    pub launch: LaunchSettings,
+    /// What the next spawn launches, none until [`Supervisor::configure`] gives it.
+    pub launch: Option<LaunchSettings>,
     pub flavour: Flavour,
     /// Where `/dynamic.json` and `/perf/` answer; by default the cfg's first TCP endpoint.
     pub probe: Option<SocketAddr>,
@@ -75,7 +78,7 @@ pub struct Settings {
 }
 
 impl Settings {
-    pub fn new(launch: LaunchSettings, data_dir: impl Into<PathBuf>) -> Self {
+    pub fn new(launch: Option<LaunchSettings>, data_dir: impl Into<PathBuf>) -> Self {
         Self {
             launch,
             flavour: Flavour::HOST,
@@ -182,7 +185,12 @@ pub enum EventKind {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Cause {
+    /// A start or a stop someone asked for.
     Requested {
+        by: String,
+    },
+    /// A restart someone asked for: its stop, then the start that follows.
+    Restart {
         by: String,
     },
     /// An automatic restart after a failure.
@@ -215,8 +223,32 @@ pub enum Cause {
         failures: usize,
     },
     SpawnFailed {
-        error: String,
+        reason: SpawnFailure,
     },
+}
+
+/// Why a spawn failed: the step, which anyone may see, and the full text, which names folders, for
+/// the console and the log.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("{message}")]
+pub struct SpawnError {
+    pub failure: SpawnFailure,
+    pub message: String,
+}
+
+impl SpawnError {
+    fn new(failure: SpawnFailure, message: impl Into<String>) -> Self {
+        Self {
+            failure,
+            message: message.into(),
+        }
+    }
+}
+
+impl From<launch::LaunchError> for SpawnError {
+    fn from(error: launch::LaunchError) -> Self {
+        Self::new(error.failure(), error.to_string())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -226,6 +258,12 @@ pub struct Status {
     pub pid: Option<u32>,
     pub since_ms: i64,
     pub problems: Vec<Problem>,
+    /// When the server that runs now was started.
+    pub started_ms: Option<i64>,
+    /// What `/dynamic.json` said last, while a server runs.
+    pub players: Option<Players>,
+    /// The build the running server reports, once it has.
+    pub build: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -239,7 +277,7 @@ pub enum ControlError {
     #[error("Observer is shutting down")]
     ShuttingDown,
     #[error("cannot start FXServer: {0}")]
-    Launch(String),
+    Launch(SpawnError),
     #[error(transparent)]
     Refused(#[from] CommandRefusal),
     #[error(transparent)]
@@ -269,6 +307,7 @@ enum Request {
     Shutdown {
         shortened: bool,
     },
+    Configure(Box<LaunchSettings>),
 }
 
 /// The handle to the supervisor task. Clones talk to the same task.
@@ -291,6 +330,9 @@ impl Supervisor {
             pid: None,
             since_ms: now_ms(),
             problems: Vec::new(),
+            started_ms: None,
+            players: None,
+            build: None,
         };
         let (status_tx, status) = watch::channel(initial);
         let (traces_tx, traces) = mpsc::channel(CHANNEL);
@@ -368,6 +410,12 @@ impl Supervisor {
             })
             .await?;
         Ok(written.await.map_err(|_| StdinError::Closed)??)
+    }
+
+    /// Sets what the next spawn launches, whether started by hand or after a failure. A running
+    /// server keeps the launch it was started with.
+    pub async fn configure(&self, launch: LaunchSettings) {
+        let _ = self.requests.send(Request::Configure(Box::new(launch))).await;
     }
 
     /// Stops the server, then the supervisor. `shortened` is for a closing console, which leaves
@@ -496,6 +544,9 @@ fn on_channel<'a>(line: &'a str, channel: &str) -> Option<&'a str> {
 struct Run {
     generation: u32,
     pid: u32,
+    started_ms: i64,
+    players: Option<Players>,
+    build: Option<u32>,
     layout: Layout,
     exit: ExitWatch,
     tree: ProcessTree,
@@ -590,11 +641,7 @@ impl Actor {
                 Wake::Exit(exit) => self.exited(exit).await,
                 Wake::Trace(trace) => self.trace(trace),
                 Wake::Signal(generation, signal) => self.signal(generation, signal),
-                Wake::Probe(generation, probe) => {
-                    if let Some(run) = self.run.as_mut().filter(|run| run.generation == generation) {
-                        run.health.probed(&probe, Instant::now());
-                    }
-                }
+                Wake::Probe(generation, probe) => self.probed(generation, &probe),
                 Wake::Tick => self.tick().await,
             }
         }
@@ -637,6 +684,28 @@ impl Actor {
                 let _ = reply.send(self.command(command, actor));
             }
             Request::Shutdown { shortened } => self.shutdown(shortened),
+            Request::Configure(launch) => self.settings.launch = Some(*launch),
+        }
+    }
+
+    fn probed(&mut self, generation: u32, probe: &Probe) {
+        let Some(run) = self.run.as_mut().filter(|run| run.generation == generation) else {
+            return;
+        };
+        run.health.probed(probe, Instant::now());
+        let changed = match probe {
+            Probe::Dynamic(Ok(players)) if run.players != Some(*players) => {
+                run.players = Some(*players);
+                true
+            }
+            Probe::Info(Ok(build)) if run.build != Some(*build) => {
+                run.build = Some(*build);
+                true
+            }
+            _ => false,
+        };
+        if changed {
+            self.publish_status();
         }
     }
 
@@ -656,7 +725,12 @@ impl Actor {
         }
     }
 
+    /// Stops the server, unless a stop is already under way: then nothing changes and it says so,
+    /// rather than have someone named for a stop they did not make.
     fn stop(&mut self, by: String) -> Result<(), ControlError> {
+        if self.shutdown.is_some() {
+            return Err(ControlError::ShuttingDown);
+        }
         match self.phase {
             Phase::Idle if self.state == State::CrashLoop => {
                 self.set_state(State::Stopped, Cause::Requested { by });
@@ -669,10 +743,34 @@ impl Actor {
                 Ok(())
             }
             Phase::Notice { .. } | Phase::Quitting { .. } | Phase::Ending { .. } => {
-                if let Some(run) = &mut self.run
-                    && !matches!(run.after, Some(After::Exit))
-                {
-                    run.after = Some(After::Stop);
+                let Some(run) = &mut self.run else {
+                    return Err(ControlError::NotRunning);
+                };
+                let restarting = match run.after {
+                    // A stop, or a console `quit`, already ends the run as a stop.
+                    Some(After::Stop | After::Exit) => return Err(ControlError::Stopping),
+                    Some(After::Restart { .. }) => true,
+                    // A run ending after a fatal error or a hang: it is not restarted now.
+                    None => false,
+                };
+                run.after = Some(After::Stop);
+                // The restart's stop goes on as a stop, made by whoever asked for it. Resources
+                // were told of a restart: until `quit` is out, they hear that the server stays
+                // down, with the time they have left.
+                if restarting && self.state == State::Stopping {
+                    if let Phase::Notice { quit_at, .. } = self.phase {
+                        let left = quit_at.saturating_duration_since(Instant::now());
+                        run.system(SystemLine::Bridge(BridgeEvent::ShuttingDown {
+                            delay_ms: u64::try_from(left.as_millis()).unwrap_or(u64::MAX),
+                            reason: StopReason::Stop,
+                            by: by.clone(),
+                        }));
+                        self.phase = Phase::Notice {
+                            quit_at,
+                            reason: StopReason::Stop,
+                        };
+                    }
+                    self.set_state(State::Stopping, Cause::Requested { by });
                 }
                 Ok(())
             }
@@ -697,7 +795,7 @@ impl Actor {
                 Ok(())
             }
             Phase::Running => {
-                let cause = Cause::Requested { by: by.clone() };
+                let cause = Cause::Restart { by: by.clone() };
                 self.begin_stop(StopReason::Restart, cause, After::Restart { by }, false);
                 Ok(())
             }
@@ -772,7 +870,7 @@ impl Actor {
             return;
         };
         let by = match &cause {
-            Cause::Requested { by } => by.clone(),
+            Cause::Requested { by } | Cause::Restart { by } => by.clone(),
             _ => "observer".to_owned(),
         };
         run.after = Some(after);
@@ -989,7 +1087,7 @@ impl Actor {
         }
     }
 
-    async fn spawn(&mut self, cause: Cause) -> Result<(), String> {
+    async fn spawn(&mut self, cause: Cause) -> Result<(), SpawnError> {
         match self.launch().await {
             Ok((run, probe, warnings)) => {
                 let pid = run.pid;
@@ -1008,7 +1106,9 @@ impl Actor {
             Err(error) => {
                 error!(%error, "cannot start FXServer");
                 self.note(&format!("cannot start FXServer: {error}"));
-                let failed = Cause::SpawnFailed { error: error.clone() };
+                let failed = Cause::SpawnFailed {
+                    reason: error.failure,
+                };
                 if cause == Cause::Recovery {
                     // What stops a respawn is often brief (a cfg being saved, a scan holding the
                     // executable), so it is one more failure for the breaker to count.
@@ -1022,33 +1122,26 @@ impl Actor {
         }
     }
 
-    async fn launch(&mut self) -> Result<(Run, SocketAddr, Vec<CfgWarning>), String> {
-        let prepared = launch::prepare(&self.settings.launch, self.settings.flavour)
-            .map_err(|error| error.to_string())?;
+    async fn launch(&mut self) -> Result<(Run, SocketAddr, Vec<CfgWarning>), SpawnError> {
+        let Some(settings) = &self.settings.launch else {
+            return Err(SpawnError::new(
+                SpawnFailure::NotConfigured,
+                "no launch settings are configured",
+            ));
+        };
+        let prepared = launch::prepare(settings, self.settings.flavour)?;
         let layout = prepared.layout.clone();
-        let dumps = (
-            layout.crashes(),
-            self.settings.data_dir.join("crashes"),
-            self.settings.dumps,
-        );
-        let installing = layout.clone();
-        let (installed, moved) = tokio::task::spawn_blocking(move || {
-            let installed = bridge::install(&installing);
-            // Dumps left by a run Observer did not see end, such as before Observer itself crashed.
-            let moved = crashes::collect(&dumps.0, &dumps.1, dumps.2);
-            (installed, moved)
-        })
-        .await
-        .map_err(|error| error.to_string())?;
-        installed.map_err(|error| format!("cannot install the observer bridge: {error}"))?;
-        self.report_dumps(moved);
-        let credentials = Credentials::generate()
-            .map_err(|error| format!("cannot generate the launch credentials: {error}"))?;
+        self.install(&layout).await?;
+        let credentials = Credentials::generate().map_err(|error| {
+            let message = format!("cannot generate the launch credentials: {error}");
+            SpawnError::new(SpawnFailure::Spawn, message)
+        })?;
 
         self.generation += 1;
         let generation = self.generation;
         self.current.send_replace(generation);
-        let spawned = observer_platform::spawn(&prepared.launch).map_err(|error| error.to_string())?;
+        let spawned = observer_platform::spawn(&prepared.launch)
+            .map_err(|error| SpawnError::new(SpawnFailure::Spawn, error.to_string()))?;
         #[cfg(unix)]
         if let Err(error) = self.pid_file().record(&spawned.tree) {
             warn!(%error, "cannot record FXServer's process group; a crash of Observer could leave it running");
@@ -1096,6 +1189,9 @@ impl Actor {
         let run = Run {
             generation,
             pid: spawned.pid,
+            started_ms: now_ms(),
+            players: None,
+            build: None,
             layout,
             exit: spawned.exit,
             tree: spawned.tree,
@@ -1111,6 +1207,29 @@ impl Actor {
             killed: false,
         };
         Ok((run, probe, prepared.warnings))
+    }
+
+    /// Writes the bridge into the build, and moves away the dumps of a run Observer did not see
+    /// end, such as before Observer itself crashed.
+    async fn install(&mut self, layout: &Layout) -> Result<(), SpawnError> {
+        let installing = layout.clone();
+        let dumps = (
+            layout.crashes(),
+            self.settings.data_dir.join("crashes"),
+            self.settings.dumps,
+        );
+        let (installed, moved) = tokio::task::spawn_blocking(move || {
+            let installed = bridge::install(&installing);
+            (installed, crashes::collect(&dumps.0, &dumps.1, dumps.2))
+        })
+        .await
+        .map_err(|error| SpawnError::new(SpawnFailure::Spawn, error.to_string()))?;
+        if let Err(error) = installed {
+            let message = format!("cannot install the observer bridge: {error}");
+            return Err(SpawnError::new(SpawnFailure::Bridge, message));
+        }
+        self.report_dumps(moved);
+        Ok(())
     }
 
     async fn exited(&mut self, exit: Exit) {
@@ -1160,7 +1279,7 @@ impl Actor {
                     self.set_state(State::Stopped, Cause::Exited { description });
                 }
                 After::Restart { by } => {
-                    let _ = self.spawn(Cause::Requested { by }).await;
+                    let _ = self.spawn(Cause::Restart { by }).await;
                 }
                 After::Exit => {
                     self.phase = Phase::Idle;
@@ -1301,12 +1420,16 @@ impl Actor {
     }
 
     fn publish_status(&self) {
+        let run = self.run.as_ref();
         self.status.send_replace(Status {
             state: self.state,
             generation: self.generation,
-            pid: self.run.as_ref().map(|run| run.pid),
+            pid: run.map(|run| run.pid),
             since_ms: self.since_ms,
             problems: self.problems.clone(),
+            started_ms: run.map(|run| run.started_ms),
+            players: run.and_then(|run| run.players),
+            build: run.and_then(|run| run.build),
         });
     }
 

@@ -61,6 +61,20 @@ impl<S: Send + Sync> FromRequestParts<S> for Id {
     }
 }
 
+/// The `{name}` of a path, which the handler looks up among the names it knows.
+pub(crate) struct Name(pub String);
+
+impl<S: Send + Sync> FromRequestParts<S> for Name {
+    type Rejection = Failure;
+
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Failure> {
+        Path::<String>::from_request_parts(parts, state)
+            .await
+            .map(|Path(name)| Self(name))
+            .map_err(|_| ErrorCode::NotFound.into())
+    }
+}
+
 /// Where the request came from: the peer address, since no proxy is trusted yet, and the
 /// user agent.
 pub(crate) struct RemoteClient(pub Client);

@@ -69,7 +69,7 @@ impl Server {
     }
 
     /// A socket opened the way the panel opens one, past its `hello`.
-    async fn socket(&self, session: &Session) -> Socket {
+    pub(super) async fn socket(&self, session: &Session) -> Socket {
         let ticket = self.ticket(session).await;
         let mut socket = self
             .upgrade(&ticket, &session.cookie, ORIGIN, Some(PROTOCOL))
@@ -80,7 +80,7 @@ impl Server {
     }
 
     /// A user who replaced their temporary password, so that every route is open to them.
-    async fn member(&self, owner: &Session, name: &str, permissions: &str) -> Session {
+    pub(super) async fn member(&self, owner: &Session, name: &str, permissions: &str) -> Session {
         let (session, temporary) = self.user(owner, name, permissions).await;
         let change = json!({ "current": temporary, "next": format!("{name} chose this one") });
         let changed = self
@@ -95,7 +95,7 @@ impl Server {
         session
     }
 
-    async fn user_id(&self, owner: &Session, name: &str) -> i64 {
+    pub(super) async fn user_id(&self, owner: &Session, name: &str) -> i64 {
         let users = self.call(Method::GET, "/api/users", Some(owner), None).await;
         let users = users.json();
         let user = users
@@ -136,7 +136,7 @@ impl Server {
     }
 }
 
-async fn send(socket: &mut Socket, message: Value) {
+pub(super) async fn send(socket: &mut Socket, message: Value) {
     socket
         .send(Message::Text(message.to_string().into()))
         .await
@@ -144,7 +144,7 @@ async fn send(socket: &mut Socket, message: Value) {
 }
 
 /// The next message Observer sends, past its pings.
-async fn receive(socket: &mut Socket) -> Value {
+pub(super) async fn receive(socket: &mut Socket) -> Value {
     loop {
         let frame = tokio::time::timeout(PATIENCE, socket.next())
             .await
@@ -261,6 +261,34 @@ async fn every_topic_needs_its_permission_on_every_subscription() {
         assert_eq!(snapshot["type"], "snapshot", "{topic:?}");
         assert_eq!(snapshot["topic"], json!(topic));
     }
+}
+
+#[tokio::test]
+async fn the_server_state_is_open_to_whoever_uses_the_console_or_the_controls() {
+    let server = Server::new().await;
+    let owner = server.owner().await;
+    // Console write and server control without the dashboard: the console needs to know whether
+    // FXServer runs, and the controls which of them apply.
+    let operator = server.member(&owner, "cid", "e").await;
+    let auditor = server.member(&owner, "kenji", "100").await;
+
+    let mut socket = server.socket(&operator).await;
+    let mut refused = server.socket(&auditor).await;
+    for socket in [&mut socket, &mut refused] {
+        send(socket, json!({ "type": "sub", "topic": "server.status" })).await;
+    }
+
+    assert_eq!(receive(&mut socket).await["type"], "snapshot");
+    assert_eq!(
+        receive(&mut refused).await,
+        json!({ "type": "unsubscribed", "topic": "server.status", "reason": "forbidden" })
+    );
+    send(&mut socket, json!({ "type": "sub", "topic": "status" })).await;
+    assert_eq!(
+        receive(&mut socket).await["type"],
+        "unsubscribed",
+        "the rest stays the dashboard's"
+    );
 }
 
 #[tokio::test]
@@ -385,7 +413,7 @@ async fn a_message_observer_cannot_read_gets_an_error_and_a_ping_its_pong() {
 
     socket.send(Message::Text("not json".into())).await.unwrap();
     let garbled = receive(&mut socket).await;
-    send(&mut socket, json!({ "type": "sub", "topic": "console" })).await;
+    send(&mut socket, json!({ "type": "sub", "topic": "metrics.live" })).await;
     let unknown = receive(&mut socket).await;
     socket.send(Message::Binary(vec![1, 2, 3].into())).await.unwrap();
     let binary = receive(&mut socket).await;

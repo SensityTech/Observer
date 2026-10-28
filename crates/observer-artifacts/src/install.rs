@@ -274,7 +274,7 @@ fn verify(tree: &Path, platform: Platform) -> Result<(), Error> {
         let server = tree.join("FXServer.exe");
         // Opened first, so that a file a scanner holds is reported as such, not as a bad signature.
         fs::File::open(&server).map_err(io(&server))?;
-        crate::windows::verify_signature(&server, SIGNER).map_err(Error::Signature)?;
+        observer_platform::verify_signature(&server, SIGNER).map_err(Error::Signature)?;
     }
     Ok(())
 }

@@ -48,6 +48,11 @@ describe('auditDetails', () => {
         expect(auditDetails(en, format, { ownerOnly: true })).toBe('Owner only: yes');
     });
 
+    it('should name the step a failed launch stopped at', () => {
+        expect(auditDetails(en, format, { reason: 'missingData' })).toBe('Reason: No server data folder');
+        expect(auditDetails(en, format, { failures: 5 })).toBe('Failures: 5');
+    });
+
     it('should say a hidden launch setting changed, and name the arguments set or removed', () => {
         expect(
             auditDetails(en, format, {
@@ -68,8 +73,9 @@ describe('auditDetails', () => {
     });
 
     it('should show what it does not know as the log stores it', () => {
-        expect(auditDetails(en, format, { reason: 'manual', refusal: 'unheard_of', extra: { a: 1 } })).toBe(
-            'reason: manual · Reason: unheard_of · extra: {"a":1}',
+        expect(auditDetails(en, format, { trigger: 'manual', refusal: 'unheard_of', extra: { a: 1 } })).toBe(
+            'trigger: manual · Reason: unheard_of · extra: {"a":1}',
         );
+        expect(auditDetails(en, format, { reason: 'gremlins' })).toBe('Reason: gremlins');
     });
 });

@@ -60,7 +60,14 @@ fn status(code: ErrorCode) -> StatusCode {
         | ErrorCode::InvalidSetupToken
         | ErrorCode::OriginMismatch => StatusCode::FORBIDDEN,
         ErrorCode::NotFound => StatusCode::NOT_FOUND,
-        ErrorCode::Conflict | ErrorCode::NameTaken | ErrorCode::AlreadySetUp => StatusCode::CONFLICT,
+        ErrorCode::Conflict
+        | ErrorCode::NameTaken
+        | ErrorCode::AlreadySetUp
+        | ErrorCode::LaunchNotConfigured
+        | ErrorCode::ServerRunning
+        | ErrorCode::ServerNotRunning
+        | ErrorCode::ServerStopping => StatusCode::CONFLICT,
+        ErrorCode::LaunchFailed => StatusCode::UNPROCESSABLE_ENTITY,
         ErrorCode::JsonRequired => StatusCode::UNSUPPORTED_MEDIA_TYPE,
         ErrorCode::UnknownHost => StatusCode::MISDIRECTED_REQUEST,
         ErrorCode::InvalidUsername
@@ -69,9 +76,12 @@ fn status(code: ErrorCode) -> StatusCode {
         | ErrorCode::PasswordUnchanged
         | ErrorCode::UnknownPermissions
         | ErrorCode::InvalidLaunchSettings
+        | ErrorCode::CommandRefused
         | ErrorCode::InvalidRequest => StatusCode::BAD_REQUEST,
-        ErrorCode::TooManyAttempts | ErrorCode::TooManySockets => StatusCode::TOO_MANY_REQUESTS,
-        ErrorCode::Busy => StatusCode::SERVICE_UNAVAILABLE,
+        ErrorCode::TooManyAttempts | ErrorCode::TooManySockets | ErrorCode::TooManyCommands => {
+            StatusCode::TOO_MANY_REQUESTS
+        }
+        ErrorCode::Busy | ErrorCode::ShuttingDown => StatusCode::SERVICE_UNAVAILABLE,
         ErrorCode::Internal => StatusCode::INTERNAL_SERVER_ERROR,
     }
 }

@@ -1,11 +1,19 @@
+use axum::body::Body;
 use axum::extract::State;
+use axum::http::{StatusCode, header};
+use axum::response::{IntoResponse, Response};
 use axum::{Extension, Json};
 use observer_app::{Caller, Servers};
 use observer_domain::launch::{LaunchChange, StoredLaunch};
+use observer_domain::server::{CommandAck, ConsoleCommand, LogFile};
+use tokio_util::io::ReaderStream;
 
 use crate::AppState;
 use crate::error::Failure;
-use crate::extract::JsonBody;
+use crate::extract::{JsonBody, Name};
+
+/// The console route as the table declares it, which a refused `SERVER_CONTROL` is audited as.
+const CONSOLE_ROUTE: &str = "/api/servers/default/console";
 
 /// Null until the owner first saves them.
 pub(crate) async fn launch_settings(
@@ -24,4 +32,64 @@ pub(crate) async fn change_launch_settings(
         .change_launch_settings(&caller, Servers::DEFAULT, change.settings, change.version)
         .await?;
     Ok(Json(saved))
+}
+
+/// Start, stop and restart answer once the supervisor took the request on; the `server.status`
+/// topic follows what FXServer does next.
+pub(crate) async fn start(
+    State(state): State<AppState>,
+    Extension(caller): Extension<Caller>,
+) -> Result<StatusCode, Failure> {
+    state.supervision.start_server(&caller).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub(crate) async fn stop(
+    State(state): State<AppState>,
+    Extension(caller): Extension<Caller>,
+) -> Result<StatusCode, Failure> {
+    state.supervision.stop_server(&caller).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub(crate) async fn restart(
+    State(state): State<AppState>,
+    Extension(caller): Extension<Caller>,
+) -> Result<StatusCode, Failure> {
+    state.supervision.restart_server(&caller).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub(crate) async fn command(
+    State(state): State<AppState>,
+    Extension(caller): Extension<Caller>,
+    JsonBody(command): JsonBody<ConsoleCommand>,
+) -> Result<Json<CommandAck>, Failure> {
+    let ack = state
+        .supervision
+        .command(&caller, &command.line, "POST", CONSOLE_ROUTE)
+        .await?;
+    Ok(Json(ack))
+}
+
+pub(crate) async fn log_files(State(state): State<AppState>) -> Result<Json<Vec<LogFile>>, Failure> {
+    Ok(Json(state.supervision.log_files().await?))
+}
+
+/// Streams one file of the list, read as the client takes it.
+pub(crate) async fn download_log(
+    State(state): State<AppState>,
+    Extension(caller): Extension<Caller>,
+    Name(name): Name,
+) -> Result<Response, Failure> {
+    let (file, opened) = state.supervision.open_log(&caller, &name).await?;
+    // A name Observer gave the file, `console-<date>[.<n>].log`: nothing in it to escape.
+    let headers = [
+        (header::CONTENT_TYPE, "text/plain; charset=utf-8".to_owned()),
+        (
+            header::CONTENT_DISPOSITION,
+            format!("attachment; filename=\"{}\"", file.name),
+        ),
+    ];
+    Ok((headers, Body::from_stream(ReaderStream::new(opened))).into_response())
 }

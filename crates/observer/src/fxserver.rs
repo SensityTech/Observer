@@ -12,8 +12,8 @@ use std::time::Duration;
 use anyhow::Context;
 use clap::Args;
 use jiff::tz::TimeZone;
+use observer_domain::launch::{ExtraArgument, LaunchSettings, OneSync};
 use observer_fxserver::console::{ConsoleHub, ConsoleLine, ConsoleLog, LineKind, LogLimits, plain};
-use observer_fxserver::launch::LaunchSettings;
 use observer_fxserver::stdin::{StdinError, UserCommand};
 use observer_fxserver::supervisor::{ControlError, Event, EventKind, Settings, State, Supervisor};
 use tokio::sync::{broadcast, mpsc, oneshot};
@@ -41,7 +41,10 @@ pub struct RunArgs {
     data: PathBuf,
     /// The cfg to execute, relative to the data folder.
     #[arg(long, default_value = "server.cfg")]
-    cfg: PathBuf,
+    cfg: String,
+    /// OneSync, set after the cfg: `off`, `on` or `legacy`.
+    #[arg(long, default_value = "on", value_parser = onesync)]
+    onesync: OneSync,
     /// The port of FXServer's HTTP endpoint; by default the cfg's first `endpoint_add_tcp`.
     #[arg(long)]
     port: Option<u16>,
@@ -54,6 +57,18 @@ fn convar(text: &str) -> Result<(String, String), String> {
     text.split_once('=')
         .map(|(name, value)| (name.to_owned(), value.to_owned()))
         .ok_or_else(|| "expected NAME=VALUE".to_owned())
+}
+
+fn onesync(text: &str) -> Result<OneSync, String> {
+    OneSync::from_name(text).ok_or_else(|| "expected off, on or legacy".to_owned())
+}
+
+/// The launch rules take full paths only; the command line also takes them relative to here.
+fn full_path(path: &std::path::Path) -> anyhow::Result<String> {
+    let full = std::path::absolute(path).with_context(|| format!("cannot resolve {}", path.display()))?;
+    full.into_os_string()
+        .into_string()
+        .map_err(|path| anyhow::anyhow!("{} is not valid Unicode", path.display()))
 }
 
 pub async fn run(config: Config, args: RunArgs) -> anyhow::Result<()> {
@@ -70,14 +85,19 @@ pub async fn run(config: Config, args: RunArgs) -> anyhow::Result<()> {
     .context("cannot open the console log")?;
     let console = Arc::new(ConsoleHub::new(Some(&console_log)));
     let mut settings = Settings::new(
-        LaunchSettings {
-            build: args.build,
-            data: args.data,
-            cfg: args.cfg,
-            onesync: None,
+        Some(LaunchSettings {
+            build_path: full_path(&args.build)?,
+            data_path: full_path(&args.data)?,
+            cfg_file: args.cfg,
+            onesync: args.onesync,
+            auto_start: false,
             txadmin_events: false,
-            extra: args.extra,
-        },
+            extra_arguments: args
+                .extra
+                .into_iter()
+                .map(|(name, value)| ExtraArgument { name, value })
+                .collect(),
+        }),
         &paths.root,
     );
     settings.probe = args
@@ -300,12 +320,16 @@ mod tests {
     use super::*;
 
     /// A terminal that takes nothing until it is released, like a console window with a text
-    /// selection held.
-    struct Held(std_mpsc::Receiver<()>);
+    /// selection held. It says when a write reaches it.
+    struct Held {
+        reached: std_mpsc::Sender<()>,
+        release: std_mpsc::Receiver<()>,
+    }
 
     impl Write for Held {
         fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-            let _ = self.0.recv();
+            let _ = self.reached.send(());
+            let _ = self.release.recv();
             Ok(bytes.len())
         }
 
@@ -316,8 +340,17 @@ mod tests {
 
     #[test]
     fn printing_never_waits_for_a_terminal_that_stopped_reading() {
+        let (reached, writing) = std_mpsc::channel();
         let (release, held) = std_mpsc::channel();
-        let (terminal, drained) = Terminal::start(Held(held)).unwrap();
+        let (terminal, drained) = Terminal::start(Held {
+            reached,
+            release: held,
+        })
+        .unwrap();
+        // The thread takes the count of dropped lines each time it reports them: once it is stuck
+        // writing a line, it no longer can.
+        terminal.print("first".to_owned());
+        writing.recv().unwrap();
         let started = Instant::now();
 
         for index in 0..TERMINAL_LINES * 2 {
@@ -329,7 +362,7 @@ mod tests {
             "{:?}",
             started.elapsed()
         );
-        assert!(terminal.dropped.load(Ordering::Relaxed) >= TERMINAL_LINES as u64 - 1);
+        assert_eq!(terminal.dropped.load(Ordering::Relaxed), TERMINAL_LINES as u64);
         drop(release);
         drop(terminal);
         drained.blocking_recv().unwrap();
