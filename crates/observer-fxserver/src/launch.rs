@@ -106,7 +106,7 @@ pub struct Prepared {
 pub enum LaunchError {
     #[error("{} is a network, device or verbatim path, which FXServer cannot be run from", .0.display())]
     RefusedPath(PathBuf),
-    #[error("{} contains a quote, a semicolon or a line break, which FXServer would read as a command", .0.display())]
+    #[error("{} would read to FXServer as a command: it starts with `+` or `-`, or holds a quote, a semicolon or a line break", .0.display())]
     UnsafePath(PathBuf),
     #[error("cannot resolve {}: {source}", path.display())]
     Resolve {
@@ -128,6 +128,10 @@ pub enum LaunchError {
     BadName(String),
     #[error("the value given for `{0}` contains a quote, a semicolon, a backslash or a control character")]
     BadValue(String),
+    #[error(
+        "the value given for `{0}` starts with `+` or `-`, which FXServer reads as a command or an option"
+    )]
+    CommandValue(String),
     #[error("`{0}` cannot be set as an extra argument: Observer manages it or it changes how FXServer runs")]
     DeniedName(String),
     #[error("`-fxdk` is not allowed: it starts FXServer as a development kit")]
@@ -228,7 +232,7 @@ fn refuse_special(path: &Path) -> Result<(), LaunchError> {
 /// A path that ends up inside an FXServer command (`+exec`, `+set citizen_dir`).
 fn refuse_commands(path: &Path) -> Result<(), LaunchError> {
     let text = path.as_os_str().to_string_lossy();
-    if text.contains(['"', ';', '\r', '\n']) {
+    if text.starts_with(['+', '-']) || text.contains(['"', ';', '\r', '\n']) {
         return Err(LaunchError::UnsafePath(path.to_path_buf()));
     }
     Ok(())
@@ -247,6 +251,14 @@ fn check_extra(name: &str, value: &str) -> Result<(), LaunchError> {
     }
     if value.contains(['"', ';', '\\']) || value.chars().any(char::is_control) {
         return Err(LaunchError::BadValue(name.to_owned()));
+    }
+    // An argument starting with `+` begins a command, one starting with `-` may be an option of
+    // FXServer's own; a negative number is neither.
+    let number = value
+        .strip_prefix('-')
+        .is_some_and(|rest| rest.starts_with(|c: char| c.is_ascii_digit() || c == '.'));
+    if value.starts_with('+') || (value.starts_with('-') && !number) {
+        return Err(LaunchError::CommandValue(name.to_owned()));
     }
     Ok(())
 }
@@ -477,6 +489,26 @@ mod tests {
     }
 
     #[test]
+    fn an_extra_value_read_as_a_command_or_an_option_is_refused() {
+        let fixture = Fixture::new("");
+        for value in ["+quit", "+_crash", "-dumpserver:1", "-fxdk", "-"] {
+            assert!(
+                matches!(
+                    refused(&fixture.with_extra("sv_projectDesc", value)),
+                    Some(LaunchError::CommandValue(_))
+                ),
+                "{value:?} was accepted"
+            );
+        }
+        for value in ["-1", "-0.5", "-.5", "a+b", "Observer +1"] {
+            assert!(
+                refused(&fixture.with_extra("sv_x", value)).is_none(),
+                "{value:?} was refused"
+            );
+        }
+    }
+
+    #[test]
     fn names_that_change_how_fxserver_runs_or_that_observer_sets_are_denied() {
         let fixture = Fixture::new("");
         for name in DENIED.iter().copied().chain(["TXADMINSERVERMODE", "Exec"]) {
@@ -495,12 +527,12 @@ mod tests {
         let fixture = Fixture::new("");
         fixture.file("-fxdk.cfg", "");
         let in_cfg = LaunchSettings {
-            cfg: PathBuf::from("-fxdk.cfg"),
+            cfg: PathBuf::from("./-fxdk.cfg"),
             ..fixture.settings()
         };
 
         assert!(matches!(
-            refused(&fixture.with_extra("sv_x", "-fxdk")),
+            refused(&fixture.with_extra("sv_x", "x -fxdk")),
             Some(LaunchError::Fxdk)
         ));
         assert!(matches!(
@@ -543,12 +575,18 @@ mod tests {
     #[test]
     fn a_cfg_path_that_reads_as_commands_is_refused() {
         let fixture = Fixture::new("");
-        let settings = LaunchSettings {
-            cfg: PathBuf::from("server.cfg;quit"),
-            ..fixture.settings()
-        };
+        fixture.file("+quit", "");
+        for cfg in ["server.cfg;quit", "+quit", "-dumpserver"] {
+            let settings = LaunchSettings {
+                cfg: PathBuf::from(cfg),
+                ..fixture.settings()
+            };
 
-        assert!(matches!(refused(&settings), Some(LaunchError::UnsafePath(_))));
+            assert!(
+                matches!(refused(&settings), Some(LaunchError::UnsafePath(_))),
+                "{cfg:?} was accepted"
+            );
+        }
     }
 
     #[test]
