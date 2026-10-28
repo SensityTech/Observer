@@ -1,0 +1,12 @@
+#!/bin/sh
+# main only moves through pull requests. GitHub cannot enforce it on this plan, so the push does.
+# Enable once per clone: git config core.hooksPath .githooks
+
+while read -r local_ref local_sha remote_ref remote_sha; do
+    if [ "$remote_ref" = "refs/heads/main" ]; then
+        echo "pre-push: main only moves through pull requests. Push a branch and open one." >&2
+        exit 1
+    fi
+done
+
+exit 0

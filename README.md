@@ -42,9 +42,41 @@ features, it exposes documented, versioned integration points that your own reso
 
 Windows x64 is the primary target. Linux x86_64 is supported.
 
-## Building
+## Development
 
-Build instructions will be added with the first release of the code.
+You need Rust through rustup (the toolchain pinned in `rust-toolchain.toml` installs itself), Node.js
+24 and npm.
+
+```bash
+git config core.hooksPath .githooks   # once per clone: main only moves through pull requests
+cargo xtask web                       # build the panel into web/dist
+cargo run -p observer                 # run Observer and serve the panel on http://localhost:40125
+cargo xtask check                     # everything CI checks
+```
+
+While working on the panel, `npm run dev` in `web/` serves it on http://localhost:41820 with hot reload
+and forwards `/api` to a running Observer (set `OBSERVER_URL` to reach another one).
+
+`cargo xtask bindings` regenerates the TypeScript types of the API from the Rust ones; CI fails when the
+committed types are out of date. `cargo xtask dist` builds a release binary with the panel inside.
+
+### Configuration
+
+Observer reads `observer.toml` from the working directory, or the file given with `--config`. Every key
+is optional; relative paths are resolved against the file's directory.
+
+```toml
+data_dir = "data"            # database, backups and logs
+
+[http]
+listen = "0.0.0.0:40125"
+
+[log]
+level = "info"               # a tracing filter; the OBSERVER_LOG variable overrides it
+```
+
+`observer db check` and `observer db backup` inspect and back up the database while Observer is
+stopped.
 
 ## License
 
