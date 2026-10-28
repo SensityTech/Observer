@@ -1,6 +1,9 @@
 //! Crash dumps: FXServer writes them into the build, where they would pile up and get in the way
 //! of the build's verification. Observer moves them into its own folder and keeps a few.
 
+pub mod analysis;
+pub mod report;
+
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};

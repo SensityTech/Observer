@@ -12,6 +12,7 @@ hyper.workspace = true
 hyper-util.workspace = true
 jiff.workspace = true
 memchr.workspace = true
+minidump.workspace = true
 observer-domain.workspace = true
 observer-platform.workspace = true
 serde.workspace = true
@@ -23,7 +24,9 @@ tracing.workspace = true
 vte.workspace = true
 
 [dev-dependencies]
+minidump-synth.workspace = true
 tempfile.workspace = true
+test-assembler.workspace = true
 tokio = { workspace = true, features = ["macros", "rt"] }
 
 [lints]
