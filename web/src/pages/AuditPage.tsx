@@ -3,6 +3,7 @@ import { ChevronDown, Clock, Download, Filter } from 'lucide-react';
 import { useId, useState, type FormEvent, type ReactNode } from 'react';
 
 import { auditQuery, downloadAuditExport } from '../api/audit';
+import { auditDetails } from '../audit/details';
 import type { AuditAction } from '../api/generated/AuditAction';
 import type { AuditEntry } from '../api/generated/AuditEntry';
 import type { AuditFilter } from '../api/generated/AuditFilter';
@@ -254,25 +255,24 @@ function EntryRow({ entry }: { entry: AuditEntry }) {
                 )}
             </td>
             <td className={cn(table.td, 'whitespace-nowrap')}>{t.audit.actions[entry.action]}</td>
-            <td className={cn(table.td, table.mono)}>{entry.target ?? ''}</td>
+            <td className={cn(table.td, table.mono)}>
+                {entry.target ??
+                    (entry.action === 'login_failed' && (
+                        <span className="font-sans text-ink-3">{t.audit.unknownUsername}</span>
+                    ))}
+            </td>
             <td className={table.td}>
                 <Chip tone={OUTCOME_TONE[entry.outcome]}>{t.audit.outcomes[entry.outcome]}</Chip>
             </td>
             <td className={cn(table.td, table.mono)}>{entry.ip ?? ''}</td>
             <td className={cn(table.td, 'min-w-60 font-mono text-meta text-ink-3 [overflow-wrap:anywhere]')}>
-                {details(entry.details)}
+                {auditDetails(t, format, entry.details)}
             </td>
         </tr>
     );
 }
 
 const actorName = (t: Messages, entry: AuditEntry) => entry.actorName ?? t.audit.actors[entry.actorKind];
-
-/** The details as plain text, as the log stores them: `key: value` pairs. */
-const details = (values: Record<string, unknown>) =>
-    Object.entries(values)
-        .map(([key, value]) => `${key}: ${typeof value === 'string' ? value : JSON.stringify(value)}`)
-        .join(' · ');
 
 function FilterField({
     label,
