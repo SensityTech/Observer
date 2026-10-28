@@ -554,6 +554,32 @@ async fn a_refused_licence_key_stops_the_server_for_good() {
 }
 
 #[tokio::test]
+async fn a_resource_printing_the_licence_error_leaves_the_server_running() {
+    let mut lab = Lab::online(&[]).await;
+
+    // What the stock chat resource prints for a player's message.
+    lab.type_command(
+        "fake_print Bob^7: A valid license check is required to run this server",
+        "test",
+    )
+    .await;
+    lab.type_command(
+        "fake_print [          svadhesive] Could not authenticate server license key.",
+        "test",
+    )
+    .await;
+
+    lab.console_until("[          svadhesive] Could not authenticate")
+        .await;
+    lab.none_within(Duration::from_secs(2), |kind| {
+        exited(kind) || matches!(kind, EventKind::State { .. })
+    })
+    .await;
+    assert_eq!(lab.supervisor.status().borrow().state, State::Online);
+    lab.shut_down(false).await;
+}
+
+#[tokio::test]
 async fn a_crash_leaves_no_child_holding_the_pipes_behind() {
     let mut lab = Lab::online(&[("fake_spawn_child", "1")]).await;
 

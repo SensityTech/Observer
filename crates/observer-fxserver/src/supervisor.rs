@@ -457,20 +457,39 @@ enum Signal {
 }
 
 impl Signal {
+    /// Only FXServer's own words count: its licence check prints on the `svadhesive` channel and
+    /// ends with a bare `Fatal Error:` on stderr. Whatever a resource prints, a player's chat
+    /// message included, comes under its `script:` channel, so quoting these texts stops nothing.
     fn read(kind: LineKind, text: &str) -> Option<Self> {
-        if LICENCE_REJECTIONS
-            .iter()
-            .any(|rejection| text.contains(rejection))
-        {
-            return Some(Self::LicenceRejected(text.trim().to_owned()));
+        match kind {
+            LineKind::Stderr => {
+                let message = text.strip_prefix("Fatal Error: ")?.trim();
+                if is_licence_rejection(message) {
+                    Some(Self::LicenceRejected(text.trim().to_owned()))
+                } else {
+                    Some(Self::Fatal(message.to_owned()))
+                }
+            }
+            LineKind::Stdout => {
+                let message = on_channel(text, "svadhesive")?;
+                let message = message.strip_prefix("Error: ").unwrap_or(message);
+                is_licence_rejection(message).then(|| Self::LicenceRejected(text.trim().to_owned()))
+            }
+            LineKind::Command | LineKind::Observer => None,
         }
-        if kind == LineKind::Stderr
-            && let Some(message) = text.strip_prefix("Fatal Error: ")
-        {
-            return Some(Self::Fatal(message.trim().to_owned()));
-        }
-        None
     }
+}
+
+fn is_licence_rejection(message: &str) -> bool {
+    LICENCE_REJECTIONS
+        .iter()
+        .any(|rejection| message.starts_with(rejection))
+}
+
+/// The text of a line FXServer printed on `channel`, whose name it right-aligns in brackets.
+fn on_channel<'a>(line: &'a str, channel: &str) -> Option<&'a str> {
+    let (name, text) = line.strip_prefix('[')?.split_once("] ")?;
+    (name.trim_start() == channel).then_some(text)
 }
 
 /// One spawn of FXServer, from its start until its tree is empty.
@@ -1386,6 +1405,37 @@ mod tests {
                 matches!(Signal::read(kind, text), Some(Signal::LicenceRejected(_))),
                 "{text}"
             );
+        }
+    }
+
+    #[test]
+    fn licence_texts_quoted_by_a_resource_or_an_operator_are_not_rejections() {
+        let lines = [
+            (
+                LineKind::Stdout,
+                "[           script:chat] Bob: lol A valid license check is required to run this server",
+            ),
+            (
+                LineKind::Stdout,
+                "[           script:chat] [          svadhesive] Could not authenticate server license key.",
+            ),
+            (
+                LineKind::Stdout,
+                "[                 cmd]  \"x\" is \"Could not authenticate server license key\"",
+            ),
+            (
+                LineKind::Stdout,
+                "[      script:svadhesive] This server does not have a license key specified.",
+            ),
+            (
+                LineKind::Stderr,
+                "SCRIPT ERROR: @chat/sv_chat.lua:12: Fatal Error: Could not authenticate server license key",
+            ),
+            (LineKind::Command, "say Could not authenticate server license key"),
+        ];
+
+        for (kind, text) in lines {
+            assert!(Signal::read(kind, text).is_none(), "{text}");
         }
     }
 
