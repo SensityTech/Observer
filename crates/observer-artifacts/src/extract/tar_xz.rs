@@ -6,6 +6,7 @@
 //! the root. FXServer runs it in place instead, so such a link would point into the host: it is
 //! rewritten relative to `alpine/` (`busybox`), which is what the musl loader then finds.
 
+use std::cell::Cell;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs::{self, File};
 use std::io::{self, BufReader, Read, Seek};
@@ -14,13 +15,20 @@ use std::path::Path;
 use lzma_rust2::XzReader;
 use tar::EntryType;
 
-use super::{Budget, Refusal, check_characters, components, refuse, write_entry};
+use super::{Budget, MAX_UNPACKED, Refusal, check_characters, components, refuse, write_entry};
 use crate::error::{Error, io};
+use crate::http::MIB;
 
 const XZ_MAGIC: [u8; 6] = [0xFD, b'7', b'z', b'X', b'Z', 0x00];
 /// What Linux allows when it resolves a path.
 const MAX_LINK_HOPS: usize = 40;
 const ALPINE: &str = "alpine";
+const BLOCK: u64 = 512;
+/// What the headers of an entry may take, beyond the data of the entry before it. FXServer's
+/// longest is a GNU long name of 119 bytes.
+const HEADER_ROOM: u64 = 64 * 1024;
+/// The whole tar stream: the data a build may have, with its headers and padding.
+const MAX_STREAM: u64 = MAX_UNPACKED + 64 * MIB;
 
 /// Extracts into `into`, which must not exist yet. A damaged stream can fail halfway, after some
 /// files are written: `into` is always a staging folder for that reason.
@@ -32,20 +40,27 @@ pub(crate) fn extract(archive: &Path, into: &Path) -> Result<(), Error> {
     }
     file.rewind().map_err(io(archive))?;
 
-    let mut tar = tar::Archive::new(XzReader::new(BufReader::new(file), true));
+    let room = Cell::new(HEADER_ROOM);
+    let mut tar = tar::Archive::new(Bounded {
+        inner: XzReader::new(BufReader::new(file), true),
+        room: &room,
+        read: 0,
+    });
     fs::create_dir(into).map_err(io(into))?;
     let mut tree = Tree::default();
     let mut budget = Budget::default();
     for entry in tar.entries().map_err(|error| damaged(&error))? {
         let mut entry = entry.map_err(|error| damaged(&error))?;
         let kind = entry.header().entry_type();
+        let name = String::from_utf8_lossy(&entry.path_bytes()).into_owned();
+        let refuse = |refusal| refuse(&name, refusal);
+        // A pax size wins over the header's, and is what `tar` reads or skips.
+        let size = entry.size();
+        budget.take(size).map_err(refuse)?;
+        room.set(size.next_multiple_of(BLOCK) + HEADER_ROOM);
         if kind == EntryType::XGlobalHeader {
             continue;
         }
-        let name = String::from_utf8_lossy(&entry.path_bytes()).into_owned();
-        let refuse = |refusal| refuse(&name, refusal);
-        let size = entry.header().size().map_err(|error| damaged(&error))?;
-        budget.take(size).map_err(refuse)?;
         let parts = components(&name).map_err(refuse)?;
         if parts.is_empty() && kind.is_dir() {
             continue;
@@ -85,13 +100,44 @@ pub(crate) fn extract(archive: &Path, into: &Path) -> Result<(), Error> {
         }
     }
     // The tar ends before the xz stream does: only reading the rest checks the last block's CRC,
-    // the index and the footer, the one guard a Linux build has against a damaged download.
+    // the index and the footer, the one guard a Linux build has against a damaged download. What
+    // follows the end is padding, 512 bytes in FXServer's archives.
+    room.set(HEADER_ROOM);
     io::copy(&mut tar.into_inner(), &mut io::sink()).map_err(|error| damaged(&error))?;
 
     for (path, link) in confine(&tree.links)? {
         create_link(&link, &into.join(path))?;
     }
     Ok(())
+}
+
+/// Holds `tar` to the room the entries seen so far leave it. It reads GNU long names and pax
+/// headers whole into memory before it hands over the entry they describe, and skips the data of
+/// entries nobody reads: unbounded, one header declaring gigabytes would be decompressed, and kept,
+/// before any check could refuse it.
+struct Bounded<'a, R> {
+    inner: R,
+    /// What may still be read before the next entry comes out, set again for each entry.
+    room: &'a Cell<u64>,
+    read: u64,
+}
+
+impl<R: Read> Read for Bounded<'_, R> {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        let room = self.room.get().min(MAX_STREAM - self.read);
+        if room == 0 && !buffer.is_empty() {
+            return Err(io::Error::other(if self.read == MAX_STREAM {
+                format!("it unpacks to more than {} GiB", MAX_STREAM / 1024 / MIB)
+            } else {
+                format!("it has headers longer than {} KiB", HEADER_ROOM / 1024)
+            }));
+        }
+        let wanted = buffer.len().min(usize::try_from(room).unwrap_or(usize::MAX));
+        let read = self.inner.read(&mut buffer[..wanted])?;
+        self.room.set(self.room.get() - read as u64);
+        self.read += read as u64;
+        Ok(read)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -464,6 +510,42 @@ mod tests {
         let refused = refusal(&[TarEntry::Declared("alpine/huge", 3 << 30)]);
 
         assert_eq!(refused, ("alpine/huge".to_owned(), Refusal::TooLarge));
+    }
+
+    #[test]
+    fn a_pax_global_header_counts_against_the_size_limit() {
+        let refused = refusal(&[TarEntry::Global(3 << 30)]);
+
+        assert_eq!(refused, ("pax_global_header".to_owned(), Refusal::TooLarge));
+    }
+
+    #[test]
+    fn a_gnu_long_name_names_the_entry_after_it() {
+        let name = format!(
+            "alpine/opt/cfx-server/citizen/system_resources/{}.lua",
+            "a".repeat(120)
+        );
+        let (dir, result) = extracted(&[
+            TarEntry::LongName(name.as_bytes()),
+            TarEntry::File("placeholder", b"--", 0o644),
+        ]);
+        result.unwrap();
+
+        assert_eq!(fs::read(dir.path().join("tree").join(&name)).unwrap(), b"--");
+    }
+
+    #[test]
+    fn a_long_name_header_larger_than_any_name_is_refused_before_it_is_read() {
+        let name = vec![b'a'; 1 << 20];
+
+        let (_dir, result) = extracted(&[
+            TarEntry::LongName(&name),
+            TarEntry::File("placeholder", b"", 0o644),
+        ]);
+
+        let error = result.unwrap_err();
+        assert!(matches!(error, Error::Damaged(_)), "{:.200}", error.to_string());
+        assert!(error.to_string().len() < 200, "{:.200}", error.to_string());
     }
 
     #[test]

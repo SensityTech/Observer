@@ -62,6 +62,10 @@ pub(crate) enum TarEntry<'a> {
     Fifo(&'a str),
     /// A file header declaring this many bytes, with none following it.
     Declared(&'a str, u64),
+    /// A GNU long name header, which names the entry after it.
+    LongName(&'a [u8]),
+    /// A pax global header declaring this many bytes, with none following it.
+    Global(u64),
 }
 
 /// Writes the names straight into the headers: `tar`'s own setters refuse `..` and absolute paths,
@@ -76,6 +80,8 @@ pub(crate) fn tar_xz(entries: &[TarEntry]) -> Vec<u8> {
             TarEntry::HardLink(name, target) => (name, EntryType::Link, &[], 0o755, Some(target)),
             TarEntry::Fifo(name) => (name, EntryType::Fifo, &[], 0o644, None),
             TarEntry::Declared(name, _) => (name, EntryType::Regular, &[], 0o644, None),
+            TarEntry::LongName(name) => ("././@LongLink", EntryType::GNULongName, name, 0o644, None),
+            TarEntry::Global(_) => ("pax_global_header", EntryType::XGlobalHeader, &[], 0o644, None),
         };
         let mut header = tar::Header::new_gnu();
         let old = header.as_old_mut();
@@ -86,7 +92,7 @@ pub(crate) fn tar_xz(entries: &[TarEntry]) -> Vec<u8> {
         header.set_entry_type(kind);
         header.set_mode(mode);
         header.set_size(match entry {
-            TarEntry::Declared(_, size) => *size,
+            TarEntry::Declared(_, size) | TarEntry::Global(size) => *size,
             _ => data.len() as u64,
         });
         header.set_cksum();
