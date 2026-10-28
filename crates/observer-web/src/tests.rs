@@ -221,6 +221,43 @@ async fn every_gated_route_refuses_a_request_without_a_session() {
     }
 }
 
+/// The router itself, not only the table: any method on any declared path either meets its gate,
+/// is a public route, or does not exist.
+#[tokio::test]
+async fn no_method_on_an_api_path_skips_the_gate() {
+    let server = Server::new().await;
+    server.owner().await;
+    let methods = [
+        Method::GET,
+        Method::HEAD,
+        Method::POST,
+        Method::PUT,
+        Method::PATCH,
+        Method::DELETE,
+        Method::OPTIONS,
+    ];
+
+    for route in routes() {
+        let path = format!("/api{}", route.path.replace("{id}", "1"));
+        for method in methods.clone() {
+            if PUBLIC.contains(&(method.clone(), route.path))
+                || (method == Method::HEAD && PUBLIC.contains(&(Method::GET, route.path)))
+            {
+                continue;
+            }
+            let reply = server.call(method.clone(), &path, None, Some(json!({}))).await;
+            assert!(
+                matches!(
+                    reply.status,
+                    StatusCode::UNAUTHORIZED | StatusCode::METHOD_NOT_ALLOWED
+                ),
+                "{method} {path} answered {}",
+                reply.status
+            );
+        }
+    }
+}
+
 #[tokio::test]
 async fn health_reports_the_running_version() {
     let server = Server::new().await;

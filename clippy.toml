@@ -1,2 +1,12 @@
 allow-expect-in-tests = true
 allow-unwrap-in-tests = true
+
+# Every API route comes from observer-web's route table, which gives it its gate. These are the
+# ways to serve a path without it; only the table's fold and the /api mount may call them.
+disallowed-methods = [
+    { path = "axum::routing::Router::route", reason = "declare the route in observer-web's api::routes, with its gate" },
+    { path = "axum::routing::Router::route_service", reason = "declare the route in observer-web's api::routes, with its gate" },
+    { path = "axum::routing::Router::nest", reason = "declare the route in observer-web's api::routes, with its gate" },
+    { path = "axum::routing::Router::nest_service", reason = "declare the route in observer-web's api::routes, with its gate" },
+    { path = "axum::routing::Router::merge", reason = "declare the route in observer-web's api::routes, with its gate" },
+]

@@ -56,12 +56,19 @@ impl AppState {
 }
 
 pub fn router(state: AppState) -> Router {
-    Router::new()
-        .nest("/api", api::router(&state))
+    mount_api(Router::new(), &state)
         .fallback(panel::serve)
         .layer(RequestBodyLimitLayer::new(MAX_BODY_BYTES))
         .layer(CatchPanicLayer::new())
         .layer(middleware::from_fn(security::headers))
         .layer(TraceLayer::new_for_http())
         .with_state(state)
+}
+
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the API, built from its route table alone"
+)]
+fn mount_api(router: Router<AppState>, state: &AppState) -> Router<AppState> {
+    router.nest("/api", api::router(state))
 }

@@ -1,5 +1,6 @@
 //! The API's route table. Every route declares its gate here, next to its handler, and nothing
-//! else adds routes to the API: what the table says is what the server enforces.
+//! else adds routes to the API: what the table says is what the server enforces. Clippy holds
+//! everyone to it: `Router::route` and its kin are disallowed outside `add` and the `/api` mount.
 
 mod account;
 mod audit;
@@ -81,20 +82,26 @@ where
 pub(crate) fn router(state: &AppState) -> Router<AppState> {
     routes()
         .into_iter()
-        .fold(Router::new(), |router, route| {
-            let guard = Guard {
-                state: state.clone(),
-                gate: route.gate,
-                path: route.path,
-            };
-            let handler = route
-                .handler
-                .route_layer(middleware::from_fn_with_state(guard, gate::enforce));
-            router.route(route.path, handler)
-        })
+        .fold(Router::new(), |router, route| add(router, route, state))
         // Without this, unknown API paths would fall through to the panel's index page.
         .fallback(|| async { Failure::from(ErrorCode::NotFound) })
         .layer(middleware::from_fn_with_state(state.clone(), security::api))
+}
+
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the one place a route joins the API, behind its gate"
+)]
+fn add(router: Router<AppState>, route: Route, state: &AppState) -> Router<AppState> {
+    let guard = Guard {
+        state: state.clone(),
+        gate: route.gate,
+        path: route.path,
+    };
+    let handler = route
+        .handler
+        .route_layer(middleware::from_fn_with_state(guard, gate::enforce));
+    router.route(route.path, handler)
 }
 
 async fn health(State(state): State<AppState>) -> Json<Health> {
