@@ -2,6 +2,7 @@
 //! database in a temporary directory.
 
 mod live;
+mod schedule;
 mod servers;
 
 use std::net::SocketAddr;

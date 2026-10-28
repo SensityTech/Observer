@@ -5,6 +5,7 @@
 mod account;
 mod audit;
 mod auth;
+mod schedule;
 mod servers;
 mod setup;
 mod users;
@@ -52,6 +53,10 @@ pub(crate) fn routes() -> Vec<Route> {
     // which the handler checks once it has read the line.
     let command = Permission(P::CONSOLE_WRITE);
     let logs = Permission(P::LOGS_DOWNLOAD);
+    // The schedule's settings take the password again; skipping, restoring or delaying its next
+    // restart are operations, and so is a single restart, which is the server control's.
+    let plan = Permission(P::SCHEDULE_MANAGE);
+    let edit_schedule = Reauthenticated(P::SCHEDULE_MANAGE);
     vec![
         route(M::GET,    "/health",                     Public,       health),
         route(M::GET,    "/setup",                      Public,       setup::status),
@@ -82,6 +87,12 @@ pub(crate) fn routes() -> Vec<Route> {
         route(M::POST,   "/servers/default/console",    command,      servers::command),
         route(M::GET,    "/servers/default/console/logs",        logs, servers::log_files),
         route(M::GET,    "/servers/default/console/logs/{name}", logs, servers::download_log),
+        route(M::PUT,    "/servers/default/schedule",       edit_schedule, schedule::change),
+        route(M::POST,   "/servers/default/schedule/skip",  plan,          schedule::skip),
+        route(M::DELETE, "/servers/default/schedule/skip",  plan,          schedule::restore),
+        route(M::POST,   "/servers/default/schedule/delay", plan,          schedule::delay),
+        route(M::PUT,    "/servers/default/schedule/once",  control,       schedule::restart_once),
+        route(M::DELETE, "/servers/default/schedule/once",  control,       schedule::cancel_once),
     ]
 }
 
