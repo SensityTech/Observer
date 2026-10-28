@@ -1387,3 +1387,54 @@ async fn a_recheck_follows_the_session_and_is_announced_when_sessions_change() {
     lab.accounts.logout(&admin).await.unwrap();
     assert!(changes.has_changed().unwrap());
 }
+
+#[tokio::test]
+async fn followers_get_each_new_entry_once_in_order_from_where_the_log_ended() {
+    let lab = Lab::new().await;
+    lab.owner().await;
+    let mut early = lab.audit.follow();
+    assert_eq!(lab.audit.publish_new().await.unwrap(), 0, "setup happened before");
+
+    lab.sign_in("ada", OWNER_PASSWORD, &office()).await.unwrap();
+    // Following starts at the next publication, not at the call: nothing written meanwhile is lost.
+    let mut late = lab.audit.follow();
+    lab.accounts.reset_password_from_cli("ada").await.unwrap();
+
+    assert_eq!(lab.audit.publish_new().await.unwrap(), 2);
+    assert_eq!(lab.audit.publish_new().await.unwrap(), 0);
+    let actions = |receiver: &mut tokio::sync::broadcast::Receiver<_>| {
+        std::iter::from_fn(|| receiver.try_recv().ok())
+            .map(|entry: std::sync::Arc<AuditEntry>| entry.action)
+            .collect::<Vec<_>>()
+    };
+    let expected = [AuditAction::LoginSucceeded, AuditAction::UserPasswordReset];
+    assert_eq!(actions(&mut early), expected);
+    assert_eq!(actions(&mut late), expected);
+    assert_eq!(
+        lab.audit.latest_id().await.unwrap(),
+        Some(lab.entries(AuditAction::UserPasswordReset).await[0].id)
+    );
+}
+
+#[tokio::test]
+async fn a_follower_too_far_behind_is_told_it_missed_entries() {
+    let lab = Lab::new().await;
+    let owner = lab.owner().await;
+    lab.audit.publish_new().await.unwrap();
+    let mut slow = lab.audit.follow();
+    let caller = lab.caller(&owner).await;
+
+    for _ in 0..300 {
+        lab.accounts
+            .reauthenticate(&caller, OWNER_PASSWORD.to_owned())
+            .await
+            .unwrap();
+        lab.pause();
+    }
+    assert_eq!(lab.audit.publish_new().await.unwrap(), 300);
+
+    assert!(matches!(
+        slow.try_recv(),
+        Err(tokio::sync::broadcast::error::TryRecvError::Lagged(44))
+    ));
+}

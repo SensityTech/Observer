@@ -15,6 +15,7 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 const DAILY: Duration = Duration::from_hours(24);
 const BACKUP_CHECK_INTERVAL: Duration = Duration::from_hours(1);
 const UPKEEP_INTERVAL: Duration = Duration::from_mins(1);
+const AUDIT_FOLLOW_INTERVAL: Duration = Duration::from_secs(1);
 
 pub async fn run(config: Config) -> anyhow::Result<()> {
     let paths = config.paths();
@@ -57,7 +58,8 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
         }
     });
     let backups = tokio::spawn(daily_backups(db.clone(), stop.clone()));
-    let upkeep = tokio::spawn(upkeep(accounts, audit, stop.clone()));
+    let upkeep = tokio::spawn(upkeep(accounts, audit.clone(), stop.clone()));
+    let audit_feed = tokio::spawn(publish_audit(audit, stop.clone()));
 
     shutdown::requested().await;
     info!("stopping Observer");
@@ -68,6 +70,7 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
     }
     backups.await.context("the backup task failed")?;
     upkeep.await.context("the upkeep task failed")?;
+    audit_feed.await.context("the audit feed task failed")?;
     db.close().await.context("cannot close the database")?;
 
     info!("Observer stopped");
@@ -133,6 +136,20 @@ async fn upkeep(accounts: Accounts, audit: AuditLog, stop: CancellationToken) {
         tokio::select! {
             () = stop.cancelled() => return,
             () = tokio::time::sleep(UPKEEP_INTERVAL) => {}
+        }
+    }
+}
+
+/// Every second, the audit entries written since the last pass go to the panels that show them
+/// live. Reading the log rather than its writers also catches what the command line writes.
+async fn publish_audit(audit: AuditLog, stop: CancellationToken) {
+    loop {
+        if let Err(error) = audit.publish_new().await {
+            warn!(%error, "new audit entries could not be read");
+        }
+        tokio::select! {
+            () = stop.cancelled() => return,
+            () = tokio::time::sleep(AUDIT_FOLLOW_INTERVAL) => {}
         }
     }
 }
