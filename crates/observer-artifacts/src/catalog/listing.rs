@@ -44,24 +44,36 @@ pub(crate) fn parse(html: &str, platform: Platform, branch: &Branch) -> Result<V
         if open_end > close {
             continue;
         }
-        let Some(href) = attribute(&anchor[..open_end], "href") else {
+        let tag = &anchor[..open_end];
+        let Some(href) = attribute(tag, "href") else {
             continue;
         };
-        let Some(relative) = href.strip_prefix("./") else {
-            continue;
-        };
-        let file = if relative.ends_with('/') {
-            platform.archive().file_name()
-        } else {
-            ""
-        };
-        let Some(location) = ArchiveLocation::parse(&format!("{base}{relative}{file}")) else {
-            continue;
-        };
-        builds.push(ListedBuild {
-            location,
-            published_at: listed_date(&anchor[open_end..close]),
+        let location = href.strip_prefix("./").and_then(|relative| {
+            let file = if relative.ends_with('/') {
+                platform.archive().file_name()
+            } else {
+                ""
+            };
+            ArchiveLocation::parse(&format!("{base}{relative}{file}"))
         });
+        // Every row but the one up to the parent folder links a build: a row that no longer reads
+        // as one means the listing changed, not that the branch lost its builds.
+        let row = href != ".."
+            && attribute(tag, "class")
+                .is_some_and(|class| class.split_whitespace().any(|name| name == "panel-block"));
+        match location {
+            Some(location) => builds.push(ListedBuild {
+                location,
+                published_at: listed_date(&anchor[open_end..close]),
+            }),
+            None if row => {
+                return Err(Error::FormatChanged {
+                    origin: Source::Branch(platform, branch.clone()),
+                    reason: format!("a row links {href:?}, not a build"),
+                });
+            }
+            None => {}
+        }
     }
     Ok(builds)
 }
@@ -147,6 +159,40 @@ mod tests {
             ),
             "{error}"
         );
+    }
+
+    #[test]
+    fn a_listing_whose_rows_changed_shape_is_a_format_change() {
+        let changed = WINDOWS.replace(
+            r#"href="./"#,
+            r#"href="/artifacts/fivem/build_server_windows/feature/network-improvements-clean/"#,
+        );
+
+        let error = parse(&changed, Platform::Windows, &branch()).unwrap_err();
+
+        assert!(
+            matches!(
+                &error,
+                Error::FormatChanged { origin: Source::Branch(..), reason } if reason.starts_with("a row links")
+            ),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn a_branch_folder_without_builds_is_an_empty_listing() {
+        // `feature/` itself, as runtime.fivem.net serves it: only the row up to the parent folder.
+        let html = r#"<p class="panel-heading">
+        Builds - fivem/build_server_windows/feature
+    </p>
+    <a class="panel-block" href="..">
+        <span class="panel-icon"><i class="fas fa-code-branch" aria-hidden="true"></i></span>
+        ..
+    </a>"#;
+
+        let builds = parse(html, Platform::Windows, &"feature".parse().unwrap()).unwrap();
+
+        assert_eq!(builds, []);
     }
 
     #[test]
