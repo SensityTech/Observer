@@ -1,11 +1,13 @@
 //! `observer fxserver run`: the supervisor in the foreground, for driving a real server by hand.
 //! It reads no database; the launch comes from the command line.
 
-use std::io::{self, BufRead, IsTerminal, Write as _};
+use std::io::{self, BufRead, IsTerminal, Write};
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, mpsc as std_mpsc};
 use std::thread;
+use std::time::Duration;
 
 use anyhow::Context;
 use clap::Args;
@@ -14,7 +16,7 @@ use observer_fxserver::console::{ConsoleHub, ConsoleLine, ConsoleLog, LineKind, 
 use observer_fxserver::launch::LaunchSettings;
 use observer_fxserver::stdin::{StdinError, UserCommand};
 use observer_fxserver::supervisor::{ControlError, Event, EventKind, Settings, State, Supervisor};
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
@@ -24,6 +26,10 @@ use crate::{lock, logging};
 
 /// Who the console shows for commands typed here.
 const LOCAL: &str = "local";
+/// Lines waiting for the terminal. Past this they are dropped, and counted.
+const TERMINAL_LINES: usize = 4096;
+/// How long the last lines get to reach the terminal once everything has stopped.
+const TERMINAL_DRAIN: Duration = Duration::from_secs(2);
 
 #[derive(Debug, Args)]
 pub struct RunArgs {
@@ -79,9 +85,15 @@ pub async fn run(config: Config, args: RunArgs) -> anyhow::Result<()> {
         .map(|port| SocketAddr::from((Ipv4Addr::LOCALHOST, port)));
     let (supervisor, task) = Supervisor::spawn(settings, Arc::clone(&console));
 
+    let (terminal, terminal_drained) =
+        Terminal::start(io::stdout()).context("cannot print to the terminal")?;
     let stop = CancellationToken::new();
-    let printer = tokio::spawn(print_console(Arc::clone(&console), stop.clone()));
-    let reporter = tokio::spawn(print_events(supervisor.events(), stop.clone()));
+    let printer = tokio::spawn(print_console(
+        Arc::clone(&console),
+        terminal.clone(),
+        stop.clone(),
+    ));
+    let reporter = tokio::spawn(print_events(supervisor.events(), terminal.clone(), stop.clone()));
     let mut typed = read_typed_commands();
 
     let started = supervisor.start(LOCAL).await;
@@ -111,6 +123,8 @@ pub async fn run(config: Config, args: RunArgs) -> anyhow::Result<()> {
     stop.cancel();
     let _ = printer.await;
     let _ = reporter.await;
+    drop(terminal);
+    let _ = tokio::time::timeout(TERMINAL_DRAIN, terminal_drained).await;
     console_log.close().await;
     info!("Observer stopped");
     drop(log_guard);
@@ -159,20 +173,62 @@ fn read_typed_commands() -> mpsc::Receiver<String> {
     typed
 }
 
-async fn print_console(console: Arc<ConsoleHub>, stop: CancellationToken) {
+/// What the command prints goes through a thread of its own: a terminal that stops reading (a
+/// text selection in a console window, a stalled pipe) must hold up none of the tasks that print.
+#[derive(Clone)]
+struct Terminal {
+    lines: std_mpsc::SyncSender<String>,
+    dropped: Arc<AtomicU64>,
+}
+
+impl Terminal {
+    /// Also hands back what resolves once every line is written and every clone dropped. The
+    /// thread is not joined: a terminal that never reads again must not hold up the exit.
+    fn start(mut out: impl Write + Send + 'static) -> io::Result<(Self, oneshot::Receiver<()>)> {
+        let (lines, queue) = std_mpsc::sync_channel::<String>(TERMINAL_LINES);
+        let (drained, terminal_drained) = oneshot::channel();
+        let dropped = Arc::new(AtomicU64::new(0));
+        thread::Builder::new().name("terminal".to_owned()).spawn({
+            let dropped = Arc::clone(&dropped);
+            move || {
+                for line in queue {
+                    let missed = dropped.swap(0, Ordering::Relaxed);
+                    if missed > 0 {
+                        let _ = writeln!(
+                            out,
+                            "[observer] {missed} lines not shown: the terminal is too slow"
+                        );
+                    }
+                    let _ = writeln!(out, "{line}");
+                }
+                let _ = drained.send(());
+            }
+        })?;
+        Ok((Self { lines, dropped }, terminal_drained))
+    }
+
+    /// Never waits: a line the terminal has no room for is dropped.
+    fn print(&self, line: String) {
+        if self.lines.try_send(line).is_err() {
+            self.dropped.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+}
+
+async fn print_console(console: Arc<ConsoleHub>, terminal: Terminal, stop: CancellationToken) {
     let subscription = console.subscribe_from(None);
     let colours = io::stdout().is_terminal();
     for line in &subscription.backlog {
-        print_line(line, colours);
+        terminal.print(format_line(line, colours));
     }
     let mut lines = subscription.live;
     loop {
         tokio::select! {
             () = stop.cancelled() => break,
             line = lines.recv() => match line {
-                Ok(line) => print_line(&line, colours),
+                Ok(line) => terminal.print(format_line(&line, colours)),
                 Err(broadcast::error::RecvError::Lagged(missed)) => {
-                    println!("[observer] {missed} console lines not shown: the terminal is too slow");
+                    terminal.print(format!("[observer] {missed} console lines not shown: the terminal is too slow"));
                 }
                 Err(broadcast::error::RecvError::Closed) => break,
             },
@@ -180,26 +236,25 @@ async fn print_console(console: Arc<ConsoleHub>, stop: CancellationToken) {
     }
     // Whatever came in while stopping.
     while let Ok(line) = lines.try_recv() {
-        print_line(&line, colours);
+        terminal.print(format_line(&line, colours));
     }
 }
 
-fn print_line(line: &ConsoleLine, colours: bool) {
+fn format_line(line: &ConsoleLine, colours: bool) -> String {
     let text = if colours {
         line.text.clone()
     } else {
         plain(&line.text)
     };
     let reset = if colours { "\x1b[0m" } else { "" };
-    let mut out = io::stdout().lock();
-    let _ = match (line.kind, &line.actor) {
-        (LineKind::Command, Some(actor)) => writeln!(out, "[{actor}] > {text}{reset}"),
-        (LineKind::Observer, _) => writeln!(out, "[observer] {text}{reset}"),
-        _ => writeln!(out, "{text}{reset}"),
-    };
+    match (line.kind, &line.actor) {
+        (LineKind::Command, Some(actor)) => format!("[{actor}] > {text}{reset}"),
+        (LineKind::Observer, _) => format!("[observer] {text}{reset}"),
+        _ => format!("{text}{reset}"),
+    }
 }
 
-async fn print_events(mut events: broadcast::Receiver<Event>, stop: CancellationToken) {
+async fn print_events(mut events: broadcast::Receiver<Event>, terminal: Terminal, stop: CancellationToken) {
     loop {
         let event = tokio::select! {
             () = stop.cancelled() => break,
@@ -217,8 +272,51 @@ async fn print_events(mut events: broadcast::Receiver<Event>, stop: Cancellation
             }
             kind => {
                 let kind = serde_json::to_string(kind).unwrap_or_default();
-                println!("[observer] #{} {kind}", event.generation);
+                terminal.print(format!("[observer] #{} {kind}", event.generation));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Instant;
+
+    use super::*;
+
+    /// A terminal that takes nothing until it is released, like a console window with a text
+    /// selection held.
+    struct Held(std_mpsc::Receiver<()>);
+
+    impl Write for Held {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            let _ = self.0.recv();
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn printing_never_waits_for_a_terminal_that_stopped_reading() {
+        let (release, held) = std_mpsc::channel();
+        let (terminal, drained) = Terminal::start(Held(held)).unwrap();
+        let started = Instant::now();
+
+        for index in 0..TERMINAL_LINES * 2 {
+            terminal.print(format!("line {index}"));
+        }
+
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "{:?}",
+            started.elapsed()
+        );
+        assert!(terminal.dropped.load(Ordering::Relaxed) >= TERMINAL_LINES as u64 - 1);
+        drop(release);
+        drop(terminal);
+        drained.blocking_recv().unwrap();
     }
 }
