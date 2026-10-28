@@ -45,6 +45,7 @@ const hour = (): MetricsSeries => {
             values: values((index) => {
                 if (series === 'joins') return index === 700 ? 12 : 0;
                 if (series === 'leaves') return index === 701 ? 9 : 0;
+                if (series === 'hitchesMain') return index > 500 ? Number(index === 600) : null;
                 if (series === 'hitchMax') return index === 600 ? 412 : null;
                 return index > 700 ? 10 + (index % 3) : null;
             }),
@@ -52,6 +53,15 @@ const hour = (): MetricsSeries => {
         markers: [],
     };
 };
+
+/** An hour of which `kept` series were measured, without a hitch. */
+const quietHour = (kept: readonly string[]): MetricsSeries => ({
+    ...hour(),
+    series: TILE_SERIES.map((series) => ({
+        series,
+        values: values((index) => (kept.includes(series) && index > 700 && series !== 'hitchMax' ? 0 : null)),
+    })),
+});
 
 const SAMPLE: LiveSample = {
     ts: NOW,
@@ -86,12 +96,12 @@ const SAMPLE: LiveSample = {
 };
 
 /** The page with Observer's health and the last hour already read, and a socket the test speaks for. */
-const page = async () => {
+const page = async (lastHour: MetricsSeries = hour()) => {
     const client = new QueryClient({
         defaultOptions: { queries: { staleTime: Infinity, retry: false, refetchInterval: false } },
     });
     client.setQueryData(healthQuery.queryKey, { status: 'ok', version: '0.1.0' });
-    client.setQueryData(seriesQuery('1h', TILE_SERIES).queryKey, hour());
+    client.setQueryData(seriesQuery('1h', TILE_SERIES).queryKey, lastHour);
     let socket: SocketEvents | undefined;
     const live = new Realtime({
         ticket: async () => 'ticket',
@@ -132,6 +142,9 @@ const tile = (label: string) => {
     }
     return within(section);
 };
+
+const lastHitch = () =>
+    tile(en.tiles.tick.label).getByText(en.tiles.tick.lastHitch).nextElementSibling?.textContent;
 
 describe('OverviewPage', () => {
     afterEach(() => {
@@ -193,6 +206,17 @@ describe('OverviewPage', () => {
         expect(cpu.getByText('182%')).not.toBeNull();
         expect(cpu.getByText(en.tiles.cpu.machine).nextElementSibling?.textContent).toBe(en.tiles.unknown);
         live.stop();
+    });
+
+    it('should say there was no hitch only over an hour in which svMain was followed', async () => {
+        const followed = await page(quietHour(['hitchesMain', 'hitchMax']));
+        expect(lastHitch()).toBe(en.tiles.tick.noHitch);
+        followed.live.stop();
+        cleanup();
+
+        const unmeasured = await page(quietHour([]));
+        expect(lastHitch()).toBe(en.tiles.unknown);
+        unmeasured.live.stop();
     });
 
     it('should show n/a rather than zero before any sample', async () => {

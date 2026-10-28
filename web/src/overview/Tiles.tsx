@@ -22,6 +22,7 @@ export const TILE_SERIES = [
     'joins',
     'leaves',
     'mainTick',
+    'hitchesMain',
     'hitchMax',
     'fxsCpu',
     'fxsPrivate',
@@ -175,16 +176,18 @@ function TickTile({ latest, trend, hour }: TileProps & { hour: MetricsSeries | n
     const sync = value('syncTick');
     const hitches = trend('hitchMax');
     const last = hitches.findLastIndex((ms) => ms !== null);
+    // A slot without a hitch has no longest one, nor has a slot nothing measured: only the count
+    // tells that svMain was followed and did not hitch.
+    const followed = trend('hitchesMain').some((count) => count !== null);
     let hitch: string = t.tiles.unknown;
-    if (hour !== null) {
+    if (hour !== null && last >= 0) {
         const at = new Date((hour.from + last * hour.step) * 1000);
-        hitch =
-            last < 0
-                ? t.tiles.tick.noHitch
-                : t.tiles.tick.hitchAt(
-                      format.milliseconds(hitches[last] ?? 0),
-                      format.dateTime(at, { dateStyle: undefined }),
-                  );
+        hitch = t.tiles.tick.hitchAt(
+            format.milliseconds(hitches[last] ?? 0),
+            format.dateTime(at, { dateStyle: undefined }),
+        );
+    } else if (followed) {
+        hitch = t.tiles.tick.noHitch;
     }
     return (
         <Tile
