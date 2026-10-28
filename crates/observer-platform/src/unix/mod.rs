@@ -8,6 +8,7 @@ use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::process::{Child, Command, Stdio};
 use std::sync::{OnceLock, mpsc};
 use std::thread;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use rustix::io::{Errno, FdFlags};
 use rustix::pipe::PipeFlags;
@@ -18,6 +19,9 @@ use crate::{Exit, ExitWatch, Launch, SpawnError, Spawned};
 
 /// The descriptor FXServer writes its structured traces to.
 const TRACES_FD: i32 = 3;
+/// Set for FXServer and inherited by everything it starts, it finds the processes that left the
+/// process group: a detached Node child, a daemon with a session of its own.
+pub(crate) const TREE_VARIABLE: &str = "OBSERVER_TREE";
 
 pub(crate) fn spawn(launch: &Launch) -> Result<Spawned, SpawnError> {
     let (traces, child_traces) =
@@ -26,9 +30,11 @@ pub(crate) fn spawn(launch: &Launch) -> Result<Spawned, SpawnError> {
     let child_traces = rustix::io::fcntl_dupfd_cloexec(&child_traces, TRACES_FD)
         .map_err(|error| SpawnError::Pipes(error.into()))?;
 
+    let marker = tree_marker();
     let mut command = Command::new(&launch.program);
     command
         .args(&launch.args)
+        .env(TREE_VARIABLE, &marker)
         .current_dir(&launch.cwd)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -71,6 +77,7 @@ pub(crate) fn spawn(launch: &Launch) -> Result<Spawned, SpawnError> {
     let pid = child.id();
     let tree = ProcessTree {
         group: pid_of(pid).map_err(SpawnError::Tree)?,
+        marker,
     };
     let (Some(stdin), Some(stdout), Some(stderr)) =
         (child.stdin.take(), child.stdout.take(), child.stderr.take())
@@ -105,15 +112,19 @@ pub(crate) fn spawn(launch: &Launch) -> Result<Spawned, SpawnError> {
     })
 }
 
-/// The process group FXServer leads. Dropping it kills whatever is left in the group.
+/// The process group FXServer leads, and every process that carries its marker after leaving
+/// the group. Dropping it kills whatever is left.
 pub struct ProcessTree {
     group: Pid,
+    marker: String,
 }
 
 impl ProcessTree {
-    /// Kills every process in the group at once.
+    /// Kills every process in the group at once, then those that left it.
     pub fn kill(&self) -> io::Result<()> {
-        signal_group(self.group, Signal::KILL)
+        signal_group(self.group, Signal::KILL)?;
+        leftovers::kill_marked(&self.marker);
+        Ok(())
     }
 
     /// Sends SIGINT to the whole group: FXServer runs `quit` on it.
@@ -124,9 +135,18 @@ impl ProcessTree {
     pub fn is_empty(&self) -> io::Result<bool> {
         match rustix::process::test_kill_process_group(self.group) {
             Ok(()) => Ok(false),
-            Err(Errno::SRCH) => Ok(true),
+            // Only then the slower look for processes that left the group.
+            Err(Errno::SRCH) => Ok(leftovers::marked(&self.marker).is_empty()),
             Err(error) => Err(error.into()),
         }
+    }
+
+    pub(crate) fn group(&self) -> u32 {
+        self.group.as_raw_pid().cast_unsigned()
+    }
+
+    pub(crate) fn marker(&self) -> &str {
+        &self.marker
     }
 
     /// The ids of the processes in the group right now.
@@ -162,6 +182,12 @@ fn signal_group(group: Pid, signal: Signal) -> io::Result<()> {
         Ok(()) | Err(Errno::SRCH) => Ok(()),
         Err(error) => Err(error.into()),
     }
+}
+
+/// Unique to this spawn, across Observers too: the pid file keeps it for the next one.
+fn tree_marker() -> String {
+    let since_epoch = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
+    format!("{}-{}", std::process::id(), since_epoch.as_nanos())
 }
 
 fn pid_of(pid: u32) -> io::Result<Pid> {
@@ -284,6 +310,49 @@ mod tests {
         spawned.tree.kill().unwrap();
 
         assert_eq!(spawned.exit.wait().await, Exit::Signal(9));
+    }
+
+    #[tokio::test]
+    async fn processes_that_left_the_group_die_with_the_tree() {
+        // A child in a session of its own, and an orphan of a subshell that has already exited.
+        let mut spawned = spawn(&shell(
+            "setsid sleep 120 </dev/null & echo $!; (setsid sleep 120 </dev/null & echo $!); exec sleep 120",
+        ))
+        .unwrap();
+        let mut escaped = Vec::new();
+        while escaped.len() < 2 {
+            let chunk = spawned.stdout.next().await.unwrap();
+            escaped.extend(
+                String::from_utf8(chunk)
+                    .unwrap()
+                    .split_whitespace()
+                    .map(|pid| pid.parse::<u32>().unwrap()),
+            );
+        }
+        // `setsid` leaves the group a moment after it starts.
+        while !escaped
+            .iter()
+            .all(|&pid| leftovers::stat(pid).is_some_and(|stat| stat.session == pid))
+        {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        // Gone, or a zombie its new parent has yet to reap.
+        let gone = |pid: u32| {
+            fs::read_to_string(format!("/proc/{pid}/stat"))
+                .ok()
+                .is_none_or(|stat| {
+                    stat.rsplit_once(") ")
+                        .is_some_and(|(_, rest)| rest.starts_with('Z'))
+                })
+        };
+
+        spawned.tree.kill().unwrap();
+
+        assert!(spawned.tree.wait_empty(Duration::from_secs(5)).await.unwrap());
+        assert!(
+            escaped.iter().all(|&pid| gone(pid)),
+            "{escaped:?} outlived the tree"
+        );
     }
 
     #[tokio::test]

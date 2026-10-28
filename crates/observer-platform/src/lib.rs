@@ -27,7 +27,7 @@ pub use windows::ProcessTree;
 pub use windows::console::{ConsoleEvent, ConsoleEvents};
 
 /// What to start: the program, its arguments and the directory it runs in. The environment is
-/// inherited.
+/// inherited; on Linux it also gets the variable that marks the tree.
 #[derive(Debug, Clone)]
 pub struct Launch {
     pub program: PathBuf,

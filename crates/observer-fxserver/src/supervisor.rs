@@ -1050,7 +1050,7 @@ impl Actor {
         self.current.send_replace(generation);
         let spawned = observer_platform::spawn(&prepared.launch).map_err(|error| error.to_string())?;
         #[cfg(unix)]
-        if let Err(error) = self.pid_file().record(spawned.pid) {
+        if let Err(error) = self.pid_file().record(&spawned.tree) {
             warn!(%error, "cannot record FXServer's process group; a crash of Observer could leave it running");
         }
 

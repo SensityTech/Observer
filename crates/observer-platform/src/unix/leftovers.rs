@@ -7,11 +7,13 @@ use std::time::{Duration, Instant};
 use rustix::io::Errno;
 use rustix::process::{Pid, Signal};
 
+use super::{ProcessTree, TREE_VARIABLE};
+
 const KILL_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// Remembers the running server's process group on disk. Without systemd nothing kills that group
-/// when Observer itself is killed (`PR_SET_PDEATHSIG` only reaches FXServer, not its children), so
-/// the next Observer sweeps it before it starts a server of its own.
+/// Remembers the running server's process group and tree marker on disk. Without systemd nothing
+/// kills them when Observer itself is killed (`PR_SET_PDEATHSIG` only reaches FXServer, not its
+/// children), so the next Observer sweeps them before it starts a server of its own.
 pub struct PidFile {
     path: PathBuf,
 }
@@ -32,11 +34,15 @@ impl PidFile {
     }
 
     /// Records the server just spawned, which leads its own process group.
-    pub fn record(&self, pid: u32) -> io::Result<()> {
+    pub fn record(&self, tree: &ProcessTree) -> io::Result<()> {
+        let pid = tree.group();
         let leader =
             stat(pid).ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "the process is gone"))?;
         let partial = self.path.with_extension("pid.partial");
-        fs::write(&partial, format!("{pid} {} {}\n", leader.group, leader.start))?;
+        fs::write(
+            &partial,
+            format!("{pid} {} {} {}\n", leader.group, leader.start, tree.marker()),
+        )?;
         fs::rename(&partial, &self.path)
     }
 
@@ -68,60 +74,113 @@ struct Record {
     pid: u32,
     group: u32,
     start: u64,
+    /// Absent from the files of Observers that did not mark the tree yet.
+    marker: Option<String>,
 }
 
 impl Record {
     fn parse(content: &str) -> Option<Self> {
-        let mut fields = content.split_whitespace().map(str::parse::<u64>);
-        let pid = u32::try_from(fields.next()?.ok()?).ok()?;
-        let group = u32::try_from(fields.next()?.ok()?).ok()?;
-        let start = fields.next()?.ok()?;
-        Some(Self { pid, group, start })
+        let mut fields = content.split_whitespace();
+        let pid = fields.next()?.parse().ok()?;
+        let group = fields.next()?.parse().ok()?;
+        let start = fields.next()?.parse().ok()?;
+        let marker = fields.next().map(str::to_owned);
+        Some(Self {
+            pid,
+            group,
+            start,
+            marker,
+        })
     }
 }
 
 fn kill_leftovers(record: &Record) -> io::Result<Sweep> {
-    if stat(record.pid).is_some_and(|leader| leader.start != record.start || leader.group != record.group) {
-        // The pid was reused, which the kernel only does once nothing uses the number as a group id:
-        // the old group is gone.
-        return Ok(Sweep::Gone);
+    // The marker is this spawn's alone, whatever became of the group's id since.
+    let mut processes = record.marker.as_deref().map(marked).unwrap_or_default();
+    // A pid is only reused once nothing uses the number as a group id any more: the old group is
+    // gone then.
+    let reused =
+        stat(record.pid).is_some_and(|leader| leader.start != record.start || leader.group != record.group);
+    let group = i32::try_from(record.group)
+        .ok()
+        .and_then(Pid::from_raw)
+        .filter(|_| !reused);
+    if group.is_some() {
+        // A group id stays reserved while any member lives, even after its leader died. Members of
+        // the recorded group were started after its leader and share the session it created.
+        processes.extend(all()?.filter(|&pid| {
+            stat(pid).is_some_and(|process| {
+                process.group == record.group
+                    && process.session == record.group
+                    && process.start >= record.start
+            })
+        }));
     }
-    // A group id stays reserved while any member lives, even after its leader died. Members of the
-    // recorded group were started after its leader and share the session the leader created.
-    let members = processes()?
-        .filter_map(stat)
-        .filter(|process| {
-            process.group == record.group && process.session == record.group && process.start >= record.start
-        })
-        .count();
-    let Some(group) = i32::try_from(record.group).ok().and_then(Pid::from_raw) else {
-        return Ok(Sweep::Gone);
-    };
-    if members == 0 {
+    processes.sort_unstable();
+    processes.dedup();
+    if processes.is_empty() {
         return Ok(Sweep::Gone);
     }
 
-    match rustix::process::kill_process_group(group, Signal::KILL) {
-        Ok(()) | Err(Errno::SRCH) => {}
-        Err(error) => return Err(error.into()),
+    if let Some(group) = group {
+        match rustix::process::kill_process_group(group, Signal::KILL) {
+            Ok(()) | Err(Errno::SRCH) => {}
+            Err(error) => return Err(error.into()),
+        }
     }
+    kill_each(&processes);
     let deadline = Instant::now() + KILL_TIMEOUT;
-    while rustix::process::test_kill_process_group(group).is_ok() {
+    while group.is_some_and(|group| rustix::process::test_kill_process_group(group).is_ok())
+        || record
+            .marker
+            .as_deref()
+            .is_some_and(|marker| !marked(marker).is_empty())
+    {
         if Instant::now() > deadline {
             return Err(io::Error::new(
                 io::ErrorKind::TimedOut,
-                format!("process group {} survived SIGKILL", record.group),
+                format!("processes of group {} survived SIGKILL", record.group),
             ));
         }
         thread::sleep(Duration::from_millis(20));
     }
     Ok(Sweep::Killed {
         group: record.group,
-        processes: members,
+        processes: processes.len(),
     })
 }
 
-fn processes() -> io::Result<impl Iterator<Item = u32>> {
+/// The processes whose environment carries the tree `marker`, wherever they are now. A process
+/// that is gone, or that belongs to another user, has no environment to read.
+pub(crate) fn marked(marker: &str) -> Vec<u32> {
+    let entry = format!("{TREE_VARIABLE}={marker}");
+    let Ok(processes) = all() else {
+        return Vec::new();
+    };
+    processes
+        .filter(|pid| {
+            fs::read(format!("/proc/{pid}/environ")).is_ok_and(|environ| {
+                environ
+                    .split(|&byte| byte == 0)
+                    .any(|variable| variable == entry.as_bytes())
+            })
+        })
+        .collect()
+}
+
+pub(crate) fn kill_marked(marker: &str) {
+    kill_each(&marked(marker));
+}
+
+fn kill_each(processes: &[u32]) {
+    for &pid in processes {
+        if let Some(pid) = i32::try_from(pid).ok().and_then(Pid::from_raw) {
+            let _ = rustix::process::kill_process(pid, Signal::KILL);
+        }
+    }
+}
+
+fn all() -> io::Result<impl Iterator<Item = u32>> {
     Ok(fs::read_dir("/proc")?.filter_map(|entry| entry.ok()?.file_name().to_str()?.parse().ok()))
 }
 
@@ -198,7 +257,7 @@ mod tests {
         let file = PidFile::new(dir.path().join("fxserver.pid"));
         let mut spawned = spawn(&sleeper("sleep 30 & echo ready; wait")).unwrap();
         assert!(spawned.stdout.next().await.is_some());
-        file.record(spawned.pid).unwrap();
+        file.record(&spawned.tree).unwrap();
 
         let sweep = file.sweep().unwrap();
 
@@ -211,6 +270,35 @@ mod tests {
         );
         assert!(spawned.tree.is_empty().unwrap());
         assert!(!dir.path().join("fxserver.pid").exists());
+    }
+
+    #[tokio::test]
+    async fn a_process_that_left_the_recorded_group_is_swept_with_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = PidFile::new(dir.path().join("fxserver.pid"));
+        let mut spawned = spawn(&sleeper("setsid sleep 30 </dev/null & echo $!; exec sleep 30")).unwrap();
+        let escaped: u32 = String::from_utf8(spawned.stdout.next().await.unwrap())
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        // `setsid` leaves the group a moment after it starts.
+        while stat(escaped).is_none_or(|process| process.session != escaped) {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        file.record(&spawned.tree).unwrap();
+
+        let sweep = file.sweep().unwrap();
+
+        assert_eq!(
+            sweep,
+            Sweep::Killed {
+                group: spawned.pid,
+                processes: 2
+            }
+        );
+        assert!(!marked(spawned.tree.marker()).contains(&escaped));
+        assert!(spawned.tree.is_empty().unwrap());
     }
 
     #[tokio::test]
