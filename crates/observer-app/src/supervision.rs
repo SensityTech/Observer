@@ -13,11 +13,13 @@ use observer_domain::audit::{ActorKind, AuditAction, Outcome};
 use observer_domain::error::{ApiError, ErrorCode};
 use observer_domain::launch::{Platform, StoredLaunch};
 use observer_domain::permissions::Permissions;
+use observer_domain::schedule::RestartSource;
 use observer_domain::server::{
     CommandAck, CommandRefusal, ConsoleLine, ConsoleSnapshot, Delivery, HangCause, HealthProblem,
     LINE_MASKED, LINE_NO_EOL, LINE_TRUNCATED, LaunchReadiness, LineKind, LogFile, PlayerCount, ServerState,
     ServerStatus, StateCause,
 };
+use observer_fxserver::bridge::BridgeEvent;
 use observer_fxserver::console::{self as fx_console, ConsoleHub, ConsoleLog, LineFlags};
 use observer_fxserver::health;
 use observer_fxserver::stdin::{self, StdinError, UserCommand};
@@ -38,6 +40,8 @@ use crate::{Accounts, Caller, Clock, Error, Servers};
 
 /// Who the console and the bridge's events name for what Observer does by itself.
 const OBSERVER: &str = "observer";
+/// Who the console names for the schedule's notes.
+const SCHEDULE: &str = "schedule";
 /// Commands one user may send within a window.
 const COMMANDS_PER_WINDOW: usize = 10;
 const COMMAND_WINDOW: SignedDuration = SignedDuration::from_secs(10);
@@ -125,6 +129,27 @@ impl Launches {
         self.supervisor.configure(stored.settings.clone()).await;
         *given = Some(stored.version);
     }
+}
+
+/// A restart the schedule makes.
+pub(crate) struct ScheduledRestart {
+    pub at: Timestamp,
+    pub source: RestartSource,
+    /// `observer` for the schedule's own times, or whoever planned the one-off.
+    pub by: String,
+    pub planned_by: Option<String>,
+    /// The time as the schedule's zone reads it, for the console: `04:00 Europe/Paris`.
+    pub local: String,
+}
+
+/// Why the schedule's restart did not happen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ScheduledRefusal {
+    /// This host refuses the stored launch settings: nothing was stopped.
+    LaunchInvalid,
+    /// FXServer was stopping, or no longer running.
+    Busy,
+    ShuttingDown,
 }
 
 /// Console lines lost before they reached the subscriber: it starts over from the last it has.
@@ -227,7 +252,10 @@ impl Supervision {
         }
         if !stored.settings.issues(Platform::host()).is_empty() {
             warn!("FXServer was not started: its launch settings are refused on this host");
-            self.note("FXServer was not started: this host refuses its launch settings");
+            self.note(
+                OBSERVER,
+                "FXServer was not started: this host refuses its launch settings",
+            );
             return Ok(());
         }
         self.inner.launches.give(&stored).await;
@@ -271,6 +299,50 @@ impl Supervision {
         self.record_control(Record::by(caller, AuditAction::ServerRestarted), &restarted)
             .await?;
         restarted.map_err(control_error)
+    }
+
+    /// The schedule's restart of a running server. The stored settings must be fit to start
+    /// before anything stops: otherwise the server keeps running, with a note in the console.
+    pub(crate) async fn restart_on_schedule(
+        &self,
+        restart: &ScheduledRestart,
+    ) -> Result<(), ScheduledRefusal> {
+        if let Err(error) = self.hand_over_launch().await {
+            warn!(%error, "the scheduled restart did not happen: the launch settings cannot start FXServer");
+            self.note(
+                SCHEDULE,
+                "the scheduled restart did not happen: this host refuses the launch settings",
+            );
+            return Err(ScheduledRefusal::LaunchInvalid);
+        }
+        match self.inner.supervisor.restart_scheduled(&restart.by).await {
+            Ok(()) => {}
+            Err(ControlError::ShuttingDown) => return Err(ScheduledRefusal::ShuttingDown),
+            Err(_) => return Err(ScheduledRefusal::Busy),
+        }
+        self.note(
+            SCHEDULE,
+            &match &restart.planned_by {
+                Some(planner) => format!("restarting as {planner} planned"),
+                None => format!("restarting on schedule ({})", restart.local),
+            },
+        );
+        let mut scheduled = json!({ "at": restart.at, "source": restart.source });
+        if let Some(planner) = &restart.planned_by {
+            scheduled["plannedBy"] = json!(planner);
+        }
+        let record = Record::operator(ActorKind::System, AuditAction::ServerRestarted)
+            .target(Servers::DEFAULT)
+            .details(json!({ "scheduled": scheduled }));
+        if let Err(error) = self.audit(record).await {
+            warn!(%error, "cannot audit the scheduled restart");
+        }
+        Ok(())
+    }
+
+    /// Raises an event of the integration contract on a running server whose bridge reported.
+    pub(crate) async fn announce(&self, event: BridgeEvent) -> Result<(), ControlError> {
+        self.inner.supervisor.announce(event).await
     }
 
     /// Sends an operator's line to FXServer's console. The line is read as FXServer will read it
@@ -472,12 +544,12 @@ impl Supervision {
             .await
     }
 
-    fn note(&self, text: &str) {
+    fn note(&self, actor: &str, text: &str) {
         let generation = self.inner.supervisor.status().borrow().generation;
         self.inner.console.push(
             generation,
             fx_console::LineKind::Observer,
-            Some(OBSERVER.to_owned()),
+            Some(actor.to_owned()),
             text.to_owned(),
             LineFlags::default(),
         );
@@ -618,6 +690,7 @@ fn state_cause(cause: &Cause) -> StateCause {
         Cause::Requested { by } => StateCause::Requested { by },
         Cause::Restart { by } => StateCause::Restart { by },
         Cause::Recovery => StateCause::Recovery,
+        Cause::Scheduled { by } => StateCause::Scheduled { by },
         Cause::Ready => StateCause::Ready,
         Cause::Recovered => StateCause::Recovered,
         Cause::Unhealthy { problems } => StateCause::Unhealthy {

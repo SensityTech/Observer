@@ -9,6 +9,7 @@ use ts_rs::TS;
 use crate::audit::AuditEntry;
 use crate::error::ErrorCode;
 use crate::metrics::{LiveSample, MetricsSnapshot};
+use crate::schedule::ScheduleStatus;
 use crate::server::{ConsoleBatch, ConsoleSnapshot, ServerStatus};
 
 /// The websocket subprotocol. A change older panels cannot read takes a new one.
@@ -44,15 +45,20 @@ pub enum Topic {
     /// A sample of the statistics every five seconds. Needs the dashboard permission.
     #[serde(rename = "metrics.live")]
     MetricsLive,
+    /// FXServer's restart schedule and its next restart. Needs the dashboard, schedule or server
+    /// control permission.
+    #[serde(rename = "server.schedule")]
+    ServerSchedule,
 }
 
 impl Topic {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::Status,
         Self::Audit,
         Self::ServerStatus,
         Self::Console,
         Self::MetricsLive,
+        Self::ServerSchedule,
     ];
 }
 
@@ -118,6 +124,8 @@ pub enum TopicSnapshot {
     Console(ConsoleSnapshot),
     #[serde(rename = "metrics.live")]
     MetricsLive(MetricsSnapshot),
+    #[serde(rename = "server.schedule")]
+    ServerSchedule(ScheduleStatus),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, TS)]
@@ -131,6 +139,9 @@ pub enum TopicEvent {
     Console(ConsoleBatch),
     #[serde(rename = "metrics.live")]
     MetricsLive(LiveSample),
+    /// The whole schedule status again, whenever any of it changes.
+    #[serde(rename = "server.schedule")]
+    ServerSchedule(ScheduleStatus),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
@@ -243,6 +254,13 @@ mod tests {
             parse(r#"{"type":"sub","topic":"metrics.live"}"#),
             Some(ClientMessage::Sub {
                 topic: Topic::MetricsLive,
+                since: None
+            })
+        );
+        assert_eq!(
+            parse(r#"{"type":"sub","topic":"server.schedule"}"#),
+            Some(ClientMessage::Sub {
+                topic: Topic::ServerSchedule,
                 since: None
             })
         );

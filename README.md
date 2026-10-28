@@ -38,6 +38,12 @@ features, it exposes documented, versioned integration points that your own reso
   deeper diagnostics for Observer only.
 - **Self-contained.** No account, telemetry or service is required beyond the Cfx.re artifact servers.
 
+## Integration contract
+
+[`resource/CONTRACT.md`](resource/CONTRACT.md) lists the server events Observer raises, what they
+carry and what your resources can rely on, along with the mapping to txAdmin's events.
+[`resource/observer_example`](resource/observer_example) is a resource that listens to each of them.
+
 ## Platforms
 
 Windows x64 is the primary target. Linux x86_64 is supported.

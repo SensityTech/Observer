@@ -19,6 +19,9 @@ use crate::{Caller, Clock, Error};
 pub(crate) const TEMPORARY_PASSWORD_LIFETIME: SignedDuration = SignedDuration::from_hours(72);
 /// The longest username `check_username` accepts.
 pub(crate) const MAX_USERNAME_BYTES: usize = 32;
+/// The names Observer gives itself on the console, in the audit log and in the bridge's events:
+/// an account by one of them would pass for Observer.
+const RESERVED_USERNAMES: [&str; 4] = ["observer", "schedule", "supervisor", "system"];
 /// A row of login failures with no lock and no failure for this long is forgotten.
 const FORGET_FAILURES_AFTER: SignedDuration = SignedDuration::from_hours(24);
 
@@ -152,17 +155,23 @@ pub(crate) fn existing(conn: &Connection, id: i64) -> Result<UserRow, Error> {
     users::get(conn, id)?.ok_or_else(|| ErrorCode::NotFound.into())
 }
 
-/// 3 to 32 characters among letters, digits, `_`, `.` and `-`.
+/// 3 to 32 characters among letters, digits, `_`, `.` and `-`, and none of the names Observer
+/// takes for itself, which count as taken.
 pub(crate) fn check_username(username: &str) -> Result<(), Error> {
     let valid = (3..=MAX_USERNAME_BYTES).contains(&username.len())
         && username
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'-'));
-    if valid {
-        Ok(())
-    } else {
-        Err(ErrorCode::InvalidUsername.into())
+    if !valid {
+        return Err(ErrorCode::InvalidUsername.into());
     }
+    if RESERVED_USERNAMES
+        .iter()
+        .any(|reserved| username.eq_ignore_ascii_case(reserved))
+    {
+        return Err(ErrorCode::NameTaken.into());
+    }
+    Ok(())
 }
 
 /// Permissions from a client may only name bits the catalog knows.
@@ -193,5 +202,17 @@ mod tests {
                 "{invalid:?}"
             );
         }
+    }
+
+    #[test]
+    fn the_names_observer_gives_itself_are_taken_whatever_their_case() {
+        for reserved in ["observer", "Observer", "SCHEDULE", "Supervisor", "system"] {
+            assert_eq!(
+                check_username(reserved).unwrap_err().code(),
+                Some(ErrorCode::NameTaken),
+                "{reserved:?}"
+            );
+        }
+        check_username("observer-ops").unwrap();
     }
 }

@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { Link, Outlet } from '@tanstack/react-router';
 import {
+    CalendarClock,
     LayoutDashboard,
     Menu as MenuIcon,
     ScrollText,
@@ -20,6 +21,7 @@ import { buttonVariants } from '../components/Button';
 import { useI18n } from '../i18n/I18nProvider';
 import { useRealtime } from '../live/context';
 import { cn } from '../lib/cn';
+import { ScheduleProvider } from '../schedule/context';
 import { ServerStatusProvider } from '../server/context';
 import { Logo } from './Logo';
 import { ServerControls } from './ServerControls';
@@ -28,11 +30,11 @@ import { ThemeSwitch } from './ThemeSwitch';
 import { UserMenu } from './UserMenu';
 
 type NavEntry = {
-    to: '/' | '/console' | '/server' | '/users' | '/audit';
+    to: '/' | '/console' | '/schedule' | '/server' | '/users' | '/audit';
     label: string;
     icon: LucideIcon;
-    /** A permission, or the owner alone for what no permission grants. */
-    access: bigint | 'owner';
+    /** A permission, any one of a list, or the owner alone for what no permission grants. */
+    access: bigint | bigint[] | 'owner';
 };
 
 export function AppShell() {
@@ -76,6 +78,14 @@ export function AppShell() {
         { to: '/', label: t.nav.overview, icon: LayoutDashboard, access: Permission.DashboardView },
         { to: '/console', label: t.nav.console, icon: SquareTerminal, access: Permission.ConsoleView },
     ];
+    const operations: NavEntry[] = [
+        {
+            to: '/schedule',
+            label: t.nav.schedule,
+            icon: CalendarClock,
+            access: [Permission.DashboardView, Permission.ScheduleManage, Permission.ServerControl],
+        },
+    ];
     const administration: NavEntry[] = [
         { to: '/server', label: t.nav.server, icon: Server, access: 'owner' },
         { to: '/users', label: t.nav.users, icon: Users, access: Permission.UsersManage },
@@ -85,73 +95,81 @@ export function AppShell() {
     return (
         <MeContext value={me}>
             <ServerStatusProvider>
-                <div className="app">
-                    <a className="skip" href="#content">
-                        {t.app.skipToContent}
-                    </a>
+                <ScheduleProvider>
+                    <div className="app">
+                        <a className="skip" href="#content">
+                            {t.app.skipToContent}
+                        </a>
 
-                    <aside
-                        id="rail"
-                        className={menuOpen ? 'rail-wrap is-open' : 'rail-wrap'}
-                        aria-label={t.nav.label}
-                    >
-                        <div className="rail">
-                            <div className="rail-head">
-                                <Logo />
+                        <aside
+                            id="rail"
+                            className={menuOpen ? 'rail-wrap is-open' : 'rail-wrap'}
+                            aria-label={t.nav.label}
+                        >
+                            <div className="rail">
+                                <div className="rail-head">
+                                    <Logo />
+                                    <button
+                                        type="button"
+                                        className={cn(
+                                            buttonVariants({ tone: 'ghost', size: 'icon' }),
+                                            'ml-auto xl:hidden',
+                                        )}
+                                        aria-label={t.nav.close}
+                                        onClick={closeMenu}
+                                    >
+                                        <X size={16} strokeWidth={1.5} aria-hidden="true" />
+                                    </button>
+                                </div>
+                                <nav className="nav" aria-label={t.nav.sections}>
+                                    <NavEntries me={me} entries={main} onNavigate={closeMenu} />
+                                    <NavEntries
+                                        me={me}
+                                        entries={operations}
+                                        group={t.nav.operations}
+                                        onNavigate={closeMenu}
+                                    />
+                                    <NavEntries
+                                        me={me}
+                                        entries={administration}
+                                        group={t.nav.administration}
+                                        onNavigate={closeMenu}
+                                    />
+                                </nav>
+                                <div className="rail-foot">
+                                    <ThemeSwitch />
+                                    <UserMenu me={me} onNavigate={closeMenu} />
+                                </div>
+                            </div>
+                        </aside>
+                        {menuOpen && <div className="scrim" aria-hidden="true" onClick={closeMenu} />}
+
+                        <div className="main" inert={menuOpen}>
+                            <div className="mobilebar">
                                 <button
                                     type="button"
-                                    className={cn(
-                                        buttonVariants({ tone: 'ghost', size: 'icon' }),
-                                        'ml-auto xl:hidden',
-                                    )}
-                                    aria-label={t.nav.close}
-                                    onClick={closeMenu}
+                                    className={buttonVariants({ tone: 'ghost', size: 'icon' })}
+                                    aria-label={t.nav.open}
+                                    aria-controls="rail"
+                                    aria-expanded={menuOpen}
+                                    onClick={() => setMenuOpen(true)}
                                 >
-                                    <X size={16} strokeWidth={1.5} aria-hidden="true" />
+                                    <MenuIcon size={18} strokeWidth={1.5} aria-hidden="true" />
                                 </button>
+                                <Logo />
                             </div>
-                            <nav className="nav" aria-label={t.nav.sections}>
-                                <NavEntries me={me} entries={main} onNavigate={closeMenu} />
-                                <NavEntries
-                                    me={me}
-                                    entries={administration}
-                                    group={t.nav.administration}
-                                    onNavigate={closeMenu}
-                                />
-                            </nav>
-                            <div className="rail-foot">
-                                <ThemeSwitch />
-                                <UserMenu me={me} onNavigate={closeMenu} />
-                            </div>
+                            <header className="topbar" aria-label={t.status.label}>
+                                <StatusBar />
+                                <ServerControls />
+                            </header>
+                            <main className="content" id="content" tabIndex={-1}>
+                                <Suspense fallback={<PageLoading />}>
+                                    <Outlet />
+                                </Suspense>
+                            </main>
                         </div>
-                    </aside>
-                    {menuOpen && <div className="scrim" aria-hidden="true" onClick={closeMenu} />}
-
-                    <div className="main" inert={menuOpen}>
-                        <div className="mobilebar">
-                            <button
-                                type="button"
-                                className={buttonVariants({ tone: 'ghost', size: 'icon' })}
-                                aria-label={t.nav.open}
-                                aria-controls="rail"
-                                aria-expanded={menuOpen}
-                                onClick={() => setMenuOpen(true)}
-                            >
-                                <MenuIcon size={18} strokeWidth={1.5} aria-hidden="true" />
-                            </button>
-                            <Logo />
-                        </div>
-                        <header className="topbar" aria-label={t.status.label}>
-                            <StatusBar />
-                            <ServerControls />
-                        </header>
-                        <main className="content" id="content" tabIndex={-1}>
-                            <Suspense fallback={<PageLoading />}>
-                                <Outlet />
-                            </Suspense>
-                        </main>
                     </div>
-                </div>
+                </ScheduleProvider>
             </ServerStatusProvider>
         </MeContext>
     );
@@ -180,8 +198,10 @@ function NavEntries({
     group?: string;
     onNavigate: () => void;
 }) {
-    const allowed = entries.filter((entry) =>
-        entry.access === 'owner' ? me.isOwner : allows(me, entry.access),
+    const allowed = entries.filter(({ access }) =>
+        access === 'owner'
+            ? me.isOwner
+            : (Array.isArray(access) ? access : [access]).some((permission) => allows(me, permission)),
     );
     if (allowed.length === 0) {
         return null;

@@ -471,6 +471,10 @@
         .status-cell:nth-child(even) {
             border-left: 1px solid var(--line);
         }
+        /* The next restart leaves the grid here: the cell after it takes its place on the right. */
+        .status-next + .status-cell {
+            border-left: 1px solid var(--line);
+        }
         .status-cell:nth-child(n + 3) {
             border-top: 1px solid var(--line);
         }

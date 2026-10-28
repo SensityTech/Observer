@@ -70,18 +70,42 @@ local function secondsUntil(at)
     return math.max(0, at // 1000 - os.time())
 end
 
--- The payloads txAdmin gave its own events, for resources written against txAdmin.
+-- txAdmin counts its warnings in whole minutes, and resources written for it divide by 60.
+local function wholeMinutes(seconds)
+    if type(seconds) ~= 'number' then
+        return 0
+    end
+    return math.ceil(seconds / 60) * 60
+end
+
+-- The events txAdmin raised where Observer raises its own, with txAdmin's payloads, for resources
+-- written against txAdmin. Each one lists them in the order txAdmin raised them.
 local TXADMIN = {
     restartScheduled = function(payload)
-        return 'txAdmin:events:scheduledRestart',
-            { secondsRemaining = payload.secondsRemaining, translatedMessage = '' }
+        local secondsRemaining = wholeMinutes(payload.secondsRemaining)
+        return {
+            { 'txAdmin:events:scheduledRestart', { secondsRemaining = secondsRemaining, translatedMessage = '' } },
+        }
     end,
     restartSkipped = function(payload)
-        return 'txAdmin:events:skippedNextScheduledRestart',
-            { secondsRemaining = secondsUntil(payload.at), temporary = false }
+        local secondsRemaining = secondsUntil(payload.at)
+        local temporary = payload.reason == 'oneOff'
+        return {
+            {
+                'txAdmin:events:scheduledRestartSkipped',
+                { secondsRemaining = secondsRemaining, temporary = temporary, author = payload.by },
+            },
+            -- Deprecated by txAdmin, which still raises it.
+            {
+                'txAdmin:events:skippedNextScheduledRestart',
+                { secondsRemaining = secondsRemaining, temporary = temporary },
+            },
+        }
     end,
     shuttingDown = function(payload)
-        return 'txAdmin:events:serverShuttingDown', { delay = payload.delayMs, author = payload.by, message = '' }
+        return {
+            { 'txAdmin:events:serverShuttingDown', { delay = payload.delayMs, author = payload.by, message = '' } },
+        }
     end,
 }
 
@@ -111,6 +135,8 @@ RegisterCommand('observer_cmd', function(source, args)
     TriggerEvent('observer:' .. command.event, command.payload)
     local txadmin = TXADMIN[command.event]
     if txadmin and GetConvarInt('observer_txadmin_events', 0) == 1 then
-        TriggerEvent(txadmin(command.payload))
+        for _, event in ipairs(txadmin(command.payload)) do
+            TriggerEvent(event[1], event[2])
+        end
     end
 end, true)

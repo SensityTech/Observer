@@ -3,6 +3,7 @@
 
 mod live;
 mod metrics;
+mod schedule;
 mod servers;
 
 use std::net::SocketAddr;
@@ -14,7 +15,8 @@ use axum::http::{HeaderMap, Method, Request, StatusCode, header};
 use http_body_util::BodyExt;
 use jiff::SignedDuration;
 use observer_app::{
-    Accounts, AuditLog, Clock, Metrics, MetricsSetup, PasswordCost, Running, Servers, Setup, Supervision,
+    Accounts, AuditLog, Clock, Metrics, MetricsSetup, PasswordCost, Running, Schedule, ScheduleSetup,
+    ScheduleTask, Servers, Setup, Supervision,
 };
 use observer_domain::audit::ActorKind;
 use observer_store::Database;
@@ -42,6 +44,7 @@ struct Server {
     metrics: Metrics,
     metrics_clock: Clock,
     _supervised: Running,
+    _scheduling: ScheduleTask,
     cookie_name: String,
 }
 
@@ -103,6 +106,16 @@ impl Server {
         )
         .await
         .unwrap();
+        let (schedule, scheduling) = Schedule::start(
+            ScheduleSetup {
+                db: db.clone(),
+                clock: clock.clone(),
+                supervision: supervision.clone(),
+            },
+            |_| {},
+        )
+        .await
+        .unwrap();
         // A millisecond before a slot ends: once moved past it, the sampler wakes at once.
         let metrics_clock = Clock::manual("2025-01-06T08:59:59.999Z".parse().unwrap());
         let metrics = Metrics::open(MetricsSetup {
@@ -118,6 +131,7 @@ impl Server {
             servers,
             supervision: supervision.clone(),
             metrics: metrics.clone(),
+            schedule,
         };
         let state = AppState::new(
             "0.0.0-test",
@@ -139,6 +153,7 @@ impl Server {
             metrics,
             metrics_clock,
             _supervised: supervised,
+            _scheduling: scheduling,
             cookie_name: format!("observer_session_{instance_id}"),
         }
     }

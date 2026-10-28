@@ -45,10 +45,23 @@ pub enum AuditAction {
     /// FXServer failed too often in a row: Observer stopped restarting it until someone starts it.
     /// `details` holds the `failures` counted.
     ServerCrashLoop,
+    /// `details` holds each changed setting with its value before and after, and what the change
+    /// `dropped`: a skip or a delay of an occurrence the schedule no longer has.
+    ScheduleChanged,
+    /// By a user, or by the system when FXServer started shortly before (`recentStart`).
+    ScheduledRestartSkipped,
+    ScheduledRestartRestored,
+    ScheduledRestartDelayed,
+    /// A restart that did not happen: its time passed while Observer was held up (`late`), or
+    /// FXServer was busy, or its launch settings are refused on this host.
+    ScheduledRestartMissed,
+    OneOffRestartPlanned,
+    /// By a user, or by the system when the run it was planned for ended first.
+    OneOffRestartCancelled,
 }
 
 impl AuditAction {
-    pub const ALL: [Self; 22] = [
+    pub const ALL: [Self; 29] = [
         Self::SetupCompleted,
         Self::SetupLinkCreated,
         Self::LoginSucceeded,
@@ -71,6 +84,13 @@ impl AuditAction {
         Self::ConsoleCommandSent,
         Self::ConsoleLogDownloaded,
         Self::ServerCrashLoop,
+        Self::ScheduleChanged,
+        Self::ScheduledRestartSkipped,
+        Self::ScheduledRestartRestored,
+        Self::ScheduledRestartDelayed,
+        Self::ScheduledRestartMissed,
+        Self::OneOffRestartPlanned,
+        Self::OneOffRestartCancelled,
     ];
 
     pub const fn as_str(self) -> &'static str {
@@ -97,6 +117,13 @@ impl AuditAction {
             Self::ConsoleCommandSent => "console_command_sent",
             Self::ConsoleLogDownloaded => "console_log_downloaded",
             Self::ServerCrashLoop => "server_crash_loop",
+            Self::ScheduleChanged => "schedule_changed",
+            Self::ScheduledRestartSkipped => "scheduled_restart_skipped",
+            Self::ScheduledRestartRestored => "scheduled_restart_restored",
+            Self::ScheduledRestartDelayed => "scheduled_restart_delayed",
+            Self::ScheduledRestartMissed => "scheduled_restart_missed",
+            Self::OneOffRestartPlanned => "one_off_restart_planned",
+            Self::OneOffRestartCancelled => "one_off_restart_cancelled",
         }
     }
 

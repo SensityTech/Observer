@@ -13,4 +13,5 @@ pub mod launch;
 pub mod live;
 pub mod metrics;
 pub mod permissions;
+pub mod schedule;
 pub mod server;

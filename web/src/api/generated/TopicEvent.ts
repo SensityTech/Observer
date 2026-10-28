@@ -2,6 +2,7 @@
 import type { AuditEntry } from "./AuditEntry";
 import type { ConsoleBatch } from "./ConsoleBatch";
 import type { LiveSample } from "./LiveSample";
+import type { ScheduleStatus } from "./ScheduleStatus";
 import type { ServerStatus } from "./ServerStatus";
 
-export type TopicEvent = { "topic": "audit", "data": AuditEntry } | { "topic": "server.status", "data": ServerStatus } | { "topic": "console", "data": ConsoleBatch } | { "topic": "metrics.live", "data": LiveSample };
+export type TopicEvent = { "topic": "audit", "data": AuditEntry } | { "topic": "server.status", "data": ServerStatus } | { "topic": "console", "data": ConsoleBatch } | { "topic": "metrics.live", "data": LiveSample } | { "topic": "server.schedule", "data": ScheduleStatus };

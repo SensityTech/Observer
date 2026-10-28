@@ -12,6 +12,8 @@ import type { OneSync } from '../api/generated/OneSync';
 import type { Outcome } from '../api/generated/Outcome';
 import type { PermissionArea } from '../api/generated/PermissionArea';
 import type { Range } from '../api/generated/Range';
+import type { ScheduleMode } from '../api/generated/ScheduleMode';
+import type { ScheduleProblem } from '../api/generated/ScheduleProblem';
 import type { ServerState } from '../api/generated/ServerState';
 import type { SpawnFailure } from '../api/generated/SpawnFailure';
 import { parsePermissions, permissionKeys, type PermissionKey } from '../auth/permissions';
@@ -37,7 +39,10 @@ const permissions = {
         name: 'Send console commands',
         description: 'Any command FXServer accepts, which reaches everything the server can.',
     },
-    serverControl: { name: 'Start and stop the server', description: 'Start, stop and restart FXServer.' },
+    serverControl: {
+        name: 'Start and stop the server',
+        description: 'Start, stop and restart FXServer, now or once at a set time.',
+    },
     scheduleManage: {
         name: 'Manage the schedule',
         description: 'Add, change and remove scheduled restarts.',
@@ -128,6 +133,8 @@ export const en = {
         overview: 'Overview',
         console: 'Console',
         administration: 'Administration',
+        operations: 'Operations',
+        schedule: 'Schedule',
         server: 'Server',
         users: 'Users',
         audit: 'Audit log',
@@ -151,6 +158,9 @@ export const en = {
         playerCount: (online: string, max: string | null) => (max === null ? online : `${online} / ${max}`),
         unknown: 'n/a',
         upFor: (uptime: string) => `up ${uptime}`,
+        nextRestart: 'Next restart',
+        none: 'None',
+        inTime: (left: string) => `in ${left}`,
         updates: 'Updates',
         link: {
             connecting: 'Connecting',
@@ -185,6 +195,7 @@ export const en = {
         invalidOther: 'The owner fixes them on the Server page.',
         openServer: 'Open the Server page',
         resources: (started: number) => `${count(started, { one: 'resource', other: 'resources' })} started`,
+        nextRestart: (time: string, left: string) => `Next restart ${time} (in ${left})`,
     },
     tiles: {
         unknown: 'n/a',
@@ -279,6 +290,130 @@ export const en = {
         attribution: 'Charts by',
         library: 'TradingView Lightweight Charts™',
     },
+    schedule: {
+        title: 'Schedule',
+        gloss: 'When FXServer restarts by itself.',
+        zone: (zone: string, offset: string) => `Times in ${zone} (${offset})`,
+        zoneUnknown: (zone: string) => `Times in UTC: this browser does not know ${zone}`,
+        loading: 'Reading the schedule',
+        unknown: 'The schedule is not known while the live link is down.',
+        outOfDate: 'The live link is down: the schedule shown may be out of date. Nothing typed is lost.',
+        nextTitle: 'Next restart',
+        when: (day: string, left: string) => `${day} · in ${left}`,
+        dayTime: (day: string, time: string) => `${day} ${time}`,
+        issueOf: (subject: string, problem: string) => `${subject}: ${problem}`,
+        fromSchedule: 'From the schedule.',
+        oneOff: (by: string) => `One-off, planned by ${by}.`,
+        delayedFrom: (time: string, by: string) => `Delayed from ${time} by ${by}.`,
+        stopped: 'FXServer is stopped: the schedule only restarts a running server.',
+        countsFromStart: 'Counts from the next start of FXServer.',
+        emptyTitle: 'No scheduled restart',
+        emptyBody:
+            'Add a fixed time or an interval below. Your resources hear of each restart before it comes.',
+        actions: 'Restart actions',
+        skip: 'Skip',
+        restore: 'Restore',
+        delay: 'Delay',
+        delayBy: (amount: string) => `Delay by ${amount}`,
+        restartOnce: 'Restart once…',
+        cancelOneOff: 'Cancel the one-off',
+        notPermittedPlan: 'Your account cannot change the schedule.',
+        notPermittedOnce: 'Your account cannot restart FXServer.',
+        notRunning: 'FXServer is not running.',
+        stoppingOnce: 'FXServer is stopping: plan the restart once it runs again.',
+        hungOnce: 'FXServer is not responding and is being stopped: plan the restart once it runs again.',
+        oneSkip: (time: string) => `Restore ${time} first: one restart can be skipped at a time.`,
+        unavailable: (action: string, reason: string) => `${action} does nothing now. ${reason}`,
+        failed: (action: string, error: string) => `${action} did not go through. ${error}`,
+        dismiss: 'Dismiss',
+        skipped: (time: string) => `The restart at ${time} is skipped.`,
+        restored: (time: string) => `The restart at ${time} is back.`,
+        delayed: (time: string) => `The restart moved to ${time}.`,
+        planned: (when: string) => `Planned for ${when}.`,
+        cancelled: 'The single restart is cancelled.',
+        onceTitle: 'Restart FXServer once',
+        onceWhen: 'When',
+        onceIn: 'In',
+        onceAt: 'At',
+        onceMinutes: 'Minutes from now',
+        onceTime: 'Time',
+        onceMinutesShort: (minutes: number) => `${formatNumber('en', minutes)} min`,
+        onceHint:
+            'It replaces any single restart planned before. Resources hear of it at once when it is inside the warnings, then at each one.',
+        onceSubmit: 'Plan the restart',
+        onceRange: `A whole number of minutes, from 1 to ${formatNumber('en', 1440)}.`,
+        onceTimeRequired: 'Pick a time, hours and minutes.',
+        upcomingTitle: 'Upcoming',
+        upcomingEmpty: 'No restart ahead.',
+        skippedBy: (by: string) => `Skipped by ${by}`,
+        skippedStart: (time: string) => `Skipped: FXServer started at ${time}`,
+        delayedTo: (time: string) => `Delayed to ${time}`,
+        moved: 'Moved by the clock change',
+        settingsTitle: 'Settings',
+        readOnly: 'Your account can see these settings, not change them.',
+        enabled: 'Restart on a schedule',
+        enabledHint: 'FXServer restarts at the times below, or at the interval, while it runs.',
+        mode: 'Restarts',
+        modes: {
+            fixedTimes: 'Fixed times',
+            interval: 'Interval',
+        } satisfies Record<ScheduleMode, string>,
+        times: 'Times',
+        noTimes: 'No time yet.',
+        removeTime: (time: string) => `Remove ${time}`,
+        addTime: 'Add a time',
+        timeIncomplete: 'Type a full time: hours and minutes.',
+        listedAlready: 'Already in the list.',
+        add: 'Add',
+        every: 'Every',
+        everyHours: 'Hours between two restarts',
+        hoursFrom: 'hours from',
+        from: 'Starting at',
+        fill: 'Fill',
+        fillLegend: 'Fill the list with times a few hours apart',
+        fillHint: 'Fills the list with times that many hours apart. Only the list is kept.',
+        intervalHours: 'Hours',
+        intervalMinutes: 'Minutes',
+        intervalHint: 'Counts from each start of FXServer, a restart after a crash included.',
+        timeZone: 'Time zone',
+        hostZone: (zone: string | null) => (zone === null ? "Host's zone" : `Host's zone (${zone})`),
+        timeZoneHint:
+            'Observer has the last word: a zone its own time zone database does not know is refused.',
+        warnings: 'Warnings',
+        warningMinutes: (minutes: number) => `${formatNumber('en', minutes)} min`,
+        removeWarning: (minutes: number) =>
+            `Remove the warning ${count(minutes, { one: 'minute', other: 'minutes' })} before`,
+        addWarning: 'Add a warning, in minutes before',
+        resetWarnings: 'Reset to the defaults',
+        warningsHint:
+            'Observer raises observer:restartScheduled at each. Your resources decide what players see.',
+        skipAfterStart: 'Skip a fixed time this soon after a start, in minutes',
+        skipAfterStartHint:
+            'After a start the schedule did not make, by hand or after a crash, a fixed time that comes this soon is skipped. 0 turns this off.',
+        changes: (value: number) => `${count(value, { one: 'unsaved change', other: 'unsaved changes' })}`,
+        discard: 'Discard',
+        save: 'Save the schedule',
+        saved: 'The schedule is saved. It applies at once.',
+        discarded: 'Changes discarded.',
+        changedElsewhere:
+            'Someone saved the schedule since you opened it. Discard your changes to see theirs, then make yours again.',
+        problems: {
+            required: 'Add at least one time, or turn the schedule off.',
+            tooMany: 'Too many: remove some.',
+            invalidTime: 'Use a time between 00:00 and 23:59.',
+            duplicate: 'This one is listed twice.',
+            tooClose: 'Keep times at least 30 minutes apart, across midnight too.',
+            outOfRange: 'This number is out of range.',
+            unknownTimeZone: 'Observer does not know this time zone.',
+        } satisfies Record<ScheduleProblem, string>,
+        ranges: {
+            intervalMinutes: 'Whole minutes, from 30 minutes to 7 days.',
+            warning: 'A whole number of minutes, from 1 to 240.',
+            skipAfterStart: 'A whole number of minutes, from 0 to 720.',
+            times: 'At most 48 times.',
+            warnings: 'At most 16 warnings.',
+        },
+    },
     server_state: {
         states: {
             stopped: 'Stopped',
@@ -296,6 +431,12 @@ export const en = {
         restarting: (by: string) =>
             `Restarting, as ${by} asked: resources are told first, then FXServer quits and starts again.`,
         restarted: (by: string) => `Restarted by ${by}.`,
+        restartingOnSchedule:
+            'Restarting on schedule: resources are told first, then FXServer quits and starts again.',
+        restartedOnSchedule: 'Restarted on schedule.',
+        restartingAsPlanned: (by: string) =>
+            `Restarting, as ${by} planned: resources are told first, then FXServer quits and starts again.`,
+        restartedAsPlanned: (by: string) => `Restarted as ${by} planned.`,
         observer: 'Observer',
         recovery: 'Started again after a failure.',
         ready: 'Ready: its HTTP endpoint answers and the observer bridge reports in.',
@@ -417,6 +558,8 @@ export const en = {
         gloss: 'This page is not for your account.',
         body: (permission: string) =>
             `It needs a permission your account does not hold: ${permission}. Whoever manages users can grant it.`,
+        anyOf: (names: string[]) =>
+            `It needs one of these permissions, which your account does not hold: ${new Intl.ListFormat('en', { type: 'disjunction' }).format(names)}. Whoever manages users can grant one.`,
         ownerOnly:
             'Only the owner opens this page: how FXServer starts decides what runs on the host, which no permission grants.',
         back: 'Open my account',
@@ -738,6 +881,13 @@ export const en = {
             console_command_sent: 'Console command',
             console_log_downloaded: 'Console log downloaded',
             server_crash_loop: 'Crash loop: restarts stopped',
+            schedule_changed: 'Schedule changed',
+            scheduled_restart_skipped: 'Scheduled restart skipped',
+            scheduled_restart_restored: 'Scheduled restart restored',
+            scheduled_restart_delayed: 'Scheduled restart delayed',
+            scheduled_restart_missed: 'Scheduled restart missed',
+            one_off_restart_planned: 'Single restart planned',
+            one_off_restart_cancelled: 'Single restart cancelled',
         } satisfies Record<AuditAction, string>,
         outcomes: {
             success: 'Success',
@@ -755,11 +905,20 @@ export const en = {
         unknownUsername: 'Unknown username',
         noPermission: 'none',
         unset: 'not set',
+        // A schedule with no zone of its own follows the host's.
+        hostZone: "the host's zone",
+        minutes: (value: string) => `${value} min`,
+        // What a change of the schedule's settings took away with the occurrence it removed.
+        dropped: {
+            skip: 'a skip',
+            delay: 'a delay',
+        },
         // A launch setting only the owner may read: the log says it changed, never what it holds.
         changed: 'changed',
         argumentsSet: (names: string) => `set ${names}`,
         argumentsRemoved: (names: string) => `removed ${names}`,
         argumentsReordered: 'reordered',
+        seconds: (value: string) => `${value} s`,
         yes: 'yes',
         no: 'no',
         detail: {
@@ -795,6 +954,39 @@ export const en = {
             command: 'Command',
             automatic: 'With Observer',
             reason: 'Reason',
+            at: 'At',
+            occurrence: 'Scheduled for',
+            previousAt: 'Before',
+            startedAt: 'Started',
+            source: 'From',
+            plannedBy: 'Planned by',
+            lateBySeconds: 'Late by',
+            state: 'State',
+            scheduled: 'On schedule',
+            dropped: 'Dropped',
+            enabled: 'On',
+            mode: 'Mode',
+            times: 'Times',
+            intervalMinutes: 'Interval',
+            timeZone: 'Time zone',
+            warnings: 'Warnings',
+            skipAfterStart: 'Skip after a start',
+            kind: 'Kind',
+            by: 'By',
+        },
+        sources: {
+            schedule: 'the schedule',
+            oneOff: 'a single restart',
+        },
+        missReasons: {
+            late: 'Observer saw the time pass too late',
+            serverBusy: 'FXServer was busy',
+            launchInvalid: 'Launch settings this host refuses',
+        },
+        dropReasons: {
+            serverRestarted: 'FXServer restarted first',
+            serverStopped: 'FXServer stopped first',
+            recentStart: 'FXServer started shortly before',
         },
         launchFailures: {
             notConfigured: 'No launch settings',
@@ -897,6 +1089,20 @@ export const en = {
         json_required: 'Observer refused a malformed request. Reload the page.',
         invalid_request: 'Observer refused a malformed request. Reload the page.',
         internal: 'Observer hit an internal error. Its log has the details.',
+        invalid_schedule: 'Some settings need fixing. Each one says why next to its field.',
+        nothing_to_skip: 'The schedule has no restart ahead to skip.',
+        already_skipped:
+            'A restart of the schedule is skipped already: restore it first, one can be skipped at a time.',
+        nothing_to_restore: 'No skipped restart is still ahead.',
+        nothing_to_delay:
+            'Only a restart of the schedule can be delayed, and the next one is a single restart.',
+        delay_too_long: (params) => {
+            const minutes = numberParam(params, 'maxMinutes');
+            return minutes > 0
+                ? `It can move ${formatDuration('en', minutes * 60)} later at most: no more than 12 hours past its time, and before the next one.`
+                : 'It cannot move any later: no more than 12 hours past its time, and before the next one.';
+        },
+        no_one_off: 'No single restart is planned.',
     } satisfies Record<ErrorCode, ErrorMessage>,
     failure: {
         unknown: 'Something went wrong. Try again.',

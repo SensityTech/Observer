@@ -105,4 +105,20 @@ describe('causeText', () => {
         );
         expect(causeText(en, status({}))).toBeNull();
     });
+
+    it('should tell a restart of the schedule from a single one someone planned', () => {
+        const schedule = { kind: 'scheduled', by: 'observer' } as const;
+        const planned = { kind: 'scheduled', by: 'ada' } as const;
+
+        expect(causeText(en, status({ state: 'stopping', cause: schedule }))).toBe(
+            'Restarting on schedule: resources are told first, then FXServer quits and starts again.',
+        );
+        expect(causeText(en, status({ state: 'starting', cause: schedule }))).toBe('Restarted on schedule.');
+        expect(causeText(en, status({ state: 'stopping', cause: planned }))).toBe(
+            'Restarting, as ada planned: resources are told first, then FXServer quits and starts again.',
+        );
+        expect(causeText(en, status({ state: 'starting', cause: planned }))).toBe(
+            'Restarted as ada planned.',
+        );
+    });
 });

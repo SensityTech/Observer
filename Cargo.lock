@@ -580,6 +580,7 @@ dependencies = [
 name = "fake-fxserver"
 version = "0.1.0"
 dependencies = [
+ "jiff",
  "observer-app",
  "observer-domain",
  "observer-fxserver",

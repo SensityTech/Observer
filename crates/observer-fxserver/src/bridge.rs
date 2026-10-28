@@ -6,6 +6,7 @@ use std::fs;
 use std::io;
 use std::path::Path;
 
+use observer_domain::schedule::RestartSource;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -100,19 +101,25 @@ impl StopReason {
     rename_all_fields = "camelCase"
 )]
 pub enum BridgeEvent {
+    /// A restart is coming: at each warning tier, or at once for the nearest one when a restart
+    /// is planned or moved inside the tiers.
     RestartScheduled {
         at: i64,
         seconds_remaining: u64,
-        reason: String,
+        reason: RestartSource,
     },
+    /// A restart announced in this run will not happen.
     RestartSkipped {
         at: i64,
         by: String,
+        reason: RestartSource,
     },
+    /// A restart announced in this run moved to `at`. `reason` is the new restart's source.
     RestartRescheduled {
         at: i64,
         previous_at: i64,
         by: String,
+        reason: RestartSource,
     },
     /// Raised again, with the time left, when a stop overtakes a restart before `quit`: the
     /// latest one says what follows.
@@ -194,6 +201,36 @@ mod tests {
     use super::*;
     use crate::layout::Flavour;
 
+    /// The contract as it ships, next to the bridge, and the example resource that follows it.
+    const CONTRACT: &str = include_str!("../../../resource/CONTRACT.md");
+    const EXAMPLE: &str = include_str!("../../../resource/observer_example/server.lua");
+
+    fn every_event() -> [BridgeEvent; 4] {
+        [
+            BridgeEvent::RestartScheduled {
+                at: 0,
+                seconds_remaining: 0,
+                reason: RestartSource::Schedule,
+            },
+            BridgeEvent::RestartSkipped {
+                at: 0,
+                by: String::new(),
+                reason: RestartSource::Schedule,
+            },
+            BridgeEvent::RestartRescheduled {
+                at: 0,
+                previous_at: 0,
+                by: String::new(),
+                reason: RestartSource::OneOff,
+            },
+            BridgeEvent::ShuttingDown {
+                delay_ms: 0,
+                reason: StopReason::Stop,
+                by: String::new(),
+            },
+        ]
+    }
+
     fn decode(hex: &str) -> Value {
         let bytes: Vec<u8> = hex
             .as_bytes()
@@ -244,33 +281,62 @@ mod tests {
     #[test]
     fn the_resource_accepts_exactly_the_events_observer_can_send() {
         let lua = FILES[1].1;
-        let events = [
-            BridgeEvent::RestartScheduled {
-                at: 0,
-                seconds_remaining: 0,
-                reason: String::new(),
-            },
-            BridgeEvent::RestartSkipped {
-                at: 0,
-                by: String::new(),
-            },
-            BridgeEvent::RestartRescheduled {
-                at: 0,
-                previous_at: 0,
-                by: String::new(),
-            },
-            BridgeEvent::ShuttingDown {
-                delay_ms: 0,
-                reason: StopReason::Stop,
-                by: String::new(),
-            },
-        ];
+        let events = every_event();
 
         for event in &events {
             assert!(lua.contains(&format!("    {} = true,\n", event.name())));
             assert_eq!(decode(&event.encode())["event"], event.name());
         }
         assert_eq!(lua.matches(" = true,\n").count(), events.len());
+    }
+
+    #[test]
+    fn the_contract_documents_every_event_with_every_field_of_its_payload() {
+        for event in every_event() {
+            let wire = serde_json::to_value(&event).unwrap();
+            let heading = format!("### `observer:{}`", event.name());
+            let start = CONTRACT
+                .find(&heading)
+                .unwrap_or_else(|| panic!("CONTRACT.md has no section {heading}"));
+            let section = &CONTRACT[start + heading.len()..];
+            let section = &section[..section.find("\n#").unwrap_or(section.len())];
+
+            assert!(CONTRACT.contains(&format!("| `observer:{}` |", event.name())));
+            for field in wire["payload"].as_object().unwrap().keys() {
+                assert!(
+                    section.contains(&format!("| `{field}` |")),
+                    "{heading} does not document `{field}`"
+                );
+            }
+        }
+        for reason in [
+            StopReason::Stop,
+            StopReason::Restart,
+            StopReason::Scheduled,
+            StopReason::Shutdown,
+        ] {
+            assert!(CONTRACT.contains(&format!("`{}`", reason.as_str())), "{reason:?}");
+        }
+        assert!(CONTRACT.contains(&format!("contract version **{CONTRACT_VERSION}**")));
+    }
+
+    #[test]
+    fn the_example_resource_handles_every_event_the_bridge_raises() {
+        let raised: Vec<&str> = FILES[1]
+            .1
+            .lines()
+            .filter_map(|line| line.trim().strip_suffix(" = true,"))
+            .collect();
+
+        assert_eq!(raised.len(), every_event().len());
+        for name in raised {
+            assert!(
+                EXAMPLE.contains(&format!("AddEventHandler('observer:{name}'")),
+                "the example does not handle observer:{name}"
+            );
+        }
+        assert!(EXAMPLE.contains(&format!("local CONTRACT_VERSION = {CONTRACT_VERSION}\n")));
+        assert!(!EXAMPLE.contains("RegisterNetEvent("));
     }
 
     #[test]

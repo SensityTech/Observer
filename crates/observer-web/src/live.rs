@@ -347,7 +347,7 @@ impl Connection {
 async fn forward(topic: Topic, mut events: Events, queue: Queue) {
     loop {
         match events.next().await {
-            Some(Delivery::Event(event)) => match queue.offer(text(&ServerMessage::Event(event))) {
+            Some(Delivery::Event(event)) => match queue.offer(text(&ServerMessage::Event(*event))) {
                 Ok(()) => {}
                 Err(Refused::Full) => break,
                 Err(Refused::Closed) => return,
@@ -470,7 +470,7 @@ mod tests {
     use super::*;
 
     fn entry(id: i64) -> Delivery {
-        Delivery::Event(TopicEvent::Audit(AuditEntry {
+        Delivery::Event(Box::new(TopicEvent::Audit(AuditEntry {
             id,
             at: "2026-10-28T09:00:00Z".parse().unwrap(),
             actor_kind: ActorKind::Cli,
@@ -482,7 +482,7 @@ mod tests {
             target: Some("grace".to_owned()),
             outcome: Outcome::Success,
             details: json!({}),
-        }))
+        })))
     }
 
     fn json(frame: Message) -> Value {

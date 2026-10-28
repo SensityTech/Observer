@@ -325,6 +325,8 @@ async fn own(stdin: Stdin, mut queue: mpsc::Receiver<Request>, generation: u32, 
 
 #[cfg(test)]
 mod tests {
+    use observer_domain::schedule::RestartSource;
+
     use super::*;
 
     const HOSTILE: &str = "\";\r\n\\";
@@ -334,16 +336,18 @@ mod tests {
             BridgeEvent::RestartScheduled {
                 at: 1,
                 seconds_remaining: 60,
-                reason: text.to_owned(),
+                reason: RestartSource::OneOff,
             },
             BridgeEvent::RestartSkipped {
                 at: 1,
                 by: text.to_owned(),
+                reason: RestartSource::Schedule,
             },
             BridgeEvent::RestartRescheduled {
                 at: 2,
                 previous_at: 1,
                 by: text.to_owned(),
+                reason: RestartSource::OneOff,
             },
             BridgeEvent::ShuttingDown {
                 delay_ms: 5000,

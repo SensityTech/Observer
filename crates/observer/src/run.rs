@@ -1,11 +1,13 @@
+use std::io;
 use std::net::SocketAddr;
 use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::Context;
+use axum::Router;
 use jiff::tz::TimeZone;
 use observer_app::{
-    Accounts, AuditLog, Clock, DatabaseFiles, Metrics, MetricsSetup, PasswordCost, Running, Servers, Setup,
-    Sources, Supervision,
+    Accounts, AuditLog, Clock, DatabaseFiles, Metrics, MetricsSetup, PasswordCost, Running, Schedule,
+    ScheduleSetup, ScheduleTask, Servers, Setup, Sources, Supervision,
 };
 use observer_fxserver::console::{ConsoleLog, LogLimits};
 use observer_store::{BackupKind, Database};
@@ -45,12 +47,22 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
     let (supervision, mut supervised) = Supervision::start(
         Setup {
             db: db.clone(),
-            clock,
+            clock: clock.clone(),
             accounts: accounts.clone(),
             servers: servers.clone(),
             data_dir: paths.root.clone(),
             console_logs,
             log: Some(&console_log),
+        },
+        |_| {},
+    )
+    .await?;
+    // Before FXServer boots, so that Observer's own start counts as one for the schedule.
+    let (schedule, scheduling) = Schedule::start(
+        ScheduleSetup {
+            db: db.clone(),
+            clock: clock.clone(),
+            supervision: supervision.clone(),
         },
         |_| {},
     )
@@ -75,6 +87,7 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
         servers,
         supervision: supervision.clone(),
         metrics: metrics.clone(),
+        schedule,
     };
     let state = observer_web::AppState::new(VERSION, services, &instance_id, &config.http.hosts);
     let live = state.live.clone();
@@ -88,15 +101,7 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
             metrics: paths.metrics.clone(),
         },
     });
-    let app = observer_web::router(state);
-    let server = tokio::spawn({
-        let stop = stop.clone();
-        async move {
-            axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
-                .with_graceful_shutdown(stop.cancelled_owned())
-                .await
-        }
-    });
+    let server = tokio::spawn(serve(listener, observer_web::router(state), stop.clone()));
     let backups = tokio::spawn(daily_backups(db.clone(), stop.clone()));
     let upkeep = tokio::spawn(upkeep(accounts, audit.clone(), stop.clone()));
     let audit_feed = tokio::spawn(publish_audit(audit, stop.clone()));
@@ -104,7 +109,7 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
         error!(%error, "cannot start FXServer with Observer");
     }
 
-    stop_fxserver(&supervision, &mut supervised, &mut signals).await;
+    stop_fxserver(&supervision, scheduling, &mut supervised, &mut signals).await;
     supervised.close().await;
     // After the supervision, so that FXServer's stop is in the statistics.
     sampling.close().await;
@@ -130,11 +135,24 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Waits for a stop request, then stops FXServer. The panel keeps serving meanwhile, so that it
-/// shows the stop as it happens.
-async fn stop_fxserver(supervision: &Supervision, supervised: &mut Running, signals: &mut Signals) {
+async fn serve(listener: TcpListener, app: Router, stop: CancellationToken) -> io::Result<()> {
+    axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
+        .with_graceful_shutdown(stop.cancelled_owned())
+        .await
+}
+
+/// Waits for a stop request, then stops FXServer for good. The panel keeps serving meanwhile, so
+/// that it shows the stop as it happens.
+async fn stop_fxserver(
+    supervision: &Supervision,
+    scheduling: ScheduleTask,
+    supervised: &mut Running,
+    signals: &mut Signals,
+) {
     let mut shortened = signals.next().await == Shutdown::Shortened;
     info!(shortened, "stopping Observer");
+    // The schedule goes first: it must not restart a server Observer is stopping.
+    scheduling.close().await;
     supervision.shutdown(shortened).await;
     loop {
         tokio::select! {

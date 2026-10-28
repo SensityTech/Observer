@@ -71,6 +71,21 @@ pub enum ErrorCode {
     JsonRequired,
     InvalidRequest,
     Internal,
+    /// Params: `issues`, the `ScheduleIssue`s found.
+    InvalidSchedule,
+    /// The schedule has no restart ahead to skip.
+    NothingToSkip,
+    /// The next restart of the schedule is skipped already.
+    AlreadySkipped,
+    /// No skipped restart is still ahead.
+    NothingToRestore,
+    /// The next restart is not the schedule's.
+    NothingToDelay,
+    /// The delay would take the restart more than 12 hours past its time, or past the next one.
+    /// Params: `maxMinutes`, how much longer it can still be delayed.
+    DelayTooLong,
+    /// No single restart is planned.
+    NoOneOff,
 }
 
 /// The body of every error response.

@@ -49,6 +49,13 @@ export const causeText = (t: Messages, status: ServerStatus): string | null => {
                 : words.restarted(by(cause.by));
         case 'recovery':
             return words.recovery;
+        case 'scheduled':
+            if (cause.by === 'observer') {
+                return status.state === 'stopping' ? words.restartingOnSchedule : words.restartedOnSchedule;
+            }
+            return status.state === 'stopping'
+                ? words.restartingAsPlanned(cause.by)
+                : words.restartedAsPlanned(cause.by);
         case 'ready':
             return words.ready;
         case 'recovered':

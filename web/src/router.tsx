@@ -22,9 +22,13 @@ import { SetupPage } from './pages/SetupPage';
 import { AppShell } from './shell/AppShell';
 
 // Pages beyond the Overview load when someone opens them: the console's virtual list and colour
-// parser, the owner's launch settings, the accounts and the audit log are no one's landing page.
+// parser, the restart schedule, the owner's launch settings, the accounts and the audit log are no
+// one's landing page.
 const ConsolePage = lazyCode(() =>
     import('./pages/ConsolePage').then((page) => ({ default: page.ConsolePage })),
+);
+const SchedulePage = lazyCode(() =>
+    import('./pages/SchedulePage').then((page) => ({ default: page.SchedulePage })),
 );
 const ServerPage = lazyCode(() =>
     import('./pages/ServerPage').then((page) => ({ default: page.ServerPage })),
@@ -128,6 +132,16 @@ const consoleRoute = createRoute({
     ),
 });
 
+const scheduleRoute = createRoute({
+    getParentRoute: () => panelRoute,
+    path: '/schedule',
+    component: () => (
+        <RequirePermission name={['DashboardView', 'ScheduleManage', 'ServerControl']}>
+            <SchedulePage />
+        </RequirePermission>
+    ),
+});
+
 const serverRoute = createRoute({
     getParentRoute: () => panelRoute,
     path: '/server',
@@ -168,7 +182,15 @@ const routeTree = rootRoute.addChildren([
     setupRoute,
     loginRoute,
     passwordRoute,
-    panelRoute.addChildren([overviewRoute, consoleRoute, serverRoute, usersRoute, auditRoute, accountRoute]),
+    panelRoute.addChildren([
+        overviewRoute,
+        consoleRoute,
+        scheduleRoute,
+        serverRoute,
+        usersRoute,
+        auditRoute,
+        accountRoute,
+    ]),
 ]);
 
 export const createPanelRouter = (queryClient: QueryClient) =>
