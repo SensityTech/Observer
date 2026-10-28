@@ -455,6 +455,24 @@ async fn a_stop_during_a_restart_ends_it_as_a_stop_by_whoever_asked() {
     lab.state(State::Stopped).await;
     lab.none_within(Duration::from_secs(1), starting).await;
     assert_eq!(lab.generation(), 1);
+    // Resources heard of grace's restart first: they must also hear that the server stays down.
+    let console = lab.console();
+    let quitting = lab.console_index("-> Quitting: stop").unwrap();
+    let told: Vec<&str> = console[..quitting]
+        .iter()
+        .filter_map(|(_, _, text)| Some(text.split_once("observer:shuttingDown ")?.1))
+        .collect();
+    assert_eq!(told.len(), 2, "{console:#?}");
+    assert!(
+        told[0].contains(r#""reason":"restart""#) && told[0].contains(r#""by":"grace""#),
+        "{}",
+        told[0]
+    );
+    assert!(
+        told[1].contains(r#""reason":"stop""#) && told[1].contains(r#""by":"ada""#),
+        "{}",
+        told[1]
+    );
     lab.shut_down(false).await;
 }
 

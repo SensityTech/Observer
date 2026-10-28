@@ -754,9 +754,17 @@ impl Actor {
                     None => false,
                 };
                 run.after = Some(After::Stop);
-                // The restart's stop goes on as a stop, made by whoever asked for it.
+                // The restart's stop goes on as a stop, made by whoever asked for it. Resources
+                // were told of a restart: until `quit` is out, they hear that the server stays
+                // down, with the time they have left.
                 if restarting && self.state == State::Stopping {
                     if let Phase::Notice { quit_at, .. } = self.phase {
+                        let left = quit_at.saturating_duration_since(Instant::now());
+                        run.system(SystemLine::Bridge(BridgeEvent::ShuttingDown {
+                            delay_ms: u64::try_from(left.as_millis()).unwrap_or(u64::MAX),
+                            reason: StopReason::Stop,
+                            by: by.clone(),
+                        }));
                         self.phase = Phase::Notice {
                             quit_at,
                             reason: StopReason::Stop,
