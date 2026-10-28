@@ -489,6 +489,8 @@ struct Run {
     ready_at: Option<Instant>,
     after: Option<After>,
     ending: Option<Ending>,
+    /// Observer killed the tree: the exit status says nothing about the server then.
+    killed: bool,
 }
 
 impl Run {
@@ -791,9 +793,10 @@ impl Actor {
     }
 
     fn kill(&mut self) {
-        let Some(run) = &self.run else {
+        let Some(run) = &mut self.run else {
             return;
         };
+        run.killed = true;
         if let Err(error) = run.tree.kill() {
             error!(%error, generation = run.generation, "cannot kill FXServer's process tree");
         }
@@ -1076,6 +1079,7 @@ impl Actor {
             ready_at: None,
             after: None,
             ending: None,
+            killed: false,
         };
         Ok((run, probe, prepared.warnings))
     }
@@ -1086,7 +1090,12 @@ impl Actor {
         };
         let generation = run.generation;
         let expected = run.after.is_some();
-        let description = exit::describe(exit);
+        // On Windows a killed tree exits with 1, which is also FXServer's own exit after `quit`.
+        let description = if run.killed {
+            format!("killed by Observer ({})", exit::raw(exit))
+        } else {
+            exit::describe(exit)
+        };
         let (code, signal) = match exit {
             Exit::Code(code) => (Some(code), None),
             Exit::Signal(signal) => (None, Some(signal)),

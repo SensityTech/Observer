@@ -17,6 +17,15 @@ pub fn describe(exit: Exit) -> String {
     }
 }
 
+/// The status alone, without what it usually means.
+pub fn raw(exit: Exit) -> String {
+    match exit {
+        Exit::Code(code) => format!("exit code {}", hex_or_decimal(code)),
+        Exit::Signal(signal) => format!("signal {signal}"),
+        Exit::Unknown => "no exit status".to_owned(),
+    }
+}
+
 /// Windows status codes are easier to look up in hex.
 fn hex_or_decimal(code: u32) -> String {
     if code >= 0x4000_0000 {
@@ -90,6 +99,13 @@ mod tests {
     fn unknown_codes_are_shown_as_they_are() {
         assert_eq!(describe(Exit::Code(3)), "exit code 3");
         assert_eq!(describe(Exit::Code(0xC0DE_0001)), "exit code 0xC0DE0001");
+    }
+
+    #[test]
+    fn the_raw_status_leaves_the_meaning_out() {
+        assert_eq!(raw(Exit::Code(1)), "exit code 1");
+        assert_eq!(raw(Exit::Code(0xC000_0005)), "exit code 0xC0000005");
+        assert_eq!(raw(Exit::Signal(9)), "signal 9");
     }
 
     #[test]
