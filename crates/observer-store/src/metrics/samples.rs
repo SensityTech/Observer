@@ -1,6 +1,6 @@
 use observer_domain::server::ServerState;
 use rusqlite::types::Value;
-use rusqlite::{Transaction, params_from_iter};
+use rusqlite::{Transaction, params, params_from_iter};
 
 use super::{Affinity, Column, Values};
 use crate::database::StoreError;
@@ -11,9 +11,13 @@ pub struct Sample {
     pub ts: i64,
     pub state: ServerState,
     pub values: Values,
+    /// The slot's busiest thread names of FXServer's main process, each name once, with its
+    /// threads' CPU together in percent of one core.
+    pub threads: Vec<(String, f64)>,
 }
 
-/// Writes the sample, replacing one already stored for its slot: the clock went back.
+/// Writes the sample and its thread rows, replacing what was already stored for its slot: the
+/// clock went back.
 pub fn insert(tx: &Transaction<'_>, sample: &Sample) -> Result<(), StoreError> {
     let names: Vec<&str> = Column::ALL.iter().map(|column| column.name()).collect();
     let placeholders: Vec<String> = (1..=names.len() + 2).map(|index| format!("?{index}")).collect();
@@ -35,6 +39,18 @@ pub fn insert(tx: &Transaction<'_>, sample: &Sample) -> Result<(), StoreError> {
         }),
     );
     tx.prepare_cached(&sql)?.execute(params_from_iter(values))?;
+
+    tx.prepare_cached("DELETE FROM thread_5s WHERE ts = ?1")?
+        .execute([sample.ts])?;
+    let mut name =
+        tx.prepare_cached("INSERT INTO thread_name (name) VALUES (?1) ON CONFLICT (name) DO NOTHING")?;
+    let mut row = tx.prepare_cached(
+        "INSERT INTO thread_5s (ts, name, cpu) SELECT ?1, id, ?3 FROM thread_name WHERE name = ?2",
+    )?;
+    for (thread, cpu) in &sample.threads {
+        name.execute([thread])?;
+        row.execute(params![sample.ts, thread, cpu])?;
+    }
     Ok(())
 }
 
@@ -64,6 +80,7 @@ pub(crate) mod tests {
             ts,
             state,
             values: Values::default(),
+            threads: Vec::new(),
         };
         for &(column, value) in values {
             sample.values.set(column, Some(value));
@@ -103,6 +120,81 @@ pub(crate) mod tests {
             )
             .unwrap();
         assert_eq!(row, ("crash_loop".to_owned(), 187, 182.5, 41.25, None));
+    }
+
+    pub(crate) fn with_threads(mut sample: Sample, threads: &[(&str, f64)]) -> Sample {
+        sample.threads = threads
+            .iter()
+            .map(|&(name, cpu)| (name.to_owned(), cpu))
+            .collect();
+        sample
+    }
+
+    fn thread_rows(conn: &Connection) -> Vec<(i64, String, f64)> {
+        let mut statement = conn
+            .prepare(
+                "SELECT t.ts, n.name, t.cpu FROM thread_5s t JOIN thread_name n ON n.id = t.name \
+                 ORDER BY t.ts, n.name",
+            )
+            .unwrap();
+        statement
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect()
+    }
+
+    #[test]
+    fn a_sample_s_threads_are_stored_under_names_kept_once() {
+        let mut conn = memory();
+        store(
+            &mut conn,
+            &[
+                with_threads(
+                    sample(100, ServerState::Online, &[(Column::ThrMainCpu, 58.0)]),
+                    &[("UV loop: svMain", 58.0), ("libuv-worker", 1.5)],
+                ),
+                with_threads(
+                    sample(105, ServerState::Online, &[]),
+                    &[("UV loop: svMain", 61.0)],
+                ),
+            ],
+        );
+
+        assert_eq!(
+            thread_rows(&conn),
+            [
+                (100, "UV loop: svMain".to_owned(), 58.0),
+                (100, "libuv-worker".to_owned(), 1.5),
+                (105, "UV loop: svMain".to_owned(), 61.0),
+            ]
+        );
+        let names: i64 = conn
+            .query_row("SELECT count(*) FROM thread_name", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(names, 2);
+    }
+
+    #[test]
+    fn a_slot_written_again_replaces_its_thread_rows() {
+        let mut conn = memory();
+        store(
+            &mut conn,
+            &[with_threads(
+                sample(100, ServerState::Online, &[]),
+                &[("UV loop: svMain", 58.0), ("libuv-worker", 1.5)],
+            )],
+        );
+
+        store(
+            &mut conn,
+            &[with_threads(
+                sample(100, ServerState::Online, &[]),
+                &[("UV loop: svSync", 7.0)],
+            )],
+        );
+
+        assert_eq!(thread_rows(&conn), [(100, "UV loop: svSync".to_owned(), 7.0)]);
     }
 
     #[test]

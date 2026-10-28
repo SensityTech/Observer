@@ -116,7 +116,12 @@ impl Sampler {
                 sockets: *sources.sockets.borrow(),
                 collect_ms,
             });
-            let sample = Sample { ts, state, values };
+            let sample = Sample {
+                ts,
+                state,
+                values,
+                threads: Vec::new(),
+            };
             // From the wake, not from the end of the write: a write that waits behind the upkeep
             // must not cost the next slot.
             wake = Wake::after(woke_ms);

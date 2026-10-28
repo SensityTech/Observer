@@ -99,12 +99,17 @@ pub fn compute(tx: &Transaction<'_>, tier: Tier, buckets: &[i64]) -> Result<(), 
     Ok(())
 }
 
-/// Deletes the samples and minute aggregates past their retention at `now`, and returns how many
-/// rows went.
+/// Deletes the samples, their thread rows and the minute aggregates past their retention at
+/// `now`, then the thread names no row refers to any more, and returns how many rows went.
 pub fn expire(tx: &Transaction<'_>, now: i64) -> Result<usize, StoreError> {
     let raw = tx.execute("DELETE FROM sample_5s WHERE ts < ?1", [now - RAW_KEPT])?;
+    let threads = tx.execute("DELETE FROM thread_5s WHERE ts < ?1", [now - RAW_KEPT])?;
+    let names = tx.execute(
+        "DELETE FROM thread_name WHERE id NOT IN (SELECT name FROM thread_5s)",
+        [],
+    )?;
     let minutes = tx.execute("DELETE FROM sample_1m WHERE ts < ?1", [now - MINUTES_KEPT])?;
-    Ok(raw + minutes)
+    Ok(raw + threads + names + minutes)
 }
 
 /// Gives the pages that deletions freed back to the file system.
@@ -127,7 +132,7 @@ mod tests {
 
     use super::*;
     use crate::metrics::memory;
-    use crate::metrics::samples::tests::{sample, store};
+    use crate::metrics::samples::tests::{sample, store, with_threads};
 
     const MINUTE: i64 = 1_761_642_000;
 
@@ -282,6 +287,42 @@ mod tests {
         );
         vacuum(&conn).unwrap();
         optimize(&conn).unwrap();
+    }
+
+    #[test]
+    fn retention_drops_old_thread_rows_and_the_names_only_they_used() {
+        let mut conn = memory();
+        let now = MINUTE + 40 * 86_400;
+        store(
+            &mut conn,
+            &[
+                with_threads(
+                    sample(now - RAW_KEPT - 5, ServerState::Online, &[]),
+                    &[("UV loop: svMain", 50.0), ("DevCon Thread", 0.1)],
+                ),
+                with_threads(
+                    sample(now - 5, ServerState::Online, &[]),
+                    &[("UV loop: svMain", 52.0)],
+                ),
+            ],
+        );
+
+        let tx = conn.transaction().unwrap();
+        assert_eq!(expire(&tx, now).unwrap(), 4, "a sample, two thread rows, a name");
+        tx.commit().unwrap();
+
+        let names: Vec<String> = conn
+            .prepare("SELECT name FROM thread_name")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(names, ["UV loop: svMain"]);
+        let rows: i64 = conn
+            .query_row("SELECT count(*) FROM thread_5s", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(rows, 1);
     }
 
     #[test]

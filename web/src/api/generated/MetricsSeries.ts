@@ -19,4 +19,13 @@ from: number, buckets: number,
 /**
  * The newest slot the buckets include; live samples continue after it.
  */
-last: number | null, series: Array<SeriesData>, markers: Array<RunMarker>, };
+last: number | null, series: Array<SeriesData>, markers: Array<RunMarker>, 
+/**
+ * The samples Observer took in each bucket.
+ */
+observed: Array<number>, 
+/**
+ * Of those, the ones taken while the server was online or degraded. A bucket observed but
+ * never online is a stretch the server was down.
+ */
+online: Array<number>, };

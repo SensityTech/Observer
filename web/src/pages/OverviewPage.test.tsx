@@ -51,6 +51,8 @@ const hour = (): MetricsSeries => {
             }),
         })),
         markers: [],
+        observed: Array.from({ length: 720 }, (_, index) => Number(index > 500)),
+        online: Array.from({ length: 720 }, (_, index) => Number(index > 500)),
     };
 };
 

@@ -99,6 +99,8 @@ const day = (
     last: NOW - 5,
     series: [gauge('players', players), gauge('slots', slots)],
     markers: [],
+    observed: Array.from({ length: 720 }, (_, index) => (players(index) === null ? 0 : 24)),
+    online: Array.from({ length: 720 }, (_, index) => (players(index) === null ? 0 : 24)),
 });
 
 const sample = (players: number, slots: number): LiveSample => ({

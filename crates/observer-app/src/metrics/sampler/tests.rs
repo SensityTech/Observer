@@ -778,6 +778,7 @@ fn shares_of_the_machine_count_the_processors_the_host_cpu_counts() {
                 ts: 1_761_642_000,
                 state: ServerState::Stopped,
                 values,
+                threads: Vec::new(),
             },
             Vec::new(),
             assembler.processors,

@@ -30,6 +30,8 @@ const grouped = (): MetricsSeries => ({
         { series: 'joins', values: [1, null, null, 2] },
     ],
     markers: [],
+    observed: [6, 0, 0, 1],
+    online: [6, 0, 0, 1],
 });
 
 /** An hour of 5 s buckets from 1,000,000, with no joins in any but the open one. */
@@ -43,6 +45,8 @@ const quietHour = (): MetricsSeries => ({
         { series: 'joins', values: Array.from({ length: 720 }, (_, index) => (index < 719 ? 0 : null)) },
     ],
     markers: [],
+    observed: Array.from({ length: 720 }, (_, index) => (index < 719 ? 1 : 0)),
+    online: Array.from({ length: 720 }, (_, index) => (index < 719 ? 1 : 0)),
 });
 
 describe('keepLive', () => {
@@ -114,6 +118,8 @@ describe('mergeLive', () => {
             last: null,
             series: [{ series: 'fxsCpu', values: [null, null, null] }],
             markers: [],
+            observed: [0, 0, 0],
+            online: [0, 0, 0],
         };
 
         const merged = mergeLive(hour, [

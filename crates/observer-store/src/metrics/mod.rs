@@ -3,10 +3,12 @@
 //! is set aside and a new one started, and it is never backed up.
 
 mod columns;
+pub mod growth;
 pub mod rollups;
 pub mod runs;
 pub mod samples;
 pub mod series;
+pub mod threads;
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -20,7 +22,10 @@ use crate::database::StoreError;
 
 pub use columns::{Affinity, Column, Kind, Values};
 
-const MIGRATIONS: &[M<'static>] = &[M::up(include_str!("../../migrations/metrics/0001_samples.sql"))];
+const MIGRATIONS: &[M<'static>] = &[
+    M::up(include_str!("../../migrations/metrics/0001_samples.sql")),
+    M::up(include_str!("../../migrations/metrics/0002_depth.sql")),
+];
 
 /// The metrics database. One connection writes, as for the state database; reads have their own
 /// beside it, which the write-ahead log allows, so that a burst of them never holds up a sample.
@@ -365,6 +370,6 @@ mod tests {
                 .unwrap()
         };
         assert_eq!(version(&dir.path().join(database)), 99);
-        assert_eq!(version(&path), 1);
+        assert_eq!(version(&path) as usize, MIGRATIONS.len());
     }
 }
