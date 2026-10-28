@@ -17,6 +17,26 @@ describe('auditDetails', () => {
         );
     });
 
+    it('should write builds as they are numbered and word what happened to them', () => {
+        expect(auditDetails(en, format, { from: 37900, to: 35245, reason: 'crashed' })).toBe(
+            'From build: 37900 · To build: 35245 · Reason: crashed',
+        );
+        expect(auditDetails(en, format, { build: 37900, from: 35245, apply: 'nextStart' })).toBe(
+            'Build: 37900 · From build: 35245 · Applied: At the next start',
+        );
+        expect(
+            auditDetails(en, format, {
+                build: 37872,
+                kind: 'install',
+                step: 'validate',
+                reason: 'signature',
+            }),
+        ).toBe('Build: 37872 · Kind: Install · Step: Validating · Reason: not signed by Rockstar Games');
+        expect(
+            auditDetails(en, format, { branches: { before: [], after: ['feature/a', 'feature/b'] } }),
+        ).toBe('Test branches: not set → feature/a, feature/b');
+    });
+
     it('should show times in local time and counts as numbers', () => {
         const first = '2026-10-28T08:01:27.884Z';
         expect(auditDetails(en, format, { network: '203.0.113.7', failures: 1200, firstAt: first })).toBe(

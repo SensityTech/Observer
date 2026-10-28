@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { ARTIFACTS } from '../artifacts/fixtures';
 import { parseServerMessage } from './messages';
 
 const parse = (message: unknown) => parseServerMessage(JSON.stringify(message));
@@ -36,66 +37,6 @@ const SAMPLE = {
     children: [{ pid: 4120, name: 'node.exe', cpu: null, workingSet: 52_428_800, private: 41_943_040 }],
     cores: 16,
 };
-
-export const ARTIFACTS = {
-    platform: 'windows',
-    installed: [
-        {
-            build: 37900,
-            origin: 'download',
-            commit: '0cfcdb5ead57a4a26fcb6ebad98adbcd0273e607',
-            branch: 'master',
-            installedAt: '2026-10-28T02:00:00Z',
-            installedBy: 'ada',
-            bytes: 196620014,
-            files: 563,
-            health: { kind: 'valid' },
-        },
-        {
-            build: 35245,
-            origin: null,
-            commit: null,
-            branch: null,
-            installedAt: null,
-            installedBy: null,
-            bytes: 0,
-            files: null,
-            health: { kind: 'broken', reason: 'noManifest' },
-        },
-    ],
-    selected: 37900,
-    pending: { build: 37950, by: 'ada', at: '2026-10-28T02:10:00Z' },
-    running: 37900,
-    lastHealthy: { build: 35245, since: '2026-10-27T02:28:00Z' },
-    probation: {
-        build: 37900,
-        from: 35245,
-        readyAt: '2026-10-28T02:28:00Z',
-        passesAt: '2026-10-28T02:38:00Z',
-    },
-    highestRun: 37900,
-    notice: null,
-    job: {
-        id: 2,
-        kind: 'install',
-        build: 37950,
-        step: 'download',
-        state: 'running',
-        startedBy: 'ada',
-        startedAt: '2026-10-28T02:30:00Z',
-        finishedAt: null,
-        download: { received: 41200000, total: 63500000, rate: 4200000 },
-        entries: null,
-        cancelRequested: false,
-        failure: null,
-        warnings: ['longPath'],
-    },
-    settings: { keepBuilds: 3, autoRollback: true, branches: [] },
-    version: null,
-    legacyFolder: false,
-    longPath: 151,
-    disk: { free: 126701535232, total: 511101108224 },
-} as const;
 
 const SCHEDULE = {
     settings: {

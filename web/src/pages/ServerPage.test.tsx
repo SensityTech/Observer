@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react';
+import type { ReactNode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { StoredLaunch } from '../api/generated/StoredLaunch';
@@ -7,6 +8,15 @@ import { DEFAULT_LAUNCH, launchQuery } from '../api/launch';
 import { en } from '../i18n/en';
 import { I18nProvider } from '../i18n/I18nProvider';
 import { ServerPage } from './ServerPage';
+
+// The page links to the Artifacts page; no router runs here.
+vi.mock('@tanstack/react-router', () => ({
+    Link: ({ to, children, className }: { to: string; children: ReactNode; className?: string }) => (
+        <a href={to} className={className}>
+            {children}
+        </a>
+    ),
+}));
 
 const stored = (cfgFile: string, version: number): StoredLaunch => ({
     settings: {
@@ -50,6 +60,17 @@ describe('ServerPage', () => {
     afterEach(() => {
         cleanup();
         vi.unstubAllGlobals();
+    });
+
+    it('should leave the build to the Artifacts page and show the folder FXServer ran from before', () => {
+        const legacy = { ...stored('server.cfg', 1), legacyBuildPath: '/srv/fxserver/build' };
+
+        const { getByText, queryByLabelText } = page(legacy);
+
+        expect(queryByLabelText(/build folder/i)).toBeNull();
+        expect(getByText(en.server.legacyBuild)).toBeTruthy();
+        expect(getByText('/srv/fxserver/build').className).toContain('font-mono');
+        expect(getByText(en.server.openArtifacts).closest('a')?.getAttribute('href')).toBe('/artifacts');
     });
 
     it('should show what another session stored while nothing was typed', async () => {

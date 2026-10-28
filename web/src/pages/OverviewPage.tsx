@@ -15,9 +15,10 @@ import { lazyCode } from '../lib/lazyCode';
 import { secondsSince, useNow } from '../lib/useNow';
 import { LiveMetricsProvider, useLiveMetrics } from '../metrics/live';
 import { Tiles } from '../overview/Tiles';
+import { useArtifacts } from '../artifacts/context';
 import { useSchedule } from '../schedule/context';
 import { useServerStatus } from '../server/context';
-import { STATE_INK, STATE_LED, causeText, isRunning } from '../server/state';
+import { STATE_INK, STATE_LED, buildFact, causeText, isRunning } from '../server/state';
 
 // The chart library is the heaviest part of the panel: it loads after the page has painted.
 const PlayersChart = lazyCode(() => import('../charts/PlayersChart'));
@@ -141,6 +142,7 @@ function ServerState({ status }: { status: ServerStatus }) {
     const now = useNow();
     const { latest } = useLiveMetrics();
     const { schedule } = useSchedule();
+    const { status: builds } = useArtifacts();
     const cause = causeText(t, status);
     const running = isRunning(status.state);
     const resources = running ? (latest?.values.resources ?? null) : null;
@@ -152,7 +154,8 @@ function ServerState({ status }: { status: ServerStatus }) {
                   format.duration(secondsSince(status.startedAt, now)),
               )
             : null,
-        status.build === null ? null : t.overview.build(String(status.build)),
+        buildFact(t, status, builds, (instant) => formatClock(locale, instant, schedule?.zone ?? 'UTC')) ??
+            (status.build === null ? null : t.overview.build(String(status.build))),
         status.players === null
             ? null
             : t.overview.players(
@@ -197,6 +200,15 @@ function ServerState({ status }: { status: ServerStatus }) {
                     <p>
                         {launch[0]} {launch[1]}
                     </p>
+                    {status.launch === 'noBuild' && (
+                        <Link
+                            to="/artifacts"
+                            className="inline-flex items-center gap-1.5 font-medium text-ink underline-offset-2 hover:underline"
+                        >
+                            {t.overview.openArtifacts}
+                            <ArrowRight size={14} strokeWidth={1.5} aria-hidden="true" />
+                        </Link>
+                    )}
                     {me.isOwner && status.launch !== 'noBuild' && (
                         <Link
                             to="/server"

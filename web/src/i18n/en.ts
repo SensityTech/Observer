@@ -2,20 +2,29 @@
 // check. Messages that take values are functions; they format with the helpers bound to this locale.
 
 import type { ActorKind } from '../api/generated/ActorKind';
+import type { ApplyMode } from '../api/generated/ApplyMode';
+import type { ArtifactSettingsProblem } from '../api/generated/ArtifactSettingsProblem';
 import type { AuditAction } from '../api/generated/AuditAction';
+import type { BuildPlatform } from '../api/generated/BuildPlatform';
 import type { CommandRefusal } from '../api/generated/CommandRefusal';
 import type { ErrorCode } from '../api/generated/ErrorCode';
 import type { HealthProblem } from '../api/generated/HealthProblem';
+import type { InstallFailure } from '../api/generated/InstallFailure';
+import type { JobKind } from '../api/generated/JobKind';
+import type { JobStep } from '../api/generated/JobStep';
 import type { LaunchProblem } from '../api/generated/LaunchProblem';
 import type { LineKind } from '../api/generated/LineKind';
+import type { NoticeReason } from '../api/generated/NoticeReason';
 import type { OneSync } from '../api/generated/OneSync';
 import type { Outcome } from '../api/generated/Outcome';
 import type { PermissionArea } from '../api/generated/PermissionArea';
+import type { Protection } from '../api/generated/Protection';
 import type { Range } from '../api/generated/Range';
 import type { ScheduleMode } from '../api/generated/ScheduleMode';
 import type { ScheduleProblem } from '../api/generated/ScheduleProblem';
 import type { ServerState } from '../api/generated/ServerState';
 import type { SpawnFailure } from '../api/generated/SpawnFailure';
+import type { SupportLevel } from '../api/generated/SupportLevel';
 import { parsePermissions, permissionKeys, type PermissionKey } from '../auth/permissions';
 import type { LinkState } from '../live/realtime';
 import { formatDuration, formatNumber, plural } from './format';
@@ -135,6 +144,7 @@ export const en = {
         administration: 'Administration',
         operations: 'Operations',
         schedule: 'Schedule',
+        artifacts: 'Artifacts',
         server: 'Server',
         users: 'Users',
         audit: 'Audit log',
@@ -161,6 +171,8 @@ export const en = {
         nextRestart: 'Next restart',
         none: 'None',
         inTime: (left: string) => `in ${left}`,
+        probation: 'probation',
+        nextBuild: (build: string) => `next ${build}`,
         updates: 'Updates',
         link: {
             connecting: 'Connecting',
@@ -196,8 +208,322 @@ export const en = {
         noBuild: 'No build is selected yet.',
         noBuildHint: 'Install or import one on the Artifacts page.',
         openServer: 'Open the Server page',
+        openArtifacts: 'Open the Artifacts page',
+        buildProbation: (build: string, until: string) => `Build ${build}, on probation until ${until}`,
+        buildProbationWaiting: (build: string) => `Build ${build}, on probation`,
+        buildBack: (build: string, from: string) => `Build ${build}, back from ${from}`,
+        buildNextStart: (build: string, next: string) => `Build ${build}, ${next} at the next start`,
+        buildPending: (build: string, pending: string) =>
+            `Build ${build}, ${pending} at the next scheduled restart`,
+        buildPassed: (build: string, at: string) => `Build ${build}, probation passed ${at}`,
         resources: (started: number) => `${count(started, { one: 'resource', other: 'resources' })} started`,
         nextRestart: (time: string, left: string) => `Next restart ${time} (in ${left})`,
+    },
+    artifacts: {
+        title: 'Artifacts',
+        gloss: 'The FXServer builds Observer installs and runs.',
+        utc: 'Dates in UTC',
+        loading: 'Reading the builds',
+        unknown: 'The builds are not known while the live link is down.',
+        outOfDate: 'The live link is down: what follows may be out of date.',
+        notices: {
+            rolledBack: (to: string, from: string, reason: NoticeReason) =>
+                `FXServer went back to build ${to}: ${from} ${reason === 'hung' ? 'stopped answering' : 'crashed'} during its probation.`,
+            probationFailed: (build: string, why: NoticeReason) =>
+                `Build ${build} failed its probation and FXServer kept it: ${
+                    {
+                        disabled: 'automatic return is off.',
+                        noHealthyBuild: 'no healthy build to go back to.',
+                        broken: 'the last healthy build is broken.',
+                        kvp: 'going back would cross build 6449.',
+                        crashed: 'it crashed.',
+                        hung: 'it stopped answering.',
+                        notInstalled: 'the last healthy build is gone.',
+                    }[why]
+                }`,
+            pendingDropped: (build: string, reason: NoticeReason) =>
+                `Build ${build} was not applied at the scheduled restart: ${reason === 'notInstalled' ? 'it was deleted.' : 'it is broken.'}`,
+            legacy: 'FXServer ran from a folder of yours until this version. Observer now runs builds from its data folder: import it to keep using it.',
+            importLegacy: 'Import…',
+            stale: (source: string, since: string) =>
+                `The catalog is not complete: ${source} did not answer since ${since}.`,
+            missing: (source: string) => `The catalog is not complete: ${source} did not answer.`,
+            commitMismatch: (build: string) =>
+                `The docs page and the changelogs name different commits for build ${build}.`,
+            docsPage: 'the docs page',
+            changelog: 'the changelogs',
+            branch: (name: string) => `branch ${name}`,
+            longPath: (length: string) =>
+                `The data folder is ${length} characters long: FXServer fails on paths past 260.`,
+            lowDisk: (free: string) => `Only ${free} are free on the disk of the data folder.`,
+            hide: 'Hide',
+            hideLabel: 'Hide this notice',
+        },
+        build: {
+            title: 'FXServer build',
+            running: 'Running',
+            stopped: 'Stopped',
+            nextStart: 'Next start',
+            none: 'No build is selected yet.',
+            pending: 'Pending',
+            atRestart: (when: string) => `at the next scheduled restart (${when})`,
+            atRestartUnknown: 'at the next scheduled restart',
+            lastHealthy: 'Last healthy',
+            since: (when: string) => `since ${when}`,
+            probation: 'Probation',
+            passesAt: (when: string) => `passes at ${when}`,
+            waiting: 'waiting for FXServer to be ready',
+            restartNeeded: (running: string, next: string) =>
+                `Restart needed: FXServer runs ${running}, ${next} starts next.`,
+            cancelPending: 'Cancel',
+            pendingCancelled: 'The pending build is cancelled.',
+        },
+        job: {
+            title: 'Job',
+            install: (build: string) => `Installing build ${build}`,
+            import: (build: string) => `Importing build ${build}`,
+            steps: {
+                preCheck: 'Checking',
+                download: 'Downloading',
+                verify: 'Verifying',
+                extract: 'Extracting',
+                copy: 'Copying',
+                validate: 'Validating',
+                commit: 'Installing',
+            } satisfies Record<JobStep, string>,
+            during: {
+                preCheck: 'checking',
+                download: 'downloading',
+                verify: 'verifying',
+                extract: 'extracting',
+                copy: 'copying',
+                validate: 'validating',
+                commit: 'installing',
+            } satisfies Record<JobStep, string>,
+            progress: 'Progress',
+            downloaded: (received: string, total: string) => `${received} of ${total}`,
+            rate: (rate: string) => `${rate}/s`,
+            left: (left: string) => `${left} left`,
+            files: (done: number, total: number | null) =>
+                total === null
+                    ? count(done, { one: 'file', other: 'files' })
+                    : `${formatNumber('en', done)} of ${count(total, { one: 'file', other: 'files' })}`,
+            cancel: 'Cancel',
+            cancelling: 'Cancelling',
+            committing: 'The build is being installed: it can no longer be cancelled.',
+            installed: 'Installed.',
+            use: 'Use this build…',
+            failed: (step: string, reason: string) => `Failed while ${step}: ${reason}`,
+            retry: 'Try again',
+            cancelled: 'Cancelled. The partial files were removed.',
+            longPath: 'The data folder is long: FXServer may fail on the deepest paths of this build.',
+            freeSpaceUnknown: 'The free space of the disk could not be read.',
+            failures: {
+                unreachable: 'Cfx.re could not be reached.',
+                httpStatus: 'Cfx.re answered with an error.',
+                archiveTooLarge: 'the archive is larger than Observer accepts.',
+                badLength: 'the archive did not have the length Cfx.re announced.',
+                truncated: 'the download was cut short.',
+                archiveChanged:
+                    'the archive differs from the one first installed for this build, so it is not trusted.',
+                diskSpace: 'the disk is too full.',
+                unsafeEntry: 'the archive holds an entry Observer refuses.',
+                damaged: 'the archive is damaged.',
+                layout: 'the build is incomplete.',
+                signature: 'FXServer.exe is not signed by Rockstar Games.',
+                alreadyInstalled: 'the build is installed already.',
+                cancelled: 'it was cancelled.',
+                interrupted: 'Observer stopped.',
+                io: "a file could not be read or written. Observer's log says which.",
+                notAFolder: 'the folder does not exist, or is not a folder.',
+                link: 'the folder is, or holds, a link Observer does not copy.',
+                insideArtifacts: "the folder is inside Observer's artifacts folder.",
+                tooManyFiles: 'the folder holds more than 20,000 entries.',
+                tooLarge: 'the folder is larger than 2 GB.',
+            } satisfies Record<InstallFailure['code'], string>,
+            httpStatus: (status: number) => `Cfx.re answered HTTP ${status}.`,
+            diskSpace: (needed: string, available: string) =>
+                `the disk has ${available} free, ${needed} are needed.`,
+        },
+        installed: {
+            title: 'Installed builds',
+            empty: 'No build is installed yet. Install one below, or import a folder of yours.',
+            build: 'Build',
+            state: 'State',
+            installedAt: 'Installed',
+            by: 'By',
+            size: 'Size',
+            actions: 'Actions',
+            imported: 'Imported',
+            commandLine: 'command line',
+            copyCommit: (commit: string) => `Copy commit ${commit}`,
+            chips: {
+                running: 'Running',
+                nextStart: 'Next start',
+                pending: 'Pending',
+                lastHealthy: 'Last healthy',
+                probation: 'On probation',
+                recommended: 'Recommended',
+                latest: 'Latest',
+                broken: 'Broken',
+                endOfSupport: (day: string) => `End of support ${day}`,
+                endOfLife: 'End of life',
+            },
+            use: 'Use…',
+            delete: 'Delete…',
+            protectedBy: {
+                selected: 'It is the build FXServer starts next.',
+                pending: 'It waits for the next scheduled restart.',
+                running: 'It is the build FXServer runs.',
+                lastHealthy: 'It is the last healthy build, which a failed switch goes back to.',
+                probation: 'It is on probation.',
+            } satisfies Record<Protection, string>,
+            current: 'It is the build FXServer starts next already.',
+            brokenReason: 'It is broken: delete it, then install it again.',
+            keep: (builds: number) =>
+                `Keep ${count(builds, { one: 'build', other: 'builds' })} besides the ones in use`,
+            cleanup: 'Clean up…',
+            importBuild: 'Import a build…',
+            notPermitted: 'Your account cannot change builds.',
+            ownerOnly: 'Only the owner imports a folder of the host.',
+            deleted: (build: string) => `Build ${build} is deleted.`,
+        },
+        available: {
+            title: 'Available builds',
+            filters: 'Filters',
+            recommended: 'Recommended',
+            latest: 'Latest',
+            supportedOnly: 'Supported only',
+            showEndOfLife: 'Show end of life',
+            notListed: 'Not listed any more',
+            search: 'Search by number or commit',
+            build: 'Build',
+            channel: 'Channel',
+            published: 'Published',
+            support: 'Support',
+            size: 'Size',
+            action: 'Action',
+            install: 'Install…',
+            isInstalled: 'Installed',
+            noArchive: (platform: string) => `No archive for ${platform}`,
+            noCommit: 'Its commit is unknown',
+            unknownDate: 'unknown',
+            never: 'never',
+            refresh: 'Refresh',
+            loading: 'Reading the catalog',
+            failed: 'The catalog could not be read.',
+            none: 'No build matches these filters.',
+            listed: (time: string) => `Listed at ${time}`,
+            supports: {
+                supported: 'Supported',
+                endOfSupport: 'End of support',
+                endOfLife: 'End of life',
+                unknown: 'Unknown',
+            } satisfies Record<SupportLevel, string>,
+            supportEnds: (day: string) => `support ends ${day}`,
+            lifeEnds: (day: string) => `life ends ${day}`,
+            platforms: { windows: 'Windows', linux: 'Linux' } satisfies Record<BuildPlatform, string>,
+            started: (build: string) => `The install of build ${build} started.`,
+        },
+        settings: {
+            title: 'Settings',
+            readOnly: 'Your account cannot change these settings.',
+            keepBuilds: 'Builds to keep',
+            keepBuildsHint: 'Besides the ones in use: 1 to 20.',
+            autoRollback: 'Go back to the last healthy build when a new one fails',
+            autoRollbackHint:
+                'A build that crashes or stops answering before it stayed up 10 minutes is replaced by the last healthy one, which FXServer restarts on.',
+            branches: 'Test branches',
+            branchesHint: 'Builds of these runtime.fivem.net branches are listed too: 10 at most.',
+            branchName: 'Branch name',
+            addBranch: 'Add a branch',
+            removeBranch: (name: string) => `Remove ${name}`,
+            noBranch: 'No test branch.',
+            problems: {
+                outOfRange: 'Keep 1 to 20 builds.',
+                tooMany: '10 branches at most.',
+                invalid: 'Use up to 4 parts joined by /, each of lower-case letters, digits, - and _.',
+                master: 'master is always listed.',
+                duplicate: 'This branch is listed already.',
+            } satisfies Record<ArtifactSettingsProblem, string>,
+            changes: (changes: number) => `${count(changes, { one: 'change', other: 'changes' })} not saved`,
+            discard: 'Discard',
+            save: 'Save',
+            saved: 'Settings saved.',
+            discarded: 'Changes discarded.',
+            changedElsewhere:
+                'These settings were changed in another session. Discard your changes to see theirs, then make yours again.',
+        },
+        install: {
+            title: (build: string) => `Install build ${build}?`,
+            channel: 'Channel',
+            published: 'Published',
+            support: 'Support',
+            size: 'Download',
+            free: 'Free on the disk',
+            endOfLife:
+                'Install it anyway: players cannot join a server running a build past its end of life.',
+            confirm: 'Install',
+        },
+        use: {
+            title: (build: string) => `Use build ${build}?`,
+            when: 'When',
+            now: 'Restart now',
+            nowPlayers: (players: number) =>
+                players === 0
+                    ? 'Nobody is connected.'
+                    : `${count(players, { one: 'player is', other: 'players are' })} connected. They will be disconnected.`,
+            nextStart: 'At the next start',
+            nextStartRunning: (running: string) =>
+                `FXServer keeps running ${running} until it starts again, a restart after a crash included.`,
+            nextStartStopped: 'FXServer starts this build the next time it starts.',
+            scheduled: 'At the next scheduled restart',
+            noRestart: 'No scheduled restart is ahead.',
+            notRunning: 'FXServer is not running.',
+            stopping: 'FXServer is stopping.',
+            notPermitted: 'Your account cannot restart FXServer.',
+            replaces: (build: string) => `Replaces the pending build ${build}.`,
+            kvp: "FXServer may delete the server's KVP data going back this far. Type 6449 to confirm.",
+            kvpLabel: 'Type 6449',
+            endOfLife: 'Use it anyway: players cannot join a server running a build past its end of life.',
+            confirm: 'Use build',
+            done: {
+                now: (build: string) => `FXServer is restarting on build ${build}.`,
+                nextStart: (build: string) => `Build ${build} starts at the next start.`,
+                scheduledRestart: (build: string) =>
+                    `Build ${build} is applied at the next scheduled restart.`,
+            } satisfies Record<ApplyMode, (build: string) => string>,
+        },
+        delete: {
+            title: (build: string) => `Delete build ${build}?`,
+            frees: (size: string) => `It frees ${size}.`,
+            gone: 'Cfx.re no longer lists it: it cannot be installed again.',
+            confirm: 'Delete',
+        },
+        cleanup: {
+            title: 'Clean up',
+            loading: 'Working out what goes',
+            none: 'Nothing to remove: every build is in use or among the ones kept.',
+            gone: 'cannot be installed again',
+            freed: (size: string) => `${size} freed`,
+            confirm: (builds: number) => `Delete ${count(builds, { one: 'build', other: 'builds' })}`,
+            done: (builds: number, size: string) =>
+                `${count(builds, { one: 'build', other: 'builds' })} deleted, ${size} freed.`,
+            skipped: (builds: string) => `Kept because they are in use: ${builds}.`,
+        },
+        import: {
+            title: 'Import a build',
+            folder: 'Build folder',
+            folderHint: 'The folder of FXServer.exe on Windows, or the one holding alpine on Linux.',
+            build: 'Build number',
+            buildHint: 'The build this folder holds, 4 to 7 digits: a folder does not say it reliably.',
+            about: "Observer copies the folder into its data folder and never changes the original. Crash dumps and Observer's bridge are left out.",
+            invalidBuild: 'Use 4 to 7 digits.',
+            confirm: 'Import',
+            started: (build: string) => `The import of build ${build} started.`,
+        },
+        failed: (action: string, reason: string) => `${action} failed: ${reason}`,
+        cancel: 'Cancel',
     },
     tiles: {
         unknown: 'n/a',
@@ -687,6 +1013,11 @@ export const en = {
         changedElsewhere:
             'These settings were changed in another session since you opened them. Discard your changes to see theirs, then make yours again.',
         files: 'Files',
+        build: 'Build',
+        buildSelected: (build: string) => `FXServer starts build ${build}, chosen on the Artifacts page.`,
+        buildNone: 'No build is selected yet.',
+        buildUnknown: 'The selected build is not known while the live link is down.',
+        openArtifacts: 'Open the Artifacts page',
         legacyBuild:
             'FXServer ran from a folder of yours until this version. Observer now runs builds from its data folder: import it on the Artifacts page to keep using it.',
         dataPath: 'Server data folder',
@@ -929,6 +1260,42 @@ export const en = {
             skip: 'a skip',
             delay: 'a delay',
         },
+        buildKinds: { install: 'Install', import: 'Import' } satisfies Record<JobKind, string>,
+        applyModes: {
+            now: 'Restart now',
+            nextStart: 'At the next start',
+            scheduledRestart: 'At the next scheduled restart',
+        } satisfies Record<ApplyMode, string>,
+        // Why a probation failed or a build was kept, and the failure codes of a job.
+        buildReasons: {
+            crashed: 'crashed',
+            hung: 'stopped answering',
+            disabled: 'automatic return off',
+            noHealthyBuild: 'no healthy build',
+            broken: 'broken',
+            kvp: 'would cross build 6449',
+            notInstalled: 'deleted',
+            unreachable: 'Cfx.re unreachable',
+            httpStatus: 'HTTP error',
+            archiveTooLarge: 'archive too large',
+            badLength: 'wrong length',
+            truncated: 'cut short',
+            archiveChanged: 'archive changed',
+            diskSpace: 'disk full',
+            unsafeEntry: 'unsafe entry',
+            damaged: 'damaged archive',
+            layout: 'incomplete build',
+            signature: 'not signed by Rockstar Games',
+            alreadyInstalled: 'installed already',
+            cancelled: 'cancelled',
+            interrupted: 'Observer stopped',
+            io: 'file error',
+            notAFolder: 'not a folder',
+            link: 'link',
+            insideArtifacts: 'inside the artifacts folder',
+            tooManyFiles: 'too many files',
+            tooLarge: 'too large',
+        },
         // A launch setting only the owner may read: the log says it changed, never what it holds.
         changed: 'changed',
         argumentsSet: (names: string) => `set ${names}`,
@@ -961,6 +1328,25 @@ export const en = {
             to: 'Until',
             ownerOnly: 'Owner only',
             buildPath: 'Build folder',
+            build: 'Build',
+            fromBuild: 'From build',
+            toBuild: 'To build',
+            previous: 'Replaced',
+            step: 'Step',
+            apply: 'Applied',
+            why: 'Kept because',
+            bytes: 'Bytes',
+            archiveSha256: 'Archive SHA-256',
+            allowEndOfLife: 'Past its end of life',
+            endOfLifeAllowed: 'Past its end of life',
+            kvpConfirmed: 'Below 6449 confirmed',
+            adopted: 'Adopted from the launch settings',
+            first: 'First build installed',
+            cleanup: 'Cleanup',
+            rollback: 'Back to the last healthy build',
+            keepBuilds: 'Builds kept',
+            autoRollback: 'Automatic return',
+            branches: 'Test branches',
             dataPath: 'Data folder',
             cfgFile: 'Config file',
             onesync: 'OneSync',
