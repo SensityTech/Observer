@@ -9,6 +9,7 @@ publish.workspace = true
 anyhow.workspace = true
 axum.workspace = true
 clap.workspace = true
+observer-app.workspace = true
 observer-store.workspace = true
 observer-web.workspace = true
 serde.workspace = true
