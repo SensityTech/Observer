@@ -261,6 +261,8 @@ export const en = {
         noTimes: 'No time yet.',
         removeTime: (time: string) => `Remove ${time}`,
         addTime: 'Add a time',
+        timeIncomplete: 'Type a full time: hours and minutes.',
+        listedAlready: 'Already in the list.',
         add: 'Add',
         every: 'Every',
         everyHours: 'Hours between two restarts',

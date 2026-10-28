@@ -63,6 +63,7 @@ const MODES: ScheduleMode[] = ['fixedTimes', 'interval'];
 const DELAYS = [15, 30, 60, 120];
 const ONCE_PRESETS = [5, 15, 30];
 const ONCE_MAX_MINUTES = 1440;
+const MAX_WARNING_MINUTES = 240;
 
 type Outcome = { tone: 'neutral' | 'success' | 'warning' | 'danger'; message: string };
 
@@ -799,9 +800,14 @@ function SettingsForm({ schedule }: { schedule: ScheduleStatus }) {
     const [issues, setIssues] = useState<ScheduleIssue[]>([]);
     const [outcome, setOutcome] = useState<Outcome | null>(null);
     const [newTime, setNewTime] = useState('');
+    const [timeProblem, setTimeProblem] = useState<string | null>(null);
+    // A new field for each time added: Chrome keeps the minutes of a cleared time field focused,
+    // so the next time typed would start there.
+    const [timeField, setTimeField] = useState(0);
     const [every, setEvery] = useState(6);
     const [from, setFrom] = useState('04:00');
     const [newWarning, setNewWarning] = useState('');
+    const [warningProblem, setWarningProblem] = useState<string | null>(null);
     const notice = useRef<HTMLDivElement>(null);
     const form = useRef<HTMLFormElement>(null);
     const showFirstIssue = useRef(false);
@@ -867,17 +873,31 @@ function SettingsForm({ schedule }: { schedule: ScheduleStatus }) {
     };
     const addTime = (time: string) => {
         const value = time.slice(0, 5);
-        if (minuteOf(value) !== null && !draft.times.includes(value)) {
+        if (minuteOf(value) === null) {
+            setTimeProblem(t.schedule.timeIncomplete);
+        } else if (draft.times.includes(value)) {
+            setTimeProblem(t.schedule.listedAlready);
+        } else {
             edit({ times: sortTimes([...draft.times, value]) });
+            setNewTime('');
+            setTimeField((key) => key + 1);
         }
-        setNewTime('');
     };
     const addWarning = () => {
         const minutes = Number(newWarning);
-        if (Number.isInteger(minutes) && minutes > 0 && !draft.warnings.includes(minutes)) {
+        if (
+            newWarning.trim() === '' ||
+            !Number.isInteger(minutes) ||
+            minutes < 1 ||
+            minutes > MAX_WARNING_MINUTES
+        ) {
+            setWarningProblem(t.schedule.ranges.warning);
+        } else if (draft.warnings.includes(minutes)) {
+            setWarningProblem(t.schedule.listedAlready);
+        } else {
             edit({ warnings: [...draft.warnings, minutes].toSorted((a, b) => b - a) });
+            setNewWarning('');
         }
-        setNewWarning('');
     };
     const discard = () => {
         startFrom(schedule);
@@ -890,6 +910,12 @@ function SettingsForm({ schedule }: { schedule: ScheduleStatus }) {
             notice.current?.focus();
         }
     }, [outcome]);
+
+    useEffect(() => {
+        if (timeField > 0) {
+            addTimeField.current?.focus();
+        }
+    }, [timeField]);
 
     useEffect(() => {
         const target = focusAfterRemoval.current;
@@ -1008,13 +1034,18 @@ function SettingsForm({ schedule }: { schedule: ScheduleStatus }) {
                             </div>
                             <div className="flex flex-wrap items-end gap-2">
                                 <TextField
+                                    key={timeField}
                                     ref={addTimeField}
                                     label={t.schedule.addTime}
                                     type="time"
                                     className="w-40 max-md:flex-1"
                                     inputClassName="font-mono"
                                     value={newTime}
-                                    onChange={(event) => setNewTime(event.target.value)}
+                                    error={timeProblem ?? undefined}
+                                    onChange={(event) => {
+                                        setNewTime(event.target.value);
+                                        setTimeProblem(null);
+                                    }}
                                     onKeyDown={(event) => {
                                         if (event.key === 'Enter') {
                                             event.preventDefault();
@@ -1167,10 +1198,14 @@ function SettingsForm({ schedule }: { schedule: ScheduleStatus }) {
                                 type="number"
                                 inputMode="numeric"
                                 min={1}
-                                max={240}
+                                max={MAX_WARNING_MINUTES}
                                 className="w-56 max-md:flex-1"
                                 value={newWarning}
-                                onChange={(event) => setNewWarning(event.target.value)}
+                                error={warningProblem ?? undefined}
+                                onChange={(event) => {
+                                    setNewWarning(event.target.value);
+                                    setWarningProblem(null);
+                                }}
                                 onKeyDown={(event) => {
                                     if (event.key === 'Enter') {
                                         event.preventDefault();

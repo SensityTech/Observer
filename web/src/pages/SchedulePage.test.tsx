@@ -232,6 +232,37 @@ describe('SchedulePage', () => {
         live.stop();
     });
 
+    it('should say why a time or a warning was not added, and start the next time afresh', async () => {
+        const { getByRole, getByLabelText, getByText, getAllByRole, live } = await page('11');
+        const add = (index: number) => {
+            const button = getAllByRole('button', { name: en.schedule.add })[index];
+            if (button !== undefined) {
+                fireEvent.click(button);
+            }
+        };
+
+        fireEvent.change(getByLabelText(en.schedule.addTime), { target: { value: '' } });
+        add(0);
+        const incomplete = getByText(en.schedule.timeIncomplete);
+        fireEvent.change(getByLabelText(en.schedule.addTime), { target: { value: '07:30' } });
+        fireEvent.keyDown(getByLabelText(en.schedule.addTime), { key: 'Enter' });
+        const added = within(getByRole('list', { name: en.schedule.times })).queryByText('07:30');
+        const fresh = getByLabelText(en.schedule.addTime);
+        fireEvent.change(getByLabelText(en.schedule.addWarning), { target: { value: '0' } });
+        add(1);
+        const outOfRange = getByText(en.schedule.ranges.warning);
+        fireEvent.change(getByLabelText(en.schedule.addWarning), { target: { value: '30' } });
+        add(1);
+
+        expect(incomplete).not.toBeNull();
+        expect(added).not.toBeNull();
+        expect((fresh as HTMLInputElement).value).toBe('');
+        expect(document.activeElement).toBe(fresh);
+        expect(outOfRange).not.toBeNull();
+        expect(getByText(en.schedule.listedAlready)).not.toBeNull();
+        live.stop();
+    });
+
     it('should count the changes typed in the save bar', async () => {
         const { getByRole, getByText, queryByText, live } = await page('11');
         expect(queryByText(en.schedule.changes(1))).toBeNull();
