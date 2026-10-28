@@ -355,6 +355,12 @@ mod tests {
         spawned.tree.kill().unwrap();
 
         assert!(spawned.tree.wait_empty(Duration::from_secs(5)).await.unwrap());
+        // A killed process loses the tree's marker with its memory, a moment before the kernel
+        // has finished ending it.
+        let ending = tokio::time::Instant::now() + Duration::from_secs(2);
+        while !escaped.iter().all(|&pid| gone(pid)) && tokio::time::Instant::now() < ending {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
         assert!(
             escaped.iter().all(|&pid| gone(pid)),
             "{escaped:?} outlived the tree"
