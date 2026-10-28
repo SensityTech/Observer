@@ -21,8 +21,8 @@ export function SetupPage() {
     const { t } = useI18n();
     const queryClient = useQueryClient();
     const navigate = useNavigate();
-    // A fragment never reaches a server or a log; read once, then dropped from the address bar.
-    const [token] = useState(() => window.location.hash.slice(1));
+    // A fragment never reaches a server or a log; read, then dropped from the address bar.
+    const [token, setToken] = useState(() => window.location.hash.slice(1));
     const [username, setUsername] = useState('');
     const [password, setPassword] = useState('');
     const [confirmation, setConfirmation] = useState('');
@@ -34,9 +34,21 @@ export function SetupPage() {
     useEffect(() => firstInput.current?.focus(), []);
 
     useEffect(() => {
+        const forget = () => void navigate({ to: '/setup', hash: undefined, replace: true });
+        // A fresh link pasted over an expired one only changes the fragment: the page stays and takes it.
+        const take = () => {
+            const fresh = window.location.hash.slice(1);
+            if (fresh !== '') {
+                setToken(fresh);
+                setFailure(null);
+                forget();
+            }
+        };
         if (window.location.hash !== '') {
-            void navigate({ to: '/setup', hash: undefined, replace: true });
+            forget();
         }
+        window.addEventListener('hashchange', take);
+        return () => window.removeEventListener('hashchange', take);
     }, [navigate]);
 
     const submit = async (event: FormEvent) => {
