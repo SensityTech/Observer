@@ -1,13 +1,16 @@
 //! Secrets hidden from every console line before it is stored, logged or sent anywhere.
 
-/// Convars whose value is a secret. The first five are the user's; the last two are the
-/// credentials Observer gives FXServer on each launch.
-const SECRET_CONVARS: [&str; 7] = [
+/// Convars whose value is a secret: the user's, the ones FXServer derives from the licence key,
+/// and the credentials Observer gives FXServer on each launch.
+const SECRET_CONVARS: [&str; 10] = [
     "sv_licenseKey",
     "sv_tebexSecret",
     "steam_webApiKey",
     "rcon_password",
     "mysql_connection_string",
+    "mumble_adminPass",
+    "sv_licenseKeyToken",
+    "adhesive_cdnKey",
     "sv_prometheusBasicAuthPassword",
     "sv_playersToken",
 ];
@@ -17,8 +20,9 @@ const LICENSE_KEY_PREFIX: &str = "cfxk_";
 const REDACTED: &str = "[REDACTED]";
 
 /// The line with every secret replaced, or `None` when it holds none: the value of a secret
-/// convar being set (`set rcon_password x`) or printed (`"rcon_password" is "x"`), the token of a
-/// Discord webhook URL, and anything that looks like a licence key.
+/// convar being set (`set rcon_password x`, or `rcon_password x` as a command of its own) or
+/// printed (`"rcon_password" is "x"`, or `rcon_password = x` in `cmdlist`), the token of a Discord
+/// webhook URL, and anything that looks like a licence key.
 pub fn mask(text: &str) -> Option<String> {
     // ASCII lowercasing keeps every byte offset, and every needle is ASCII.
     let lower = text.to_ascii_lowercase();
@@ -73,7 +77,10 @@ fn convar_values(text: &str, lower: &str, secrets: &mut Vec<std::ops::Range<usiz
             if quoted && text[after..].starts_with(" is \"") {
                 let value = after + " is \"".len();
                 secrets.push(value..until(text, value, |c| c == '"'));
-            } else if follows_set(&lower[..before]) {
+            } else if text[end..].starts_with(" = ") {
+                let value = end + " = ".len();
+                secrets.push(value..until(text, value, |c| c == '\x1b'));
+            } else if follows_set(&lower[..before]) || starts_command(&lower[..before]) {
                 secrets.push(value_after(text, after));
             }
         }
@@ -91,6 +98,13 @@ fn follows_set(before: &str) -> bool {
         .any(|command| trimmed.ends_with(command) && starts_word(trimmed, trimmed.len() - command.len()))
 }
 
+/// Whether the text before a convar name leaves it as the command itself, which sets the convar
+/// when a value follows.
+fn starts_command(before: &str) -> bool {
+    let trimmed = before.trim_end_matches([' ', '\t']);
+    trimmed.is_empty() || trimmed.ends_with(';')
+}
+
 /// The value that follows a convar name: a quoted string, or a word up to a blank or `;`.
 fn value_after(text: &str, end: usize) -> std::ops::Range<usize> {
     let rest = &text[end..];
@@ -102,7 +116,9 @@ fn value_after(text: &str, end: usize) -> std::ops::Range<usize> {
     if text[start..].starts_with('"') {
         start + 1..until(text, start + 1, |c| c == '"')
     } else {
-        start..until(text, start, |c| c.is_whitespace() || c == ';' || c == '"')
+        start..until(text, start, |c| {
+            c.is_whitespace() || c == ';' || c == '"' || c == '\x1b'
+        })
     }
 }
 
@@ -195,6 +211,33 @@ mod tests {
     }
 
     #[test]
+    fn a_secret_listed_by_cmdlist_is_masked() {
+        assert_eq!(
+            masked("[           CmdSystem] mysql_connection_string = mysql://root:pw@localhost/es"),
+            "[           CmdSystem] mysql_connection_string = [REDACTED]"
+        );
+        for name in SECRET_CONVARS {
+            assert_eq!(
+                masked(&format!("[           CmdSystem] {name} = hunter2 two\x1b[0m")),
+                format!("[           CmdSystem] {name} = [REDACTED]\x1b[0m"),
+            );
+        }
+    }
+
+    #[test]
+    fn a_secret_set_by_typing_its_name_and_a_value_is_masked() {
+        assert_eq!(masked("sv_tebexSecret hunter2"), "sv_tebexSecret [REDACTED]");
+        assert_eq!(
+            masked("say hi; RCON_PASSWORD \"letmein\""),
+            "say hi; RCON_PASSWORD \"[REDACTED]\""
+        );
+        assert_eq!(
+            masked("\"steam_webApiKey\" ABCDEF0123"),
+            "\"steam_webApiKey\" [REDACTED]"
+        );
+    }
+
+    #[test]
     fn a_discord_webhook_loses_its_id_and_token() {
         assert_eq!(
             masked("posting to https://discord.com/api/webhooks/1234567890/AbC-dEf_123 now"),
@@ -220,9 +263,12 @@ mod tests {
             "[           resources] Started resource rcon_password_tools",
             "set sv_hostname \"rcon_password\"",
             "my_rcon_password is set",
-            "set sv_licenseKeyToken abc",
+            "say my rcon_password is long",
+            "set rcon_passwordHint abc",
+            "[           CmdSystem] sv_hostname = rcon_password",
             "notcfxk_abc",
             "set rcon_password",
+            "rcon_password",
         ] {
             assert_eq!(mask(text), None, "{text:?}");
         }
