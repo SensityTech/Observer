@@ -441,9 +441,30 @@
             padding: 12px 16px 0;
         }
         .status {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
             width: 100%;
             height: auto;
-            min-height: 44px;
+        }
+        .status-cell {
+            flex-direction: column;
+            align-items: flex-start;
+            gap: 3px;
+            padding: 8px 12px;
+            white-space: normal;
+        }
+        .status-cell + .status-cell {
+            border-left: 0;
+        }
+        .status-cell:nth-child(even) {
+            border-left: 1px solid var(--line);
+        }
+        .status-cell:nth-child(n + 3) {
+            border-top: 1px solid var(--line);
+        }
+        .status-cell > dd {
+            flex-wrap: wrap;
+            gap: 2px 6px;
         }
         .content {
             padding: 16px 16px 40px;

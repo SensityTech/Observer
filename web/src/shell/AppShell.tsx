@@ -9,6 +9,7 @@ import type { Me } from '../api/generated/Me';
 import { allows, MeContext } from '../auth/me';
 import { buttonVariants } from '../components/Button';
 import { useI18n } from '../i18n/I18nProvider';
+import { useRealtime } from '../live/context';
 import { cn } from '../lib/cn';
 import { Logo } from './Logo';
 import { StatusBar } from './StatusBar';
@@ -22,6 +23,13 @@ export function AppShell() {
     const { data: me } = useQuery(meQuery);
     const [menuOpen, setMenuOpen] = useState(false);
     const closeMenu = () => setMenuOpen(false);
+    const live = useRealtime();
+
+    // The socket lives as long as the signed-in shell: signing out unmounts it, and closes it.
+    useEffect(() => {
+        live.start();
+        return () => live.stop();
+    }, [live]);
 
     useEffect(() => {
         if (!menuOpen) {

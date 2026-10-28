@@ -7,6 +7,7 @@ import type { ErrorCode } from '../api/generated/ErrorCode';
 import type { Outcome } from '../api/generated/Outcome';
 import type { PermissionArea } from '../api/generated/PermissionArea';
 import { parsePermissions, permissionKeys, type PermissionKey } from '../auth/permissions';
+import type { LinkState } from '../live/realtime';
 import { formatDuration, formatNumber, plural } from './format';
 import { numberParam, stringParam } from './params';
 
@@ -99,6 +100,14 @@ export const en = {
         ok: 'Running',
         down: 'Unreachable',
         pending: 'Checking',
+        updates: 'Updates',
+        link: {
+            connecting: 'Connecting',
+            live: 'Live',
+            offline: 'Offline',
+            // Only another Observer version or an ended session refuses the link: a reload settles both.
+            refused: 'Reload needed',
+        } satisfies Record<LinkState, string>,
     },
     account: {
         menu: (username: string) => `Account menu for ${username}`,
@@ -113,6 +122,7 @@ export const en = {
         stateTitle: 'State',
         running: 'Observer is running.',
         version: (version: string) => `Version ${version}`,
+        started: (time: string, uptime: string) => `Started ${time} · up ${uptime}`,
         unreachable: 'Observer cannot be reached.',
         unreachableHint: 'The panel keeps trying every few seconds.',
         loading: 'Checking Observer',
