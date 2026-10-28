@@ -32,6 +32,8 @@ import { chartOptions, tokenColor, withAlpha } from './theme';
 const RANGES: Range[] = ['1h', '6h', '24h', '7d', '30d'];
 const SERIES = ['players', 'slots'] as const;
 const ATTRIBUTION = 'https://www.tradingview.com/';
+/** Players and slots are whole: the scale steps and reads in whole numbers. */
+const WHOLE = { type: 'price', precision: 0, minMove: 1 } as const;
 
 const MARKER_ICONS = { start: Play, restart: RotateCw, crash: OctagonX } satisfies Record<
     MarkerKind,
@@ -258,6 +260,7 @@ function Plot({
         const autoscale = () => ({ priceRange: { minValue: 0, maxValue: topRef.current } });
         players.current = api.addSeries(AreaSeries, {
             priceScaleId: 'left',
+            priceFormat: WHOLE,
             lineWidth: 2,
             priceLineVisible: false,
             lastValueVisible: false,
@@ -266,6 +269,7 @@ function Plot({
         });
         slots.current = api.addSeries(LineSeries, {
             priceScaleId: 'left',
+            priceFormat: WHOLE,
             lineWidth: 1,
             lineStyle: LineStyle.Dashed,
             lineType: LineType.WithSteps,
