@@ -808,6 +808,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "observer-platform"
+version = "0.1.0"
+dependencies = [
+ "rustix",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "windows-sys",
+]
+
+[[package]]
 name = "observer-store"
 version = "0.1.0"
 dependencies = [
