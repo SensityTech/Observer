@@ -451,6 +451,42 @@ fn a_one_off_seven_minutes_ahead_is_announced_at_once_with_the_time_left() {
 }
 
 #[test]
+fn a_one_off_planned_in_minutes_warns_once_per_tier_whatever_the_milliseconds() {
+    for (planned, count, expected) in [
+        ("2026-10-28T17:45:22.630Z", 1, vec![60]),
+        ("2026-10-28T17:45:22.300Z", 1, vec![60]),
+        ("2026-10-28T17:45:22.700Z", 5, vec![300, 240, 180, 120, 60]),
+    ] {
+        let mut sim = Sim::running(paris(&[]), "2026-10-28T17:00:00Z", planned);
+        let request = OneOffRequest {
+            in_minutes: Some(count),
+            at: None,
+        };
+        let at = resolve_one_off(&request, &sim.settings.zone, sim.now).unwrap();
+        let mut log: Vec<(Timestamp, Effect)> = sim
+            .send(Input::OneOff {
+                at,
+                by: "ada".to_owned(),
+            })
+            .into_iter()
+            .map(|effect| (ts(planned), effect))
+            .collect();
+        log.extend(sim.run_until(&(at - SignedDuration::from_secs(1)).to_string()));
+
+        let seconds: Vec<u64> = announcements(&log)
+            .into_iter()
+            .filter_map(|(_, event)| match event {
+                BridgeEvent::RestartScheduled {
+                    seconds_remaining, ..
+                } => Some(seconds_remaining),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(seconds, expected, "planned at {planned} for {count} min");
+    }
+}
+
+#[test]
 fn warnings_wait_for_the_bridge_then_send_the_nearest_only() {
     let mut sim = Sim::new(paris(&["04:00"]), "2026-10-28T02:40:00Z");
     sim.server(

@@ -681,22 +681,24 @@ impl State {
             return;
         }
         let left = at.duration_since(now);
+        let seconds = u64::try_from((left.as_millis().max(0) + 500) / 1000).unwrap_or(u64::MAX);
         let below = self.warned.get(&at).copied().unwrap_or(u32::MAX);
+        // Due by the seconds it announces, not the exact time left: a restart half a second past a
+        // tier would otherwise go out as the tier above, then as its own, both saying the same.
         let Some(tier) = settings
             .stored
             .warnings
             .iter()
             .copied()
-            .filter(|&tier| tier < below && left <= minutes(tier))
+            .filter(|&tier| tier < below && seconds <= u64::from(tier) * 60)
             .min()
         else {
             return;
         };
         self.warned.insert(at, tier);
-        let seconds = (left.as_millis().max(0) + 500) / 1000;
         effects.push(Effect::Announce(BridgeEvent::RestartScheduled {
             at: at.as_millisecond(),
-            seconds_remaining: u64::try_from(seconds).unwrap_or(u64::MAX),
+            seconds_remaining: seconds,
             reason: source,
         }));
     }
