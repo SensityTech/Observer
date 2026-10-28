@@ -745,6 +745,7 @@ async fn the_statistics_follow_a_run_from_before_its_start_to_after_its_stop() {
     metrics.close().await.unwrap();
     observer.stop_observer().await;
 }
+
 #[tokio::test]
 async fn a_one_off_warns_the_bridge_then_restarts_on_schedule() {
     let mut observer = Observer::new(false).await;
