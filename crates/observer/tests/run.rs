@@ -1,5 +1,5 @@
 //! `observer run` as it ships: the built binary against the fake FXServer, driven over HTTP the
-//! way the panel drives it, then asked to stop the way a service manager does.
+//! way the panel drives it, then asked to stop the way a service manager or a terminal does.
 // The helpers below are test code too, though not inside a `#[test]` function.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -94,11 +94,23 @@ struct Observer {
     dir: TempDir,
     port: u16,
     process: Child,
+    /// What Observer prints, line by line: the setup link on stdout, its log on stderr.
+    lines: mpsc::Receiver<String>,
+}
+
+/// Copies what Observer prints on `stream` to `file`, and passes each line on.
+fn tee(stream: impl Read + Send + 'static, mut file: fs::File, lines: mpsc::Sender<String>) {
+    std::thread::spawn(move || {
+        for line in BufReader::new(stream).lines().map_while(Result::ok) {
+            let _ = writeln!(file, "{line}");
+            let _ = lines.send(line);
+        }
+    });
 }
 
 impl Observer {
-    /// An Observer of its own data folder, whose owner `ada` the setup link created.
-    fn start() -> (Self, (String, String)) {
+    /// Observer on a data folder of its own, as it first starts there.
+    fn spawn() -> Self {
         let dir = tempfile::tempdir().unwrap();
         let port = free_port();
         let config = dir.path().join("observer.toml");
@@ -107,29 +119,53 @@ impl Observer {
             format!("data_dir = \"data\"\n\n[http]\nlisten = \"127.0.0.1:{port}\"\n"),
         )
         .unwrap();
-        // Observer prints the setup link on its first start, to the terminal only.
         let mut process = Command::new(env!("CARGO_BIN_EXE_observer"))
             .args(["--config", config.to_str().unwrap(), "run"])
             .env_remove("INVOCATION_ID")
             .env_remove("NOTIFY_SOCKET")
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
-            .stderr(fs::File::create(dir.path().join("observer.err")).unwrap())
+            .stderr(Stdio::piped())
             .spawn()
             .unwrap();
-        let (token_tx, token) = mpsc::channel();
-        let stdout = process.stdout.take().unwrap();
-        let mut out = fs::File::create(dir.path().join("observer.out")).unwrap();
-        std::thread::spawn(move || {
-            for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-                if let Some((_, token)) = line.split_once("/setup#") {
-                    let _ = token_tx.send(token.trim().to_owned());
-                }
-                let _ = writeln!(out, "{line}");
+        let (lines, printed) = mpsc::channel();
+        let file = |name| fs::File::create(dir.path().join(name)).unwrap();
+        tee(
+            process.stdout.take().unwrap(),
+            file("observer.out"),
+            lines.clone(),
+        );
+        tee(process.stderr.take().unwrap(), file("observer.err"), lines);
+        Self {
+            dir,
+            port,
+            process,
+            lines: printed,
+        }
+    }
+
+    /// Waits for Observer to print a line holding `text`, and returns that line.
+    fn printed(&self, text: &str) -> String {
+        let deadline = Instant::now() + WAIT;
+        loop {
+            let left = deadline.saturating_duration_since(Instant::now());
+            let line = self
+                .lines
+                .recv_timeout(left)
+                .unwrap_or_else(|error| panic!("Observer never printed `{text}`: {error}"));
+            if line.contains(text) {
+                return line;
             }
-        });
-        let token = token.recv_timeout(WAIT).expect("Observer printed no setup link");
-        let observer = Self { dir, port, process };
+        }
+    }
+
+    /// An Observer of its own data folder, whose owner `ada` the setup link created.
+    fn start() -> (Self, (String, String)) {
+        let observer = Self::spawn();
+        // Observer prints the setup link on its first start, to the terminal only.
+        let link = observer.printed("/setup#");
+        let token = link.split_once("/setup#").unwrap().1.trim();
+        let port = observer.port;
         wait_for("the panel answering", || {
             TcpStream::connect(("127.0.0.1", port)).is_ok()
         });
@@ -220,6 +256,34 @@ impl Observer {
             .map(|name| fs::read_to_string(self.dir.path().join(name)).unwrap_or_default())
             .concat()
     }
+
+    #[cfg(unix)]
+    fn signal(&self, signal: &str) {
+        let sent = Command::new("kill")
+            .args([signal, &self.process.id().to_string()])
+            .status()
+            .unwrap();
+        assert!(sent.success());
+    }
+
+    /// Waits for Observer to end, and checks it went through its whole stop.
+    #[cfg(unix)]
+    fn stopped_gracefully(&mut self) {
+        let deadline = Instant::now() + WAIT;
+        let status = loop {
+            if let Some(status) = self.process.try_wait().unwrap() {
+                break status;
+            }
+            assert!(Instant::now() < deadline, "Observer did not stop: {}", self.log());
+            std::thread::sleep(Duration::from_millis(100));
+        };
+        assert!(status.success(), "{status:?}: {}", self.log());
+        let log = self.log();
+        assert!(
+            log.contains("stopping Observer") && log.contains("Observer stopped"),
+            "{log}"
+        );
+    }
 }
 
 impl Drop for Observer {
@@ -273,28 +337,20 @@ fn observer_run_restarts_a_crashed_server_with_the_settings_saved_meanwhile_and_
 /// What a service manager does to stop Observer, and FXServer with it.
 #[cfg(unix)]
 fn stops_gracefully_on_sigterm(mut observer: Observer) {
-    let terminated = Command::new("kill")
-        .args(["-TERM", &observer.process.id().to_string()])
-        .status()
-        .unwrap();
-    assert!(terminated.success());
-    let deadline = Instant::now() + WAIT;
-    let status = loop {
-        if let Some(status) = observer.process.try_wait().unwrap() {
-            break status;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "Observer did not stop: {}",
-            observer.log()
-        );
-        std::thread::sleep(Duration::from_millis(100));
-    };
-    assert!(status.success(), "{status:?}: {}", observer.log());
-    let log = observer.log();
-    assert!(
-        log.contains("stopping Observer") && log.contains("Observer stopped"),
-        "{log}"
-    );
+    observer.signal("-TERM");
+
+    observer.stopped_gracefully();
     assert!(observer.console_log().contains("-> Quitting: shutdown"));
+}
+
+#[cfg(unix)]
+#[test]
+fn a_ctrl_c_while_observer_starts_stops_it_gracefully_rather_than_kill_it() {
+    let mut observer = Observer::spawn();
+    // Printed once stop requests are caught, before the database is even open.
+    observer.printed("starting Observer");
+
+    observer.signal("-INT");
+
+    observer.stopped_gracefully();
 }

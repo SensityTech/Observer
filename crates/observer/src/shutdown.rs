@@ -76,27 +76,3 @@ impl Signals {
         self.console.release();
     }
 }
-
-#[cfg(all(test, unix))]
-mod tests {
-    use std::process::Command;
-    use std::time::Duration;
-
-    use super::*;
-
-    #[tokio::test]
-    async fn a_ctrl_c_before_observer_waits_for_it_stops_it_gracefully_rather_than_kill_it() {
-        let mut signals = Signals::listen().unwrap();
-
-        let sent = Command::new("kill")
-            .args(["-INT", &std::process::id().to_string()])
-            .status()
-            .unwrap();
-        assert!(sent.success());
-        // Long enough for the signal to land before anything waits for it.
-        tokio::time::sleep(Duration::from_millis(200)).await;
-
-        let shutdown = tokio::time::timeout(Duration::from_secs(5), signals.next()).await;
-        assert_eq!(shutdown, Ok(Shutdown::Graceful));
-    }
-}
