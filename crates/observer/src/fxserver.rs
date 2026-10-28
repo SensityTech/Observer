@@ -12,8 +12,8 @@ use clap::Args;
 use jiff::tz::TimeZone;
 use observer_fxserver::console::{ConsoleHub, ConsoleLine, ConsoleLog, LineKind, LogLimits, plain};
 use observer_fxserver::launch::LaunchSettings;
-use observer_fxserver::stdin::UserCommand;
-use observer_fxserver::supervisor::{Event, EventKind, Settings, State, Supervisor};
+use observer_fxserver::stdin::{StdinError, UserCommand};
+use observer_fxserver::supervisor::{ControlError, Event, EventKind, Settings, State, Supervisor};
 use tokio::sync::{broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
@@ -130,8 +130,10 @@ async fn submit(supervisor: &Supervisor, line: &str) {
         Ok(command) => supervisor.command(command, LOCAL).await,
         Err(refusal) => Err(refusal.into()),
     };
-    if let Err(error) = result {
-        warn!(%error, "command not sent");
+    match result {
+        Ok(()) => {}
+        Err(error @ ControlError::Stdin(StdinError::Pending)) => warn!(%error, "command not read yet"),
+        Err(error) => warn!(%error, "command not sent"),
     }
 }
 

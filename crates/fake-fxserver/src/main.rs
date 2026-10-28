@@ -19,7 +19,9 @@
 //!   the way FXServer's dump server ends it on Windows (`0xFFFFFFFE`);
 //! - `fake_spawn_child 1`: start a child that inherits the pipes and outlives a crash, like the
 //!   crash dump server;
-//! - on stdin: `fake_crash [code]`, `fake_hang`, `fake_print <text>`, `fake_trace <type>`.
+//! - on stdin: `fake_crash [code]`, `fake_hang`, `fake_print <text>`, `fake_trace <type>`, and
+//!   `fake_stall_input <ms>`, which stops reading stdin for a while, as FXServer does while its
+//!   main loop is stuck.
 //!
 //! The bridge's `observer_cmd <hex>` prints the event it decodes, which the real bridge does not, so
 //! that tests can see it arrive. Unknown commands get FXServer's `No such command <name>.`
@@ -53,6 +55,8 @@ pub struct Server {
     convars: Mutex<HashMap<String, String>>,
     main_ticks: AtomicU64,
     started: Instant,
+    /// Uptime in milliseconds until which stdin is left unread.
+    input_stalled_until: AtomicU64,
 }
 
 impl Server {
@@ -114,6 +118,7 @@ fn main() {
             convars: Mutex::new(HashMap::new()),
             main_ticks: AtomicU64::new(0),
             started: Instant::now(),
+            input_stalled_until: AtomicU64::new(0),
         }),
         traces,
         endpoint: None,
@@ -166,7 +171,7 @@ impl Fake {
     }
 
     fn run(&mut self) -> ! {
-        let commands = read_stdin();
+        let commands = read_stdin(Arc::clone(&self.server));
         let crash_at = self.deadline("fake_crash_after_ms");
         let hang_at = self.deadline("fake_hang_after_ms");
         loop {
@@ -223,6 +228,10 @@ impl Fake {
             ("quit", reason) => self.quit(reason),
             ("fake_crash", code) => self.crash(code.and_then(|code| code.parse().ok())),
             ("fake_hang", _) => hang(),
+            ("fake_stall_input", Some(ms)) => {
+                let until = self.server.uptime_ms() + ms.parse::<u64>().unwrap_or(0);
+                self.server.input_stalled_until.store(until, Ordering::Relaxed);
+            }
             ("fake_print", Some(_)) => {
                 let text = args.join(" ");
                 console::script("fake", &text);
@@ -434,13 +443,21 @@ fn hang() -> ! {
     }
 }
 
-fn read_stdin() -> mpsc::Receiver<String> {
+/// Lines are read one at a time, so that a stall leaves the rest in the pipe.
+fn read_stdin(server: Arc<Server>) -> mpsc::Receiver<String> {
     let (lines, commands) = mpsc::channel();
     thread::spawn(move || {
-        for line in io::stdin().lock().lines() {
-            let Ok(line) = line else {
-                break;
-            };
+        let mut stdin = io::stdin().lock();
+        loop {
+            while server.uptime_ms() < server.input_stalled_until.load(Ordering::Relaxed) {
+                thread::sleep(Duration::from_millis(10));
+            }
+            let mut line = String::new();
+            match stdin.read_line(&mut line) {
+                Ok(0) | Err(_) => break,
+                Ok(_) => {}
+            }
+            let line = line.trim_end_matches(['\r', '\n']).to_owned();
             if lines.send(line).is_err() {
                 break;
             }

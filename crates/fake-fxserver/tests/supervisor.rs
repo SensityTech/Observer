@@ -13,7 +13,7 @@ use observer_fxserver::console::{ConsoleHub, LineKind, plain};
 use observer_fxserver::health::{HangCause, HealthLimits, Problem};
 use observer_fxserver::launch::LaunchSettings;
 use observer_fxserver::recovery::RecoveryPolicy;
-use observer_fxserver::stdin::UserCommand;
+use observer_fxserver::stdin::{StdinError, UserCommand};
 use observer_fxserver::supervisor::{
     Cause, ControlError, Event, EventKind, Settings, State, StopTimings, Supervisor,
 };
@@ -706,6 +706,45 @@ async fn the_shortened_stop_sends_event_and_quit_at_once_and_kills_within_its_wi
             .iter()
             .any(|(kind, _, text)| *kind == LineKind::Observer && text == "quit \"shutdown\"")
     );
+}
+
+#[tokio::test]
+async fn a_line_fxserver_has_not_read_yet_is_pending_and_nothing_queues_behind_it() {
+    let lab = Lab::online(&[]).await;
+    lab.type_command("fake_stall_input 4000", "test").await;
+    // Into the stall, which the fake's main loop starts.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    let filler = "x".repeat(1000);
+    let mut pending = None;
+    for index in 0..200 {
+        let line = format!("set fake_fill_{index} {filler}");
+        match lab
+            .supervisor
+            .command(UserCommand::parse(&line).unwrap(), "test")
+            .await
+        {
+            Ok(()) => {}
+            Err(ControlError::Stdin(StdinError::Pending)) => {
+                pending = Some(line);
+                break;
+            }
+            Err(error) => panic!("{error}"),
+        }
+    }
+    let pending = pending.expect("the fake read every line");
+    let behind = lab
+        .supervisor
+        .command(UserCommand::parse("fake_print queued behind").unwrap(), "test")
+        .await;
+
+    assert_eq!(behind, Err(ControlError::Stdin(StdinError::Busy)));
+    lab.console_until(&pending).await;
+    lab.type_command("fake_print after the stall", "test").await;
+    lab.console_until("after the stall").await;
+    let console = lab.console();
+    assert!(console.contains(&(LineKind::Command, Some("test".to_owned()), pending)));
+    assert!(!console.iter().any(|(_, _, text)| text.contains("queued behind")));
 }
 
 #[tokio::test]

@@ -22,7 +22,7 @@ pub const PERF_USER: &str = "observer";
 const TOKEN_BYTES: usize = 16;
 /// Longer than any event of the contract, short enough to refuse anything else.
 const MAX_BRIDGE_HEX: usize = 4096;
-/// A server whose main loop is stuck stops reading; a write gives up after this.
+/// A server whose main loop is stuck stops reading; a write is reported pending after this.
 const WRITE_TIMEOUT: Duration = Duration::from_secs(2);
 const QUEUED_WRITES: usize = 32;
 const QUIT_REASONS: [StopReason; 5] = [
@@ -222,10 +222,12 @@ pub enum StdinError {
     NotAllowed,
     #[error("FXServer's stdin is closed")]
     Closed,
+    /// Refused without being written: FXServer is not reading what it was given already.
     #[error("FXServer is not reading its stdin")]
     Busy,
-    #[error("FXServer did not read the line within {} s", WRITE_TIMEOUT.as_secs())]
-    TimedOut,
+    /// Handed to FXServer, which has not read it yet: it runs, and is echoed, once it does.
+    #[error("FXServer has not read the line yet; it runs when the server reads its stdin again")]
+    Pending,
 }
 
 pub(crate) enum Write {
@@ -284,18 +286,36 @@ async fn own(stdin: Stdin, mut queue: mpsc::Receiver<Request>, generation: u32, 
                 )),
             ),
         };
-        let result =
-            match tokio::time::timeout(WRITE_TIMEOUT, stdin.write(format!("{line}\n").into_bytes())).await {
-                Ok(Ok(())) => Ok(()),
-                Ok(Err(_)) => Err(StdinError::Closed),
-                Err(_) => Err(StdinError::TimedOut),
-            };
+        let writing = stdin.write(format!("{line}\n").into_bytes());
+        tokio::pin!(writing);
+        let mut reply = Some(reply);
+        let written = tokio::select! {
+            written = &mut writing => written,
+            () = tokio::time::sleep(WRITE_TIMEOUT) => {
+                // The line is FXServer's now and runs once it reads again. Nothing more goes in
+                // behind it meanwhile, so that no line runs after its sender was told it failed.
+                if let Some(reply) = reply.take() {
+                    let _ = reply.send(Err(StdinError::Pending));
+                }
+                loop {
+                    tokio::select! {
+                        written = &mut writing => break written,
+                        Some((_, refused)) = queue.recv() => {
+                            let _ = refused.send(Err(StdinError::Busy));
+                        }
+                    }
+                }
+            }
+        };
+        let result = written.map_err(|_| StdinError::Closed);
         if result.is_ok()
             && let Some((kind, actor, text)) = echo
         {
             console.push(generation, kind, actor, text, LineFlags::default());
         }
-        let _ = reply.send(result);
+        if let Some(reply) = reply {
+            let _ = reply.send(result);
+        }
     }
 }
 
