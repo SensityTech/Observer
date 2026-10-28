@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, mpsc};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use jiff::civil::Date;
 use jiff::tz::TimeZone;
@@ -93,6 +93,31 @@ impl ConsoleLog {
 
     pub(super) fn queue(&self) -> LogQueue {
         self.queue.clone()
+    }
+
+    /// The files a console log wrote in `dir`, oldest first. Other files are left out, whatever
+    /// their name.
+    pub fn files(dir: &Path) -> io::Result<Vec<LogFile>> {
+        let mut files = Vec::new();
+        for entry in fs::read_dir(dir)? {
+            let entry = entry?;
+            let Some((date, index)) = entry.file_name().to_str().and_then(parse_name) else {
+                continue;
+            };
+            let metadata = entry.metadata()?;
+            if !metadata.is_file() {
+                continue;
+            }
+            files.push(LogFile {
+                date,
+                index,
+                size: metadata.len(),
+                modified: metadata.modified()?,
+                path: entry.path(),
+            });
+        }
+        files.sort_by_key(|file| (file.date, file.index));
+        Ok(files)
     }
 
     /// Writes what is queued, syncs the file and stops the writer.
@@ -254,31 +279,21 @@ impl LogFiles {
         }
     }
 
-    /// The log files in the folder, oldest first.
     fn files(&self) -> io::Result<Vec<LogFile>> {
-        let mut files = Vec::new();
-        for entry in fs::read_dir(&self.dir)? {
-            let entry = entry?;
-            let Some((date, index)) = entry.file_name().to_str().and_then(parse_name) else {
-                continue;
-            };
-            files.push(LogFile {
-                date,
-                index,
-                size: entry.metadata()?.len(),
-                path: entry.path(),
-            });
-        }
-        files.sort_by_key(|file| (file.date, file.index));
-        Ok(files)
+        ConsoleLog::files(&self.dir)
     }
 }
 
-struct LogFile {
-    date: Date,
-    index: u32,
-    size: u64,
-    path: PathBuf,
+/// One file of the console log.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LogFile {
+    /// The local day of its lines.
+    pub date: Date,
+    /// 0 for the day's first file, then 1, 2… after each rotation for size.
+    pub index: u32,
+    pub size: u64,
+    pub modified: SystemTime,
+    pub path: PathBuf,
 }
 
 fn format_line(stamp: &str, line: &ConsoleLine) -> String {

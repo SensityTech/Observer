@@ -99,7 +99,7 @@ impl Lab {
             txadmin_events: false,
             extra_arguments,
         };
-        let mut settings = Settings::new(launch.clone(), dir.path().join("observer-data"));
+        let mut settings = Settings::new(Some(launch.clone()), dir.path().join("observer-data"));
         settings.health = HealthLimits {
             boot_grace: Duration::from_secs(2),
             heartbeat_late: Duration::from_secs(1),

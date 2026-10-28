@@ -85,7 +85,7 @@ pub async fn run(config: Config, args: RunArgs) -> anyhow::Result<()> {
     .context("cannot open the console log")?;
     let console = Arc::new(ConsoleHub::new(Some(&console_log)));
     let mut settings = Settings::new(
-        LaunchSettings {
+        Some(LaunchSettings {
             build_path: full_path(&args.build)?,
             data_path: full_path(&args.data)?,
             cfg_file: args.cfg,
@@ -97,7 +97,7 @@ pub async fn run(config: Config, args: RunArgs) -> anyhow::Result<()> {
                 .into_iter()
                 .map(|(name, value)| ExtraArgument { name, value })
                 .collect(),
-        },
+        }),
         &paths.root,
     );
     settings.probe = args

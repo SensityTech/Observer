@@ -63,8 +63,8 @@ pub enum State {
 
 #[derive(Debug, Clone)]
 pub struct Settings {
-    /// What the next spawn launches; [`Supervisor::configure`] replaces it.
-    pub launch: LaunchSettings,
+    /// What the next spawn launches, none until [`Supervisor::configure`] gives it.
+    pub launch: Option<LaunchSettings>,
     pub flavour: Flavour,
     /// Where `/dynamic.json` and `/perf/` answer; by default the cfg's first TCP endpoint.
     pub probe: Option<SocketAddr>,
@@ -77,7 +77,7 @@ pub struct Settings {
 }
 
 impl Settings {
-    pub fn new(launch: LaunchSettings, data_dir: impl Into<PathBuf>) -> Self {
+    pub fn new(launch: Option<LaunchSettings>, data_dir: impl Into<PathBuf>) -> Self {
         Self {
             launch,
             flavour: Flavour::HOST,
@@ -654,7 +654,7 @@ impl Actor {
                 let _ = reply.send(self.command(command, actor));
             }
             Request::Shutdown { shortened } => self.shutdown(shortened),
-            Request::Configure(launch) => self.settings.launch = *launch,
+            Request::Configure(launch) => self.settings.launch = Some(*launch),
         }
     }
 
@@ -1062,8 +1062,10 @@ impl Actor {
     }
 
     async fn launch(&mut self) -> Result<(Run, SocketAddr, Vec<CfgWarning>), String> {
-        let prepared = launch::prepare(&self.settings.launch, self.settings.flavour)
-            .map_err(|error| error.to_string())?;
+        let Some(settings) = &self.settings.launch else {
+            return Err("no launch settings are configured".to_owned());
+        };
+        let prepared = launch::prepare(settings, self.settings.flavour).map_err(|error| error.to_string())?;
         let layout = prepared.layout.clone();
         let dumps = (
             layout.crashes(),

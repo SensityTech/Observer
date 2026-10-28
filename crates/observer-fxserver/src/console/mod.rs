@@ -13,7 +13,7 @@ use serde::Serialize;
 use tokio::sync::broadcast;
 
 pub use assemble::{Assembled, FLUSH_AFTER, LineAssembler, MAX_LINE};
-pub use log::{ConsoleLog, LogLimits};
+pub use log::{ConsoleLog, LogFile, LogLimits};
 pub use mask::mask;
 pub use sanitize::{plain, sanitize};
 
