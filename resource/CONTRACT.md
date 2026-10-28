@@ -64,7 +64,7 @@ change them.
 |---|---|---|
 | `at` | integer | When the restart happens now. |
 | `previousAt` | integer | The time announced before. |
-| `by` | string | Who delayed it, or planned a single restart before it. |
+| `by` | string | Who delayed it, planned a single restart before it, or restored a skipped restart that now comes first. |
 | `reason` | string | The source of the restart at `at`: `schedule` or `oneOff`. |
 
 An `observer:restartScheduled` for the new time follows at once when it is already inside the warning
