@@ -47,8 +47,8 @@ impl Http {
         })
     }
 
-    #[cfg(test)]
-    pub(crate) fn local(port: u16) -> Self {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn local(port: u16) -> Self {
         Self {
             local_port: Some(port),
             ..Self::new().expect("the HTTP client starts in tests")

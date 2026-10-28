@@ -51,7 +51,7 @@ pub(crate) fn remove_file(path: &Path) -> io::Result<()> {
     }
 }
 
-fn busy(error: &io::Error) -> bool {
+pub(crate) fn busy(error: &io::Error) -> bool {
     // 32 and 33 are Windows' sharing and lock violations, which have no portable kind.
     matches!(
         error.kind(),

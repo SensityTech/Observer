@@ -1,20 +1,22 @@
-use std::collections::HashMap;
 use std::fs;
-use std::io;
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, MutexGuard};
+use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
 use std::time::Duration;
 
 use jiff::Timestamp;
 use reqwest::Url;
+use tokio_util::sync::CancellationToken;
 
 use crate::download::{self, Downloaded, RETRY_DELAYS};
 use crate::error::{Error, io};
+use crate::extract::{self, Track};
 use crate::http::{ARCHIVE_LIMIT, Head, Http, MIB, too_large};
-use crate::layout::{self, MANIFEST_FORMAT, Manifest};
-use crate::{Branch, CommitSha, Platform, disk, extract};
+use crate::layout::{self, MANIFEST_FORMAT, Manifest, Origin};
+use crate::{Branch, CommitSha, Platform, disk};
 
-const STAGING: &str = ".staging";
+pub(crate) const STAGING: &str = ".staging";
 /// Far longer than an install takes: three download attempts of two hours at most, then seconds.
 const STALE_STAGING: Duration = Duration::from_hours(24);
 const HEAD_TIMEOUT: Duration = Duration::from_secs(30);
@@ -23,6 +25,7 @@ const WINDOWS_SPACE: u64 = 350 * MIB;
 const LINUX_SPACE: u64 = 450 * MIB;
 /// An xz archive does not say how much it unpacks to; FXServer's expand a little over four times.
 const XZ_EXPANSION: u64 = 5;
+const XZ_MAGIC: [u8; 6] = [0xFD, b'7', b'z', b'X', b'Z', 0x00];
 /// Who signs FXServer.exe. Linux builds carry no signature at all.
 #[cfg(windows)]
 const SIGNER: &str = "Rockstar Games, Inc.";
@@ -35,13 +38,38 @@ pub struct InstallRequest {
     pub branch: Branch,
     pub platform: Platform,
     pub url: Url,
+    /// The SHA-256, in hexadecimal, of the archive the first time this build was installed.
+    /// Cfx.re publishes no checksum, so a later download that differs is refused rather than
+    /// trusted.
+    pub fingerprint: Option<String>,
+    /// The user the manifest names; none for the command line.
+    pub installed_by: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// The step an install or an import is at. The counters of `Extracting` and `Copying` move on
+/// while the step lasts.
+#[derive(Debug, Clone)]
 pub enum Progress {
-    Downloading { received: u64, total: u64 },
-    Extracting,
+    Checking,
+    Downloading {
+        received: u64,
+        total: u64,
+    },
+    /// The download's fingerprint, the archive's index or header, and the room to unpack it.
     Verifying,
+    /// `total` is the zip's entry count; an xz archive does not say.
+    Extracting {
+        total: Option<u64>,
+        done: Arc<AtomicU64>,
+    },
+    Copying {
+        total: u64,
+        done: Arc<AtomicU64>,
+    },
+    /// The layout, the signature on Windows, the measure and the manifest.
+    Validating,
+    /// The rename that makes the build appear: past this point a cancellation has no effect.
+    Committing,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -55,21 +83,13 @@ pub struct Installed {
 /// never leaves a build that looks complete.
 #[derive(Debug)]
 pub struct Installer {
-    http: Http,
-    root: PathBuf,
-    /// The SHA-256, in hexadecimal, of each archive the first time it was installed. Cfx.re
-    /// publishes no checksum, so a later download that differs is refused rather than trusted. In
-    /// memory for now.
-    first_seen: Mutex<HashMap<(Platform, u32), String>>,
+    pub(crate) http: Http,
+    pub(crate) root: PathBuf,
 }
 
 impl Installer {
     pub fn new(http: Http, root: PathBuf) -> Self {
-        Self {
-            http,
-            root,
-            first_seen: Mutex::default(),
-        }
+        Self { http, root }
     }
 
     pub fn root(&self) -> &Path {
@@ -82,10 +102,18 @@ impl Installer {
         disk::long_path(&self.root)
     }
 
-    pub async fn install<F>(&self, request: &InstallRequest, mut progress: F) -> Result<Installed, Error>
+    /// Downloads, verifies and extracts a build. `cancel` stops it at the next chunk or entry until
+    /// the build is validated; the commit that follows runs whatever it says.
+    pub async fn install<F>(
+        &self,
+        request: &InstallRequest,
+        cancel: &CancellationToken,
+        mut progress: F,
+    ) -> Result<Installed, Error>
     where
         F: FnMut(Progress) + Send,
     {
+        progress(Progress::Checking);
         if request.platform != Platform::host() {
             return Err(Error::WrongPlatform(request.platform));
         }
@@ -93,24 +121,13 @@ impl Installer {
         if tokio::fs::symlink_metadata(&target).await.is_ok() {
             return Err(Error::AlreadyInstalled(request.build));
         }
-        let staging = self.root.join(STAGING);
-        tokio::fs::create_dir_all(&staging).await.map_err(io(&staging))?;
-        // The final rename is only atomic within one volume, which a link could leave.
-        let metadata = tokio::fs::symlink_metadata(&staging)
-            .await
-            .map_err(io(&staging))?;
-        if !metadata.is_dir() {
-            return Err(Error::StagingLink(staging));
-        }
-        let swept = staging.clone();
-        blocking(move || {
-            sweep(&swept);
-            Ok(())
-        })
-        .await?;
+        let staging = self.staging().await?;
 
         // A `HEAD` first: the docs page only links `server.7z`, so this proves `server.zip` is there.
-        let head = self.head(&request.url).await?;
+        let head = tokio::select! {
+            head = self.head(&request.url) => head?,
+            () = cancel.cancelled() => return Err(Error::Cancelled),
+        };
         let length = match head.length {
             None => {
                 return Err(Error::LengthMissing {
@@ -130,22 +147,33 @@ impl Installer {
         let name = format!("{}-{}", request.build, suffix()?);
         let archive = staging.join(format!("{name}.part"));
         let tree = staging.join(&name);
-        let staged = self.stage(request, length, &archive, &tree, &mut progress).await;
+        let staged = self
+            .stage(request, length, &archive, &tree, cancel, &mut progress)
+            .await;
         if let Err(error) = blocking(move || disk::remove_file(&archive).map_err(io(&archive))).await {
             tracing::warn!(%error, "a downloaded archive is left in the staging folder");
         }
-        let result = match staged {
-            Ok(manifest) => commit(tree.clone(), target, request.build)
-                .await
-                .map(|path| Installed { path, manifest }),
-            Err(error) => Err(error),
-        };
-        if let Ok(installed) = &result {
-            self.remember(request, &installed.manifest.archive_sha256);
-        } else if let Err(error) = blocking(move || remove_tree(&tree).map_err(io(&tree))).await {
-            tracing::warn!(%error, "a staged build is left in the staging folder");
+        finish(staged, tree, target, request.build, &mut progress).await
+    }
+
+    /// The staging folder, created if need be, once what earlier jobs left there is swept.
+    pub(crate) async fn staging(&self) -> Result<PathBuf, Error> {
+        let staging = self.root.join(STAGING);
+        tokio::fs::create_dir_all(&staging).await.map_err(io(&staging))?;
+        // The final rename is only atomic within one volume, which a link could leave.
+        let metadata = tokio::fs::symlink_metadata(&staging)
+            .await
+            .map_err(io(&staging))?;
+        if !metadata.is_dir() {
+            return Err(Error::StagingLink(staging));
         }
-        result
+        let swept = staging.clone();
+        blocking(move || {
+            sweep(&swept, STALE_STAGING);
+            Ok(())
+        })
+        .await?;
+        Ok(staging)
     }
 
     async fn stage(
@@ -154,6 +182,7 @@ impl Installer {
         length: u64,
         archive: &Path,
         tree: &Path,
+        cancel: &CancellationToken,
         progress: &mut (dyn FnMut(Progress) + Send),
     ) -> Result<Manifest, Error> {
         let downloaded = download::download(
@@ -162,40 +191,44 @@ impl Installer {
             length,
             archive,
             &RETRY_DELAYS,
+            cancel,
             &mut |received, total| {
                 progress(Progress::Downloading { received, total });
             },
         )
         .await?;
-        self.check_first_seen(request, &downloaded)?;
-
-        progress(Progress::Extracting);
-        let platform = request.platform;
-        let (root, archive, tree) = (self.root.clone(), archive.to_path_buf(), tree.to_path_buf());
-        let extracted = tree.clone();
-        blocking(move || extract(platform, &root, &archive, downloaded.bytes, &extracted)).await?;
 
         progress(Progress::Verifying);
+        check_fingerprint(request, &downloaded)?;
+        let platform = request.platform;
+        let (root, archive, tree) = (self.root.clone(), archive.to_path_buf(), tree.to_path_buf());
+        let unpacking = archive.clone();
+        let unpack = blocking(move || prepare(platform, &root, &unpacking, downloaded.bytes)).await?;
+        stop_if(cancel)?;
+
+        let track = Track {
+            cancel: cancel.clone(),
+            done: Arc::default(),
+        };
+        progress(Progress::Extracting {
+            total: unpack.entries(),
+            done: Arc::clone(&track.done),
+        });
+        let extracted = tree.clone();
+        blocking(move || unpack.into(&archive, &extracted, &track)).await?;
+        stop_if(cancel)?;
+
+        progress(Progress::Validating);
         let request = request.clone();
         blocking(move || {
-            verify(&tree, platform)?;
-            let (files, bytes) = layout::measure(&tree, platform)?;
-            let manifest = Manifest {
-                format: MANIFEST_FORMAT,
-                build: request.build,
+            let origin = Origin::Download {
                 commit: request.commit,
                 branch: request.branch,
-                platform,
                 source_url: request.url.to_string(),
                 archive_bytes: downloaded.bytes,
                 archive_sha256: hex(&downloaded.sha256),
-                installed_at: Timestamp::now(),
-                files,
-                bytes,
             };
-            // Last, so that a build with a manifest is a build that passed every check.
-            manifest.write(&tree)?;
-            Ok(manifest)
+            validate(&tree, request.build, platform, request.installed_by, origin)
         })
         .await
     }
@@ -216,57 +249,104 @@ impl Installer {
             }
         }
     }
+}
 
-    fn check_first_seen(&self, request: &InstallRequest, downloaded: &Downloaded) -> Result<(), Error> {
-        let now = hex(&downloaded.sha256);
-        match self.first_seen().get(&(request.platform, request.build)) {
-            Some(first) if *first != now => Err(Error::ArchiveChanged {
-                build: request.build,
-                first: first.clone(),
-                now,
-            }),
-            _ => Ok(()),
+/// Commits a staged build, or removes what is left of it.
+pub(crate) async fn finish(
+    staged: Result<Manifest, Error>,
+    tree: PathBuf,
+    target: PathBuf,
+    build: u32,
+    progress: &mut (dyn FnMut(Progress) + Send),
+) -> Result<Installed, Error> {
+    let result = match staged {
+        Ok(manifest) => {
+            progress(Progress::Committing);
+            commit(tree.clone(), target, build)
+                .await
+                .map(|path| Installed { path, manifest })
         }
+        Err(error) => Err(error),
+    };
+    if result.is_err()
+        && let Err(error) = blocking(move || remove_tree(&tree).map_err(io(&tree))).await
+    {
+        tracing::warn!(%error, "a staged build is left in the staging folder");
     }
+    result
+}
 
-    /// Only an archive that passed every check is remembered: a download refused on the way, a
-    /// maintenance page or a damaged file, would otherwise stand in for the real archive.
-    fn remember(&self, request: &InstallRequest, sha256: &str) {
-        self.first_seen()
-            .entry((request.platform, request.build))
-            .or_insert_with(|| sha256.to_owned());
-    }
-
-    fn first_seen(&self) -> MutexGuard<'_, HashMap<(Platform, u32), String>> {
-        self.first_seen
-            .lock()
-            .expect("the fingerprint lock is never poisoned")
+fn check_fingerprint(request: &InstallRequest, downloaded: &Downloaded) -> Result<(), Error> {
+    let now = hex(&downloaded.sha256);
+    match &request.fingerprint {
+        Some(first) if *first != now => Err(Error::ArchiveChanged {
+            build: request.build,
+            first: first.clone(),
+            now,
+        }),
+        _ => Ok(()),
     }
 }
 
-fn extract(
-    platform: Platform,
-    root: &Path,
-    archive: &Path,
-    archive_bytes: u64,
-    tree: &Path,
-) -> Result<(), Error> {
+pub(crate) fn stop_if(cancel: &CancellationToken) -> Result<(), Error> {
+    if cancel.is_cancelled() {
+        Err(Error::Cancelled)
+    } else {
+        Ok(())
+    }
+}
+
+/// How an archive is unpacked, once its index or header was read and the room for it checked.
+enum Unpack {
+    Zip(extract::Plan),
+    TarXz { space: u64 },
+}
+
+impl Unpack {
+    fn entries(&self) -> Option<u64> {
+        match self {
+            Self::Zip(plan) => Some(plan.entries() as u64),
+            Self::TarXz { .. } => None,
+        }
+    }
+
+    fn into(self, archive: &Path, tree: &Path, track: &Track) -> Result<(), Error> {
+        match self {
+            Self::Zip(plan) => extract::extract_zip(archive, &plan, tree, track),
+            Self::TarXz { space } => extract::extract_tar_xz(archive, tree, space, track),
+        }
+    }
+}
+
+fn prepare(platform: Platform, root: &Path, archive: &Path, archive_bytes: u64) -> Result<Unpack, Error> {
     match platform {
         Platform::Windows => {
             let plan = extract::plan_zip(archive)?;
             disk::require_space(root, plan.unpacked + disk::SPACE_MARGIN)?;
-            extract::extract_zip(archive, &plan, tree)
+            Ok(Unpack::Zip(plan))
         }
         Platform::Linux => {
+            let mut magic = [0; 6];
+            let read = fs::File::open(archive).and_then(|mut file| file.read_exact(&mut magic));
+            if read.is_err() || magic != XZ_MAGIC {
+                return Err(Error::Damaged("it is not an xz archive".to_owned()));
+            }
             let space = archive_bytes.saturating_mul(XZ_EXPANSION);
             disk::require_space(root, space + disk::SPACE_MARGIN)?;
-            extract::extract_tar_xz(archive, tree, space)
+            Ok(Unpack::TarXz { space })
         }
     }
 }
 
-/// The layout first, so that a missing FXServer.exe is reported as missing rather than unsigned.
-fn verify(tree: &Path, platform: Platform) -> Result<(), Error> {
+/// Checks a staged build and writes its manifest. The layout first, so that a missing
+/// FXServer.exe is reported as missing rather than unsigned.
+pub(crate) fn validate(
+    tree: &Path,
+    build: u32,
+    platform: Platform,
+    installed_by: Option<String>,
+    origin: Origin,
+) -> Result<Manifest, Error> {
     layout::validate(tree, platform)?;
     // Only Windows builds are signed, and only Windows can check them; the platforms always match.
     #[cfg(windows)]
@@ -276,7 +356,19 @@ fn verify(tree: &Path, platform: Platform) -> Result<(), Error> {
         fs::File::open(&server).map_err(io(&server))?;
         observer_platform::verify_signature(&server, SIGNER).map_err(Error::Signature)?;
     }
-    Ok(())
+    let (files, bytes) = layout::measure(tree, platform)?;
+    let manifest = Manifest {
+        format: MANIFEST_FORMAT,
+        build,
+        platform,
+        installed_at: Timestamp::now(),
+        installed_by,
+        files,
+        bytes,
+        origin,
+    };
+    manifest.write(tree)?;
+    Ok(manifest)
 }
 
 async fn commit(tree: PathBuf, target: PathBuf, build: u32) -> Result<PathBuf, Error> {
@@ -291,26 +383,26 @@ async fn commit(tree: PathBuf, target: PathBuf, build: u32) -> Result<PathBuf, E
     .await
 }
 
-fn remove_tree(tree: &Path) -> io::Result<()> {
+/// Removes a tree without following its links.
+pub(crate) fn remove_tree(tree: &Path) -> io::Result<()> {
     match disk::retry(|| fs::remove_dir_all(tree)) {
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
         result => result,
     }
 }
 
-/// Removes what earlier installs left in the staging folder, a tree a scanner held while it was
-/// being removed or the download of an install that crashed, once it is too old for any install
-/// still to be writing it.
-fn sweep(staging: &Path) {
-    let Ok(entries) = fs::read_dir(staging) else {
+/// Removes what earlier jobs left in a holding folder, a tree a scanner held while it was being
+/// removed or the download of an install that crashed, once it is older than `stale`.
+pub(crate) fn sweep(holding: &Path, stale: Duration) {
+    let Ok(entries) = fs::read_dir(holding) else {
         return;
     };
     for entry in entries.flatten() {
-        let stale = entry
+        let old = entry
             .metadata()
             .and_then(|metadata| metadata.modified())
-            .is_ok_and(|modified| modified.elapsed().is_ok_and(|age| age > STALE_STAGING));
-        if !stale {
+            .is_ok_and(|modified| modified.elapsed().is_ok_and(|age| age >= stale));
+        if !old {
             continue;
         }
         let path = entry.path();
@@ -320,12 +412,12 @@ fn sweep(staging: &Path) {
             disk::remove_file(&path)
         };
         if let Err(error) = removed {
-            tracing::warn!(path = %path.display(), %error, "cannot remove what an earlier install left");
+            tracing::warn!(path = %path.display(), %error, "cannot remove what an earlier job left");
         }
     }
 }
 
-async fn blocking<T, F>(function: F) -> Result<T, Error>
+pub(crate) async fn blocking<T, F>(function: F) -> Result<T, Error>
 where
     T: Send + 'static,
     F: FnOnce() -> Result<T, Error> + Send + 'static,
@@ -337,14 +429,14 @@ where
     }
 }
 
-/// Keeps two installs of the same build, or the leftovers of a crashed one, apart in `.staging/`.
-fn suffix() -> Result<String, Error> {
+/// Keeps two jobs on the same build, or the leftovers of a crashed one, apart.
+pub(crate) fn suffix() -> Result<String, Error> {
     let mut bytes = [0; 4];
     getrandom::fill(&mut bytes).map_err(Error::Random)?;
     Ok(hex(&bytes))
 }
 
-fn hex(bytes: &[u8]) -> String {
+pub(crate) fn hex(bytes: &[u8]) -> String {
     const DIGITS: &[u8; 16] = b"0123456789abcdef";
     bytes
         .iter()
@@ -406,13 +498,41 @@ mod tests {
                 branch: Branch::master(),
                 platform: Platform::host(),
                 url: self.server.url(path),
+                fingerprint: None,
+                installed_by: Some("ada".to_owned()),
             }
+        }
+
+        async fn install(&self, request: &InstallRequest) -> Result<Installed, Error> {
+            self.installer
+                .install(request, &CancellationToken::new(), |_| {})
+                .await
         }
 
         fn staging_is_empty(&self) -> bool {
             fs::read_dir(self.installer.root().join(STAGING))
                 .map_or(true, |mut entries| entries.next().is_none())
         }
+    }
+
+    /// The steps an install went through, each once, in order.
+    fn steps(seen: &[Progress]) -> Vec<&'static str> {
+        let mut steps: Vec<&'static str> = Vec::new();
+        for progress in seen {
+            let step = match progress {
+                Progress::Checking => "checking",
+                Progress::Downloading { .. } => "downloading",
+                Progress::Verifying => "verifying",
+                Progress::Extracting { .. } => "extracting",
+                Progress::Copying { .. } => "copying",
+                Progress::Validating => "validating",
+                Progress::Committing => "committing",
+            };
+            if steps.last() != Some(&step) {
+                steps.push(step);
+            }
+        }
+        steps
     }
 
     #[cfg(unix)]
@@ -422,21 +542,38 @@ mod tests {
 
         let archive = host_build();
         let lab = Lab::new(vec![archive.clone()]).await;
-        let mut downloaded = 0;
+        let mut seen = Vec::new();
 
         let installed = lab
             .installer
-            .install(&lab.request("/fx.tar.xz"), |progress| {
-                if let Progress::Downloading { received, .. } = progress {
-                    downloaded = received;
-                }
-            })
+            .install(
+                &lab.request("/fx.tar.xz"),
+                &CancellationToken::new(),
+                |progress| {
+                    seen.push(progress);
+                },
+            )
             .await
             .unwrap();
 
         let build = lab.installer.root().join("37872");
         assert_eq!(installed.path, build);
-        assert_eq!(downloaded, archive.len() as u64);
+        assert_eq!(
+            steps(&seen),
+            [
+                "checking",
+                "downloading",
+                "verifying",
+                "extracting",
+                "validating",
+                "committing"
+            ]
+        );
+        let extracted = seen.iter().find_map(|progress| match progress {
+            Progress::Extracting { total, done } => Some((*total, done.load(Ordering::Relaxed))),
+            _ => None,
+        });
+        assert_eq!(extracted, Some((None, 6)));
         assert_eq!(
             fs::read_link(build.join("alpine/bin/kill")).unwrap(),
             Path::new("busybox")
@@ -446,23 +583,69 @@ mod tests {
             0o755
         );
         assert_eq!(Manifest::read(&build).unwrap(), installed.manifest);
-        assert_eq!(installed.manifest.archive_sha256, hex(&Sha256::digest(&archive)));
+        assert_eq!(
+            installed.manifest.origin.archive_sha256(),
+            Some(hex(&Sha256::digest(&archive)).as_str())
+        );
+        assert_eq!(installed.manifest.installed_by.as_deref(), Some("ada"));
         assert_eq!(installed.manifest.files, 5);
         assert!(lab.staging_is_empty());
-        assert_eq!(
-            lab.installer.first_seen().get(&(Platform::Linux, 37872)),
-            Some(&installed.manifest.archive_sha256)
-        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_cancel_once_the_build_is_validated_is_too_late() {
+        let lab = Lab::new(vec![host_build()]).await;
+        let cancel = CancellationToken::new();
+
+        let installed = lab
+            .installer
+            .install(&lab.request("/fx.tar.xz"), &cancel, |progress| {
+                if matches!(progress, Progress::Committing) {
+                    cancel.cancel();
+                }
+            })
+            .await;
+
+        assert!(installed.is_ok(), "{installed:?}");
+        assert!(lab.installer.root().join("37872").is_dir());
+    }
+
+    #[tokio::test]
+    async fn a_cancelled_extraction_leaves_nothing_behind() {
+        let lab = Lab::new(vec![host_build()]).await;
+        let cancel = CancellationToken::new();
+
+        let error = lab
+            .installer
+            .install(&lab.request("/archive"), &cancel, |progress| {
+                if matches!(progress, Progress::Extracting { .. }) {
+                    cancel.cancel();
+                }
+            })
+            .await
+            .unwrap_err();
+
+        assert!(matches!(error, Error::Cancelled), "{error}");
+        assert!(!lab.installer.root().join("37872").exists());
+        assert!(lab.staging_is_empty());
     }
 
     #[cfg(windows)]
     #[tokio::test]
-    async fn an_fxserver_without_the_rockstar_signature_is_refused_and_leaves_nothing_behind() {
+    async fn an_fxserver_without_the_rockstar_signature_fails_its_validation_and_leaves_nothing_behind() {
         let lab = Lab::new(vec![host_build()]).await;
+        let mut seen = Vec::new();
 
         let error = lab
             .installer
-            .install(&lab.request("/server.zip"), |_| {})
+            .install(
+                &lab.request("/server.zip"),
+                &CancellationToken::new(),
+                |progress| {
+                    seen.push(progress);
+                },
+            )
             .await
             .unwrap_err();
 
@@ -470,6 +653,15 @@ mod tests {
             error.to_string(),
             "FXServer.exe is not signed by Rockstar Games: it is not a Windows executable"
         );
+        assert_eq!(
+            steps(&seen),
+            ["checking", "downloading", "verifying", "extracting", "validating"]
+        );
+        let extracted = seen.iter().find_map(|progress| match progress {
+            Progress::Extracting { total, done } => Some((*total, done.load(Ordering::Relaxed))),
+            _ => None,
+        });
+        assert_eq!(extracted, Some((Some(3), 3)));
         assert!(!lab.installer.root().join("37872").exists());
         assert!(lab.staging_is_empty());
     }
@@ -477,6 +669,7 @@ mod tests {
     #[cfg(windows)]
     #[tokio::test]
     async fn a_windows_build_without_fxserver_is_reported_incomplete_rather_than_unsigned() {
+        use crate::LayoutProblem;
         use crate::samples::{ZipEntry, zip_archive};
 
         let lab = Lab::new(vec![zip_archive(&[ZipEntry::Deflated(
@@ -485,15 +678,17 @@ mod tests {
         )])])
         .await;
 
-        let error = lab
-            .installer
-            .install(&lab.request("/server.zip"), |_| {})
-            .await
-            .unwrap_err();
+        let error = lab.install(&lab.request("/server.zip")).await.unwrap_err();
 
-        assert_eq!(
-            error.to_string(),
-            "the extracted build is incomplete: FXServer.exe is missing"
+        assert!(
+            matches!(
+                error,
+                Error::Layout {
+                    path: "FXServer.exe",
+                    problem: LayoutProblem::Missing
+                }
+            ),
+            "{error}"
         );
     }
 
@@ -502,13 +697,12 @@ mod tests {
         let mut changed = host_build();
         changed.push(0);
         let lab = Lab::new(vec![changed]).await;
-        let request = lab.request("/archive");
-        // What an install of the genuine archive leaves; on Windows the sample cannot get that far,
-        // its FXServer.exe carries no signature.
-        lab.installer
-            .remember(&request, &hex(&Sha256::digest(host_build())));
+        let request = InstallRequest {
+            fingerprint: Some(hex(&Sha256::digest(host_build()))),
+            ..lab.request("/archive")
+        };
 
-        let error = lab.installer.install(&request, |_| {}).await.unwrap_err();
+        let error = lab.install(&request).await.unwrap_err();
 
         assert!(
             matches!(error, Error::ArchiveChanged { build: 37872, .. }),
@@ -519,31 +713,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_refused_first_download_does_not_stand_in_for_the_archive() {
-        let lab = Lab::new(vec![b"<html>maintenance</html>".to_vec(), host_build()]).await;
-        let request = lab.request("/archive");
-        let first = lab.installer.install(&request, |_| {}).await.unwrap_err();
-        assert!(matches!(first, Error::Damaged(_)), "{first}");
-
-        let second = lab.installer.install(&request, |_| {}).await;
-
-        if cfg!(windows) {
-            assert!(matches!(second, Err(Error::Signature(_))), "{second:?}");
-        } else {
-            second.unwrap();
-        }
-    }
-
-    #[tokio::test]
     async fn an_installed_build_is_never_downloaded_again() {
         let lab = Lab::new(vec![host_build()]).await;
         fs::create_dir_all(lab.installer.root().join("37872")).unwrap();
 
-        let error = lab
-            .installer
-            .install(&lab.request("/archive"), |_| {})
-            .await
-            .unwrap_err();
+        let error = lab.install(&lab.request("/archive")).await.unwrap_err();
 
         assert!(matches!(error, Error::AlreadyInstalled(37872)), "{error}");
         assert!(lab.server.requests().is_empty());
@@ -553,11 +727,7 @@ mod tests {
     async fn a_missing_archive_is_found_out_before_downloading() {
         let lab = Lab::new(vec![host_build()]).await;
 
-        let error = lab
-            .installer
-            .install(&lab.request("/missing"), |_| {})
-            .await
-            .unwrap_err();
+        let error = lab.install(&lab.request("/missing")).await.unwrap_err();
 
         assert!(matches!(error, Error::Status { status: 404, .. }), "{error}");
         let methods: Vec<String> = lab
@@ -581,7 +751,7 @@ mod tests {
         })
         .await;
 
-        let result = lab.installer.install(&lab.request("/archive"), |_| {}).await;
+        let result = lab.install(&lab.request("/archive")).await;
 
         assert!(!matches!(result, Err(Error::Status { .. })), "{result:?}");
         let methods: Vec<String> = lab
@@ -608,14 +778,14 @@ mod tests {
             set_modified(old, two_days_ago);
         }
 
-        let _ = lab.installer.install(&lab.request("/archive"), |_| {}).await;
+        let _ = lab.install(&lab.request("/archive")).await;
 
         assert!(!old_tree.exists());
         assert!(!old_part.exists());
         assert!(recent.exists());
     }
 
-    fn set_modified(path: &Path, at: std::time::SystemTime) {
+    pub(crate) fn set_modified(path: &Path, at: std::time::SystemTime) {
         let mut options = fs::File::options();
         options.read(true);
         // Windows needs the right to write attributes, and opens a folder only with backup semantics.
@@ -635,7 +805,7 @@ mod tests {
             ..lab.request("/archive")
         };
 
-        let error = lab.installer.install(&request, |_| {}).await.unwrap_err();
+        let error = lab.install(&request).await.unwrap_err();
 
         assert!(matches!(error, Error::WrongPlatform(_)), "{error}");
     }

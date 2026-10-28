@@ -4,6 +4,7 @@ use anyhow::{bail, ensure};
 use jiff::Timestamp;
 use observer_artifacts::catalog::{Availability, Catalog, CatalogBuild, Listing, PolicyDate, Support};
 use observer_artifacts::{Branch, Http, Installer, Platform, Progress};
+use tokio_util::sync::CancellationToken;
 
 use crate::config::Config;
 
@@ -156,8 +157,9 @@ pub async fn install(
         );
     }
     let mut shown = None;
+    // Nothing cancels it but the end of the process.
     let installed = artifacts
-        .install(&request, |progress| match progress {
+        .install(&request, &CancellationToken::new(), |progress| match progress {
             Progress::Downloading { received, total } => {
                 if shown.is_none() {
                     eprintln!("downloading {} ({})", request.url, mebibytes(total));
@@ -168,13 +170,15 @@ pub async fn install(
                     eprintln!("downloaded {}%", tenth * 10);
                 }
             }
-            Progress::Extracting => eprintln!("extracting"),
-            Progress::Verifying => eprintln!("verifying"),
+            Progress::Verifying => eprintln!("verifying the archive"),
+            Progress::Extracting { .. } => eprintln!("extracting"),
+            Progress::Validating => eprintln!("validating the build"),
+            Progress::Checking | Progress::Copying { .. } | Progress::Committing => {}
         })
         .await?;
     eprintln!(
         "installed build {build}, archive sha256 {}",
-        installed.manifest.archive_sha256
+        installed.manifest.origin.archive_sha256().unwrap_or_default()
     );
     println!("{}", installed.path.display());
     Ok(())
@@ -184,7 +188,7 @@ async fn catalog(platform: Platform, branches: &[Branch]) -> anyhow::Result<List
     if branches.iter().any(Branch::is_master) {
         bail!("master needs no --branch: the docs page lists it");
     }
-    let listing = Catalog::new(Http::new()?).list(platform, branches).await?;
+    let listing = Catalog::new(Http::new()?).list(platform, branches, &[]).await?;
     for warning in &listing.warnings {
         eprintln!("warning: {warning}");
     }

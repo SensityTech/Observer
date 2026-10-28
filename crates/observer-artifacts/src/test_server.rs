@@ -4,6 +4,7 @@
 //! It listens only on the five ports set aside for these tests. Any free port would do on Windows,
 //! but WSL hands out ephemeral ports from 32768, a range that holds ports other servers on the
 //! same machine are known to use.
+#![allow(clippy::unwrap_used, reason = "test support, where a failure is the test's")]
 
 use std::fmt::Write;
 use std::ops::RangeInclusive;
@@ -21,7 +22,7 @@ const PORTS: RangeInclusive<u16> = 41950..=41954;
 static SERVERS: Semaphore = Semaphore::const_new(5);
 
 #[derive(Debug, Clone)]
-pub(crate) struct Request {
+pub struct Request {
     pub method: String,
     pub path: String,
     headers: Vec<(String, String)>,
@@ -36,7 +37,7 @@ impl Request {
     }
 }
 
-pub(crate) struct Reply {
+pub struct Reply {
     status: u16,
     headers: Vec<(String, String)>,
     body: Vec<u8>,
@@ -58,6 +59,7 @@ impl Reply {
     }
 
     /// Sets the body and a matching `Content-Length`.
+    #[must_use]
     pub fn body(mut self, body: Vec<u8>) -> Self {
         self.headers.retain(|(key, _)| key != "Content-Length");
         self.headers
@@ -66,25 +68,28 @@ impl Reply {
         self
     }
 
+    #[must_use]
     pub fn header(mut self, name: &str, value: &str) -> Self {
         self.headers.retain(|(key, _)| key != name);
         self.headers.push((name.to_owned(), value.to_owned()));
         self
     }
 
+    #[must_use]
     pub fn without_length(mut self) -> Self {
         self.headers.retain(|(key, _)| key != "Content-Length");
         self
     }
 
     /// Closes the connection after this many bytes of the body.
+    #[must_use]
     pub fn cut_after(mut self, bytes: usize) -> Self {
         self.cut_after = Some(bytes);
         self
     }
 }
 
-pub(crate) struct TestServer {
+pub struct TestServer {
     pub port: u16,
     requests: Arc<Mutex<Vec<Request>>>,
     task: JoinHandle<()>,
