@@ -1,0 +1,1470 @@
+//! The supervisor: one task that starts FXServer, watches its health, stops it gracefully, and
+//! brings it back after a crash or a hang. Every change of state goes out on an event bus.
+
+use std::net::{Ipv4Addr, SocketAddr};
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use observer_platform::{Exit, ExitWatch, Output, ProcessTree};
+use serde::Serialize;
+use tokio::sync::{broadcast, mpsc, oneshot, watch};
+use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
+use tracing::{error, info, warn};
+
+use crate::bridge::{self, BridgeEvent, Report, StopReason};
+use crate::console::{ConsoleHub, LineAssembler, LineFlags, LineKind, plain, sanitize};
+use crate::crashes::{self, DumpLimits};
+use crate::exit;
+use crate::health::{self, HangCause, Health, HealthLimits, Probe, Problem, Verdict};
+use crate::launch::{self, CfgWarning, LaunchSettings};
+use crate::layout::{Flavour, Layout};
+use crate::recovery::{Next, Recovery, RecoveryPolicy};
+use crate::stdin::{CommandRefusal, Credentials, StdinError, StdinWriter, SystemLine, UserCommand, Write};
+use crate::trace::{self, Trace, TraceDecoder, TraceKind};
+
+/// How often health is weighed while a server runs.
+const TICK: Duration = Duration::from_secs(1);
+/// Once the main process is gone, the rest of the tree gets this long to end by itself: the crash
+/// dump server may still be finishing a dump.
+const TREE_SETTLE: Duration = Duration::from_secs(3);
+const TREE_KILL: Duration = Duration::from_secs(5);
+const TASK_JOIN: Duration = Duration::from_secs(2);
+/// A dump file touched this recently means the dump server is writing.
+const DUMP_ACTIVITY: Duration = Duration::from_secs(10);
+/// FXServer's own default, for a cfg that names no TCP endpoint.
+const DEFAULT_PORT: u16 = 30120;
+const EVENTS: usize = 256;
+const CHANNEL: usize = 256;
+const REQUESTS: usize = 16;
+const SUPERVISOR: &str = "supervisor";
+
+const LICENCE_REJECTIONS: [&str; 3] = [
+    "Could not authenticate server license key",
+    "This server does not have a license key specified",
+    "A valid license check is required to run this server",
+];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum State {
+    Stopped,
+    Starting,
+    Online,
+    Degraded,
+    Hung,
+    Stopping,
+    Crashed,
+    /// Automatic restarts are off until someone starts the server.
+    CrashLoop,
+}
+
+#[derive(Debug, Clone)]
+pub struct Settings {
+    pub launch: LaunchSettings,
+    pub flavour: Flavour,
+    /// Where `/dynamic.json` and `/perf/` answer; by default the cfg's first TCP endpoint.
+    pub probe: Option<SocketAddr>,
+    /// Observer's data folder: crash dumps go to its `crashes/`.
+    pub data_dir: PathBuf,
+    pub health: HealthLimits,
+    pub recovery: RecoveryPolicy,
+    pub stop: StopTimings,
+    pub dumps: DumpLimits,
+}
+
+impl Settings {
+    pub fn new(launch: LaunchSettings, data_dir: impl Into<PathBuf>) -> Self {
+        Self {
+            launch,
+            flavour: Flavour::HOST,
+            probe: None,
+            data_dir: data_dir.into(),
+            health: HealthLimits::default(),
+            recovery: RecoveryPolicy::default(),
+            stop: StopTimings::default(),
+            dumps: DumpLimits::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct StopTimings {
+    /// Between `observer:shuttingDown` and `quit`, for resources to save and warn players.
+    pub notice: Duration,
+    /// How long `quit` gets before the tree is killed.
+    pub quit: Duration,
+    /// The wait after `quit` when the console is closing and Windows gives about five seconds.
+    pub shortened: Duration,
+    /// After a fatal error, how long FXServer gets to exit before the tree is killed: on Windows
+    /// it sometimes stays up behind an error dialog.
+    pub fatal_exit: Duration,
+}
+
+impl Default for StopTimings {
+    fn default() -> Self {
+        Self {
+            notice: Duration::from_secs(5),
+            quit: Duration::from_secs(15),
+            shortened: Duration::from_secs(4),
+            fatal_exit: Duration::from_secs(5),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Event {
+    pub at_ms: i64,
+    /// The spawn the event is about; 0 before the first.
+    pub generation: u32,
+    pub kind: EventKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum EventKind {
+    State {
+        from: State,
+        to: State,
+        cause: Cause,
+    },
+    Spawned {
+        pid: u32,
+        probe: SocketAddr,
+    },
+    CfgWarning {
+        warning: CfgWarning,
+    },
+    Exited {
+        code: Option<u32>,
+        signal: Option<i32>,
+        description: String,
+        /// Observer had asked it to stop, or an operator typed `quit`.
+        expected: bool,
+    },
+    /// The problems of a degraded server changed.
+    Health {
+        problems: Vec<Problem>,
+    },
+    RestartScheduled {
+        delay_ms: u64,
+    },
+    CrashDumps {
+        paths: Vec<PathBuf>,
+    },
+    Hitch {
+        thread: String,
+        ms: u64,
+    },
+    WatchdogBark {
+        thread: String,
+        seconds: u64,
+        stack: String,
+    },
+    WatchdogBite {
+        thread: String,
+    },
+    NucleusConnected {
+        url: String,
+    },
+    Resources {
+        started: Vec<String>,
+    },
+    Heap {
+        heap_used: u64,
+        heap_total: u64,
+        rss: u64,
+        external: u64,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Cause {
+    Requested {
+        by: String,
+    },
+    /// An automatic restart after a failure.
+    Recovery,
+    Ready,
+    Recovered,
+    Unhealthy {
+        problems: Vec<Problem>,
+    },
+    Hang {
+        cause: HangCause,
+    },
+    Exited {
+        description: String,
+    },
+    FatalError {
+        message: String,
+    },
+    BindError {
+        address: String,
+    },
+    LicenceRejected {
+        message: String,
+    },
+    ConsoleQuit {
+        by: String,
+    },
+    Shutdown,
+    CrashLoop {
+        failures: usize,
+    },
+    SpawnFailed {
+        error: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Status {
+    pub state: State,
+    pub generation: u32,
+    pub pid: Option<u32>,
+    pub since_ms: i64,
+    pub problems: Vec<Problem>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum ControlError {
+    #[error("the server is already running")]
+    AlreadyRunning,
+    #[error("the server is not running")]
+    NotRunning,
+    #[error("the server is stopping")]
+    Stopping,
+    #[error("Observer is shutting down")]
+    ShuttingDown,
+    #[error("cannot start FXServer: {0}")]
+    Launch(String),
+    #[error(transparent)]
+    Refused(#[from] CommandRefusal),
+    #[error(transparent)]
+    Stdin(#[from] StdinError),
+}
+
+type Reply<T> = oneshot::Sender<Result<T, ControlError>>;
+
+enum Request {
+    Start {
+        by: String,
+        reply: Reply<()>,
+    },
+    Stop {
+        by: String,
+        reply: Reply<()>,
+    },
+    Restart {
+        by: String,
+        reply: Reply<()>,
+    },
+    Command {
+        command: UserCommand,
+        actor: String,
+        reply: Reply<oneshot::Receiver<Result<(), StdinError>>>,
+    },
+    Shutdown {
+        shortened: bool,
+    },
+}
+
+/// The handle to the supervisor task. Clones talk to the same task.
+#[derive(Clone)]
+pub struct Supervisor {
+    requests: mpsc::Sender<Request>,
+    events: broadcast::Sender<Event>,
+    status: watch::Receiver<Status>,
+}
+
+impl Supervisor {
+    /// Starts the supervisor with the server stopped. The task ends after [`Supervisor::shutdown`]
+    /// has stopped the server.
+    pub fn spawn(settings: Settings, console: Arc<ConsoleHub>) -> (Self, JoinHandle<()>) {
+        let (requests, requests_rx) = mpsc::channel(REQUESTS);
+        let events = broadcast::channel(EVENTS).0;
+        let initial = Status {
+            state: State::Stopped,
+            generation: 0,
+            pid: None,
+            since_ms: now_ms(),
+            problems: Vec::new(),
+        };
+        let (status_tx, status) = watch::channel(initial);
+        let (traces_tx, traces) = mpsc::channel(CHANNEL);
+        let (signals_tx, signals) = mpsc::channel(CHANNEL);
+        let (probes_tx, probes) = mpsc::channel(CHANNEL);
+        let actor = Actor {
+            recovery: Recovery::new(settings.recovery.clone()),
+            settings,
+            console,
+            events: events.clone(),
+            status: status_tx,
+            requests: requests_rx,
+            traces_tx,
+            traces,
+            signals_tx,
+            signals,
+            probes_tx,
+            probes,
+            current: watch::channel(0).0,
+            generation: 0,
+            state: State::Stopped,
+            since_ms: now_ms(),
+            problems: Vec::new(),
+            run: None,
+            phase: Phase::Idle,
+            last_tick: Instant::now(),
+            shutdown: None,
+            orphaned: false,
+            done: false,
+        };
+        let task = tokio::spawn(actor.run());
+        (
+            Self {
+                requests,
+                events,
+                status,
+            },
+            task,
+        )
+    }
+
+    pub async fn start(&self, by: &str) -> Result<(), ControlError> {
+        self.ask(|reply| Request::Start {
+            by: by.to_owned(),
+            reply,
+        })
+        .await
+    }
+
+    /// Stops the server gracefully: `observer:shuttingDown`, the notice delay, `quit`, then the
+    /// tree is killed if it is still there.
+    pub async fn stop(&self, by: &str) -> Result<(), ControlError> {
+        self.ask(|reply| Request::Stop {
+            by: by.to_owned(),
+            reply,
+        })
+        .await
+    }
+
+    pub async fn restart(&self, by: &str) -> Result<(), ControlError> {
+        self.ask(|reply| Request::Restart {
+            by: by.to_owned(),
+            reply,
+        })
+        .await
+    }
+
+    /// Writes an operator's command to FXServer and echoes it into the console once written.
+    pub async fn command(&self, command: UserCommand, actor: &str) -> Result<(), ControlError> {
+        let written = self
+            .ask(|reply| Request::Command {
+                command,
+                actor: actor.to_owned(),
+                reply,
+            })
+            .await?;
+        Ok(written.await.map_err(|_| StdinError::Closed)??)
+    }
+
+    /// Stops the server, then the supervisor. `shortened` is for a closing console, which leaves
+    /// a few seconds only.
+    pub async fn shutdown(&self, shortened: bool) {
+        let _ = self.requests.send(Request::Shutdown { shortened }).await;
+    }
+
+    pub fn events(&self) -> broadcast::Receiver<Event> {
+        self.events.subscribe()
+    }
+
+    pub fn status(&self) -> watch::Receiver<Status> {
+        self.status.clone()
+    }
+
+    async fn ask<T>(&self, request: impl FnOnce(Reply<T>) -> Request) -> Result<T, ControlError> {
+        let (reply, answer) = oneshot::channel();
+        self.requests
+            .send(request(reply))
+            .await
+            .map_err(|_| ControlError::ShuttingDown)?;
+        answer.await.map_err(|_| ControlError::ShuttingDown)?
+    }
+}
+
+/// What the stopping server should do once it is gone.
+#[derive(Debug, Clone)]
+enum After {
+    Stop,
+    Restart {
+        by: String,
+    },
+    /// Observer itself is stopping.
+    Exit,
+}
+
+/// Why a run is ending, known before its process is gone.
+#[derive(Debug, Clone)]
+enum Ending {
+    Fatal { message: String },
+    Hang { cause: HangCause },
+    BindError { address: String },
+    LicenceRejected { message: String },
+}
+
+impl Ending {
+    /// A fatal error often follows a more telling reason: a taken port, a refused licence.
+    fn rank(&self) -> u8 {
+        match self {
+            Self::Fatal { .. } => 0,
+            Self::Hang { .. } => 1,
+            Self::BindError { .. } => 2,
+            Self::LicenceRejected { .. } => 3,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Phase {
+    /// No server: stopped, or in a crash loop.
+    Idle,
+    Running,
+    /// `observer:shuttingDown` is out; `quit` follows at `quit_at`.
+    Notice {
+        quit_at: Instant,
+        reason: StopReason,
+    },
+    /// `quit` is out; the tree is killed at `kill_at`.
+    Quitting {
+        kill_at: Instant,
+    },
+    /// The run is over (fatal error, hang); the tree is killed at `kill_at` unless it ends first.
+    Ending {
+        kill_at: Instant,
+    },
+    /// Waiting to restart after a failure.
+    Backoff {
+        respawn_at: Instant,
+    },
+}
+
+#[derive(Debug)]
+enum Signal {
+    Fatal(String),
+    LicenceRejected(String),
+}
+
+impl Signal {
+    /// Only FXServer's own words count: its licence check prints on the `svadhesive` channel and
+    /// ends with a bare `Fatal Error:` on stderr. Whatever a resource prints, a player's chat
+    /// message included, comes under its `script:` channel, so quoting these texts stops nothing.
+    fn read(kind: LineKind, text: &str) -> Option<Self> {
+        match kind {
+            LineKind::Stderr => {
+                let message = text.strip_prefix("Fatal Error: ")?.trim();
+                if is_licence_rejection(message) {
+                    Some(Self::LicenceRejected(text.trim().to_owned()))
+                } else {
+                    Some(Self::Fatal(message.to_owned()))
+                }
+            }
+            LineKind::Stdout => {
+                let message = on_channel(text, "svadhesive")?;
+                let message = message.strip_prefix("Error: ").unwrap_or(message);
+                is_licence_rejection(message).then(|| Self::LicenceRejected(text.trim().to_owned()))
+            }
+            LineKind::Command | LineKind::Observer => None,
+        }
+    }
+}
+
+fn is_licence_rejection(message: &str) -> bool {
+    LICENCE_REJECTIONS
+        .iter()
+        .any(|rejection| message.starts_with(rejection))
+}
+
+/// The text of a line FXServer printed on `channel`, whose name it right-aligns in brackets.
+fn on_channel<'a>(line: &'a str, channel: &str) -> Option<&'a str> {
+    let (name, text) = line.strip_prefix('[')?.split_once("] ")?;
+    (name.trim_start() == channel).then_some(text)
+}
+
+/// One spawn of FXServer, from its start until its tree is empty.
+struct Run {
+    generation: u32,
+    pid: u32,
+    layout: Layout,
+    exit: ExitWatch,
+    tree: ProcessTree,
+    stdin: StdinWriter,
+    stdin_task: JoinHandle<()>,
+    cancel: CancellationToken,
+    tasks: Vec<JoinHandle<()>>,
+    health: Health,
+    bridge_ready: bool,
+    ready_at: Option<Instant>,
+    after: Option<After>,
+    ending: Option<Ending>,
+    /// Observer killed the tree: the exit status says nothing about the server then.
+    killed: bool,
+}
+
+impl Run {
+    fn end(&mut self, ending: Ending) {
+        if self
+            .ending
+            .as_ref()
+            .is_none_or(|current| current.rank() < ending.rank())
+        {
+            self.ending = Some(ending);
+        }
+    }
+
+    fn system(&self, line: SystemLine) {
+        // Fire and forget: a line FXServer does not take is covered by the deadline that follows.
+        drop(self.stdin.send(Write::System(line)));
+    }
+}
+
+enum Wake {
+    Request(Option<Request>),
+    Exit(Exit),
+    Trace(Trace),
+    Signal(u32, Signal),
+    Probe(u32, Probe),
+    Tick,
+}
+
+struct Actor {
+    settings: Settings,
+    console: Arc<ConsoleHub>,
+    events: broadcast::Sender<Event>,
+    status: watch::Sender<Status>,
+    requests: mpsc::Receiver<Request>,
+    traces_tx: mpsc::Sender<Trace>,
+    traces: mpsc::Receiver<Trace>,
+    signals_tx: mpsc::Sender<(u32, Signal)>,
+    signals: mpsc::Receiver<(u32, Signal)>,
+    probes_tx: mpsc::Sender<(u32, Probe)>,
+    probes: mpsc::Receiver<(u32, Probe)>,
+    /// The current generation, which trace decoders compare theirs against.
+    current: watch::Sender<u32>,
+    generation: u32,
+    state: State,
+    since_ms: i64,
+    problems: Vec<Problem>,
+    recovery: Recovery,
+    run: Option<Run>,
+    phase: Phase,
+    last_tick: Instant,
+    /// Set once Observer asked to stop; `true` for the shortened stop.
+    shutdown: Option<bool>,
+    /// Every handle is gone, so no request can come any more.
+    orphaned: bool,
+    done: bool,
+}
+
+impl Actor {
+    async fn run(mut self) {
+        #[cfg(unix)]
+        self.sweep_leftovers().await;
+        while !self.done {
+            let deadline = self.deadline();
+            let wake = tokio::select! {
+                request = self.requests.recv(), if !self.orphaned => Wake::Request(request),
+                exit = exit_of(&mut self.run) => Wake::Exit(exit),
+                Some(trace) = self.traces.recv() => Wake::Trace(trace),
+                Some((generation, signal)) = self.signals.recv() => Wake::Signal(generation, signal),
+                Some((generation, probe)) = self.probes.recv() => Wake::Probe(generation, probe),
+                () = tokio::time::sleep_until(deadline.into()) => Wake::Tick,
+            };
+            match wake {
+                Wake::Request(Some(request)) => self.request(request).await,
+                Wake::Request(None) => {
+                    self.orphaned = true;
+                    self.shutdown(false);
+                }
+                Wake::Exit(exit) => self.exited(exit).await,
+                Wake::Trace(trace) => self.trace(trace),
+                Wake::Signal(generation, signal) => self.signal(generation, signal),
+                Wake::Probe(generation, probe) => {
+                    if let Some(run) = self.run.as_mut().filter(|run| run.generation == generation) {
+                        run.health.probed(&probe, Instant::now());
+                    }
+                }
+                Wake::Tick => self.tick().await,
+            }
+        }
+        info!("the supervisor stopped");
+    }
+
+    fn deadline(&self) -> Instant {
+        let phase = match self.phase {
+            Phase::Notice { quit_at, .. } => Some(quit_at),
+            Phase::Quitting { kill_at } | Phase::Ending { kill_at } => Some(kill_at),
+            Phase::Backoff { respawn_at } => Some(respawn_at),
+            Phase::Idle | Phase::Running => None,
+        };
+        let tick = self.run.as_ref().map(|_| self.last_tick + TICK);
+        [phase, tick]
+            .into_iter()
+            .flatten()
+            .min()
+            .unwrap_or_else(|| Instant::now() + Duration::from_hours(1))
+    }
+
+    async fn request(&mut self, request: Request) {
+        match request {
+            Request::Start { by, reply } => {
+                let result = self.start(by).await;
+                let _ = reply.send(result);
+            }
+            Request::Stop { by, reply } => {
+                let _ = reply.send(self.stop(by));
+            }
+            Request::Restart { by, reply } => {
+                let result = self.restart(by).await;
+                let _ = reply.send(result);
+            }
+            Request::Command {
+                command,
+                actor,
+                reply,
+            } => {
+                let _ = reply.send(self.command(command, actor));
+            }
+            Request::Shutdown { shortened } => self.shutdown(shortened),
+        }
+    }
+
+    async fn start(&mut self, by: String) -> Result<(), ControlError> {
+        if self.shutdown.is_some() {
+            return Err(ControlError::ShuttingDown);
+        }
+        match self.phase {
+            Phase::Idle | Phase::Backoff { .. } => {
+                self.recovery.reset();
+                self.spawn(Cause::Requested { by })
+                    .await
+                    .map_err(ControlError::Launch)
+            }
+            Phase::Notice { .. } | Phase::Quitting { .. } => Err(ControlError::Stopping),
+            Phase::Running | Phase::Ending { .. } => Err(ControlError::AlreadyRunning),
+        }
+    }
+
+    fn stop(&mut self, by: String) -> Result<(), ControlError> {
+        match self.phase {
+            Phase::Idle if self.state == State::CrashLoop => {
+                self.set_state(State::Stopped, Cause::Requested { by });
+                Ok(())
+            }
+            Phase::Idle => Err(ControlError::NotRunning),
+            Phase::Backoff { .. } => {
+                self.phase = Phase::Idle;
+                self.set_state(State::Stopped, Cause::Requested { by });
+                Ok(())
+            }
+            Phase::Notice { .. } | Phase::Quitting { .. } | Phase::Ending { .. } => {
+                if let Some(run) = &mut self.run
+                    && !matches!(run.after, Some(After::Exit))
+                {
+                    run.after = Some(After::Stop);
+                }
+                Ok(())
+            }
+            Phase::Running => {
+                self.begin_stop(StopReason::Stop, Cause::Requested { by }, After::Stop, false);
+                Ok(())
+            }
+        }
+    }
+
+    async fn restart(&mut self, by: String) -> Result<(), ControlError> {
+        if self.shutdown.is_some() {
+            return Err(ControlError::ShuttingDown);
+        }
+        match self.phase {
+            Phase::Idle | Phase::Backoff { .. } => self.start(by).await,
+            Phase::Notice { .. } | Phase::Quitting { .. } => Err(ControlError::Stopping),
+            Phase::Ending { .. } => {
+                if let Some(run) = &mut self.run {
+                    run.after = Some(After::Restart { by });
+                }
+                Ok(())
+            }
+            Phase::Running => {
+                let cause = Cause::Requested { by: by.clone() };
+                self.begin_stop(StopReason::Restart, cause, After::Restart { by }, false);
+                Ok(())
+            }
+        }
+    }
+
+    fn command(
+        &mut self,
+        command: UserCommand,
+        actor: String,
+    ) -> Result<oneshot::Receiver<Result<(), StdinError>>, ControlError> {
+        let Some(run) = &mut self.run else {
+            return Err(ControlError::NotRunning);
+        };
+        let quits = command.quits() && run.after.is_none();
+        if quits {
+            run.after = Some(After::Stop);
+        }
+        let written = run.stdin.send(Write::User {
+            command,
+            actor: actor.clone(),
+        });
+        if quits {
+            // FXServer quits by itself; Observer only makes sure it does.
+            self.set_state(State::Stopping, Cause::ConsoleQuit { by: actor });
+            self.phase = Phase::Quitting {
+                kill_at: Instant::now() + self.settings.stop.quit,
+            };
+        }
+        Ok(written)
+    }
+
+    fn shutdown(&mut self, shortened: bool) {
+        let shortened = shortened || self.shutdown == Some(true);
+        self.shutdown = Some(shortened);
+        let now = Instant::now();
+        match self.phase {
+            Phase::Idle => self.done = true,
+            Phase::Backoff { .. } => {
+                self.phase = Phase::Idle;
+                self.set_state(State::Stopped, Cause::Shutdown);
+                self.done = true;
+            }
+            Phase::Running => self.begin_stop(StopReason::Shutdown, Cause::Shutdown, After::Exit, shortened),
+            Phase::Notice { reason, .. } => {
+                if let Some(run) = &mut self.run {
+                    run.after = Some(After::Exit);
+                }
+                if shortened {
+                    self.quit(reason, self.settings.stop.shortened);
+                }
+            }
+            Phase::Quitting { kill_at } | Phase::Ending { kill_at } => {
+                if let Some(run) = &mut self.run {
+                    run.after = Some(After::Exit);
+                }
+                if shortened {
+                    let kill_at = kill_at.min(now + self.settings.stop.shortened);
+                    self.phase = match self.phase {
+                        Phase::Quitting { .. } => Phase::Quitting { kill_at },
+                        _ => Phase::Ending { kill_at },
+                    };
+                }
+            }
+        }
+    }
+
+    /// The stop sequence: the bridge event, the notice delay when the bridge is there to pass it
+    /// on and time allows, then `quit`.
+    fn begin_stop(&mut self, reason: StopReason, cause: Cause, after: After, shortened: bool) {
+        let Some(run) = &mut self.run else {
+            return;
+        };
+        let by = match &cause {
+            Cause::Requested { by } => by.clone(),
+            _ => "observer".to_owned(),
+        };
+        run.after = Some(after);
+        let notice = if shortened {
+            Duration::ZERO
+        } else {
+            self.settings.stop.notice
+        };
+        let bridge_ready = run.bridge_ready;
+        if bridge_ready {
+            run.system(SystemLine::Bridge(BridgeEvent::ShuttingDown {
+                delay_ms: u64::try_from(notice.as_millis()).unwrap_or(u64::MAX),
+                reason,
+                by,
+            }));
+        }
+        self.set_state(State::Stopping, cause);
+        if bridge_ready && !notice.is_zero() {
+            self.phase = Phase::Notice {
+                quit_at: Instant::now() + notice,
+                reason,
+            };
+        } else {
+            let wait = if shortened {
+                self.settings.stop.shortened
+            } else {
+                self.settings.stop.quit
+            };
+            self.quit(reason, wait);
+        }
+    }
+
+    fn quit(&mut self, reason: StopReason, wait: Duration) {
+        if let Some(run) = &self.run {
+            run.system(SystemLine::Quit(reason));
+        }
+        self.phase = Phase::Quitting {
+            kill_at: Instant::now() + wait,
+        };
+    }
+
+    fn kill(&mut self) {
+        let Some(run) = &mut self.run else {
+            return;
+        };
+        run.killed = true;
+        if let Err(error) = run.tree.kill() {
+            error!(%error, generation = run.generation, "cannot kill FXServer's process tree");
+        }
+        // Try again if the exit does not follow.
+        self.phase = Phase::Ending {
+            kill_at: Instant::now() + TREE_KILL,
+        };
+    }
+
+    async fn tick(&mut self) {
+        let now = Instant::now();
+        self.last_tick = now;
+        match self.phase {
+            Phase::Notice { quit_at, reason } if now >= quit_at => {
+                self.quit(reason, self.settings.stop.quit);
+            }
+            Phase::Quitting { kill_at } | Phase::Ending { kill_at } if now >= kill_at => {
+                if self.run.is_some() {
+                    self.note("FXServer did not end in time; killing its process tree");
+                }
+                self.kill();
+            }
+            Phase::Backoff { respawn_at } if now >= respawn_at => {
+                // A failed respawn backs off again, which the events already say.
+                let _ = self.spawn(Cause::Recovery).await;
+            }
+            Phase::Running => self.weigh_health(now).await,
+            _ => {}
+        }
+        if let Some(ready_at) = self.run.as_ref().and_then(|run| run.ready_at) {
+            self.recovery.up_for(now.saturating_duration_since(ready_at));
+        }
+    }
+
+    async fn weigh_health(&mut self, now: Instant) {
+        let Some(run) = &mut self.run else {
+            return;
+        };
+        let verdict = run.health.verdict(now, &self.settings.health);
+        let newly_ready = !matches!(verdict, Verdict::Starting | Verdict::Hung(_)) && run.ready_at.is_none();
+        if newly_ready {
+            run.ready_at = Some(now);
+        }
+        let crashes = run.layout.crashes();
+        if newly_ready {
+            self.recovery.ready();
+        }
+        match verdict {
+            Verdict::Starting => {}
+            Verdict::Healthy => match self.state {
+                State::Starting => self.set_state(State::Online, Cause::Ready),
+                State::Degraded => self.set_state(State::Online, Cause::Recovered),
+                _ => {}
+            },
+            Verdict::Degraded(problems) => {
+                if self.state == State::Starting {
+                    self.set_state(State::Online, Cause::Ready);
+                }
+                if self.state != State::Degraded {
+                    self.problems.clone_from(&problems);
+                    self.set_state(State::Degraded, Cause::Unhealthy { problems });
+                } else if self.problems != problems {
+                    self.problems.clone_from(&problems);
+                    self.publish_status();
+                    self.emit(EventKind::Health { problems });
+                }
+            }
+            Verdict::Hung(cause) => {
+                let dumping =
+                    tokio::task::spawn_blocking(move || crashes::being_written(&crashes, DUMP_ACTIVITY))
+                        .await
+                        .unwrap_or(false);
+                if dumping {
+                    return;
+                }
+                if let Some(run) = &mut self.run {
+                    run.end(Ending::Hang { cause });
+                }
+                self.set_state(State::Hung, Cause::Hang { cause });
+                self.note(&format!(
+                    "FXServer is not responding ({}); killing its process tree",
+                    hang_text(cause)
+                ));
+                self.kill();
+            }
+        }
+    }
+
+    fn trace(&mut self, trace: Trace) {
+        let Some(run) = self.run.as_mut().filter(|run| run.generation == trace.generation) else {
+            return;
+        };
+        let event = match Report::from_trace(&trace.kind) {
+            Some(Report::Ready { .. } | Report::Heartbeat) => {
+                run.health.heartbeat(Instant::now());
+                run.bridge_ready = true;
+                return;
+            }
+            Some(Report::Resources { started }) => EventKind::Resources { started },
+            Some(Report::Heap {
+                heap_used,
+                heap_total,
+                rss,
+                external,
+            }) => EventKind::Heap {
+                heap_used,
+                heap_total,
+                rss,
+                external,
+            },
+            None => match trace.kind {
+                TraceKind::Hitch { thread, ms } => EventKind::Hitch { thread, ms },
+                TraceKind::WatchdogBark {
+                    thread,
+                    seconds,
+                    stack,
+                } => {
+                    run.health.bark();
+                    warn!(%thread, seconds, "FXServer's watchdog reports a stuck thread");
+                    EventKind::WatchdogBark {
+                        thread,
+                        seconds,
+                        stack,
+                    }
+                }
+                TraceKind::WatchdogBite { thread } => EventKind::WatchdogBite { thread },
+                TraceKind::NucleusConnected { url } => EventKind::NucleusConnected { url },
+                TraceKind::BindError { address } => {
+                    self.end_run(Ending::BindError { address });
+                    return;
+                }
+                TraceKind::Probe | TraceKind::Script { .. } | TraceKind::Unknown(_) => return,
+            },
+        };
+        self.emit(event);
+    }
+
+    fn signal(&mut self, generation: u32, signal: Signal) {
+        if self.run.as_ref().is_none_or(|run| run.generation != generation) {
+            return;
+        }
+        let ending = match signal {
+            Signal::LicenceRejected(message) => Ending::LicenceRejected { message },
+            Signal::Fatal(message) => match message
+                .strip_prefix("Could not bind on ")
+                .and_then(|rest| rest.split_whitespace().next())
+            {
+                Some(address) => Ending::BindError {
+                    address: address.to_owned(),
+                },
+                None => Ending::Fatal { message },
+            },
+        };
+        self.end_run(ending);
+    }
+
+    /// FXServer said it cannot go on. It usually exits within seconds, but on Windows it may stay
+    /// up behind an error dialog, so the tree is killed if it does not.
+    fn end_run(&mut self, ending: Ending) {
+        let Some(run) = &mut self.run else {
+            return;
+        };
+        run.end(ending);
+        if matches!(self.phase, Phase::Running) {
+            self.phase = Phase::Ending {
+                kill_at: Instant::now() + self.settings.stop.fatal_exit,
+            };
+        }
+    }
+
+    async fn spawn(&mut self, cause: Cause) -> Result<(), String> {
+        match self.launch().await {
+            Ok((run, probe, warnings)) => {
+                let pid = run.pid;
+                self.run = Some(run);
+                self.phase = Phase::Running;
+                self.last_tick = Instant::now();
+                self.set_state(State::Starting, cause);
+                self.note(&format!("FXServer started (pid {pid})"));
+                self.emit(EventKind::Spawned { pid, probe });
+                for warning in warnings {
+                    warn!(?warning, "the server cfg works against Observer");
+                    self.emit(EventKind::CfgWarning { warning });
+                }
+                Ok(())
+            }
+            Err(error) => {
+                error!(%error, "cannot start FXServer");
+                self.note(&format!("cannot start FXServer: {error}"));
+                let failed = Cause::SpawnFailed { error: error.clone() };
+                if cause == Cause::Recovery {
+                    // What stops a respawn is often brief (a cfg being saved, a scan holding the
+                    // executable), so it is one more failure for the breaker to count.
+                    self.failed(failed);
+                } else {
+                    self.phase = Phase::Idle;
+                    self.set_state(State::Stopped, failed);
+                }
+                Err(error)
+            }
+        }
+    }
+
+    async fn launch(&mut self) -> Result<(Run, SocketAddr, Vec<CfgWarning>), String> {
+        let prepared = launch::prepare(&self.settings.launch, self.settings.flavour)
+            .map_err(|error| error.to_string())?;
+        let layout = prepared.layout.clone();
+        let dumps = (
+            layout.crashes(),
+            self.settings.data_dir.join("crashes"),
+            self.settings.dumps,
+        );
+        let installing = layout.clone();
+        let (installed, moved) = tokio::task::spawn_blocking(move || {
+            let installed = bridge::install(&installing);
+            // Dumps left by a run Observer did not see end, such as before Observer itself crashed.
+            let moved = crashes::collect(&dumps.0, &dumps.1, dumps.2);
+            (installed, moved)
+        })
+        .await
+        .map_err(|error| error.to_string())?;
+        installed.map_err(|error| format!("cannot install the observer bridge: {error}"))?;
+        self.report_dumps(moved);
+        let credentials = Credentials::generate()
+            .map_err(|error| format!("cannot generate the launch credentials: {error}"))?;
+
+        self.generation += 1;
+        let generation = self.generation;
+        self.current.send_replace(generation);
+        let spawned = observer_platform::spawn(&prepared.launch).map_err(|error| error.to_string())?;
+        #[cfg(unix)]
+        if let Err(error) = self.pid_file().record(&spawned.tree) {
+            warn!(%error, "cannot record FXServer's process group; a crash of Observer could leave it running");
+        }
+
+        let probe = self
+            .settings
+            .probe
+            .or(prepared.endpoint)
+            .unwrap_or_else(|| SocketAddr::from((Ipv4Addr::LOCALHOST, DEFAULT_PORT)));
+        let cancel = CancellationToken::new();
+        let (stdin, stdin_task) = StdinWriter::start(spawned.stdin, generation, Arc::clone(&self.console));
+        let mut tasks = vec![
+            tokio::spawn(read_console(
+                spawned.stdout,
+                LineKind::Stdout,
+                generation,
+                Arc::clone(&self.console),
+                self.signals_tx.clone(),
+            )),
+            tokio::spawn(read_console(
+                spawned.stderr,
+                LineKind::Stderr,
+                generation,
+                Arc::clone(&self.console),
+                self.signals_tx.clone(),
+            )),
+            tokio::spawn(trace::read(
+                spawned.traces,
+                TraceDecoder::new(generation, self.current.subscribe()),
+                self.traces_tx.clone(),
+            )),
+        ];
+        tasks.extend(health::start(
+            probe,
+            &credentials,
+            generation,
+            self.probes_tx.clone(),
+            &cancel,
+        ));
+        for line in credentials.lines() {
+            drop(stdin.send(Write::System(line)));
+        }
+
+        let run = Run {
+            generation,
+            pid: spawned.pid,
+            layout,
+            exit: spawned.exit,
+            tree: spawned.tree,
+            stdin,
+            stdin_task,
+            cancel,
+            tasks,
+            health: Health::new(Instant::now()),
+            bridge_ready: false,
+            ready_at: None,
+            after: None,
+            ending: None,
+            killed: false,
+        };
+        Ok((run, probe, prepared.warnings))
+    }
+
+    async fn exited(&mut self, exit: Exit) {
+        let Some(run) = &self.run else {
+            return;
+        };
+        let generation = run.generation;
+        let expected = run.after.is_some();
+        // On Windows a killed tree exits with 1, which is also FXServer's own exit after `quit`.
+        let description = if run.killed {
+            format!("killed by Observer ({})", exit::raw(exit))
+        } else {
+            exit::describe(exit)
+        };
+        let (code, signal) = match exit {
+            Exit::Code(code) => (Some(code), None),
+            Exit::Signal(signal) => (None, Some(signal)),
+            Exit::Unknown => (None, None),
+        };
+        info!(generation, %description, expected, "FXServer exited");
+        self.note(&format!("FXServer exited: {description}"));
+        self.emit(EventKind::Exited {
+            code,
+            signal,
+            description: description.clone(),
+            expected,
+        });
+        self.wind_down().await;
+        // Its output is all read now, and what it said last may explain the exit: FXServer
+        // reports a taken port or a fatal error and is gone a moment later.
+        while let Ok(trace) = self.traces.try_recv() {
+            self.trace(trace);
+        }
+        while let Ok((generation, signal)) = self.signals.try_recv() {
+            self.signal(generation, signal);
+        }
+        let Some(run) = self.run.take() else {
+            return;
+        };
+        self.collect_dumps(&run.layout).await;
+        let Run { after, ending, .. } = run;
+
+        if let Some(after) = after {
+            match after {
+                After::Stop => {
+                    self.phase = Phase::Idle;
+                    self.set_state(State::Stopped, Cause::Exited { description });
+                }
+                After::Restart { by } => {
+                    let _ = self.spawn(Cause::Requested { by }).await;
+                }
+                After::Exit => {
+                    self.phase = Phase::Idle;
+                    self.set_state(State::Stopped, Cause::Shutdown);
+                    self.done = true;
+                }
+            }
+            return;
+        }
+        match ending {
+            Some(Ending::LicenceRejected { message }) => {
+                self.phase = Phase::Idle;
+                self.note("the licence key was refused; the server stays stopped until it is started again");
+                self.set_state(State::Stopped, Cause::LicenceRejected { message });
+            }
+            Some(Ending::BindError { address }) => {
+                let delay = self.recovery.bind_error();
+                self.set_state(State::Crashed, Cause::BindError { address });
+                self.back_off(delay);
+            }
+            Some(Ending::Hang { cause }) => self.failed(Cause::Hang { cause }),
+            Some(Ending::Fatal { message }) => self.failed(Cause::FatalError { message }),
+            None => self.failed(Cause::Exited { description }),
+        }
+    }
+
+    fn failed(&mut self, cause: Cause) {
+        self.set_state(State::Crashed, cause);
+        match self.recovery.failure(Instant::now()) {
+            Next::RestartIn(delay) => self.back_off(delay),
+            Next::CrashLoop { failures } => {
+                self.phase = Phase::Idle;
+                self.note(&format!(
+                    "{failures} failures in a row; automatic restarts are off until the server is started again"
+                ));
+                self.set_state(State::CrashLoop, Cause::CrashLoop { failures });
+            }
+        }
+    }
+
+    fn back_off(&mut self, delay: Duration) {
+        self.phase = Phase::Backoff {
+            respawn_at: Instant::now() + delay,
+        };
+        self.note(&format!("restarting in {:.1} s", delay.as_secs_f64()));
+        self.emit(EventKind::RestartScheduled {
+            delay_ms: u64::try_from(delay.as_millis()).unwrap_or(u64::MAX),
+        });
+    }
+
+    /// Waits for the whole tree to be gone, then for the run's tasks, which end with its pipes.
+    async fn wind_down(&mut self) {
+        let Some(run) = &mut self.run else {
+            return;
+        };
+        run.cancel.cancel();
+        if !run.tree.wait_empty(TREE_SETTLE).await.unwrap_or(false) {
+            if let Err(error) = run.tree.kill() {
+                error!(%error, "cannot kill what is left of FXServer's process tree");
+            }
+            if !run.tree.wait_empty(TREE_KILL).await.unwrap_or(false) {
+                error!(
+                    generation = run.generation,
+                    "processes of FXServer's tree survived the kill"
+                );
+            }
+        }
+        // Nothing more will be written to a server that is gone.
+        run.stdin_task.abort();
+        for mut task in run.tasks.drain(..) {
+            if tokio::time::timeout(TASK_JOIN, &mut task).await.is_err() {
+                task.abort();
+            }
+        }
+        #[cfg(unix)]
+        if let Err(error) = self.pid_file().clear() {
+            warn!(%error, "cannot remove FXServer's pid file");
+        }
+    }
+
+    async fn collect_dumps(&mut self, layout: &Layout) {
+        let (from, to, limits) = (
+            layout.crashes(),
+            self.settings.data_dir.join("crashes"),
+            self.settings.dumps,
+        );
+        let moved = tokio::task::spawn_blocking(move || crashes::collect(&from, &to, limits))
+            .await
+            .unwrap_or_else(|error| Err(std::io::Error::other(error)));
+        self.report_dumps(moved);
+    }
+
+    fn report_dumps(&mut self, moved: std::io::Result<Vec<PathBuf>>) {
+        match moved {
+            Ok(paths) if paths.is_empty() => {}
+            Ok(paths) => {
+                for path in &paths {
+                    self.note(&format!("crash dump saved to {}", path.display()));
+                }
+                self.emit(EventKind::CrashDumps { paths });
+            }
+            Err(error) => warn!(%error, "cannot move FXServer's crash dumps"),
+        }
+    }
+
+    #[cfg(unix)]
+    fn pid_file(&self) -> observer_platform::PidFile {
+        observer_platform::PidFile::new(self.settings.data_dir.join("fxserver.pid"))
+    }
+
+    /// Without systemd nothing ends a server Observer left behind when it died, so the next
+    /// Observer does before it starts one.
+    #[cfg(unix)]
+    async fn sweep_leftovers(&self) {
+        let pid_file = self.pid_file();
+        match tokio::task::spawn_blocking(move || pid_file.sweep()).await {
+            Ok(Ok(observer_platform::Sweep::Killed { group, processes })) => {
+                warn!(
+                    group,
+                    processes, "killed an FXServer left running by an earlier Observer"
+                );
+            }
+            Ok(Ok(_)) => {}
+            Ok(Err(error)) => warn!(%error, "cannot check for an FXServer left by an earlier Observer"),
+            Err(error) => warn!(%error, "the leftover check failed"),
+        }
+    }
+
+    fn set_state(&mut self, to: State, cause: Cause) {
+        let from = std::mem::replace(&mut self.state, to);
+        self.since_ms = now_ms();
+        if to != State::Degraded {
+            self.problems.clear();
+        }
+        info!(?from, ?to, ?cause, generation = self.generation, "server state");
+        self.publish_status();
+        self.emit(EventKind::State { from, to, cause });
+    }
+
+    fn publish_status(&self) {
+        self.status.send_replace(Status {
+            state: self.state,
+            generation: self.generation,
+            pid: self.run.as_ref().map(|run| run.pid),
+            since_ms: self.since_ms,
+            problems: self.problems.clone(),
+        });
+    }
+
+    fn emit(&self, kind: EventKind) {
+        let _ = self.events.send(Event {
+            at_ms: now_ms(),
+            generation: self.generation,
+            kind,
+        });
+    }
+
+    fn note(&self, text: &str) {
+        self.console.push(
+            self.generation,
+            LineKind::Observer,
+            Some(SUPERVISOR.to_owned()),
+            text.to_owned(),
+            LineFlags::default(),
+        );
+    }
+}
+
+async fn exit_of(run: &mut Option<Run>) -> Exit {
+    match run {
+        Some(run) => run.exit.wait().await,
+        None => std::future::pending().await,
+    }
+}
+
+/// Reads one of FXServer's console streams into the console, line by line, and passes on what
+/// the supervisor must act on.
+async fn read_console(
+    mut output: Output,
+    kind: LineKind,
+    generation: u32,
+    console: Arc<ConsoleHub>,
+    signals: mpsc::Sender<(u32, Signal)>,
+) {
+    let mut lines = LineAssembler::default();
+    let publish = |assembled: crate::console::Assembled| {
+        let flags = LineFlags {
+            truncated: assembled.truncated,
+            no_eol: assembled.no_eol,
+            masked: false,
+        };
+        let line = console.push(generation, kind, None, sanitize(&assembled.text), flags);
+        if let Some(signal) = Signal::read(kind, &plain(&line.text)) {
+            let _ = signals.try_send((generation, signal));
+        }
+    };
+    loop {
+        let flush_at = lines
+            .deadline()
+            .unwrap_or_else(|| Instant::now() + Duration::from_hours(1));
+        tokio::select! {
+            chunk = output.next() => {
+                let Some(bytes) = chunk else {
+                    lines.finish().into_iter().for_each(&publish);
+                    return;
+                };
+                lines.push(&bytes, Instant::now()).into_iter().for_each(&publish);
+            }
+            () = tokio::time::sleep_until(flush_at.into()) => lines.flush(Instant::now()).into_iter().for_each(&publish),
+        }
+    }
+}
+
+fn hang_text(cause: HangCause) -> &'static str {
+    match cause {
+        HangCause::NoHeartbeat => "no heartbeat from the observer bridge",
+        HangCause::NoHttp => "its HTTP endpoint does not answer",
+    }
+}
+
+fn now_ms() -> i64 {
+    jiff::Timestamp::now().as_millisecond()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn licence_rejections_are_recognised_on_either_stream() {
+        let lines = [
+            (
+                LineKind::Stderr,
+                "Fatal Error: This server does not have a license key specified. Please set the sv_licenseKey console variable to a key from https://portal.cfx.re/servers/registration-keys.",
+            ),
+            (
+                LineKind::Stdout,
+                "[          svadhesive] Error: This server does not have a license key specified.",
+            ),
+            (
+                LineKind::Stderr,
+                "Fatal Error: Could not authenticate server license key. Invalid key format specified.",
+            ),
+            (
+                LineKind::Stdout,
+                "[          svadhesive] Could not authenticate server license key. The specified key (cfxk...AbCd) does not exist.",
+            ),
+        ];
+
+        for (kind, text) in lines {
+            assert!(
+                matches!(Signal::read(kind, text), Some(Signal::LicenceRejected(_))),
+                "{text}"
+            );
+        }
+    }
+
+    #[test]
+    fn licence_texts_quoted_by_a_resource_or_an_operator_are_not_rejections() {
+        let lines = [
+            (
+                LineKind::Stdout,
+                "[           script:chat] Bob: lol A valid license check is required to run this server",
+            ),
+            (
+                LineKind::Stdout,
+                "[           script:chat] [          svadhesive] Could not authenticate server license key.",
+            ),
+            (
+                LineKind::Stdout,
+                "[                 cmd]  \"x\" is \"Could not authenticate server license key\"",
+            ),
+            (
+                LineKind::Stdout,
+                "[      script:svadhesive] This server does not have a license key specified.",
+            ),
+            (
+                LineKind::Stderr,
+                "SCRIPT ERROR: @chat/sv_chat.lua:12: Fatal Error: Could not authenticate server license key",
+            ),
+            (LineKind::Command, "say Could not authenticate server license key"),
+        ];
+
+        for (kind, text) in lines {
+            assert!(Signal::read(kind, text).is_none(), "{text}");
+        }
+    }
+
+    #[test]
+    fn a_fatal_error_comes_from_stderr_only() {
+        let message =
+            "Fatal Error: Could not bind on 127.0.0.1:30140 - is this address valid and not already in use?";
+
+        assert!(matches!(
+            Signal::read(LineKind::Stderr, message),
+            Some(Signal::Fatal(text)) if text.starts_with("Could not bind on 127.0.0.1:30140")
+        ));
+        assert!(Signal::read(LineKind::Stdout, message).is_none());
+        assert!(
+            Signal::read(
+                LineKind::Stdout,
+                "[ citizen-server-impl] Error: Could not bind on 127.0.0.1:30140"
+            )
+            .is_none()
+        );
+    }
+}

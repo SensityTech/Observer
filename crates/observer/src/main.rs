@@ -1,6 +1,7 @@
 mod artifacts;
 mod config;
 mod db;
+mod fxserver;
 mod lock;
 mod logging;
 mod run;
@@ -42,6 +43,16 @@ enum Command {
     /// List and install the FXServer builds Cfx.re publishes, even while Observer runs.
     #[command(subcommand)]
     Artifacts(ArtifactsCommand),
+    /// Drive FXServer by hand, without the panel.
+    #[command(subcommand)]
+    Fxserver(FxserverCommand),
+}
+
+#[derive(Debug, Subcommand)]
+enum FxserverCommand {
+    /// Run FXServer under the supervisor in the foreground, printing its console and state
+    /// changes. Lines typed here go to its console. Ctrl+C stops it gracefully.
+    Run(fxserver::RunArgs),
 }
 
 #[derive(Debug, Subcommand)]
@@ -118,6 +129,7 @@ async fn main() -> ExitCode {
                 branches,
                 allow_end_of_life,
             }) => artifacts::install(&config, build, &branches, allow_end_of_life).await,
+            Command::Fxserver(FxserverCommand::Run(args)) => fxserver::run(config, args).await,
         },
         Err(error) => Err(error),
     };

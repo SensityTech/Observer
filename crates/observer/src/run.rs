@@ -9,7 +9,8 @@ use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
 use crate::config::Config;
-use crate::{lock, logging, setup, shutdown};
+use crate::shutdown::Signals;
+use crate::{lock, logging, setup};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const DAILY: Duration = Duration::from_hours(24);
@@ -20,7 +21,8 @@ const AUDIT_FOLLOW_INTERVAL: Duration = Duration::from_secs(1);
 pub async fn run(config: Config) -> anyhow::Result<()> {
     let paths = config.paths();
     let _lock = lock::acquire(&paths.root)?;
-    let _log_guard = logging::init(&config.log.level, &paths.logs)?;
+    let log_guard = logging::init(&config.log.level, &paths.logs)?;
+    let mut signals = Signals::listen().context("cannot listen for stop requests")?;
 
     info!(version = VERSION, data_dir = %paths.root.display(), "starting Observer");
 
@@ -62,7 +64,7 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
     let upkeep = tokio::spawn(upkeep(accounts, audit.clone(), stop.clone()));
     let audit_feed = tokio::spawn(publish_audit(audit, stop.clone()));
 
-    shutdown::requested().await;
+    signals.next().await;
     info!("stopping Observer");
     stop.cancel();
     live.shutdown().await;
@@ -76,6 +78,8 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
     db.close().await.context("cannot close the database")?;
 
     info!("Observer stopped");
+    drop(log_guard);
+    signals.release();
     Ok(())
 }
 
