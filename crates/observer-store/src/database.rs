@@ -18,7 +18,8 @@ pub enum StoreError {
     )]
     TooNew { found: usize, known: usize },
     #[error(
-        "the database has schema {found} and this build needs {known}; start Observer once to          migrate it"
+        "the database has schema {found} and this build needs {known}; start Observer once to \
+         migrate it"
     )]
     NotMigrated { found: usize, known: usize },
     #[error(transparent)]
