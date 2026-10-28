@@ -41,8 +41,10 @@ pub fn collect(from: &Path, to: &Path, limits: DumpLimits) -> io::Result<Vec<Pat
         move_file(&entry.path(), &target)?;
         moved.push(target);
     }
-    trim(to, limits)?;
-    moved.retain(|path| path.exists());
+    if !moved.is_empty() {
+        trim(to, limits)?;
+        moved.retain(|path| path.exists());
+    }
     Ok(moved)
 }
 
@@ -161,6 +163,20 @@ mod tests {
             Vec::<PathBuf>::new()
         );
         assert!(!dir.path().join("data").exists());
+    }
+
+    #[test]
+    fn an_empty_crashes_folder_needs_no_folder_of_observer_s_own() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("build/crashes")).unwrap();
+
+        let moved = collect(
+            &dir.path().join("build/crashes"),
+            &dir.path().join("data/crashes"),
+            DumpLimits::default(),
+        );
+
+        assert_eq!(moved.unwrap(), Vec::<PathBuf>::new());
     }
 
     #[test]
