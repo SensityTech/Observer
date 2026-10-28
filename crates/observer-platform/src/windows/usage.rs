@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::io;
+use std::mem::size_of;
 use std::os::windows::ffi::OsStrExt;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle, RawHandle};
 use std::path::Path;
@@ -7,8 +8,10 @@ use std::ptr;
 use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
+use windows_sys::Wdk::System::SystemInformation::{NtQuerySystemInformation, SystemProcessInformation};
 use windows_sys::Win32::Foundation::{
-    ERROR_SUCCESS, FALSE, FILETIME, INVALID_HANDLE_VALUE, LocalFree, NO_ERROR, WAIT_OBJECT_0,
+    ERROR_SUCCESS, FALSE, FILETIME, INVALID_HANDLE_VALUE, LocalFree, NO_ERROR, STATUS_INFO_LENGTH_MISMATCH,
+    WAIT_OBJECT_0,
 };
 use windows_sys::Win32::NetworkManagement::IpHelper::{
     FreeMibTable, GetIfTable2, MIB_IF_ROW2, MIB_IF_TABLE2,
@@ -16,10 +19,6 @@ use windows_sys::Win32::NetworkManagement::IpHelper::{
 use windows_sys::Win32::Storage::FileSystem::{
     CreateFileW, FILE_SHARE_READ, FILE_SHARE_WRITE, GetDiskFreeSpaceExW, GetVolumeNameForVolumeMountPointW,
     GetVolumePathNameW, OPEN_EXISTING,
-};
-use windows_sys::Win32::System::Diagnostics::ToolHelp::{
-    CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
-    TH32CS_SNAPTHREAD, THREADENTRY32, Thread32First, Thread32Next,
 };
 use windows_sys::Win32::System::IO::DeviceIoControl;
 use windows_sys::Win32::System::Ioctl::{DISK_PERFORMANCE, IOCTL_DISK_PERFORMANCE};
@@ -42,6 +41,7 @@ use windows_sys::Win32::System::Threading::{
     GetThreadTimes, IO_COUNTERS, OpenProcess, OpenThread, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_VM_READ,
     THREAD_QUERY_LIMITED_INFORMATION, WaitForSingleObject,
 };
+use windows_sys::Win32::System::WindowsProgramming::{SYSTEM_PROCESS_INFORMATION, SYSTEM_THREAD_INFORMATION};
 
 use super::{ProcessTree, check, size_u32};
 use crate::usage::{
@@ -364,55 +364,93 @@ struct Snapshot {
     threads: Vec<u32>,
 }
 
-/// Every process's thread count and executable name, and the threads of `owner`, from one
-/// snapshot of the system.
+/// Every process's thread count and executable name, and the threads of `owner`, from the system's
+/// list of processes and their threads. A Toolhelp snapshot holds the same list, but walking its
+/// threads one call at a time costs some 15 µs for each thread of the machine: 60 to 110 ms on a
+/// desktop, against a few milliseconds for the one call here.
 fn snapshot(owner: u32) -> io::Result<Snapshot> {
-    // SAFETY: a snapshot of every process and thread takes no pid; the handle is checked before
-    // use.
-    let handle = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS | TH32CS_SNAPTHREAD, 0) };
-    if handle == INVALID_HANDLE_VALUE {
-        return Err(io::Error::last_os_error());
-    }
-    // SAFETY: CreateToolhelp32Snapshot returned an open handle nothing else owns.
-    let snapshot = unsafe { OwnedHandle::from_raw_handle(handle) };
+    let (words, length) = process_list()?;
+    let list = words.as_ptr().cast::<u8>();
+    let entry_size = size_of::<SYSTEM_PROCESS_INFORMATION>();
+    let thread_size = size_of::<SYSTEM_THREAD_INFORMATION>();
     let mut processes = HashMap::new();
-    let mut entry = PROCESSENTRY32W {
-        dwSize: size_u32::<PROCESSENTRY32W>(),
-        ..Default::default()
-    };
-    // SAFETY: the snapshot is open and `entry` is a writable structure whose `dwSize` is set.
-    let mut more = unsafe { Process32FirstW(snapshot.as_raw_handle(), &raw mut entry) } != 0;
-    while more {
-        let length = entry
-            .szExeFile
-            .iter()
-            .position(|&unit| unit == 0)
-            .unwrap_or(entry.szExeFile.len());
+    let mut threads = Vec::new();
+    let mut offset = 0;
+    while offset + entry_size <= length {
+        // SAFETY: the system wrote a chain of entries in the buffer, each at its predecessor's
+        // `NextEntryOffset`, and this one lies inside the `length` bytes it wrote.
+        let entry = unsafe {
+            list.add(offset)
+                .cast::<SYSTEM_PROCESS_INFORMATION>()
+                .read_unaligned()
+        };
+        let pid = u32::try_from(entry.UniqueProcessId as usize).unwrap_or(u32::MAX);
+        let name = if entry.ImageName.Buffer.is_null() {
+            String::new()
+        } else {
+            // SAFETY: a non-null name points into the same buffer, which stays alive meanwhile:
+            // `Length` bytes of UTF-16, 2-aligned like the 8-aligned buffer the system fills.
+            String::from_utf16_lossy(unsafe {
+                std::slice::from_raw_parts(entry.ImageName.Buffer, usize::from(entry.ImageName.Length) / 2)
+            })
+        };
         processes.insert(
-            entry.th32ProcessID,
+            pid,
             Listed {
-                threads: entry.cntThreads,
-                name: String::from_utf16_lossy(&entry.szExeFile[..length]),
+                threads: entry.NumberOfThreads,
+                name,
             },
         );
-        // SAFETY: as for the first entry.
-        more = unsafe { Process32NextW(snapshot.as_raw_handle(), &raw mut entry) } != 0;
-    }
-    let mut threads = Vec::new();
-    let mut thread = THREADENTRY32 {
-        dwSize: size_u32::<THREADENTRY32>(),
-        ..Default::default()
-    };
-    // SAFETY: the same open snapshot, and a writable structure whose `dwSize` is set.
-    let mut more = unsafe { Thread32First(snapshot.as_raw_handle(), &raw mut thread) } != 0;
-    while more {
-        if thread.th32OwnerProcessID == owner {
-            threads.push(thread.th32ThreadID);
+        if pid == owner {
+            // The entry's threads follow it.
+            let first = offset + entry_size;
+            for index in 0..entry.NumberOfThreads as usize {
+                let at = first + index * thread_size;
+                if at + thread_size > length {
+                    break;
+                }
+                // SAFETY: the thread entry lies inside the bytes the system wrote, as checked.
+                let thread = unsafe { list.add(at).cast::<SYSTEM_THREAD_INFORMATION>().read_unaligned() };
+                threads.push(u32::try_from(thread.ClientId.UniqueThread as usize).unwrap_or(u32::MAX));
+            }
         }
-        // SAFETY: as for the first thread.
-        more = unsafe { Thread32Next(snapshot.as_raw_handle(), &raw mut thread) } != 0;
+        if entry.NextEntryOffset == 0 {
+            break;
+        }
+        offset += entry.NextEntryOffset as usize;
     }
     Ok(Snapshot { processes, threads })
+}
+
+/// `SystemProcessInformation` in a buffer grown until the list fits, and the bytes it takes. The
+/// buffer is of `u64` so that the entries in it are aligned.
+fn process_list() -> io::Result<(Vec<u64>, usize)> {
+    let mut capacity = 1 << 20;
+    loop {
+        let mut list = vec![0u64; capacity / 8];
+        let mut written = 0;
+        let length = u32::try_from(capacity).map_err(io::Error::other)?;
+        // SAFETY: the buffer is writable for `length` bytes and `written` receives the size used.
+        let status = unsafe {
+            NtQuerySystemInformation(
+                SystemProcessInformation,
+                list.as_mut_ptr().cast(),
+                length,
+                &raw mut written,
+            )
+        };
+        if status == STATUS_INFO_LENGTH_MISMATCH {
+            // Processes may start between this call and the next.
+            capacity = (written as usize).max(capacity).next_multiple_of(8) + (1 << 16);
+            continue;
+        }
+        if status < 0 {
+            return Err(io::Error::other(format!(
+                "the system would not list its processes ({status:#x})"
+            )));
+        }
+        return Ok((list, (written as usize).min(capacity)));
+    }
 }
 
 fn cpu_times() -> Option<CpuTimes> {
