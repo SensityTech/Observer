@@ -80,11 +80,11 @@ impl Sampler {
         let mut busy = Busy::default();
         let mut events_open = true;
         let mut writer = Writer::default();
+        let mut wake = Wake::after(clock.now().as_millisecond());
 
         loop {
-            let now = clock.now().as_millisecond();
-            let wait = next_slot_end(now) + WAKE_AFTER_MS - now;
-            tokio::select! {
+            if let Some(wait) = wake.wait(clock.now().as_millisecond()) {
+                tokio::select! {
                 () = stop.cancelled() => break,
                 event = events.recv(), if events_open => {
                     match event {
@@ -99,10 +99,12 @@ impl Sampler {
                     }
                     continue;
                 }
-                () = tokio::time::sleep(Duration::from_millis(u64::try_from(wait).unwrap_or(0))) => {}
+                () = tokio::time::sleep(Duration::from_millis(wait)) => {}
+                }
+                continue;
             }
 
-            let woke = Instant::now();
+            let measured_at = Instant::now();
             let ts = slot_just_ended(clock.now().as_millisecond());
             let (state, generation, build) = {
                 let status = status.borrow();
@@ -116,9 +118,9 @@ impl Sampler {
                 runs.build(generation, build).await;
             }
             let measures = measure(&mut busy, run.as_ref(), &sources.data_dir, &sources.databases).await;
-            let collect_ms = u64::try_from(woke.elapsed().as_millis()).unwrap_or(u64::MAX);
-            let (values, children) = assembler.sample(Wake {
-                at: woke,
+            let collect_ms = u64::try_from(measured_at.elapsed().as_millis()).unwrap_or(u64::MAX);
+            let (values, children) = assembler.sample(Taken {
+                at: measured_at,
                 run,
                 measures,
                 sockets: *sources.sockets.borrow(),
@@ -127,11 +129,36 @@ impl Sampler {
             let sample = Sample { ts, state, values };
             writer.write(&metrics, &sample).await;
             metrics.publish(live(&sample, children, cores));
+            wake = Wake::after(clock.now().as_millisecond());
         }
         // The stop of FXServer that came just before is part of its run.
         while let Ok(event) = events.try_recv() {
             fold(&mut assembler, &mut runs, &event).await;
         }
+    }
+}
+
+/// When the sampler wakes next: 100 ms after the end of the slot under way. It is set once per
+/// sample, so that an event right after a slot ends does not push the wake to the next slot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Wake {
+    at: i64,
+}
+
+impl Wake {
+    fn after(now: i64) -> Self {
+        Self {
+            at: next_slot_end(now) + WAKE_AFTER_MS,
+        }
+    }
+
+    /// The milliseconds left before the wake, or `None` once it is due. A clock set back by more
+    /// than a slot finds the next wake again rather than wait for the clock to catch up.
+    fn wait(&mut self, now: i64) -> Option<u64> {
+        if self.at - now > SLOT_MS + WAKE_AFTER_MS {
+            *self = Self::after(now);
+        }
+        u64::try_from(self.at - now).ok().filter(|&left| left > 0)
     }
 }
 
@@ -291,8 +318,8 @@ fn database_size(path: &Path) -> Option<u64> {
     Some(main + std::fs::metadata(PathBuf::from(wal)).map_or(0, |metadata| metadata.len()))
 }
 
-/// One wake of the sampler.
-pub(super) struct Wake {
+/// What one wake of the sampler gathered.
+pub(super) struct Taken {
     pub at: Instant,
     pub run: Option<RunReadings>,
     pub measures: Measures,
@@ -396,7 +423,7 @@ impl Assembler {
         self.slot.lagged = true;
     }
 
-    pub(super) fn sample(&mut self, wake: Wake) -> (Values, Vec<ChildProcess>) {
+    pub(super) fn sample(&mut self, wake: Taken) -> (Values, Vec<ChildProcess>) {
         let mut values = Values::default();
         let run = wake.run.as_ref();
         let generation = run.map(|run| run.generation);

@@ -75,8 +75,8 @@ fn usage(cpu_ms: u64, started: u64) -> Usage {
     }
 }
 
-fn wake(at: Instant, run: Option<RunReadings>, measures: Measures) -> Wake {
-    Wake {
+fn wake(at: Instant, run: Option<RunReadings>, measures: Measures) -> Taken {
+    Taken {
         at,
         run,
         measures,
@@ -110,6 +110,39 @@ fn event(generation: u32, kind: EventKind) -> Event {
         generation,
         kind,
     }
+}
+
+#[test]
+fn the_wake_comes_after_the_slot_ends_whatever_events_come_meanwhile() {
+    let mut wake = Wake::after(1_761_642_004_950);
+
+    assert_eq!(wake.wait(1_761_642_004_950), Some(150));
+    assert_eq!(
+        wake.wait(1_761_642_005_050),
+        Some(50),
+        "an event just after the end keeps the wake"
+    );
+    assert_eq!(wake.wait(1_761_642_005_100), None);
+    assert_eq!(wake.wait(1_761_642_027_000), None, "a late wake samples at once");
+    assert_eq!(
+        Wake::after(1_761_642_005_110),
+        Wake {
+            at: 1_761_642_010_100
+        }
+    );
+}
+
+#[test]
+fn a_clock_set_back_finds_the_next_wake_again() {
+    let mut wake = Wake::after(1_761_642_004_950);
+
+    assert_eq!(wake.wait(1_761_638_400_000), Some(5_100));
+    assert_eq!(
+        wake,
+        Wake {
+            at: 1_761_638_405_100
+        }
+    );
 }
 
 #[test]

@@ -40,6 +40,7 @@ struct Server {
     live: Live,
     supervision: Supervision,
     metrics: Metrics,
+    metrics_clock: Clock,
     _supervised: Running,
     cookie_name: String,
 }
@@ -102,11 +103,11 @@ impl Server {
         )
         .await
         .unwrap();
-        // A millisecond before a slot ends, a clock that stands still has the sampler sample that
-        // slot again and again, a tenth of a second apart.
+        // A millisecond before a slot ends: once moved past it, the sampler wakes at once.
+        let metrics_clock = Clock::manual("2025-01-06T08:59:59.999Z".parse().unwrap());
         let metrics = Metrics::open(MetricsSetup {
             path: dir.path().join("metrics.sqlite3"),
-            clock: Clock::manual("2025-01-06T08:59:59.999Z".parse().unwrap()),
+            clock: metrics_clock.clone(),
         })
         .await
         .unwrap();
@@ -136,6 +137,7 @@ impl Server {
             live,
             supervision,
             metrics,
+            metrics_clock,
             _supervised: supervised,
             cookie_name: format!("observer_session_{instance_id}"),
         }

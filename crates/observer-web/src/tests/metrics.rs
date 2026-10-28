@@ -1,6 +1,7 @@
 //! The statistics: the series route and its bounds, and the live topic.
 
 use axum::http::{Method, StatusCode};
+use jiff::SignedDuration;
 use observer_app::{DatabaseFiles, Sources};
 use observer_domain::metrics::Series;
 use serde_json::{Value, json};
@@ -118,6 +119,14 @@ async fn the_live_topic_gives_the_newest_sample_then_each_one_taken() {
             metrics: server.dir.path().join("metrics.sqlite3"),
         },
     });
+    // Time runs ten times faster than it does, so that a slot ends every half second.
+    let clock = server.metrics_clock.clone();
+    let ticker = tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            clock.advance(SignedDuration::from_millis(500));
+        }
+    });
     let event = receive(&mut socket).await;
     send(&mut socket, json!({ "type": "sub", "topic": "metrics.live" })).await;
     let snapshot = loop {
@@ -127,6 +136,7 @@ async fn the_live_topic_gives_the_newest_sample_then_each_one_taken() {
         }
     };
     sampling.close().await;
+    ticker.abort();
 
     assert_eq!(
         empty,
@@ -137,8 +147,11 @@ async fn the_live_topic_gives_the_newest_sample_then_each_one_taken() {
         (&json!("event"), &json!("metrics.live"))
     );
     let sample = &event["data"];
-    // The slot that ended before the wake, a tenth of a second after 08:59:59.999.
-    assert_eq!(sample["ts"], NOW / 5 * 5 - 5);
+    let ts = sample["ts"].as_i64().unwrap();
+    assert!(
+        ts >= NOW / 5 * 5 - 5 && ts % 5 == 0,
+        "a slot that ended after the start: {ts}"
+    );
     assert_eq!(sample["state"], "stopped");
     assert_eq!(sample["values"]["dashboardClients"], 1.0, "this socket");
     assert!(sample["values"]["observerWorkingSet"].as_f64().unwrap() > 0.0);
