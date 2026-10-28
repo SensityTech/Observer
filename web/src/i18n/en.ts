@@ -11,6 +11,7 @@ import type { LineKind } from '../api/generated/LineKind';
 import type { OneSync } from '../api/generated/OneSync';
 import type { Outcome } from '../api/generated/Outcome';
 import type { PermissionArea } from '../api/generated/PermissionArea';
+import type { Range } from '../api/generated/Range';
 import type { ServerState } from '../api/generated/ServerState';
 import type { SpawnFailure } from '../api/generated/SpawnFailure';
 import { parsePermissions, permissionKeys, type PermissionKey } from '../auth/permissions';
@@ -94,6 +95,14 @@ const healthProblems = {
     watchdogBark: 'its watchdog reported a stuck thread',
 } satisfies Record<HealthProblem, string>;
 
+const ranges = {
+    '1h': '1h',
+    '6h': '6h',
+    '24h': '24h',
+    '7d': '7d',
+    '30d': '30d',
+} satisfies Record<Range, string>;
+
 export const en = {
     app: {
         name: 'Observer',
@@ -108,6 +117,7 @@ export const en = {
         showPassword: 'Show the password',
         loading: 'Loading',
         retry: 'Try again',
+        reload: 'Reload',
         optional: 'optional',
     },
     nav: {
@@ -161,13 +171,7 @@ export const en = {
         title: 'Overview',
         gloss: 'FXServer and Observer, right now.',
         stateTitle: 'FXServer',
-        observerTitle: 'Observer',
-        running: 'Observer is running.',
-        version: (version: string) => `Version ${version}`,
         started: (time: string, uptime: string) => `Started ${time} · up ${uptime}`,
-        unreachable: 'Observer cannot be reached.',
-        unreachableHint: 'The panel keeps trying every few seconds.',
-        loading: 'Checking Observer',
         serverLoading: 'Reading the state of FXServer',
         serverUnknown: 'The state of FXServer is not known while the live link is down.',
         serverForbidden: 'Your account cannot see the state of FXServer.',
@@ -180,6 +184,100 @@ export const en = {
         invalidOwner: 'Fix them on the Server page before the next start.',
         invalidOther: 'The owner fixes them on the Server page.',
         openServer: 'Open the Server page',
+        resources: (started: number) => `${count(started, { one: 'resource', other: 'resources' })} started`,
+    },
+    tiles: {
+        unknown: 'n/a',
+        players: {
+            label: 'Players',
+            ping: 'Ping',
+            of: (slots: string) => `/ ${slots}`,
+            pings: (average: string, p95: string) => `${average} · p95 ${p95}`,
+            lastHour: 'Last hour',
+            joinedLeft: (joined: string, left: string) => `${joined} joined · ${left} left`,
+            trend: 'Players over the last hour',
+        },
+        tick: {
+            label: 'svMain tick',
+            unit: 'ms avg',
+            overBudget: 'Over the 50 ms budget',
+            others: 'svNetwork · svSync',
+            pair: (first: string, second: string) => `${first} · ${second}`,
+            lastHitch: 'Last hitch',
+            hitchAt: (ms: string, time: string) => `${ms} at ${time}`,
+            noHitch: 'None in the last hour',
+            trend: 'svMain tick time over the last hour',
+        },
+        cpu: {
+            label: 'FXServer CPU',
+            unit: 'of one core',
+            machine: 'Of the machine',
+            threadsHandles: 'Threads · handles',
+            children: 'Child processes',
+            childrenValue: (processes: number, cpu: string) =>
+                `${count(processes, { one: 'process', other: 'processes' })} · ${cpu}`,
+            trend: 'FXServer CPU over the last hour',
+        },
+        memory: {
+            label: 'FXServer memory',
+            unit: (unit: string) => `${unit} private`,
+            workingSet: 'Working set',
+            heap: 'JS heap',
+            io: 'I/O read · write',
+            perSecond: (bytes: string) => `${bytes}/s`,
+            trend: 'FXServer private memory over the last hour',
+        },
+        host: {
+            label: 'Host',
+            unit: 'CPU',
+            memory: 'RAM',
+            disk: 'Disk free',
+            network: 'Network in · out',
+            trend: 'Host CPU over the last hour',
+        },
+        observer: {
+            label: 'Observer',
+            running: 'Running',
+            unreachable: 'Cannot be reached',
+            unit: (unit: string) => `${unit} RAM`,
+            cpu: 'CPU',
+            clients: 'Dashboard clients',
+            databases: 'Databases',
+            databasesValue: (state: string, metrics: string) => `${state} · ${metrics}`,
+            version: 'Version',
+            versionValue: (version: string, uptime: string) => `${version} · up ${uptime}`,
+            trend: 'Observer memory over the last hour',
+        },
+        ratio: (part: string, whole: string) => `${part} / ${whole}`,
+    },
+    charts: {
+        players: {
+            title: 'Online players',
+            every: (step: string) => `Every ${step}`,
+            range: 'Range',
+            ranges,
+            players: 'Players',
+            maxSlots: 'Max slots',
+            event: 'Event',
+            maxSlotsAt: (slots: string) => `Max slots ${slots}`,
+            tooltip: (players: number) => count(players, { one: 'player', other: 'players' }),
+            summary: (average: string, range: string, peak: string, at: string) =>
+                `${average} on average over ${range}. Peak ${peak} at ${at}.`,
+            summaryNow: (now: string, average: string, range: string, peak: string, at: string) =>
+                `${now} online now, ${average} on average over ${range}. Peak ${peak} at ${at}.`,
+            empty: 'Nothing was measured over this range.',
+            failed: 'The players chart could not be read. It is read again in a moment.',
+            unavailable: 'The players chart could not be shown. Reload the page to see it.',
+            loading: 'Loading the players chart',
+        },
+        markers: {
+            start: 'Start',
+            restart: 'Restart',
+            crash: 'Crash',
+            backOnline: (time: string) => ` · back online ${time}`,
+        },
+        attribution: 'Charts by',
+        library: 'TradingView Lightweight Charts™',
     },
     server_state: {
         states: {
@@ -299,7 +397,7 @@ export const en = {
         unavailable: 'The console shows again once the live link is back.',
         logs: {
             title: 'Console log files',
-            body: 'A file a day, continued in a new one past 256 MiB, without colours. The oldest go after 14 days, or sooner once all of them pass 2 GiB. The newest is first.',
+            body: 'A file a day, continued in a new one past 256 MB, without colours. The oldest go after 14 days, or sooner once all of them pass 2 GB. The newest is first.',
             caption: 'Console log files, newest first',
             name: 'File',
             size: 'Size',
@@ -803,6 +901,7 @@ export const en = {
     failure: {
         unknown: 'Something went wrong. Try again.',
         network: 'Observer cannot be reached. Check that it is running, then try again.',
+        code: 'This page could not be loaded, and stays so until the panel is loaded again. Reload it once Observer answers.',
     },
 };
 

@@ -1,6 +1,15 @@
 import { describe, expect, it } from 'vitest';
 
-import { formatBytes, formatDuration, formatNumber, formatTimestamp, plural } from './format';
+import {
+    formatBitRate,
+    formatBytes,
+    formatDuration,
+    formatMilliseconds,
+    formatNumber,
+    formatPercent,
+    formatTimestamp,
+    plural,
+} from './format';
 
 describe('plural', () => {
     const players = { one: 'player', other: 'players' };
@@ -21,14 +30,48 @@ describe('plural', () => {
 });
 
 describe('formatBytes', () => {
-    it('should use decimal units with one decimal', () => {
-        expect(formatBytes('en', 9_400_000_000)).toBe('9.4 GB');
-        expect(formatBytes('en', 38_000_000)).toBe('38 MB');
+    it('should count in multiples of 1024 with three significant digits', () => {
+        expect(formatBytes('en', 9.4 * 1024 ** 3)).toBe('9.4 GB');
+        expect(formatBytes('en', 38 * 1024 ** 2)).toBe('38 MB');
+        expect(formatBytes('en', 22.14 * 1024 ** 3)).toBe('22.1 GB');
+        expect(formatBytes('en', 64 * 1024 ** 3)).toBe('64 GB');
+        expect(formatBytes('en', 412.4 * 1024)).toBe('412 KB');
+        expect(formatBytes('en', 3 * 1024 ** 4)).toBe('3 TB');
     });
 
     it('should spell out whole bytes below a kilobyte, plural included', () => {
         expect(formatBytes('en', 512)).toBe('512 bytes');
         expect(formatBytes('en', 1)).toBe('1 byte');
+    });
+
+    it('should pass to kilobytes a rate that rounds to 1024 bytes', () => {
+        expect(formatBytes('en', 1023.4)).toBe('1,023 bytes');
+        expect(formatBytes('en', 1023.6)).toBe('1 KB');
+    });
+});
+
+describe('formatBitRate', () => {
+    it('should give bytes per second as bits in multiples of 1000', () => {
+        expect(formatBitRate('en', 1_500_000)).toBe('12 Mbit/s');
+        expect(formatBitRate('en', 2000)).toBe('16 kbit/s');
+        expect(formatBitRate('en', 50)).toBe('400 bit/s');
+        expect(formatBitRate('en', 1.25e9)).toBe('10 Gbit/s');
+    });
+});
+
+describe('formatPercent', () => {
+    it('should keep the sign against the number with one decimal at most', () => {
+        expect(formatPercent('en', 0.42)).toBe('0.4%');
+        expect(formatPercent('en', 71)).toBe('71%');
+        expect(formatPercent('en', 182.4)).toBe('182%');
+    });
+});
+
+describe('formatMilliseconds', () => {
+    it('should write three significant digits', () => {
+        expect(formatMilliseconds('en', 6.84)).toBe('6.8 ms');
+        expect(formatMilliseconds('en', 412.3)).toBe('412 ms');
+        expect(formatMilliseconds('en', 1250)).toBe('1,250 ms');
     });
 });
 

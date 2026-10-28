@@ -10,11 +10,13 @@ use std::sync::{LazyLock, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use observer_app::{
-    Accounts, AuditLog, Caller, Client, Clock, Error, PasswordCost, Running, Servers, Setup, Supervision,
+    Accounts, AuditLog, Caller, Client, Clock, DatabaseFiles, Error, Metrics, MetricsSetup, PasswordCost,
+    Running, Servers, Setup, Sources, Supervision,
 };
 use observer_domain::audit::{ActorKind, AuditAction, AuditEntry, AuditFilter, Outcome};
 use observer_domain::error::ErrorCode;
 use observer_domain::launch::{ExtraArgument, LaunchSettings, OneSync};
+use observer_domain::metrics::{LiveSample, MarkerKind, Range, Series};
 use observer_domain::server::{
     CommandAck, ConsoleLine, Delivery, LINE_MASKED, LineKind, ServerState, ServerStatus, StateCause,
 };
@@ -25,10 +27,17 @@ use observer_fxserver::supervisor::StopTimings;
 use observer_store::Database;
 use serde_json::json;
 use tempfile::TempDir;
+use tokio::sync::{broadcast, watch};
 use tokio::time::timeout;
 
 const WAIT: Duration = Duration::from_secs(20);
 const CONSOLE_ROUTE: (&str, &str) = ("POST", "/api/servers/default/console");
+/// A quick heartbeat, three players and ticks of 12 ms.
+const FAKE: [(&str, &str); 3] = [
+    ("fake_heartbeat_ms", "200"),
+    ("fake_players", "3"),
+    ("fake_tick_ms", "12"),
+];
 
 /// Ports of their own: test binaries run one after the other, but this one's tests run together.
 static PORTS: LazyLock<Mutex<Vec<u16>>> = LazyLock::new(|| Mutex::new((41926..=41928).collect()));
@@ -113,10 +122,12 @@ impl Observer {
             onesync: OneSync::On,
             auto_start,
             txadmin_events: false,
-            extra_arguments: vec![ExtraArgument {
-                name: "fake_heartbeat_ms".to_owned(),
-                value: "200".to_owned(),
-            }],
+            extra_arguments: FAKE
+                .map(|(name, value)| ExtraArgument {
+                    name: name.to_owned(),
+                    value: value.to_owned(),
+                })
+                .to_vec(),
         };
         servers
             .change_launch_settings(&owner, Servers::DEFAULT, launch, None)
@@ -508,5 +519,103 @@ async fn a_secret_set_in_an_unusual_spelling_is_masked_in_the_echo_and_the_audit
         json!({ "command": "set sv_tebexSecret [REDACTED]; set rcon_password [REDACTED]" })
     );
     assert!(!format!("{:?}", observer.console()).contains("hunter2"));
+    observer.stop_observer().await;
+}
+
+/// The next live sample that `wanted` accepts, within a few slots.
+async fn sample_where(
+    live: &mut broadcast::Receiver<LiveSample>,
+    wanted: impl Fn(&LiveSample) -> bool,
+) -> LiveSample {
+    let found = timeout(Duration::from_secs(60), async {
+        loop {
+            let sample = live.recv().await.unwrap();
+            if wanted(&sample) {
+                return sample;
+            }
+        }
+    })
+    .await;
+    found.expect("no such sample came")
+}
+
+#[tokio::test]
+async fn the_statistics_follow_a_run_from_before_its_start_to_after_its_stop() {
+    let mut observer = Observer::new(false).await;
+    let path = observer.dir.path().join("metrics.sqlite3");
+    let metrics = Metrics::open(MetricsSetup {
+        path: path.clone(),
+        clock: Clock::system(),
+    })
+    .await
+    .unwrap();
+    let (_sockets, sockets) = watch::channel(1);
+    let sampling = metrics.start(Sources {
+        supervision: observer.supervision.clone(),
+        sockets,
+        data_dir: observer.dir.path().to_path_buf(),
+        databases: DatabaseFiles {
+            state: observer.dir.path().join("observer.sqlite3"),
+            metrics: path,
+        },
+    });
+    let (_, mut live) = metrics.live();
+
+    let before = sample_where(&mut live, |_| true).await;
+    observer.supervision.start_server(&observer.owner).await.unwrap();
+    observer.state(ServerState::Online).await;
+    let running = sample_where(&mut live, |sample| sample.values.contains_key(&Series::PingAvg)).await;
+    observer.supervision.stop_server(&observer.owner).await.unwrap();
+    observer.state(ServerState::Stopped).await;
+    let after = sample_where(&mut live, |sample| sample.state == ServerState::Stopped).await;
+    sampling.close().await;
+
+    assert_eq!(before.state, ServerState::Stopped);
+    assert!(!before.values.contains_key(&Series::Players), "{before:?}");
+    assert!(before.values[&Series::ObserverWorkingSet] > 0.0);
+    assert!(before.values[&Series::HostMemoryTotal] > 0.0);
+    assert_eq!(before.values[&Series::DashboardClients], 1.0);
+    let value = |series| running.values.get(&series).copied();
+    assert_eq!(value(Series::Players), Some(3.0));
+    assert_eq!(value(Series::Slots), Some(8.0));
+    // The fake's pings are 25, 30 and 35 ms.
+    assert_eq!(
+        (value(Series::PingAvg), value(Series::PingP95)),
+        (Some(30.0), Some(35.0))
+    );
+    assert_eq!(value(Series::MainTick), Some(12.0));
+    assert_eq!(value(Series::MainOverBudget), Some(0.0));
+    assert!(value(Series::FxsCpu).is_some_and(|cpu| cpu >= 0.0), "{running:?}");
+    assert!(value(Series::FxsWorkingSet).is_some_and(|bytes| bytes > 0.0));
+    assert_eq!(value(Series::HitchesMain), Some(0.0));
+    assert_eq!(
+        value(Series::Resources),
+        Some(1.0),
+        "the fake starts the bridge alone"
+    );
+    for series in [
+        Series::Players,
+        Series::FxsCpu,
+        Series::MainTick,
+        Series::FxsWorkingSet,
+    ] {
+        assert!(
+            !after.values.contains_key(&series),
+            "{series:?} after the stop: {after:?}"
+        );
+    }
+
+    let hour = metrics
+        .series(Range::Hour, &[Series::Players, Series::FxsCpu])
+        .await
+        .unwrap();
+    let players = &hour.series[0].values;
+    assert!(players.contains(&Some(3.0)));
+    assert_eq!(players.last(), Some(&None), "the open slot has no sample yet");
+    assert_eq!(
+        hour.markers.iter().map(|marker| marker.kind).collect::<Vec<_>>(),
+        [MarkerKind::Start]
+    );
+    metrics.close().await.unwrap();
     observer.stop_observer().await;
 }

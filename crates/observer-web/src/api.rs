@@ -5,6 +5,7 @@
 mod account;
 mod audit;
 mod auth;
+mod metrics;
 mod servers;
 mod setup;
 mod users;
@@ -52,6 +53,7 @@ pub(crate) fn routes() -> Vec<Route> {
     // which the handler checks once it has read the line.
     let command = Permission(P::CONSOLE_WRITE);
     let logs = Permission(P::LOGS_DOWNLOAD);
+    let dashboard = Permission(P::DASHBOARD_VIEW);
     vec![
         route(M::GET,    "/health",                     Public,       health),
         route(M::GET,    "/setup",                      Public,       setup::status),
@@ -82,6 +84,7 @@ pub(crate) fn routes() -> Vec<Route> {
         route(M::POST,   "/servers/default/console",    command,      servers::command),
         route(M::GET,    "/servers/default/console/logs",        logs, servers::log_files),
         route(M::GET,    "/servers/default/console/logs/{name}", logs, servers::download_log),
+        route(M::GET,    "/metrics/series",             dashboard,    metrics::series),
     ]
 }
 

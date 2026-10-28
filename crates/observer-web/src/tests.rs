@@ -2,6 +2,7 @@
 //! database in a temporary directory.
 
 mod live;
+mod metrics;
 mod servers;
 
 use std::net::SocketAddr;
@@ -12,7 +13,9 @@ use axum::extract::connect_info::MockConnectInfo;
 use axum::http::{HeaderMap, Method, Request, StatusCode, header};
 use http_body_util::BodyExt;
 use jiff::SignedDuration;
-use observer_app::{Accounts, AuditLog, Clock, PasswordCost, Running, Servers, Setup, Supervision};
+use observer_app::{
+    Accounts, AuditLog, Clock, Metrics, MetricsSetup, PasswordCost, Running, Servers, Setup, Supervision,
+};
 use observer_domain::audit::ActorKind;
 use observer_store::Database;
 use serde_json::{Value, json};
@@ -21,7 +24,7 @@ use tower::ServiceExt;
 
 use crate::api::routes;
 use crate::gate::Gate;
-use crate::{AppState, Live, SESSION_KEY_HEADER, router};
+use crate::{AppState, Live, SESSION_KEY_HEADER, Services, router};
 
 const HOST: &str = "observer.test:40125";
 const ORIGIN: &str = "http://observer.test:40125";
@@ -36,6 +39,8 @@ struct Server {
     db: Database,
     live: Live,
     supervision: Supervision,
+    metrics: Metrics,
+    metrics_clock: Clock,
     _supervised: Running,
     cookie_name: String,
 }
@@ -98,13 +103,25 @@ impl Server {
         )
         .await
         .unwrap();
+        // A millisecond before a slot ends: once moved past it, the sampler wakes at once.
+        let metrics_clock = Clock::manual("2025-01-06T08:59:59.999Z".parse().unwrap());
+        let metrics = Metrics::open(MetricsSetup {
+            path: dir.path().join("metrics.sqlite3"),
+            clock: metrics_clock.clone(),
+        })
+        .await
+        .unwrap();
         let instance_id = db.instance_id().await.unwrap();
+        let services = Services {
+            accounts: accounts.clone(),
+            audit: audit.clone(),
+            servers,
+            supervision: supervision.clone(),
+            metrics: metrics.clone(),
+        };
         let state = AppState::new(
             "0.0.0-test",
-            accounts.clone(),
-            audit.clone(),
-            servers,
-            supervision.clone(),
+            services,
             &instance_id,
             &["observer.test".to_owned()],
         );
@@ -119,6 +136,8 @@ impl Server {
             db,
             live,
             supervision,
+            metrics,
+            metrics_clock,
             _supervised: supervised,
             cookie_name: format!("observer_session_{instance_id}"),
         }
