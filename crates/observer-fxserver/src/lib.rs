@@ -2,6 +2,7 @@
 
 pub mod bridge;
 pub mod command;
+pub mod console;
 pub mod launch;
 pub mod layout;
 pub mod trace;
