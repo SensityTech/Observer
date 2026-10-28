@@ -9,6 +9,8 @@ mod logging;
 mod run;
 mod setup;
 mod shutdown;
+#[cfg(target_os = "linux")]
+mod systemd;
 mod user;
 
 use std::path::PathBuf;
@@ -68,6 +70,18 @@ enum Command {
     /// Drive FXServer by hand, without the panel.
     #[command(subcommand)]
     Fxserver(FxserverCommand),
+    /// Run Observer as a systemd service.
+    #[cfg(target_os = "linux")]
+    #[command(subcommand)]
+    Service(ServiceCommand),
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Debug, Subcommand)]
+enum ServiceCommand {
+    /// Print a systemd unit that runs this binary with this configuration, as the user running
+    /// the command. It writes nothing: it says where the unit goes.
+    PrintUnit,
 }
 
 #[derive(Debug, Subcommand)]
@@ -153,6 +167,8 @@ async fn main() -> ExitCode {
                 allow_end_of_life,
             }) => artifacts::install(&config, build, &branches, allow_end_of_life).await,
             Command::Fxserver(FxserverCommand::Run(args)) => fxserver::run(config, args).await,
+            #[cfg(target_os = "linux")]
+            Command::Service(ServiceCommand::PrintUnit) => systemd::print_unit(&cli.config),
         },
         Err(error) => Err(error),
     };

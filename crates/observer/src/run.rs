@@ -167,10 +167,12 @@ pub async fn run(config: Config, args: RunArgs) -> anyhow::Result<()> {
 }
 
 /// What the host shows of Observer besides its console: the status window and the tray icon on
-/// Windows.
+/// Windows, the state of the service to systemd on Linux.
 struct Host {
     #[cfg(windows)]
     desktop: Option<crate::desktop::Desktop>,
+    #[cfg(target_os = "linux")]
+    readiness: crate::systemd::Readiness,
 }
 
 #[cfg_attr(
@@ -214,7 +216,10 @@ impl Host {
         }
         #[cfg(not(windows))]
         {
-            Self {}
+            Self {
+                #[cfg(target_os = "linux")]
+                readiness: crate::systemd::Readiness::start(setup.supervision, setup.listen.port()),
+            }
         }
     }
 
@@ -223,6 +228,8 @@ impl Host {
         if let Some(desktop) = &self.desktop {
             desktop.stopping();
         }
+        #[cfg(target_os = "linux")]
+        self.readiness.stopping();
     }
 
     async fn close(self) {
@@ -230,6 +237,8 @@ impl Host {
         if let Some(desktop) = self.desktop {
             desktop.close().await;
         }
+        #[cfg(target_os = "linux")]
+        self.readiness.close().await;
     }
 }
 
