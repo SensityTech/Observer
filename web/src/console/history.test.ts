@@ -16,6 +16,13 @@ describe('console history', () => {
         expect(readHistory('kenji')).toEqual([]);
     });
 
+    it('should leave out a command Observer masked a secret in', () => {
+        const history = remember('ada', ['status'], 'set rcon_password"letmein"', true);
+
+        expect(history).toEqual(['status']);
+        expect(readHistory('ada')).toEqual([]);
+    });
+
     it('should forget what it cannot read', () => {
         localStorage.setItem('observer.console.history.ada', '{"not":"a list"');
         expect(readHistory('ada')).toEqual([]);

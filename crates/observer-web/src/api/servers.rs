@@ -65,11 +65,11 @@ pub(crate) async fn command(
     Extension(caller): Extension<Caller>,
     JsonBody(command): JsonBody<ConsoleCommand>,
 ) -> Result<Json<CommandAck>, Failure> {
-    let delivery = state
+    let ack = state
         .supervision
         .command(&caller, &command.line, "POST", CONSOLE_ROUTE)
         .await?;
-    Ok(Json(CommandAck { delivery }))
+    Ok(Json(ack))
 }
 
 pub(crate) async fn log_files(State(state): State<AppState>) -> Result<Json<Vec<LogFile>>, Failure> {

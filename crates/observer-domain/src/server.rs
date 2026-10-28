@@ -244,6 +244,9 @@ pub enum Delivery {
 #[ts(export)]
 pub struct CommandAck {
     pub delivery: Delivery,
+    /// A secret was masked in the command as the console and the audit log show it: the panel
+    /// keeps such a line out of the history it stores in the browser.
+    pub masked: bool,
 }
 
 /// Why a console command was refused before anything was written. `observer_cmd` is Observer's

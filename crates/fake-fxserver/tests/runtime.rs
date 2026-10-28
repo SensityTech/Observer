@@ -16,7 +16,7 @@ use observer_domain::audit::{ActorKind, AuditAction, AuditEntry, AuditFilter, Ou
 use observer_domain::error::ErrorCode;
 use observer_domain::launch::{ExtraArgument, LaunchSettings, OneSync};
 use observer_domain::server::{
-    ConsoleLine, Delivery, LINE_MASKED, LineKind, ServerState, ServerStatus, StateCause,
+    CommandAck, ConsoleLine, Delivery, LINE_MASKED, LineKind, ServerState, ServerStatus, StateCause,
 };
 use observer_fxserver::console::plain;
 use observer_fxserver::health::HealthLimits;
@@ -310,7 +310,13 @@ async fn a_server_started_from_the_panel_runs_a_command_then_stops_gracefully() 
     assert_eq!(online.cause, Some(StateCause::Ready));
     assert_eq!(online.build, Some(35245));
     assert!(online.started_at.is_some());
-    assert_eq!(delivery, Delivery::Written);
+    assert_eq!(
+        delivery,
+        CommandAck {
+            delivery: Delivery::Written,
+            masked: false
+        }
+    );
     assert_eq!((echo.3, echo.4.as_deref()), (LineKind::Command, Some("ada")));
     assert!(
         echo.0 < printed.0,
@@ -478,7 +484,7 @@ async fn a_secret_set_in_an_unusual_spelling_is_masked_in_the_echo_and_the_audit
     observer.supervision.start_server(&observer.owner).await.unwrap();
     observer.state(ServerState::Online).await;
 
-    observer
+    let ack = observer
         .supervision
         .command(
             &observer.owner,
@@ -495,6 +501,7 @@ async fn a_secret_set_in_an_unusual_spelling_is_masked_in_the_echo_and_the_audit
         "set sv_tebexSecret [REDACTED]; set rcon_password [REDACTED]"
     );
     assert_eq!(echo.6 & LINE_MASKED, LINE_MASKED);
+    assert!(ack.masked, "the panel keeps the line out of its history");
     let commands = observer.audited(AuditAction::ConsoleCommandSent).await;
     assert_eq!(
         commands[0].details,

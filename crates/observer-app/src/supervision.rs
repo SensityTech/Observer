@@ -14,9 +14,9 @@ use observer_domain::error::{ApiError, ErrorCode};
 use observer_domain::launch::{Platform, StoredLaunch};
 use observer_domain::permissions::Permissions;
 use observer_domain::server::{
-    CommandRefusal, ConsoleLine, ConsoleSnapshot, Delivery, HangCause, HealthProblem, LINE_MASKED,
-    LINE_NO_EOL, LINE_TRUNCATED, LaunchReadiness, LineKind, LogFile, PlayerCount, ServerState, ServerStatus,
-    StateCause,
+    CommandAck, CommandRefusal, ConsoleLine, ConsoleSnapshot, Delivery, HangCause, HealthProblem,
+    LINE_MASKED, LINE_NO_EOL, LINE_TRUNCATED, LaunchReadiness, LineKind, LogFile, PlayerCount, ServerState,
+    ServerStatus, StateCause,
 };
 use observer_fxserver::console::{self as fx_console, ConsoleHub, ConsoleLog, LineFlags};
 use observer_fxserver::health;
@@ -276,14 +276,15 @@ impl Supervision {
     /// Sends an operator's line to FXServer's console. The line is read as FXServer will read it
     /// first: a command that stops the server or its bridge, or runs what Observer cannot read,
     /// also takes the right to control the server, checked as `method path` for the audit log.
-    /// The command is audited before it is written.
+    /// The command is audited before it is written. The answer says whether a secret was masked
+    /// in it, which the panel then keeps out of its history.
     pub async fn command(
         &self,
         caller: &Caller,
         line: &str,
         method: &str,
         path: &str,
-    ) -> Result<Delivery, Error> {
+    ) -> Result<CommandAck, Error> {
         let inner = &self.inner;
         let command = match UserCommand::parse(line) {
             Ok(command) => command,
@@ -316,16 +317,20 @@ impl Supervision {
             return Err(ErrorCode::ServerNotRunning.into());
         }
 
+        let shown = fx_console::mask_command(command.as_str());
+        let masked = shown.is_some();
+        let shown = shown.unwrap_or_else(|| command.as_str().to_owned());
         let record = Record::by(caller, AuditAction::ConsoleCommandSent)
             .target(Servers::DEFAULT)
-            .details(json!({ "command": masked(command.as_str()) }));
+            .details(json!({ "command": shown }));
         self.audit(record).await?;
-        match inner.supervisor.command(command, &caller.username).await {
-            Ok(()) => Ok(Delivery::Written),
-            Err(ControlError::Stdin(StdinError::Pending)) => Ok(Delivery::Pending),
-            Err(ControlError::Stdin(StdinError::Busy)) => Ok(Delivery::Busy),
-            Err(error) => Err(control_error(error)),
-        }
+        let delivery = match inner.supervisor.command(command, &caller.username).await {
+            Ok(()) => Delivery::Written,
+            Err(ControlError::Stdin(StdinError::Pending)) => Delivery::Pending,
+            Err(ControlError::Stdin(StdinError::Busy)) => Delivery::Busy,
+            Err(error) => return Err(control_error(error)),
+        };
+        Ok(CommandAck { delivery, masked })
     }
 
     /// The status as it changes.

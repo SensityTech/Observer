@@ -372,12 +372,12 @@ function CommandLine({ onSent }: { onSent: (command: string) => void }) {
         }
         setSending(true);
         try {
-            const { delivery } = await sendCommand(line);
+            const { delivery, masked } = await sendCommand(line);
             if (delivery === 'busy') {
                 setFeedback({ tone: 'danger', text: t.console.busy });
                 return;
             }
-            setHistory(remember(me.username, history, line));
+            setHistory(remember(me.username, history, line, masked));
             setPosition(START);
             setCommand('');
             setFeedback(delivery === 'pending' ? { tone: 'warning', text: t.console.pending } : null);

@@ -14,8 +14,15 @@ export const readHistory = (username: string): string[] => {
     }
 };
 
-/** The history with `command` as its newest entry, saved. The same command twice in a row counts once. */
-export const remember = (username: string, history: string[], command: string): string[] => {
+/**
+ * The history with `command` as its newest entry, saved. The same command twice in a row counts once.
+ * A command Observer masked a secret in is left out: the browser would keep the secret in clear,
+ * long after the session.
+ */
+export const remember = (username: string, history: string[], command: string, masked = false): string[] => {
+    if (masked) {
+        return history;
+    }
     const next = history.at(-1) === command ? history : [...history, command].slice(-MAX);
     try {
         localStorage.setItem(key(username), JSON.stringify(next));

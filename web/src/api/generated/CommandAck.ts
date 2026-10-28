@@ -4,4 +4,9 @@ import type { Delivery } from "./Delivery";
 /**
  * The answer to a console command.
  */
-export type CommandAck = { delivery: Delivery, };
+export type CommandAck = { delivery: Delivery, 
+/**
+ * A secret was masked in the command as the console and the audit log show it: the panel
+ * keeps such a line out of the history it stores in the browser.
+ */
+masked: boolean, };
