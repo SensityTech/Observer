@@ -56,6 +56,13 @@ const ONLINE = {
     launch: 'ready',
 };
 
+/** The text of what a field is described by, element by element. */
+const described = (field: HTMLElement) =>
+    (field.getAttribute('aria-describedby') ?? '')
+        .split(' ')
+        .map((id) => document.getElementById(id)?.textContent)
+        .join(' | ');
+
 /** The page, and the status bar, for an account holding `permissions`, the schedule as the topic says. */
 const page = async (permissions: string, schedule: ScheduleStatus = SCHEDULE) => {
     let socket: SocketEvents | undefined;
@@ -398,6 +405,32 @@ describe('SchedulePage', () => {
         expect(rangeError).not.toBeNull();
         expect(dialog.getByText(en.schedule.onceTimeRequired)).not.toBeNull();
         expect(fetch).not.toHaveBeenCalled();
+        live.stop();
+    });
+
+    it('should tie each hint and error to the fields it is about', async () => {
+        Element.prototype.scrollIntoView = () => {};
+        const { getByRole, getByLabelText, live } = await page('19');
+
+        const zone = described(getByLabelText(en.schedule.timeZone));
+        fireEvent.click(getByRole('radio', { name: en.schedule.modes.interval }));
+        fireEvent.change(getByLabelText(en.schedule.intervalMinutes), { target: { value: '1.5' } });
+        fireEvent.click(getByRole('button', { name: en.schedule.save }));
+        const fields = [
+            getByLabelText(en.schedule.intervalHours),
+            getByLabelText(en.schedule.intervalMinutes),
+        ];
+        fireEvent.click(getByRole('button', { name: en.schedule.restartOnce }));
+        const once = described(within(getByRole('dialog')).getByLabelText(en.schedule.onceMinutes));
+
+        expect(zone).toBe(en.schedule.timeZoneHint);
+        for (const field of fields) {
+            expect(field.getAttribute('aria-invalid')).toBe('true');
+            expect(described(field)).toBe(
+                `${en.schedule.ranges.intervalMinutes} | ${en.schedule.intervalHint}`,
+            );
+        }
+        expect(once).toBe(en.schedule.onceHint);
         live.stop();
     });
 

@@ -513,7 +513,7 @@ function OnceDialog({
                 </>
             }
         >
-            <div className="flex flex-col gap-4" aria-describedby={hint}>
+            <div className="flex flex-col gap-4">
                 <Segmented
                     legend={t.schedule.onceWhen}
                     name="once-mode"
@@ -531,6 +531,7 @@ function OnceDialog({
                     <div className="flex flex-col gap-2">
                         <TextField
                             label={t.schedule.onceMinutes}
+                            describedBy={hint}
                             type="number"
                             inputMode="numeric"
                             min={1}
@@ -563,6 +564,7 @@ function OnceDialog({
                 ) : (
                     <TextField
                         label={t.schedule.onceTime}
+                        describedBy={hint}
                         hint={zone}
                         type="time"
                         className="max-w-48"
@@ -979,6 +981,9 @@ function SettingsForm({ schedule }: { schedule: ScheduleStatus }) {
     const warningIssues = draft.warnings
         .map((minutes, index) => ({ minutes, message: issue('warning', index) }))
         .filter((each) => each.message !== undefined);
+    const intervalDescribedBy = issue('intervalMinutes')
+        ? 'schedule-interval-error schedule-interval-hint'
+        : 'schedule-interval-hint';
     const hours = Math.floor(draft.intervalMinutes / 60);
     const minutesPart = draft.intervalMinutes % 60;
     const hostZone = schedule.settings.timeZone === null ? schedule.zone : null;
@@ -1135,6 +1140,7 @@ function SettingsForm({ schedule }: { schedule: ScheduleStatus }) {
                                     className="w-28 max-md:flex-1"
                                     value={hours}
                                     aria-invalid={issue('intervalMinutes') ? true : undefined}
+                                    describedBy={intervalDescribedBy}
                                     onChange={(event) =>
                                         edit({
                                             intervalMinutes: Number(event.target.value) * 60 + minutesPart,
@@ -1149,13 +1155,21 @@ function SettingsForm({ schedule }: { schedule: ScheduleStatus }) {
                                     max={59}
                                     className="w-28 max-md:flex-1"
                                     value={minutesPart}
+                                    aria-invalid={issue('intervalMinutes') ? true : undefined}
+                                    describedBy={intervalDescribedBy}
                                     onChange={(event) =>
                                         edit({ intervalMinutes: hours * 60 + Number(event.target.value) })
                                     }
                                 />
                             </div>
-                            {issue('intervalMinutes') && <FieldError>{issue('intervalMinutes')}</FieldError>}
-                            <p className="text-small text-ink-3">{t.schedule.intervalHint}</p>
+                            {issue('intervalMinutes') && (
+                                <FieldError id="schedule-interval-error">
+                                    {issue('intervalMinutes')}
+                                </FieldError>
+                            )}
+                            <p id="schedule-interval-hint" className="text-small text-ink-3">
+                                {t.schedule.intervalHint}
+                            </p>
                         </fieldset>
                     )}
 
@@ -1168,6 +1182,9 @@ function SettingsForm({ schedule }: { schedule: ScheduleStatus }) {
                             className={cn(inputClass, 'max-w-sm')}
                             value={draft.timeZone ?? ''}
                             aria-invalid={issue('timeZone') ? true : undefined}
+                            aria-describedby={
+                                issue('timeZone') ? 'schedule-zone-error' : 'schedule-zone-hint'
+                            }
                             onChange={(event) => edit({ timeZone: event.target.value || null })}
                         >
                             <option value="">{t.schedule.hostZone(hostZone)}</option>
@@ -1178,9 +1195,11 @@ function SettingsForm({ schedule }: { schedule: ScheduleStatus }) {
                             ))}
                         </select>
                         {issue('timeZone') ? (
-                            <FieldError>{issue('timeZone')}</FieldError>
+                            <FieldError id="schedule-zone-error">{issue('timeZone')}</FieldError>
                         ) : (
-                            <p className="text-small text-ink-3">{t.schedule.timeZoneHint}</p>
+                            <p id="schedule-zone-hint" className="text-small text-ink-3">
+                                {t.schedule.timeZoneHint}
+                            </p>
                         )}
                     </div>
 
