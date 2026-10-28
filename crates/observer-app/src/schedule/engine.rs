@@ -617,6 +617,7 @@ impl State {
 
     fn miss(&mut self, target: Target, reason: Miss, effects: &mut Vec<Effect>) {
         if self.announced(target.at) && self.online() {
+            self.warned.remove(&target.at);
             effects.push(Effect::Announce(BridgeEvent::RestartSkipped {
                 at: target.at.as_millisecond(),
                 by: OBSERVER.to_owned(),
@@ -633,8 +634,9 @@ impl State {
     }
 
     /// Resources heard of the restart that was next before a user's action: they hear what
-    /// became of it.
-    fn tell_of_change(&self, previous: &Target, by: &str, change: Change, effects: &mut Vec<Effect>) {
+    /// became of it. They then count it gone, so should it come back, by a restore or a settings
+    /// change, its warnings go out again.
+    fn tell_of_change(&mut self, previous: &Target, by: &str, change: Change, effects: &mut Vec<Effect>) {
         let resolved = effects.iter().any(|effect| {
             matches!(effect, Effect::Restart(target) | Effect::Missed { target, .. } if target.at == previous.at)
         });
@@ -659,6 +661,7 @@ impl State {
                 reason: previous.source,
             },
         };
+        self.warned.remove(&previous.at);
         effects.push(Effect::Announce(event));
     }
 

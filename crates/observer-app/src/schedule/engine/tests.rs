@@ -997,6 +997,25 @@ fn skipping_or_turning_off_an_announced_restart_tells_resources_it_will_not_happ
 }
 
 #[test]
+fn a_restart_told_skipped_then_brought_back_is_announced_again() {
+    // Within the 5-minute tier, which went out at 02:55 and is not due again by itself.
+    let mut restored = announced();
+    let mut turned_on = announced();
+    restored.at("2026-10-28T02:55:10Z", Input::Skip { by: "ada".to_owned() });
+    turned_on.settings.stored.enabled = false;
+    turned_on.at("2026-10-28T02:55:10Z", Input::Settings { by: "ada".to_owned() });
+    turned_on.settings.stored.enabled = true;
+
+    let back = restored.at("2026-10-28T02:55:30Z", Input::Restore { by: "ada".to_owned() });
+    let on = turned_on.at("2026-10-28T02:55:30Z", Input::Settings { by: "ada".to_owned() });
+    let fired = restored.run_until("2026-10-28T03:00:00Z");
+
+    assert_eq!(events(&back), [scheduled("2026-10-28T03:00:00Z", 270)]);
+    assert_eq!(events(&on), [scheduled("2026-10-28T03:00:00Z", 270)]);
+    assert_eq!(restarts(&fired), [ts("2026-10-28T03:00:00Z")]);
+}
+
+#[test]
 fn changes_before_any_announcement_tell_resources_nothing() {
     let mut sim = Sim::running(
         paris(&["04:00", "16:00"]),

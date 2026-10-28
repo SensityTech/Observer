@@ -89,7 +89,8 @@ window.
   decreasing. After a sleep or a clock change, only the nearest warning goes out, never several at
   once.
 - `observer:restartSkipped` and `observer:restartRescheduled` only name an `at` announced in the same
-  run.
+  run. Should that restart come back (restored, or the schedule turned on again), it is announced
+  again, from its nearest warning.
 - A restart that happens is always preceded by `observer:shuttingDown`, and no `observer:restart*`
   event follows it. A second `observer:shuttingDown` may follow when a stop, or Observer stopping,
   overtakes a restart: the latest one says what happens.
