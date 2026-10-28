@@ -1,16 +1,20 @@
-import { useQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { ArrowRight } from 'lucide-react';
+import { lazy, Suspense } from 'react';
 
-import { healthQuery } from '../api/health';
 import type { ServerStatus } from '../api/generated/ServerStatus';
 import { useMe } from '../auth/me';
 import { useI18n } from '../i18n/I18nProvider';
-import { useLinkState, useSnapshot } from '../live/context';
+import { useLinkState } from '../live/context';
 import { cn } from '../lib/cn';
 import { secondsSince, useNow } from '../lib/useNow';
+import { LiveMetricsProvider, useLiveMetrics } from '../metrics/live';
+import { Tiles } from '../overview/Tiles';
 import { useServerStatus } from '../server/context';
 import { STATE_INK, STATE_LED, causeText, isRunning } from '../server/state';
+
+// The chart library is the heaviest part of the panel: it loads after the page has painted.
+const PlayersChart = lazy(() => import('../charts/PlayersChart'));
 
 export function OverviewPage() {
     const { t } = useI18n();
@@ -22,9 +26,29 @@ export function OverviewPage() {
                     {t.overview.title} <span className="gloss">{t.overview.gloss}</span>
                 </h1>
             </div>
-            <ServerCard />
-            <ObserverCard />
+            <LiveMetricsProvider>
+                <ServerCard />
+                <Tiles />
+                <Suspense fallback={<ChartPlaceholder />}>
+                    <PlayersChart />
+                </Suspense>
+            </LiveMetricsProvider>
         </>
+    );
+}
+
+/** The chart card's shape while its code loads. */
+function ChartPlaceholder() {
+    const { t } = useI18n();
+    return (
+        <section className="card" aria-busy="true" aria-label={t.charts.players.loading}>
+            <div className="card-head">
+                <span className="skeleton h-3 w-40" />
+            </div>
+            <div className="card-body">
+                <div className="skeleton h-[260px] w-full max-md:h-[200px]" />
+            </div>
+        </section>
     );
 }
 
@@ -65,8 +89,10 @@ function ServerState({ status }: { status: ServerStatus }) {
     const { t, format } = useI18n();
     const me = useMe();
     const now = useNow();
+    const { latest } = useLiveMetrics();
     const cause = causeText(t, status);
     const running = isRunning(status.state);
+    const resources = running ? (latest?.values.resources ?? null) : null;
 
     const facts = [
         running && status.startedAt !== null
@@ -84,6 +110,7 @@ function ServerState({ status }: { status: ServerStatus }) {
                       status.players.max === null ? null : format.number(status.players.max),
                   ),
               ),
+        resources === null ? null : t.overview.resources(resources),
         status.restartAt === null
             ? null
             : t.server_state.restartIn(
@@ -128,54 +155,5 @@ function ServerState({ status }: { status: ServerStatus }) {
                 </div>
             )}
         </>
-    );
-}
-
-function ObserverCard() {
-    const { t, format } = useI18n();
-    const health = useQuery(healthQuery);
-    const status = useSnapshot('status');
-    const now = useNow();
-
-    return (
-        <section className="card" aria-labelledby="overview-observer">
-            <div className="card-head">
-                <h2 id="overview-observer" className="eyebrow">
-                    {t.overview.observerTitle}
-                </h2>
-            </div>
-            <div className="card-body flex flex-col gap-1.5">
-                {health.isPending && <p className="text-ink-3">{t.overview.loading}</p>}
-                {/* A failed check keeps the last answer: it no longer says Observer runs. */}
-                {health.isError && (
-                    <>
-                        <p className="flex items-center gap-2.5 text-state text-ink">
-                            <span className="led led-down" aria-hidden="true" />
-                            {t.overview.unreachable}
-                        </p>
-                        <p className="text-ink-3">{t.overview.unreachableHint}</p>
-                    </>
-                )}
-                {!health.isError && health.data && (
-                    <>
-                        <p className="flex items-center gap-2.5 text-state text-ink">
-                            <span className="led led-live" aria-hidden="true" />
-                            {t.overview.running}
-                        </p>
-                        <p className="font-mono text-[13px] text-ink-3">
-                            {t.overview.version(health.data.version)}
-                        </p>
-                        {status && (
-                            <p className="text-small text-ink-3">
-                                {t.overview.started(
-                                    format.timestamp(status.startedAt, { seconds: false }),
-                                    format.duration(secondsSince(status.startedAt, now)),
-                                )}
-                            </p>
-                        )}
-                    </>
-                )}
-            </div>
-        </section>
     );
 }
