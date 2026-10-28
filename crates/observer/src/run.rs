@@ -3,7 +3,9 @@ use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::Context;
 use jiff::tz::TimeZone;
-use observer_app::{Accounts, AuditLog, Clock, PasswordCost, Servers, Setup, Supervision};
+use observer_app::{
+    Accounts, AuditLog, Clock, PasswordCost, Running, Schedule, ScheduleSetup, Servers, Setup, Supervision,
+};
 use observer_fxserver::console::{ConsoleLog, LogLimits};
 use observer_store::{BackupKind, Database};
 use tokio::net::TcpListener;
@@ -42,12 +44,22 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
     let (supervision, mut supervised) = Supervision::start(
         Setup {
             db: db.clone(),
-            clock,
+            clock: clock.clone(),
             accounts: accounts.clone(),
             servers: servers.clone(),
             data_dir: paths.root.clone(),
             console_logs,
             log: Some(&console_log),
+        },
+        |_| {},
+    )
+    .await?;
+    // Before FXServer boots, so that Observer's own start counts as one for the schedule.
+    let (schedule, scheduling) = Schedule::start(
+        ScheduleSetup {
+            db: db.clone(),
+            clock: clock.clone(),
+            supervision: supervision.clone(),
         },
         |_| {},
     )
@@ -66,6 +78,7 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
         audit.clone(),
         servers,
         supervision.clone(),
+        schedule,
         &instance_id,
         &config.http.hosts,
     );
@@ -87,22 +100,11 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
     }
 
     // The panel keeps serving while FXServer stops, so that it shows the stop as it happens.
-    let mut shortened = signals.next().await == Shutdown::Shortened;
+    let shortened = signals.next().await == Shutdown::Shortened;
     info!(shortened, "stopping Observer");
-    supervision.shutdown(shortened).await;
-    loop {
-        tokio::select! {
-            () = supervised.stopped() => break,
-            // A console closed during a graceful stop leaves Windows' few seconds only.
-            shutdown = signals.next(), if !shortened => {
-                if shutdown == Shutdown::Shortened {
-                    shortened = true;
-                    info!("the console is closing; shortening the stop");
-                    supervision.shutdown(true).await;
-                }
-            }
-        }
-    }
+    // The schedule goes first: it must not restart a server Observer is stopping.
+    scheduling.close().await;
+    stop_fxserver(&supervision, &mut supervised, &mut signals, shortened).await;
     supervised.close().await;
     stop.cancel();
     live.shutdown().await;
@@ -120,6 +122,30 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
     drop(log_guard);
     signals.release();
     Ok(())
+}
+
+/// Stops FXServer for good. A console closed during a graceful stop leaves Windows' few seconds
+/// only, so the stop is shortened then.
+async fn stop_fxserver(
+    supervision: &Supervision,
+    supervised: &mut Running,
+    signals: &mut Signals,
+    shortened: bool,
+) {
+    let mut shortened = shortened;
+    supervision.shutdown(shortened).await;
+    loop {
+        tokio::select! {
+            () = supervised.stopped() => return,
+            shutdown = signals.next(), if !shortened => {
+                if shutdown == Shutdown::Shortened {
+                    shortened = true;
+                    info!("the console is closing; shortening the stop");
+                    supervision.shutdown(true).await;
+                }
+            }
+        }
+    }
 }
 
 fn announce(listen: SocketAddr) {

@@ -9,12 +9,17 @@ use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
+use jiff::{SignedDuration, Timestamp, Unit};
 use observer_app::{
-    Accounts, AuditLog, Caller, Client, Clock, Error, PasswordCost, Running, Servers, Setup, Supervision,
+    Accounts, AuditLog, Caller, Client, Clock, Error, PasswordCost, Running, Schedule, ScheduleSetup,
+    ScheduleTask, Servers, Setup, Supervision,
 };
 use observer_domain::audit::{ActorKind, AuditAction, AuditEntry, AuditFilter, Outcome};
 use observer_domain::error::ErrorCode;
 use observer_domain::launch::{ExtraArgument, LaunchSettings, OneSync};
+use observer_domain::schedule::{
+    OneOffRequest, OneOffRestart, RestartSource, ScheduleChange, ScheduleSettings,
+};
 use observer_domain::server::{
     CommandAck, ConsoleLine, Delivery, LINE_MASKED, LineKind, ServerState, ServerStatus, StateCause,
 };
@@ -55,12 +60,88 @@ impl Drop for Port {
 struct Observer {
     dir: TempDir,
     _port: Port,
+    /// The schedule's clock, which the tests move on rather than wait.
+    clock: Clock,
     db: Database,
     audit: AuditLog,
     servers: Servers,
     supervision: Supervision,
     running: Option<Running>,
+    schedule: Schedule,
+    scheduling: Option<ScheduleTask>,
     owner: Caller,
+}
+
+/// The services `observer run` starts, on the database of `dir`.
+struct Services {
+    db: Database,
+    audit: AuditLog,
+    servers: Servers,
+    accounts: Accounts,
+}
+
+impl Services {
+    async fn open(dir: &Path) -> Self {
+        let db = Database::open(dir.join("observer.sqlite3"), dir.join("backups"))
+            .await
+            .unwrap();
+        let clock = Clock::system();
+        let accounts = Accounts::new(db.clone(), clock.clone(), PasswordCost::TEST)
+            .await
+            .unwrap();
+        Self {
+            audit: AuditLog::new(db.clone(), clock.clone()),
+            servers: Servers::new(db.clone(), clock),
+            accounts,
+            db,
+        }
+    }
+
+    /// The supervision and the schedule, with timings short enough for tests.
+    async fn supervise(&self, dir: &Path, clock: &Clock) -> (Supervision, Running, Schedule, ScheduleTask) {
+        let setup = Setup {
+            db: self.db.clone(),
+            clock: Clock::system(),
+            accounts: self.accounts.clone(),
+            servers: self.servers.clone(),
+            data_dir: dir.join("observer-data"),
+            console_logs: dir.join("observer-data/logs/console"),
+            log: None,
+        };
+        let (supervision, running) = Supervision::start(setup, |settings| {
+            settings.health = HealthLimits {
+                boot_grace: Duration::from_secs(2),
+                heartbeat_late: Duration::from_secs(1),
+                heartbeat_fatal: Duration::from_secs(2),
+                http_late: Duration::from_secs(2),
+                http_fatal: Duration::from_secs(5),
+            };
+            settings.stop = StopTimings {
+                notice: Duration::from_millis(300),
+                quit: Duration::from_secs(3),
+                shortened: Duration::from_secs(1),
+                fatal_exit: Duration::from_secs(1),
+            };
+            settings.recovery = RecoveryPolicy {
+                backoff: vec![Duration::from_millis(100)],
+                backoff_cap: Duration::from_millis(100),
+                ..RecoveryPolicy::default()
+            };
+        })
+        .await
+        .unwrap();
+        let (schedule, scheduling) = Schedule::start(
+            ScheduleSetup {
+                db: self.db.clone(),
+                clock: clock.clone(),
+                supervision: supervision.clone(),
+            },
+            |timings| timings.longest_sleep = Duration::from_millis(50),
+        )
+        .await
+        .unwrap();
+        (supervision, running, schedule, scheduling)
+    }
 }
 
 impl Observer {
@@ -83,15 +164,8 @@ impl Observer {
         )
         .unwrap();
 
-        let db = Database::open(dir.path().join("observer.sqlite3"), dir.path().join("backups"))
-            .await
-            .unwrap();
-        let clock = Clock::system();
-        let accounts = Accounts::new(db.clone(), clock.clone(), PasswordCost::TEST)
-            .await
-            .unwrap();
-        let audit = AuditLog::new(db.clone(), clock.clone());
-        let servers = Servers::new(db.clone(), clock.clone());
+        let services = Services::open(dir.path()).await;
+        let accounts = &services.accounts;
         let client = Client::new(IpAddr::V4(Ipv4Addr::LOCALHOST), Some("test"));
         let token = accounts
             .create_setup_token(ActorKind::System)
@@ -118,50 +192,26 @@ impl Observer {
                 value: "200".to_owned(),
             }],
         };
-        servers
+        services
+            .servers
             .change_launch_settings(&owner, Servers::DEFAULT, launch, None)
             .await
             .unwrap();
 
-        let setup = Setup {
-            db: db.clone(),
-            clock,
-            accounts,
-            servers: servers.clone(),
-            data_dir: dir.path().join("observer-data"),
-            console_logs: dir.path().join("observer-data/logs/console"),
-            log: None,
-        };
-        let (supervision, running) = Supervision::start(setup, |settings| {
-            settings.health = HealthLimits {
-                boot_grace: Duration::from_secs(2),
-                heartbeat_late: Duration::from_secs(1),
-                heartbeat_fatal: Duration::from_secs(2),
-                http_late: Duration::from_secs(2),
-                http_fatal: Duration::from_secs(5),
-            };
-            settings.stop = StopTimings {
-                notice: Duration::from_millis(300),
-                quit: Duration::from_secs(3),
-                shortened: Duration::from_secs(1),
-                fatal_exit: Duration::from_secs(1),
-            };
-            settings.recovery = RecoveryPolicy {
-                backoff: vec![Duration::from_millis(100)],
-                backoff_cap: Duration::from_millis(100),
-                ..RecoveryPolicy::default()
-            };
-        })
-        .await
-        .unwrap();
+        // On a whole second, as a one-off planned in minutes is.
+        let clock = Clock::manual(Timestamp::now().round(Unit::Second).unwrap());
+        let (supervision, running, schedule, scheduling) = services.supervise(dir.path(), &clock).await;
         Self {
             dir,
             _port: port,
-            db,
-            audit,
-            servers,
+            clock,
+            db: services.db,
+            audit: services.audit,
+            servers: services.servers,
             supervision,
             running: Some(running),
+            schedule,
+            scheduling: Some(scheduling),
             owner,
         }
     }
@@ -270,11 +320,35 @@ fake_print running {cfg_file}
     }
 
     async fn stop_observer(&mut self) {
+        if let Some(scheduling) = self.scheduling.take() {
+            scheduling.close().await;
+        }
         self.supervision.shutdown(false).await;
         let running = self.running.take().unwrap();
         timeout(WAIT, running.close())
             .await
             .expect("the supervisor did not stop");
+    }
+
+    /// Stops this Observer, then starts another on the same data, as after an update.
+    async fn restart_observer(&mut self) {
+        self.stop_observer().await;
+        self.db.clone().close().await.unwrap();
+        let services = Services::open(self.dir.path()).await;
+        let (supervision, running, schedule, scheduling) =
+            services.supervise(self.dir.path(), &self.clock).await;
+        self.db = services.db;
+        self.audit = services.audit;
+        self.servers = services.servers;
+        self.supervision = supervision;
+        self.running = Some(running);
+        self.schedule = schedule;
+        self.scheduling = Some(scheduling);
+    }
+
+    /// The position of the first console line holding `needle`, once there is one.
+    async fn line_of(&self, needle: &str) -> u64 {
+        self.console_until(needle).await.0
     }
 }
 
@@ -508,5 +582,166 @@ async fn a_secret_set_in_an_unusual_spelling_is_masked_in_the_echo_and_the_audit
         json!({ "command": "set sv_tebexSecret [REDACTED]; set rcon_password [REDACTED]" })
     );
     assert!(!format!("{:?}", observer.console()).contains("hunter2"));
+    observer.stop_observer().await;
+}
+
+#[tokio::test]
+async fn a_one_off_warns_the_bridge_then_restarts_on_schedule() {
+    let mut observer = Observer::new(false).await;
+    observer.supervision.start_server(&observer.owner).await.unwrap();
+    observer.state(ServerState::Online).await;
+
+    let planned = observer
+        .schedule
+        .restart_once(
+            &observer.owner,
+            OneOffRequest {
+                in_minutes: Some(2),
+                at: None,
+            },
+        )
+        .await
+        .unwrap();
+    let two_minutes = observer
+        .line_of(r#""reason":"oneOff","secondsRemaining":120}"#)
+        .await;
+    observer.clock.advance(SignedDuration::from_mins(1));
+    let one_minute = observer
+        .line_of(r#""reason":"oneOff","secondsRemaining":60}"#)
+        .await;
+    observer.clock.advance(SignedDuration::from_mins(1));
+    let restarted = observer
+        .until(|status| status.generation == 2 && status.state == ServerState::Online)
+        .await;
+
+    let at = observer.clock.now();
+    assert_eq!(
+        planned.one_off,
+        Some(OneOffRestart {
+            at,
+            by: "ada".to_owned()
+        })
+    );
+    assert_eq!(planned.next.map(|next| next.source), Some(RestartSource::OneOff));
+    let notice = observer.line_of("observer:shuttingDown").await;
+    let quit = observer.line_of("-> Quitting: scheduled").await;
+    let note = observer.line_of("restarting as ada planned").await;
+    assert!(two_minutes < one_minute && one_minute < notice && notice < quit);
+    assert!(note > one_minute);
+    let shutting_down = observer
+        .console()
+        .into_iter()
+        .find(|line| line.0 == notice)
+        .unwrap();
+    assert!(
+        plain(&shutting_down.5).contains(r#""by":"ada","delayMs":300,"reason":"scheduled""#),
+        "{shutting_down:?}"
+    );
+    assert!(restarted.started_at.is_some());
+    let planned_entries = observer.audited(AuditAction::OneOffRestartPlanned).await;
+    assert_eq!(planned_entries.len(), 1);
+    assert_eq!(planned_entries[0].actor_name.as_deref(), Some("ada"));
+    assert_eq!(planned_entries[0].details, json!({ "at": at }));
+    let restarts = observer.audited(AuditAction::ServerRestarted).await;
+    assert_eq!(restarts.len(), 1);
+    assert_eq!(restarts[0].actor_kind, ActorKind::System);
+    assert_eq!(
+        restarts[0].details,
+        json!({ "scheduled": { "at": at, "source": "oneOff", "plannedBy": "ada" } })
+    );
+    assert_eq!(observer.schedule.status().borrow().one_off, None);
+    observer.stop_observer().await;
+}
+
+#[tokio::test]
+async fn the_schedule_never_starts_a_stopped_server() {
+    let mut observer = Observer::new(false).await;
+    let soon = observer.clock.now() + SignedDuration::from_mins(2);
+    let time = soon.strftime("%H:%M").to_string();
+    let settings = ScheduleSettings {
+        enabled: true,
+        times: vec![time],
+        time_zone: Some("UTC".to_owned()),
+        ..ScheduleSettings::default()
+    };
+    let saved = observer
+        .schedule
+        .change_settings(
+            &observer.owner,
+            ScheduleChange {
+                settings,
+                version: None,
+            },
+        )
+        .await
+        .unwrap();
+    let first = saved.next.unwrap().at;
+
+    observer.clock.advance(SignedDuration::from_mins(3));
+    let mut status = observer.schedule.status();
+    let moved = timeout(
+        WAIT,
+        status.wait_for(|status| status.next.as_ref().is_some_and(|next| next.at > first)),
+    )
+    .await
+    .map(|status| status.unwrap().clone());
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    assert!(
+        first <= soon && soon.duration_since(first) < SignedDuration::from_mins(1),
+        "{first} for {soon}"
+    );
+    assert_eq!(
+        moved.unwrap().next.unwrap().at,
+        first + SignedDuration::from_hours(24)
+    );
+    let server = observer.supervision.status().borrow().clone();
+    assert_eq!((server.state, server.generation), (ServerState::Stopped, 0));
+    for action in [
+        AuditAction::ScheduledRestartMissed,
+        AuditAction::ServerStarted,
+        AuditAction::ServerRestarted,
+    ] {
+        assert_eq!(observer.audited(action).await, [], "{action:?}");
+    }
+    assert_eq!(observer.audited(AuditAction::ScheduleChanged).await.len(), 1);
+    observer.stop_observer().await;
+}
+
+#[tokio::test]
+async fn a_planned_one_off_survives_a_restart_of_observer() {
+    let mut observer = Observer::new(true).await;
+    observer.supervision.boot().await.unwrap();
+    observer.state(ServerState::Online).await;
+    let planned = observer
+        .schedule
+        .restart_once(
+            &observer.owner,
+            OneOffRequest {
+                in_minutes: Some(30),
+                at: None,
+            },
+        )
+        .await
+        .unwrap()
+        .one_off
+        .unwrap();
+
+    observer.restart_observer().await;
+    let read_back = observer.schedule.status().borrow().one_off.clone();
+    observer.supervision.boot().await.unwrap();
+    observer.state(ServerState::Online).await;
+    observer.clock.advance(SignedDuration::from_mins(30));
+    observer
+        .until(|status| status.generation == 2 && status.state == ServerState::Online)
+        .await;
+
+    assert_eq!(read_back, Some(planned.clone()));
+    let restarts = observer.audited(AuditAction::ServerRestarted).await;
+    assert_eq!(restarts.len(), 1, "{restarts:#?}");
+    assert_eq!(
+        restarts[0].details,
+        json!({ "scheduled": { "at": planned.at, "source": "oneOff", "plannedBy": "ada" } })
+    );
     observer.stop_observer().await;
 }

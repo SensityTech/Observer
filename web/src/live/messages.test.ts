@@ -29,6 +29,36 @@ const ONLINE = {
 
 const LINE = [1_761_660_127_000_001, 1_761_660_127_123, 3, 'command', 'ada', 'ensure chat', 0];
 
+const SCHEDULE = {
+    settings: {
+        enabled: true,
+        mode: 'fixedTimes',
+        times: ['04:00', '16:00'],
+        intervalMinutes: 360,
+        timeZone: null,
+        warnings: [30, 15, 10, 5, 4, 3, 2, 1],
+        skipAfterStart: 120,
+    },
+    version: 3,
+    zone: 'Europe/Paris',
+    next: { at: '2026-10-29T03:30:00Z', source: 'schedule', by: 'ada', delayedFrom: '2026-10-29T03:00:00Z' },
+    upcoming: [
+        {
+            at: '2026-10-29T03:00:00Z',
+            time: '04:00',
+            skipped: null,
+            delayed: { to: '2026-10-29T03:30:00Z', by: 'ada' },
+        },
+        {
+            at: '2026-10-29T15:00:00Z',
+            time: '16:00',
+            skipped: { kind: 'recentStart', startedAt: '2026-10-29T14:10:00Z' },
+            delayed: null,
+        },
+    ],
+    oneOff: null,
+};
+
 describe('parseServerMessage', () => {
     it('should accept every message of the contract', () => {
         for (const message of [
@@ -55,6 +85,12 @@ describe('parseServerMessage', () => {
                 type: 'event',
                 topic: 'console',
                 data: { lines: [LINE, [...LINE.slice(0, 3), 'stdout', null, 'x', 4]] },
+            },
+            { type: 'snapshot', topic: 'server.schedule', data: SCHEDULE },
+            {
+                type: 'event',
+                topic: 'server.schedule',
+                data: { ...SCHEDULE, oneOff: { at: '2026-10-28T15:07:00Z', by: 'grace' }, version: null },
             },
             { type: 'resync', topic: 'audit' },
             { type: 'unsubscribed', topic: 'status', reason: 'forbidden' },
@@ -97,6 +133,16 @@ describe('parseServerMessage', () => {
                 type: 'event',
                 topic: 'console',
                 data: { lines: [[...LINE.slice(0, 3), 'stdin', null, 'x', 0]] },
+            },
+            {
+                type: 'snapshot',
+                topic: 'server.schedule',
+                data: { ...SCHEDULE, settings: { ...SCHEDULE.settings, mode: 'weekly' } },
+            },
+            {
+                type: 'event',
+                topic: 'server.schedule',
+                data: { ...SCHEDULE, upcoming: [{ ...SCHEDULE.upcoming[0], skipped: { kind: 'manual' } }] },
             },
             { type: 'shutdown' },
         ]) {

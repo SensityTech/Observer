@@ -10,7 +10,7 @@ use observer_app::{ConsoleLines, Error};
 use observer_domain::audit::AuditEntry;
 use observer_domain::live::{AuditSnapshot, ObserverStatus, Topic, TopicEvent, TopicSnapshot};
 use observer_domain::permissions::Permissions;
-use observer_domain::server::{ConsoleBatch, ServerStatus};
+use observer_domain::server::ConsoleBatch;
 use tokio::sync::broadcast::{self, error::RecvError};
 use tokio::sync::watch;
 
@@ -19,7 +19,7 @@ use crate::AppState;
 pub(super) type Events = Pin<Box<dyn Stream<Item = Delivery> + Send>>;
 
 pub(super) enum Delivery {
-    Event(TopicEvent),
+    Event(Box<TopicEvent>),
     /// Events were lost before they reached the socket: the client must start over.
     Missed,
 }
@@ -44,6 +44,11 @@ pub(super) fn allows(topic: Topic, held: Permissions) -> bool {
         ]),
         Topic::Audit => any(&[Permissions::AUDIT_VIEW]),
         Topic::Console => any(&[Permissions::CONSOLE_VIEW]),
+        Topic::ServerSchedule => any(&[
+            Permissions::DASHBOARD_VIEW,
+            Permissions::SCHEDULE_MANAGE,
+            Permissions::SERVER_CONTROL,
+        ]),
     }
 }
 
@@ -71,7 +76,15 @@ pub(super) async fn open(topic: Topic, since: Option<u64>, state: &AppState) -> 
             let snapshot = status.borrow_and_update().clone();
             Ok(Feed {
                 snapshot: TopicSnapshot::ServerStatus(snapshot),
-                events: Some(status_events(status)),
+                events: Some(status_events(status, TopicEvent::ServerStatus)),
+            })
+        }
+        Topic::ServerSchedule => {
+            let mut status = state.schedule.status();
+            let snapshot = status.borrow_and_update().clone();
+            Ok(Feed {
+                snapshot: TopicSnapshot::ServerSchedule(snapshot),
+                events: Some(status_events(status, TopicEvent::ServerSchedule)),
             })
         }
         Topic::Console => {
@@ -86,18 +99,21 @@ pub(super) async fn open(topic: Topic, since: Option<u64>, state: &AppState) -> 
 
 /// The whole status each time it changes. A client too slow to see every change only misses the
 /// ones a newer status already replaced.
-fn status_events(status: watch::Receiver<ServerStatus>) -> Events {
-    Box::pin(stream::unfold(status, |mut status| async move {
+fn status_events<T>(status: watch::Receiver<T>, event: fn(T) -> TopicEvent) -> Events
+where
+    T: Clone + Send + Sync + 'static,
+{
+    Box::pin(stream::unfold(status, move |mut status| async move {
         status.changed().await.ok()?;
         let current = status.borrow_and_update().clone();
-        Some((Delivery::Event(TopicEvent::ServerStatus(current)), status))
+        Some((Delivery::Event(Box::new(event(current))), status))
     }))
 }
 
 fn console_events(lines: ConsoleLines) -> Events {
     Box::pin(stream::unfold(lines, |mut lines| async move {
         let delivery = match lines.next().await? {
-            Ok(lines) => Delivery::Event(TopicEvent::Console(ConsoleBatch { lines })),
+            Ok(lines) => Delivery::Event(Box::new(TopicEvent::Console(ConsoleBatch { lines }))),
             Err(_) => Delivery::Missed,
         };
         Some((delivery, lines))
@@ -110,7 +126,7 @@ fn audit_events(entries: broadcast::Receiver<Arc<AuditEntry>>, latest_id: Option
         loop {
             let delivery = match entries.recv().await {
                 Ok(entry) if latest_id.is_some_and(|latest| entry.id <= latest) => continue,
-                Ok(entry) => Delivery::Event(TopicEvent::Audit(AuditEntry::clone(&entry))),
+                Ok(entry) => Delivery::Event(Box::new(TopicEvent::Audit(AuditEntry::clone(&entry)))),
                 Err(RecvError::Lagged(_)) => Delivery::Missed,
                 Err(RecvError::Closed) => return None,
             };

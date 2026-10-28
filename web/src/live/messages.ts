@@ -7,6 +7,9 @@ import type { HealthProblem } from '../api/generated/HealthProblem';
 import type { LaunchReadiness } from '../api/generated/LaunchReadiness';
 import type { LineKind } from '../api/generated/LineKind';
 import type { Outcome } from '../api/generated/Outcome';
+import type { RestartSource } from '../api/generated/RestartSource';
+import type { ScheduleMode } from '../api/generated/ScheduleMode';
+import type { ScheduleStatus } from '../api/generated/ScheduleStatus';
 import type { ServerMessage } from '../api/generated/ServerMessage';
 import type { ServerState } from '../api/generated/ServerState';
 import type { ServerStatus } from '../api/generated/ServerStatus';
@@ -18,10 +21,13 @@ import type { Topic } from '../api/generated/Topic';
 // records below list every value of the generated unions: one the Rust side adds fails the type check
 // here until it is listed.
 
-const TOPICS = { status: true, audit: true, 'server.status': true, console: true } satisfies Record<
-    Topic,
-    true
->;
+const TOPICS = {
+    status: true,
+    audit: true,
+    'server.status': true,
+    console: true,
+    'server.schedule': true,
+} satisfies Record<Topic, true>;
 
 const ACTOR_KINDS = {
     user: true,
@@ -102,6 +108,10 @@ const LINE_KINDS = { stdout: true, stderr: true, command: true, observer: true }
     LineKind,
     true
 >;
+
+const SCHEDULE_MODES = { fixedTimes: true, interval: true } satisfies Record<ScheduleMode, true>;
+
+const RESTART_SOURCES = { schedule: true, oneOff: true } satisfies Record<RestartSource, true>;
 
 type Shape = 'text' | 'count' | 'problems' | 'hang' | 'spawnFailure';
 
@@ -193,6 +203,51 @@ export const isServerStatus = (value: unknown): value is ServerStatus =>
     orNull(isTimestamp)(value.restartAt) &&
     oneOf<LaunchReadiness>(READINESS)(value.launch);
 
+const isCounts = (value: unknown): value is number[] => Array.isArray(value) && value.every(isCount);
+
+const isScheduleSettings = (value: unknown) =>
+    isRecord(value) &&
+    typeof value.enabled === 'boolean' &&
+    oneOf<ScheduleMode>(SCHEDULE_MODES)(value.mode) &&
+    Array.isArray(value.times) &&
+    value.times.every(isText) &&
+    isCount(value.intervalMinutes) &&
+    orNull(isText)(value.timeZone) &&
+    isCounts(value.warnings) &&
+    isCount(value.skipAfterStart);
+
+const isSkipped = (value: unknown) =>
+    value === null ||
+    (isRecord(value) &&
+        ((value.kind === 'manual' && isText(value.by)) ||
+            (value.kind === 'recentStart' && isTimestamp(value.startedAt))));
+
+const isOccurrence = (value: unknown) =>
+    isRecord(value) &&
+    isTimestamp(value.at) &&
+    orNull(isText)(value.time) &&
+    isSkipped(value.skipped) &&
+    (value.delayed === null ||
+        (isRecord(value.delayed) && isTimestamp(value.delayed.to) && isText(value.delayed.by)));
+
+const isNextRestart = (value: unknown) =>
+    isRecord(value) &&
+    isTimestamp(value.at) &&
+    oneOf<RestartSource>(RESTART_SOURCES)(value.source) &&
+    orNull(isText)(value.by) &&
+    orNull(isTimestamp)(value.delayedFrom);
+
+export const isScheduleStatus = (value: unknown): value is ScheduleStatus =>
+    isRecord(value) &&
+    isScheduleSettings(value.settings) &&
+    orNull(isId)(value.version) &&
+    isText(value.zone) &&
+    (value.next === null || isNextRestart(value.next)) &&
+    Array.isArray(value.upcoming) &&
+    value.upcoming.every(isOccurrence) &&
+    (value.oneOff === null ||
+        (isRecord(value.oneOff) && isTimestamp(value.oneOff.at) && isText(value.oneOff.by)));
+
 export const isConsoleLine = (value: unknown): value is ConsoleLine =>
     Array.isArray(value) &&
     value.length === 7 &&
@@ -239,6 +294,8 @@ const isSnapshotData = (topic: Topic, data: unknown) => {
                 typeof data.restarted === 'boolean' &&
                 isCount(data.last)
             );
+        case 'server.schedule':
+            return isScheduleStatus(data);
     }
 };
 
@@ -252,6 +309,8 @@ const isEventData = (topic: Topic, data: unknown) => {
             return isServerStatus(data);
         case 'console':
             return isRecord(data) && isLines(data.lines);
+        case 'server.schedule':
+            return isScheduleStatus(data);
     }
 };
 
