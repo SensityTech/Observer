@@ -163,13 +163,15 @@ impl FromStr for CommitSha {
         if pairs.len() != 20 || !rest.is_empty() {
             return Err(invalid());
         }
+        // Only what `Display` writes back: `from_str_radix` would also take a sign or upper case.
+        let nibble = |digit: u8| match digit {
+            b'0'..=b'9' => Some(digit - b'0'),
+            b'a'..=b'f' => Some(digit - b'a' + 10),
+            _ => None,
+        };
         let mut bytes = [0; 20];
-        for (byte, pair) in bytes.iter_mut().zip(pairs) {
-            let pair = std::str::from_utf8(pair).map_err(|_| invalid())?;
-            if pair.bytes().any(|digit| digit.is_ascii_uppercase()) {
-                return Err(invalid());
-            }
-            *byte = u8::from_str_radix(pair, 16).map_err(|_| invalid())?;
+        for (byte, [high, low]) in bytes.iter_mut().zip(pairs) {
+            *byte = (nibble(*high).ok_or_else(invalid)? << 4) | nibble(*low).ok_or_else(invalid)?;
         }
         Ok(Self(bytes))
     }
@@ -318,6 +320,23 @@ mod tests {
         ] {
             assert_eq!(ArchiveLocation::parse(&url), None, "{url}");
         }
+    }
+
+    #[test]
+    fn a_commit_sha_is_forty_lower_case_hexadecimal_digits() {
+        assert_eq!(SHA.parse::<CommitSha>().unwrap().to_string(), SHA);
+        let signed = "+0".repeat(20);
+        for invalid in [
+            signed.as_str(),
+            &SHA.to_uppercase(),
+            &SHA[..39],
+            &format!("{SHA}0"),
+            &SHA.replace('c', "g"),
+        ] {
+            assert!(invalid.parse::<CommitSha>().is_err(), "{invalid}");
+        }
+        let url = format!("{RUNTIME}build_server_windows/master/37872-{signed}/server.zip");
+        assert_eq!(ArchiveLocation::parse(&url), None);
     }
 
     #[test]
