@@ -14,12 +14,16 @@ pub struct Signals {
     #[cfg(windows)]
     console: observer_platform::ConsoleEvents,
     #[cfg(unix)]
+    interrupt: tokio::signal::unix::Signal,
+    #[cfg(unix)]
     terminate: tokio::signal::unix::Signal,
     #[cfg(unix)]
     hangup: tokio::signal::unix::Signal,
 }
 
 impl Signals {
+    /// Listens from now on: a request that comes before the first [`Signals::next`] waits for it,
+    /// rather than end the process at once.
     pub fn listen() -> io::Result<Self> {
         #[cfg(windows)]
         {
@@ -32,6 +36,7 @@ impl Signals {
             use tokio::signal::unix::{SignalKind, signal};
 
             Ok(Self {
+                interrupt: signal(SignalKind::interrupt())?,
                 terminate: signal(SignalKind::terminate())?,
                 hangup: signal(SignalKind::hangup())?,
             })
@@ -52,7 +57,7 @@ impl Signals {
         #[cfg(unix)]
         {
             tokio::select! {
-                _ = tokio::signal::ctrl_c() => {}
+                _ = self.interrupt.recv() => {}
                 _ = self.terminate.recv() => {}
                 _ = self.hangup.recv() => {}
             }
@@ -69,5 +74,29 @@ impl Signals {
     pub fn release(&self) {
         #[cfg(windows)]
         self.console.release();
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use std::process::Command;
+    use std::time::Duration;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn a_ctrl_c_before_observer_waits_for_it_stops_it_gracefully_rather_than_kill_it() {
+        let mut signals = Signals::listen().unwrap();
+
+        let sent = Command::new("kill")
+            .args(["-INT", &std::process::id().to_string()])
+            .status()
+            .unwrap();
+        assert!(sent.success());
+        // Long enough for the signal to land before anything waits for it.
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        let shutdown = tokio::time::timeout(Duration::from_secs(5), signals.next()).await;
+        assert_eq!(shutdown, Ok(Shutdown::Graceful));
     }
 }
