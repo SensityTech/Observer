@@ -69,9 +69,13 @@ fn mid_slot(start: Instant, slot: u32) -> Instant {
 
 fn usage(cpu_ms: u64, started: u64) -> Usage {
     Usage {
-        cpu: Duration::from_millis(cpu_ms),
+        user: Duration::from_millis(cpu_ms),
+        kernel: Duration::ZERO,
         working_set: 300 << 20,
+        working_set_peak: Some(320 << 20),
         private: 250 << 20,
+        faults: None,
+        hard_faults: None,
         threads: Some(40),
         handles: Some(900),
         read: Some(cpu_ms * 1000),
@@ -171,6 +175,8 @@ fn a_process_s_first_sample_has_no_cpu_and_a_reused_pid_starts_over() {
         tree: Some(TreeUsage {
             main: Some(usage(cpu_ms, started)),
             children: Vec::new(),
+            threads: None,
+            totals: None,
         }),
         ..Measures::default()
     };
@@ -232,6 +238,8 @@ fn a_new_child_counts_at_once_in_count_and_memory_and_in_cpu_from_its_second_sam
         tree: Some(TreeUsage {
             main: Some(usage(0, 1)),
             children,
+            threads: None,
+            totals: None,
         }),
         ..Measures::default()
     };
@@ -263,6 +271,8 @@ fn the_first_tree_of_a_new_run_has_no_children_cpu_as_it_has_no_main_cpu() {
                 name: "conhost.exe".to_owned(),
                 usage: usage(child_cpu_ms, u64::from(child_pid)),
             }],
+            threads: None,
+            totals: None,
         }),
         ..Measures::default()
     };
@@ -687,6 +697,7 @@ fn the_host_rates_leave_out_an_adapter_whose_counters_went_back() {
             cpu: Some(CpuTimes {
                 busy,
                 total: busy * 4,
+                steal: None,
             }),
             processors: Some(28),
             memory: Some(Memory {
@@ -694,6 +705,8 @@ fn the_host_rates_leave_out_an_adapter_whose_counters_went_back() {
                 total: 16 << 30,
             }),
             interfaces: Some(interfaces),
+            clock: None,
+            pressure: None,
         }),
         ..Measures::default()
     };
@@ -753,6 +766,8 @@ fn shares_of_the_machine_count_the_processors_the_host_cpu_counts() {
             processors,
             memory: None,
             interfaces: None,
+            clock: None,
+            pressure: None,
         }),
         ..Measures::default()
     };

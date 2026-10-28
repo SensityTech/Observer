@@ -25,7 +25,10 @@ windows-sys = { workspace = true, features = [
     "Win32_Storage_FileSystem",
     "Win32_System_Console",
     "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_IO",
+    "Win32_System_Ioctl",
     "Win32_System_JobObjects",
+    "Win32_System_Performance",
     "Win32_System_Pipes",
     "Win32_System_ProcessStatus",
     "Win32_System_SystemInformation",
@@ -35,6 +38,9 @@ windows-sys = { workspace = true, features = [
 [dev-dependencies]
 tempfile.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "time"] }
+
+[target.'cfg(unix)'.dev-dependencies]
+rustix = { workspace = true, features = ["thread"] }
 
 [lints]
 workspace = true

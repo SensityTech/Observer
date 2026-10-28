@@ -700,7 +700,7 @@ impl Assembler {
 /// Percent of one core between two measures of the same process.
 fn cpu(before: Measured, now: Measured) -> Option<f64> {
     let seconds = now.at.saturating_duration_since(before.at).as_secs_f64();
-    let used = now.usage.cpu.checked_sub(before.usage.cpu)?;
+    let used = now.usage.cpu().checked_sub(before.usage.cpu())?;
     (seconds > 0.0).then(|| used.as_secs_f64() / seconds * 100.0)
 }
 
