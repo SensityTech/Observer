@@ -481,6 +481,7 @@ struct Run {
     exit: ExitWatch,
     tree: ProcessTree,
     stdin: StdinWriter,
+    stdin_task: JoinHandle<()>,
     cancel: CancellationToken,
     tasks: Vec<JoinHandle<()>>,
     health: Health,
@@ -1029,7 +1030,6 @@ impl Actor {
         let cancel = CancellationToken::new();
         let (stdin, stdin_task) = StdinWriter::start(spawned.stdin, generation, Arc::clone(&self.console));
         let mut tasks = vec![
-            stdin_task,
             tokio::spawn(read_console(
                 spawned.stdout,
                 LineKind::Stdout,
@@ -1068,6 +1068,7 @@ impl Actor {
             exit: spawned.exit,
             tree: spawned.tree,
             stdin,
+            stdin_task,
             cancel,
             tasks,
             health: Health::new(Instant::now()),
@@ -1080,17 +1081,18 @@ impl Actor {
     }
 
     async fn exited(&mut self, exit: Exit) {
-        let Some(run) = self.run.take() else {
+        let Some(run) = &self.run else {
             return;
         };
-        let description = exit::describe(exit);
+        let generation = run.generation;
         let expected = run.after.is_some();
+        let description = exit::describe(exit);
         let (code, signal) = match exit {
             Exit::Code(code) => (Some(code), None),
             Exit::Signal(signal) => (None, Some(signal)),
             Exit::Unknown => (None, None),
         };
-        info!(generation = run.generation, %description, expected, "FXServer exited");
+        info!(generation, %description, expected, "FXServer exited");
         self.note(&format!("FXServer exited: {description}"));
         self.emit(EventKind::Exited {
             code,
@@ -1098,9 +1100,20 @@ impl Actor {
             description: description.clone(),
             expected,
         });
-        let after = run.after.clone();
-        let ending = run.ending.clone();
-        self.finish(run).await;
+        self.wind_down().await;
+        // Its output is all read now, and what it said last may explain the exit: FXServer
+        // reports a taken port or a fatal error and is gone a moment later.
+        while let Ok(trace) = self.traces.try_recv() {
+            self.trace(trace);
+        }
+        while let Ok((generation, signal)) = self.signals.try_recv() {
+            self.signal(generation, signal);
+        }
+        let Some(run) = self.run.take() else {
+            return;
+        };
+        self.collect_dumps(&run.layout).await;
+        let Run { after, ending, .. } = run;
 
         if let Some(after) = after {
             match after {
@@ -1160,8 +1173,11 @@ impl Actor {
         });
     }
 
-    /// Waits for the whole tree to be gone, then collects the run's tasks and crash dumps.
-    async fn finish(&mut self, run: Run) {
+    /// Waits for the whole tree to be gone, then for the run's tasks, which end with its pipes.
+    async fn wind_down(&mut self) {
+        let Some(run) = &mut self.run else {
+            return;
+        };
         run.cancel.cancel();
         if !run.tree.wait_empty(TREE_SETTLE).await.unwrap_or(false) {
             if let Err(error) = run.tree.kill() {
@@ -1174,12 +1190,9 @@ impl Actor {
                 );
             }
         }
-        let Run {
-            stdin, tasks, layout, ..
-        } = run;
-        // The writer ends once nothing can queue a line any more.
-        drop(stdin);
-        for mut task in tasks {
+        // Nothing more will be written to a server that is gone.
+        run.stdin_task.abort();
+        for mut task in run.tasks.drain(..) {
             if tokio::time::timeout(TASK_JOIN, &mut task).await.is_err() {
                 task.abort();
             }
@@ -1188,6 +1201,9 @@ impl Actor {
         if let Err(error) = self.pid_file().clear() {
             warn!(%error, "cannot remove FXServer's pid file");
         }
+    }
+
+    async fn collect_dumps(&mut self, layout: &Layout) {
         let (from, to, limits) = (
             layout.crashes(),
             self.settings.data_dir.join("crashes"),
