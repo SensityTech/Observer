@@ -5,14 +5,11 @@ import {
     LineStyle,
     LineType,
     createChart,
-    type AreaData,
     type IChartApi,
     type ISeriesApi,
-    type LineData,
     type MouseEventParams,
     type Time,
     type UTCTimestamp,
-    type WhitespaceData,
 } from 'lightweight-charts';
 import { OctagonX, Play, RotateCw, Users, type LucideIcon } from 'lucide-react';
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
@@ -28,6 +25,7 @@ import { cn } from '../lib/cn';
 import { useLiveMetrics } from '../metrics/live';
 import { mergeLive } from '../metrics/merge';
 import { bucketOf, sides, type Side } from './markers';
+import { buckets, playerPoints, resumes, slotPoints, type Bucket } from './points';
 import { ceiling } from './scale';
 import { chartOptions, tokenColor, withAlpha } from './theme';
 
@@ -45,50 +43,6 @@ const clock = (seconds: number) => {
     const date = new Date(seconds * 1000);
     return `${pad(date.getHours())}:${pad(date.getMinutes())}`;
 };
-
-type Bucket = { time: number; players: number | null; slots: number | null };
-
-/** The page as the chart draws it: players by bucket average, the slots by their bucket maximum. */
-const buckets = (page: MetricsSeries): Bucket[] => {
-    const players = page.series.find((data) => data.series === 'players');
-    const slots = page.series.find((data) => data.series === 'slots');
-    return Array.from({ length: page.buckets }, (_, index) => ({
-        time: page.from + index * page.step,
-        players: players?.values[index] ?? null,
-        slots: slots?.max?.[index] ?? slots?.values[index] ?? null,
-    }));
-};
-
-/**
- * An unmeasured bucket is whitespace, and the point before it is drawn transparent: the library
- * would otherwise join both sides of a stop, which must read as a gap, never as zero players.
- */
-const playerPoints = (rows: Bucket[], transparent: string): (AreaData | WhitespaceData)[] => {
-    // The buckets after the newest measured one are still to come, not a gap.
-    const newest = rows.findLastIndex((row) => row.players !== null);
-    return rows.map((row, index) => {
-        const time = row.time as UTCTimestamp;
-        if (row.players === null) {
-            return { time };
-        }
-        return index < newest && rows[index + 1]?.players === null
-            ? {
-                  time,
-                  value: row.players,
-                  lineColor: transparent,
-                  topColor: transparent,
-                  bottomColor: transparent,
-              }
-            : { time, value: row.players };
-    });
-};
-
-const slotPoints = (rows: Bucket[]): (LineData | WhitespaceData)[] =>
-    rows.map((row) =>
-        row.slots === null
-            ? { time: row.time as UTCTimestamp }
-            : { time: row.time as UTCTimestamp, value: row.slots },
-    );
 
 type Overlay = {
     markers: { marker: RunMarker; x: number }[];
@@ -367,7 +321,8 @@ function Plot({
         };
     }, []);
 
-    // A new page is set at once; live samples move the newest bucket only.
+    // A new page is set at once, and so is the line picking up after a stop; live samples
+    // otherwise move the newest bucket only.
     useEffect(() => {
         const element = host.current;
         const area = players.current;
@@ -376,7 +331,7 @@ function Plot({
             return;
         }
         const transparent = withAlpha(tokenColor(element, '--accent'), 0);
-        if (drawn.current === fetched) {
+        if (drawn.current === fetched && !resumes(rows)) {
             const newest = rows.slice(-1);
             for (const point of playerPoints(newest, transparent)) {
                 area.update(point);
@@ -387,7 +342,9 @@ function Plot({
         } else {
             area.setData(playerPoints(rows, transparent));
             line.setData(slotPoints(rows));
-            chart.current?.timeScale().fitContent();
+            if (drawn.current !== fetched) {
+                chart.current?.timeScale().fitContent();
+            }
         }
         drawn.current = fetched;
         place();
