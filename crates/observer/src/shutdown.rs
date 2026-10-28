@@ -62,6 +62,10 @@ impl Signals {
 
     /// After a console close, Windows ends the process as soon as it is let go; call this once
     /// everything is stopped.
+    #[cfg_attr(
+        unix,
+        expect(clippy::unused_self, reason = "only a Windows console holds the process")
+    )]
     pub fn release(&self) {
         #[cfg(windows)]
         self.console.release();
