@@ -92,6 +92,8 @@ pub struct Health {
     ticks: Option<u64>,
     stalled: bool,
     unauthorized: bool,
+    /// `/perf/` probes refused in a row.
+    refusals: u32,
     /// A watchdog bark since the last heartbeat.
     bark: bool,
 }
@@ -105,6 +107,7 @@ impl Health {
             ticks: None,
             stalled: false,
             unauthorized: false,
+            refusals: 0,
             bark: false,
         }
     }
@@ -125,10 +128,15 @@ impl Health {
                 self.stalled = self.ticks == Some(*ticks);
                 self.ticks = Some(*ticks);
                 self.unauthorized = false;
+                self.refusals = 0;
             }
-            // FXServer reads its credentials from stdin once it is up, so the first probes can be
-            // refused; a refusal only means something after it has accepted them.
-            Probe::Perf(Err(ProbeError::Unauthorized)) => self.unauthorized = self.ticks.is_some(),
+            // FXServer reads its credentials from stdin once it is up, so the first probe can be
+            // refused. A refusal means something once it has accepted them, or when the next probe
+            // is refused too: it reads them well within a probe period, so they were changed.
+            Probe::Perf(Err(ProbeError::Unauthorized)) => {
+                self.refusals += 1;
+                self.unauthorized = self.ticks.is_some() || self.refusals > 1;
+            }
             // Silence is measured from the last answer, so a failure has nothing to add.
             Probe::Dynamic(Err(_)) | Probe::Perf(Err(_)) | Probe::Info(_) => {}
         }
@@ -537,6 +545,20 @@ mod tests {
         assert_eq!(health.verdict(start + secs(1), &LIMITS), Verdict::Healthy);
 
         health.probed(&Probe::Perf(Ok(12)), start + secs(5));
+        health.probed(&Probe::Perf(Err(ProbeError::Unauthorized)), start + secs(10));
+        assert_eq!(
+            health.verdict(start + secs(10), &LIMITS),
+            Verdict::Degraded(vec![Problem::ProbeUnauthorized])
+        );
+    }
+
+    #[test]
+    fn credentials_changed_before_any_accepted_probe_show_once_two_probes_in_a_row_are_refused() {
+        let start = Instant::now();
+        let mut health = ready(start);
+        health.probed(&Probe::Perf(Err(ProbeError::Unauthorized)), start + secs(5));
+        assert_eq!(health.verdict(start + secs(5), &LIMITS), Verdict::Healthy);
+
         health.probed(&Probe::Perf(Err(ProbeError::Unauthorized)), start + secs(10));
         assert_eq!(
             health.verdict(start + secs(10), &LIMITS),
