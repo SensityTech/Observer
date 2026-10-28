@@ -12,6 +12,7 @@ pub(crate) const MIB: u64 = 1024 * 1024;
 const HOSTS: [&str; 3] = ["runtime.fivem.net", "changelogs-live.fivem.net", "docs.fivem.net"];
 pub(crate) const MAX_REDIRECTS: usize = 3;
 const PAGE_LIMIT: u64 = 4 * MIB;
+pub(crate) const ARCHIVE_LIMIT: u64 = 512 * MIB;
 
 /// An HTTP client that reaches only the Cfx.re hosts, over HTTPS and through no proxy, and checks
 /// every redirect against the same hosts before following it. It sends no browser headers and asks

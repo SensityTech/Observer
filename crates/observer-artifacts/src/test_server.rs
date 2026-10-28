@@ -1,5 +1,5 @@
 //! A tiny HTTP/1.1 server on 127.0.0.1 for tests. Each connection gets one answer from the handler
-//! and is closed.
+//! and is closed, which is also how a reply is cut short.
 
 use std::fmt::Write;
 use std::sync::{Arc, Mutex};
@@ -13,12 +13,23 @@ use tokio::task::JoinHandle;
 pub(crate) struct Request {
     pub method: String,
     pub path: String,
+    headers: Vec<(String, String)>,
+}
+
+impl Request {
+    pub fn header(&self, name: &str) -> Option<&str> {
+        self.headers
+            .iter()
+            .find(|(key, _)| key.eq_ignore_ascii_case(name))
+            .map(|(_, value)| value.as_str())
+    }
 }
 
 pub(crate) struct Reply {
     status: u16,
     headers: Vec<(String, String)>,
     body: Vec<u8>,
+    cut_after: Option<usize>,
 }
 
 impl Reply {
@@ -31,6 +42,7 @@ impl Reply {
             status,
             headers: Vec::new(),
             body: Vec::new(),
+            cut_after: None,
         }
     }
 
@@ -51,6 +63,12 @@ impl Reply {
 
     pub fn without_length(mut self) -> Self {
         self.headers.retain(|(key, _)| key != "Content-Length");
+        self
+    }
+
+    /// Closes the connection after this many bytes of the body.
+    pub fn cut_after(mut self, bytes: usize) -> Self {
+        self.cut_after = Some(bytes);
         self
     }
 }
@@ -89,7 +107,8 @@ impl TestServer {
                 head.push_str("Connection: close\r\n\r\n");
                 let _ = stream.write_all(head.as_bytes()).await;
                 if request.method != "HEAD" {
-                    let _ = stream.write_all(&reply.body).await;
+                    let end = reply.cut_after.unwrap_or(reply.body.len()).min(reply.body.len());
+                    let _ = stream.write_all(&reply.body[..end]).await;
                 }
                 let _ = stream.shutdown().await;
             }
@@ -127,8 +146,18 @@ async fn read_request(stream: &mut tokio::net::TcpStream) -> Option<Request> {
         buffer.extend_from_slice(&chunk[..read]);
     }
     let text = String::from_utf8_lossy(&buffer);
-    let mut request_line = text.split("\r\n").next()?.split(' ');
+    let mut lines = text.split("\r\n");
+    let mut request_line = lines.next()?.split(' ');
     let method = request_line.next()?.to_owned();
     let path = request_line.next()?.to_owned();
-    Some(Request { method, path })
+    let headers = lines
+        .take_while(|line| !line.is_empty())
+        .filter_map(|line| line.split_once(": "))
+        .map(|(name, value)| (name.to_owned(), value.to_owned()))
+        .collect();
+    Some(Request {
+        method,
+        path,
+        headers,
+    })
 }
