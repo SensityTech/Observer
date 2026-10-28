@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { LiveSample } from '../api/generated/LiveSample';
 import type { MetricsSeries } from '../api/generated/MetricsSeries';
-import { mergeLive } from './merge';
+import { keepLive, mergeLive } from './merge';
 
 const sample = (ts: number, values: LiveSample['values']): LiveSample => ({
     ts,
@@ -30,6 +30,49 @@ const grouped = (): MetricsSeries => ({
         { series: 'joins', values: [1, null, null, 2] },
     ],
     markers: [],
+});
+
+/** An hour of 5 s buckets from 1,000,000, with no joins in any but the open one. */
+const quietHour = (): MetricsSeries => ({
+    range: '1h',
+    step: 5,
+    from: 1_000_000,
+    buckets: 720,
+    last: 1_000_000 + 718 * 5,
+    series: [
+        { series: 'joins', values: Array.from({ length: 720 }, (_, index) => (index < 719 ? 0 : null)) },
+    ],
+    markers: [],
+});
+
+describe('keepLive', () => {
+    it('should hold every sample a page read five minutes ago lacks', () => {
+        const page = quietHour();
+        let kept: LiveSample[] = [];
+        for (let slot = 1; slot <= 60; slot += 1) {
+            kept = keepLive(kept, sample((page.last ?? 0) + slot * 5, { joins: 1 }));
+        }
+
+        const joins = mergeLive(page, kept).series[0]?.values ?? [];
+        expect(joins.slice(-60)).toEqual(Array<number>(60).fill(1));
+        expect(joins.reduce<number>((sum, value) => sum + (value ?? 0), 0)).toBe(60);
+    });
+
+    it('should let a sample go once it is six minutes older than the newest', () => {
+        let kept: LiveSample[] = [];
+        for (let slot = 1; slot <= 100; slot += 1) {
+            kept = keepLive(kept, sample(1_000_000 + slot * 5, {}));
+        }
+
+        expect(kept).toHaveLength(72);
+        expect(kept[0]?.ts).toBe(1_000_000 + 29 * 5);
+    });
+
+    it('should replace a sample it already holds', () => {
+        const kept = keepLive([sample(1_000_000, { joins: 1 })], sample(1_000_000, { joins: 2 }));
+
+        expect(kept.map((held) => held.values.joins)).toEqual([2]);
+    });
 });
 
 describe('mergeLive', () => {

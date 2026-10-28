@@ -2,9 +2,7 @@ import { createContext, use, useMemo, useState, type ReactNode } from 'react';
 
 import type { LiveSample } from '../api/generated/LiveSample';
 import { useTopic } from '../live/context';
-
-/** Two minutes of samples: what a tile's facts and a page fetched a moment ago both need. */
-const KEPT = 24;
+import { keepLive } from './merge';
 
 type LiveMetrics = {
     latest: LiveSample | null;
@@ -23,9 +21,11 @@ export function LiveMetricsProvider({ children }: { children: ReactNode }) {
     useTopic('metrics.live', {
         snapshot: ({ latest }) => {
             setRefused(false);
-            setRecent((kept) => keep(kept, latest));
+            if (latest !== null) {
+                setRecent((kept) => keepLive(kept, latest));
+            }
         },
-        event: (sample) => setRecent((kept) => keep(kept, sample)),
+        event: (sample) => setRecent((kept) => keepLive(kept, sample)),
         refused: () => {
             setRefused(true);
             setRecent([]);
@@ -34,15 +34,6 @@ export function LiveMetricsProvider({ children }: { children: ReactNode }) {
     const value = useMemo(() => ({ latest: recent.at(-1) ?? null, recent, refused }), [recent, refused]);
     return <LiveMetricsContext value={value}>{children}</LiveMetricsContext>;
 }
-
-/** A sample already held, a snapshot after a reconnect say, replaces itself rather than repeat. */
-const keep = (kept: LiveSample[], sample: LiveSample | null) => {
-    if (sample === null) {
-        return kept;
-    }
-    const older = kept.filter((held) => held.ts < sample.ts);
-    return [...older, sample].slice(-KEPT);
-};
 
 export const useLiveMetrics = () => {
     const live = use(LiveMetricsContext);

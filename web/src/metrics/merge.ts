@@ -2,9 +2,22 @@ import type { LiveSample } from '../api/generated/LiveSample';
 import type { MetricsSeries } from '../api/generated/MetricsSeries';
 import type { Series } from '../api/generated/Series';
 import type { SeriesData } from '../api/generated/SeriesData';
+import { REFETCH_EVERY } from '../api/metrics';
+
+/** As long as a page they complete may be old: until it is read again, and a minute more. */
+const KEPT_SECONDS = REFETCH_EVERY / 1000 + 60;
 
 /** Series whose bucket holds the slot's total rather than an average. */
 const COUNTS = new Set<Series>(['joins', 'leaves', 'hitchesMain', 'hitchesNetwork', 'hitchesSync', 'barks']);
+
+/**
+ * The live samples held once `sample` came, oldest first. A sample already held, a snapshot after
+ * a reconnect say, replaces itself rather than repeat.
+ */
+export const keepLive = (kept: readonly LiveSample[], sample: LiveSample): LiveSample[] => [
+    ...kept.filter((held) => held.ts < sample.ts && held.ts > sample.ts - KEPT_SECONDS),
+    sample,
+];
 
 /**
  * A page of series with the live samples taken after its newest one. A sample opens the next
