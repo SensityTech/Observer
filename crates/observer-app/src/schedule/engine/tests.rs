@@ -1420,6 +1420,34 @@ fn a_one_off_at_a_wall_time_is_the_first_such_time_at_least_a_minute_ahead() {
 }
 
 #[test]
+fn a_one_off_at_a_wall_time_the_clock_repeats_takes_the_pass_still_ahead() {
+    let zone = TimeZone::get("Europe/Paris").unwrap();
+    let at = |time: &str, now: &str| {
+        let request = OneOffRequest {
+            in_minutes: None,
+            at: Some(time.to_owned()),
+        };
+        resolve_one_off(&request, &zone, ts(now)).unwrap()
+    };
+
+    assert_eq!(
+        at("02:30", "2026-10-25T00:45:00Z"),
+        ts("2026-10-25T01:30:00Z"),
+        "at 02:45 CEST, 02:30 CET is 45 minutes ahead"
+    );
+    assert_eq!(
+        at("02:30", "2026-10-25T00:00:00Z"),
+        ts("2026-10-25T00:30:00Z"),
+        "the first pass while it is ahead"
+    );
+    assert_eq!(
+        at("00:00", "2026-10-24T22:01:00Z"),
+        ts("2026-10-25T23:00:00Z"),
+        "the next midnight, 24 h 59 min ahead on the day that lasts 25 hours"
+    );
+}
+
+#[test]
 fn the_status_lists_five_occurrences_with_the_time_each_comes_from() {
     let mut sim = Sim::running(
         paris(&["02:30", "12:00"]),

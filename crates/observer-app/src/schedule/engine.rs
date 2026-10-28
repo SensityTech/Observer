@@ -5,7 +5,7 @@
 
 use std::collections::BTreeMap;
 
-use jiff::tz::TimeZone;
+use jiff::tz::{AmbiguousOffset, TimeZone};
 use jiff::{SignedDuration, Timestamp, Unit};
 use observer_domain::error::{ApiError, ErrorCode};
 use observer_domain::schedule::{
@@ -346,7 +346,8 @@ pub(crate) fn status(state: &State, settings: &Settings, now: Timestamp) -> Sche
 }
 
 /// When a single restart asked for in minutes, or at a wall time, happens: the first such time in
-/// `zone` at least a minute ahead, today or tomorrow. Minutes count to the nearest second.
+/// `zone` at least a minute ahead, today or tomorrow, either pass of a time the clock change
+/// repeats. Minutes count to the nearest second.
 pub(crate) fn resolve_one_off(
     request: &OneOffRequest,
     zone: &TimeZone,
@@ -363,7 +364,11 @@ pub(crate) fn resolve_one_off(
             let today = now.to_zoned(zone.clone()).date();
             let mut date = today.yesterday().unwrap_or(today);
             for _ in 0..4 {
-                if let Some(at) = wall_time(date, minute, zone).filter(|at| *at >= earliest) {
+                if let Some(at) = wall_passes(date, minute, zone)
+                    .into_iter()
+                    .flatten()
+                    .find(|at| *at >= earliest)
+                {
                     return Ok(at);
                 }
                 date = date.tomorrow().unwrap_or(date);
@@ -923,12 +928,20 @@ fn interval_occurrences(
 }
 
 fn wall_time(date: jiff::civil::Date, minute: i32, zone: &TimeZone) -> Option<Timestamp> {
-    let hour = i8::try_from(minute / 60).ok()?;
-    let minute = i8::try_from(minute % 60).ok()?;
-    date.at(hour, minute, 0, 0)
-        .to_zoned(zone.clone())
-        .ok()
-        .map(|zoned| zoned.timestamp())
+    wall_passes(date, minute, zone)[0]
+}
+
+/// The instants a wall time names on `date`: its first pass, then its second when the clock
+/// change repeats it. A time the change skips happens as much later as the change lasts.
+fn wall_passes(date: jiff::civil::Date, minute: i32, zone: &TimeZone) -> [Option<Timestamp>; 2] {
+    let (Ok(hour), Ok(minute)) = (i8::try_from(minute / 60), i8::try_from(minute % 60)) else {
+        return [None, None];
+    };
+    let passes = zone.to_ambiguous_timestamp(date.at(hour, minute, 0, 0));
+    match passes.offset() {
+        AmbiguousOffset::Fold { .. } => [passes.compatible().ok(), passes.later().ok()],
+        _ => [passes.compatible().ok(), None],
+    }
 }
 
 fn local_time(at: Timestamp, zone: &TimeZone) -> String {
