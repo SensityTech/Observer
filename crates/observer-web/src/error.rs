@@ -70,7 +70,7 @@ fn status(code: ErrorCode) -> StatusCode {
         | ErrorCode::UnknownPermissions
         | ErrorCode::InvalidLaunchSettings
         | ErrorCode::InvalidRequest => StatusCode::BAD_REQUEST,
-        ErrorCode::TooManyAttempts => StatusCode::TOO_MANY_REQUESTS,
+        ErrorCode::TooManyAttempts | ErrorCode::TooManySockets => StatusCode::TOO_MANY_REQUESTS,
         ErrorCode::Busy => StatusCode::SERVICE_UNAVAILABLE,
         ErrorCode::Internal => StatusCode::INTERNAL_SERVER_ERROR,
     }

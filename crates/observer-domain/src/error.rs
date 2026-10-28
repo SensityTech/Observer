@@ -17,6 +17,9 @@ pub enum ErrorCode {
     TooManyAttempts,
     /// Too many passwords are being checked at once. Params: `retryAfter`, in seconds.
     Busy,
+    /// The session already holds as many live sockets, or tickets for them, as it may: a few per
+    /// browser, one for each tab of the panel.
+    TooManySockets,
     PasswordChangeRequired,
     /// The action needs the password again; `POST /api/auth/reauth`, then retry.
     ReauthRequired,

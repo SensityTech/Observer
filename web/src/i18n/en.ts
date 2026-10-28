@@ -541,6 +541,8 @@ export const en = {
             `Too many attempts. Try again in ${formatDuration('en', numberParam(params, 'retryAfter'))}.`,
         busy: (params) =>
             `Observer is busy checking other passwords. Try again in ${formatDuration('en', numberParam(params, 'retryAfter'))}.`,
+        too_many_sockets:
+            'Too many tabs of the panel are open in this browser. Close a few, then reload this one.',
         password_change_required: 'Choose a new password before you go on.',
         reauth_required: 'This change needs your password again.',
         wrong_password: 'Wrong password.',

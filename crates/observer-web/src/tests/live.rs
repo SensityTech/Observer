@@ -13,7 +13,7 @@ use observer_domain::live::{CLOSE_SESSION_ENDED, PROTOCOL, Topic};
 use observer_store::StoreError;
 use observer_store::audit::{self, NewAuditEntry};
 use serde_json::{Value, json};
-use tokio::io::DuplexStream;
+use tokio::io::{AsyncReadExt, AsyncWriteExt, DuplexStream};
 use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::HeaderValue;
@@ -494,4 +494,89 @@ async fn the_audit_log_names_changed_launch_settings_without_showing_what_only_t
         assert!(!shown.contains("Hidden"), "{shown}");
         assert!(!shown.contains("hidden"), "{shown}");
     }
+}
+
+#[tokio::test]
+async fn a_frame_larger_than_any_message_drops_the_socket_before_its_payload_comes() {
+    let server = Server::new().await;
+    let owner = server.owner().await;
+    let ticket = server.ticket(&owner).await;
+    let (mut client, socket) = tokio::io::duplex(64 * 1024);
+    let service = TowerToHyperService::new(server.app.clone());
+    tokio::spawn(
+        hyper::server::conn::http1::Builder::new()
+            .serve_connection(TokioIo::new(socket), service)
+            .with_upgrades(),
+    );
+    let handshake = format!(
+        "GET /api/ws?ticket={ticket} HTTP/1.1\r\nHost: {HOST}\r\nOrigin: {ORIGIN}\r\nCookie: {}\r\n\
+         Connection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\n\
+         Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Protocol: {PROTOCOL}\r\n\r\n",
+        owner.cookie
+    );
+    client.write_all(handshake.as_bytes()).await.unwrap();
+    let mut response = vec![0; 1024];
+    let read = client.read(&mut response).await.unwrap();
+    assert!(response[..read].starts_with(b"HTTP/1.1 101"));
+
+    // A masked text frame announcing 8 MiB, of which only the header and a few bytes arrive.
+    let mut frame = vec![0x81, 0xff];
+    frame.extend_from_slice(&(8u64 << 20).to_be_bytes());
+    frame.extend_from_slice(&[1, 2, 3, 4]);
+    frame.extend_from_slice(&[b'a'; 512]);
+    client.write_all(&frame).await.unwrap();
+
+    let mut rest = Vec::new();
+    let dropped = tokio::time::timeout(PATIENCE, client.read_to_end(&mut rest)).await;
+    assert!(
+        matches!(dropped, Ok(Ok(_))),
+        "Observer kept waiting for the rest of the frame"
+    );
+}
+
+#[tokio::test]
+async fn a_session_holds_a_few_sockets_and_unspent_tickets_at_most() {
+    let server = Server::new().await;
+    let owner = server.owner().await;
+    let mut sockets = Vec::new();
+    for _ in 0..8 {
+        sockets.push(server.socket(&owner).await);
+    }
+
+    let ticket = server.ticket(&owner).await;
+    let one_more = server
+        .upgrade(&ticket, &owner.cookie, ORIGIN, Some(PROTOCOL))
+        .await;
+    assert_eq!(one_more.err(), Some(StatusCode::TOO_MANY_REQUESTS));
+
+    // A closed socket frees its place once Observer sees it go.
+    let mut closed = sockets.pop().unwrap();
+    closed.close(None).await.unwrap();
+    let mut reopened = None;
+    for _ in 0..50 {
+        let ticket = server.ticket(&owner).await;
+        if let Ok(socket) = server
+            .upgrade(&ticket, &owner.cookie, ORIGIN, Some(PROTOCOL))
+            .await
+        {
+            reopened = Some(socket);
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(reopened.is_some(), "the closed socket's place was freed");
+
+    let mut tickets = Vec::new();
+    for _ in 0..8 {
+        tickets.push(server.ticket(&owner).await);
+    }
+    let refused = server
+        .call(Method::POST, "/api/auth/ws-ticket", Some(&owner), None)
+        .await;
+    assert_eq!(refused.status, StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(refused.code(), "too_many_sockets");
+    // Another session of the same account has its own.
+    server.clock.advance(SignedDuration::from_secs(2));
+    let phone = server.login("ada", OWNER_PASSWORD).await.session();
+    server.socket(&phone).await;
 }

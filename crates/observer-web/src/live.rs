@@ -5,8 +5,9 @@
 mod topics;
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::collections::hash_map::Entry;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use axum::Extension;
@@ -45,8 +46,11 @@ const SILENCE_LIMIT: Duration = Duration::from_secs(60);
 const WRITE_LIMIT: Duration = Duration::from_secs(10);
 /// How long a closing socket gets to send what it still has.
 const CLOSE_LIMIT: Duration = Duration::from_secs(2);
-/// What the panel sends is a few dozen bytes.
+/// What the panel sends is a few dozen bytes. A frame announcing more is refused from its header,
+/// before its payload is buffered.
 const MAX_MESSAGE_BYTES: usize = 4096;
+/// One per tab of the panel, which a browser shares a session between.
+const SOCKETS_PER_SESSION: usize = 8;
 const CLOSE_GOING_AWAY: u16 = 1001;
 const CLOSE_INTERNAL_ERROR: u16 = 1011;
 
@@ -56,6 +60,8 @@ pub struct Live {
     stop: CancellationToken,
     sockets: TaskTracker,
     connections: Arc<AtomicU64>,
+    /// How many sockets each session holds open.
+    open: Arc<Mutex<HashMap<i64, usize>>>,
     started_at: Timestamp,
 }
 
@@ -65,6 +71,7 @@ impl Live {
             stop: CancellationToken::new(),
             sockets: TaskTracker::new(),
             connections: Arc::default(),
+            open: Arc::default(),
             started_at: Timestamp::now(),
         }
     }
@@ -75,6 +82,38 @@ impl Live {
         self.stop.cancel();
         self.sockets.close();
         self.sockets.wait().await;
+    }
+
+    /// A place for one more socket of the session, unless it holds as many as it may.
+    fn place(&self, session_id: i64) -> Option<Place> {
+        let mut open = self.open.lock().unwrap_or_else(PoisonError::into_inner);
+        let count = open.entry(session_id).or_default();
+        if *count >= SOCKETS_PER_SESSION {
+            return None;
+        }
+        *count += 1;
+        Some(Place {
+            open: Arc::clone(&self.open),
+            session_id,
+        })
+    }
+}
+
+/// A socket counted against its session until it ends, or until its upgrade fails.
+struct Place {
+    open: Arc<Mutex<HashMap<i64, usize>>>,
+    session_id: i64,
+}
+
+impl Drop for Place {
+    fn drop(&mut self) {
+        let mut open = self.open.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Entry::Occupied(mut count) = open.entry(self.session_id) {
+            *count.get_mut() -= 1;
+            if *count.get() == 0 {
+                count.remove();
+            }
+        }
     }
 }
 
@@ -94,14 +133,21 @@ pub(crate) async fn open(
         return Failure::from(ErrorCode::InvalidRequest).into_response();
     }
     let live = state.live.clone();
+    let Some(place) = live.place(caller.session_id) else {
+        return Failure::from(ErrorCode::TooManySockets).into_response();
+    };
     let id = live.connections.fetch_add(1, Ordering::Relaxed) + 1;
+    // An idle socket then costs a few kilobytes rather than the 128 KiB read buffer it would
+    // otherwise reserve up front.
     upgrade
         .protocols([PROTOCOL])
         .max_message_size(MAX_MESSAGE_BYTES)
-        .on_upgrade(move |socket| live.sockets.track_future(serve(socket, state, caller, id)))
+        .max_frame_size(MAX_MESSAGE_BYTES)
+        .read_buffer_size(MAX_MESSAGE_BYTES)
+        .on_upgrade(move |socket| live.sockets.track_future(serve(socket, state, caller, id, place)))
 }
 
-async fn serve(socket: WebSocket, state: AppState, caller: Caller, id: u64) {
+async fn serve(socket: WebSocket, state: AppState, caller: Caller, id: u64, _place: Place) {
     let (sink, mut inbound) = socket.split();
     let (queue, outbound) = mpsc::channel(QUEUE_FRAMES);
     let writer = tokio::spawn(write(sink, outbound));

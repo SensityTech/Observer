@@ -15,6 +15,9 @@ use crate::sessions::live_user;
 use crate::{Accounts, Caller, Client, Error, secrets};
 
 const TICKET_LIFETIME: SignedDuration = SignedDuration::from_secs(30);
+/// Each tab of the panel trades one for its socket as it connects: a session never needs more at
+/// once than it may hold sockets.
+const TICKETS_PER_SESSION: usize = 8;
 
 #[derive(Default)]
 pub(crate) struct Tickets {
@@ -33,6 +36,13 @@ impl Accounts {
         let mut issued = self.tickets.issued.lock().unwrap_or_else(PoisonError::into_inner);
         // Nothing else forgets them: the map holds no more than 30 seconds of requests.
         issued.retain(|_, ticket| now < ticket.expires_at);
+        let unspent = issued
+            .values()
+            .filter(|ticket| ticket.session_id == caller.session_id)
+            .count();
+        if unspent >= TICKETS_PER_SESSION {
+            return Err(ErrorCode::TooManySockets.into());
+        }
         issued.insert(
             secrets::sha256(&ticket),
             Ticket {
