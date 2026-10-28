@@ -21,7 +21,7 @@ pub(crate) const TEMPORARY_PASSWORD_LIFETIME: SignedDuration = SignedDuration::f
 pub(crate) const MAX_USERNAME_BYTES: usize = 32;
 /// The names Observer gives itself on the console, in the audit log and in the bridge's events:
 /// an account by one of them would pass for Observer.
-const RESERVED_USERNAMES: [&str; 3] = ["observer", "schedule", "system"];
+const RESERVED_USERNAMES: [&str; 4] = ["observer", "schedule", "supervisor", "system"];
 /// A row of login failures with no lock and no failure for this long is forgotten.
 const FORGET_FAILURES_AFTER: SignedDuration = SignedDuration::from_hours(24);
 
@@ -206,7 +206,7 @@ mod tests {
 
     #[test]
     fn the_names_observer_gives_itself_are_taken_whatever_their_case() {
-        for reserved in ["observer", "Observer", "SCHEDULE", "system"] {
+        for reserved in ["observer", "Observer", "SCHEDULE", "Supervisor", "system"] {
             assert_eq!(
                 check_username(reserved).unwrap_err().code(),
                 Some(ErrorCode::NameTaken),
