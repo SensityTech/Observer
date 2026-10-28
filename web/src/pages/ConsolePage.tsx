@@ -123,6 +123,21 @@ export function ConsolePage() {
         }
     }, [frozen, total, visible.length]);
 
+    // The output also changes size with no line coming (a notice above the card, a phone turned):
+    // while following, its bottom stays the newest line.
+    const following = frozen === null;
+    useEffect(() => {
+        const element = scroller.current;
+        if (!following || element === null) {
+            return;
+        }
+        const pin = new ResizeObserver(() => {
+            element.scrollTop = element.scrollHeight;
+        });
+        pin.observe(element);
+        return () => pin.disconnect();
+    }, [following]);
+
     const atBottom = () => {
         const element = scroller.current;
         return element === null || element.scrollHeight - element.scrollTop - element.clientHeight < BOTTOM;
