@@ -1,11 +1,11 @@
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState, type ReactNode } from 'react';
 
 import { ApiError, send } from '../api/client';
 import type { CreatedUser } from '../api/generated/CreatedUser';
 import type { TemporaryPassword } from '../api/generated/TemporaryPassword';
 import type { User } from '../api/generated/User';
-import { permissionCatalogQuery } from '../api/users';
+import { permissionCatalogQuery, usersQuery } from '../api/users';
 import { useMe } from '../auth/me';
 import { formatPermissions, grantable, parsePermissions } from '../auth/permissions';
 import { usernameProblem, type Problem } from '../auth/validation';
@@ -19,6 +19,19 @@ import { useI18n } from '../i18n/I18nProvider';
 import { PermissionEditor } from './PermissionEditor';
 
 type Close = { onClose: () => void };
+
+/**
+ * Refetches the users list after a refusal saying it is out of date: the account changed or went
+ * since it was read. The next dialog opened from the list then starts from what is there now.
+ */
+function useRefreshWhenStale() {
+    const queryClient = useQueryClient();
+    return (error: unknown) => {
+        if (error instanceof ApiError && (error.code === 'conflict' || error.code === 'not_found')) {
+            void queryClient.invalidateQueries({ queryKey: usersQuery.queryKey });
+        }
+    };
+}
 
 /** The catalog the editor shows, or why it is missing. */
 function CatalogEditor({ value, onChange }: { value: bigint; onChange: (value: bigint) => void }) {
@@ -129,6 +142,7 @@ export function CreateUserDialog({
 
 export function EditUserDialog({ user, onClose, onSaved }: Close & { user: User; onSaved: () => void }) {
     const { t } = useI18n();
+    const refreshWhenStale = useRefreshWhenStale();
     const [permissions, setPermissions] = useState(() => parsePermissions(user.permissions));
     const [failure, setFailure] = useState<string | null>(null);
     const [pending, setPending] = useState(false);
@@ -148,6 +162,7 @@ export function EditUserDialog({ user, onClose, onSaved }: Close & { user: User;
         } catch (error) {
             setPending(false);
             setFailure(errorMessage(t, error));
+            refreshWhenStale(error);
         }
     };
 
@@ -194,6 +209,7 @@ function Confirm({
     ready?: boolean;
 }) {
     const { t } = useI18n();
+    const refreshWhenStale = useRefreshWhenStale();
     const [failure, setFailure] = useState<string | null>(null);
     const [pending, setPending] = useState(false);
 
@@ -208,6 +224,7 @@ function Confirm({
         } catch (error) {
             setPending(false);
             setFailure(errorMessage(t, error));
+            refreshWhenStale(error);
         }
     };
 
