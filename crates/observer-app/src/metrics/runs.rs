@@ -35,7 +35,7 @@ impl Change {
             } => {
                 let cause = match cause {
                     Cause::Requested { .. } => StartCause::Requested,
-                    Cause::Restart { .. } => StartCause::Restart,
+                    Cause::Restart { .. } | Cause::Scheduled { .. } => StartCause::Restart,
                     Cause::Recovery => StartCause::Recovery,
                     _ => return None,
                 };
@@ -205,5 +205,19 @@ mod tests {
             )),
             Some(Change::Hung)
         );
+    }
+
+    #[test]
+    fn a_restart_the_schedule_made_starts_a_run_as_a_restart() {
+        for by in ["observer", "ada"] {
+            assert_eq!(
+                Change::of(&state(State::Starting, Cause::Scheduled { by: by.to_owned() })),
+                Some(Change::Started {
+                    at_ms: 1_761_642_000_000,
+                    cause: StartCause::Restart
+                }),
+                "{by}"
+            );
+        }
     }
 }
