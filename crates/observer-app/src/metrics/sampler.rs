@@ -50,26 +50,15 @@ const TICK_COLUMNS: [(Thread, [Column; 3]); 3] = [
 pub(super) struct Sampler {
     metrics: Metrics,
     sources: Sources,
-    cores: u32,
 }
 
 impl Sampler {
     pub(super) fn new(metrics: Metrics, sources: Sources) -> Self {
-        let cores = std::thread::available_parallelism()
-            .map_or(1, |cores| u32::try_from(cores.get()).unwrap_or(u32::MAX));
-        Self {
-            metrics,
-            sources,
-            cores,
-        }
+        Self { metrics, sources }
     }
 
     pub(super) async fn run(self, stop: CancellationToken) {
-        let Self {
-            metrics,
-            sources,
-            cores,
-        } = self;
+        let Self { metrics, sources } = self;
         let supervisor = sources.supervision.supervisor().clone();
         let mut events = supervisor.events();
         let status = supervisor.status();
@@ -128,7 +117,7 @@ impl Sampler {
             });
             let sample = Sample { ts, state, values };
             writer.write(&metrics, &sample).await;
-            metrics.publish(live(&sample, children, cores));
+            metrics.publish(live(&sample, children, assembler.processors));
             wake = Wake::after(clock.now().as_millisecond());
         }
         // The stop of FXServer that came just before is part of its run.
@@ -216,7 +205,7 @@ impl Writer {
     }
 }
 
-fn live(sample: &Sample, children: Vec<ChildProcess>, cores: u32) -> LiveSample {
+fn live(sample: &Sample, children: Vec<ChildProcess>, cores: Option<u32>) -> LiveSample {
     LiveSample {
         ts: sample.ts,
         state: sample.state,
@@ -365,6 +354,8 @@ pub(super) struct Assembler {
     children: Option<(u32, Children)>,
     observer: Option<Measured>,
     host_cpu: Option<CpuTimes>,
+    /// The machine's processors, as the host's CPU share counts them.
+    processors: Option<u32>,
     interfaces: Option<(Instant, Vec<Interface>)>,
     perf: Option<(u32, TickReport)>,
     players: Option<(u32, HashSet<u32>)>,
@@ -381,6 +372,7 @@ impl Assembler {
             children: None,
             observer: None,
             host_cpu: None,
+            processors: None,
             interfaces: None,
             perf: None,
             players: None,
@@ -666,6 +658,7 @@ impl Assembler {
             }
         }
         self.host_cpu = host.cpu.or(self.host_cpu);
+        self.processors = host.processors.or(self.processors);
         if let Some(memory) = host.memory {
             values.set(Column::HostMemUsed, Some(real(memory.used)));
             values.set(Column::HostMemTotal, Some(real(memory.total)));

@@ -217,6 +217,7 @@ function CpuTile({ latest, trend }: TileProps) {
     const handles = value('fxsHandles');
     const children = value('children');
     const childrenCpu = value('childrenCpu');
+    const cores = latest?.cores ?? null;
     return (
         <Tile
             icon={Cpu}
@@ -224,7 +225,10 @@ function CpuTile({ latest, trend }: TileProps) {
             value={shown('fxsCpu', format.percent)}
             unit={t.tiles.cpu.unit}
             facts={[
-                [t.tiles.cpu.machine, shown('fxsCpu', (cpu) => format.percent(cpu / (latest?.cores ?? 1)))],
+                [
+                    t.tiles.cpu.machine,
+                    cores === null ? t.tiles.unknown : shown('fxsCpu', (cpu) => format.percent(cpu / cores)),
+                ],
                 [
                     t.tiles.cpu.threadsHandles,
                     t.tiles.tick.pair(

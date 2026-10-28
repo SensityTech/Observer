@@ -292,8 +292,7 @@ export const isLiveSample = (value: unknown): value is LiveSample =>
     isSeriesValues(value.values) &&
     Array.isArray(value.children) &&
     value.children.every(isChildProcess) &&
-    isCount(value.cores) &&
-    value.cores > 0;
+    (value.cores === null || (isCount(value.cores) && value.cores > 0));
 
 const isSnapshotData = (topic: Topic, data: unknown) => {
     if (!isRecord(data)) {

@@ -42,6 +42,9 @@ pub struct Member {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HostUsage {
     pub cpu: Option<CpuTimes>,
+    /// The logical processors `cpu` counts: every one of the machine's, whatever this process may
+    /// use.
+    pub processors: Option<u32>,
     pub memory: Option<Memory>,
     pub interfaces: Option<Vec<Interface>>,
 }

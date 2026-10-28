@@ -68,6 +68,7 @@ describe('parseServerMessage', () => {
             { type: 'snapshot', topic: 'metrics.live', data: { latest: null } },
             { type: 'snapshot', topic: 'metrics.live', data: { latest: SAMPLE } },
             { type: 'event', topic: 'metrics.live', data: { ...SAMPLE, values: {}, children: [] } },
+            { type: 'event', topic: 'metrics.live', data: { ...SAMPLE, cores: null } },
             { type: 'resync', topic: 'metrics.live' },
             { type: 'unsubscribed', topic: 'status', reason: 'forbidden' },
             { type: 'pong' },

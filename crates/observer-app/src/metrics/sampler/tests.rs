@@ -1,5 +1,6 @@
 use std::sync::Weak;
 
+use observer_domain::server::ServerState;
 use observer_fxserver::health::{PlayerList, Players};
 use observer_fxserver::supervisor::Stamped;
 use observer_platform::{Member, Memory};
@@ -683,6 +684,7 @@ fn the_host_rates_leave_out_an_adapter_whose_counters_went_back() {
                 busy,
                 total: busy * 4,
             }),
+            processors: Some(28),
             memory: Some(Memory {
                 used: 7 << 30,
                 total: 16 << 30,
@@ -735,6 +737,43 @@ fn the_host_rates_leave_out_an_adapter_whose_counters_went_back() {
     );
     assert_eq!(second.get(Column::HostTxBps), Some(1000.0));
     assert_eq!(reset.get(Column::HostRxBps), None, "no adapter left to compare");
+}
+
+#[test]
+fn shares_of_the_machine_count_the_processors_the_host_cpu_counts() {
+    let start = Instant::now();
+    let mut assembler = Assembler::new(start);
+    let host = |processors| Measures {
+        host: Some(HostUsage {
+            cpu: None,
+            processors,
+            memory: None,
+            interfaces: None,
+        }),
+        ..Measures::default()
+    };
+    let sample = |assembler: &mut Assembler, slot, measures| {
+        let values = sample_at(assembler, start, slot, None, measures);
+        live(
+            &Sample {
+                ts: 1_761_642_000,
+                state: ServerState::Stopped,
+                values,
+            },
+            Vec::new(),
+            assembler.processors,
+        )
+        .cores
+    };
+
+    assert_eq!(sample(&mut assembler, 1, Measures::default()), None);
+    // A process limited to 2 of the host's 28 processors still reads the 28 of the host's share.
+    assert_eq!(sample(&mut assembler, 2, host(Some(28))), Some(28));
+    assert_eq!(
+        sample(&mut assembler, 3, host(None)),
+        Some(28),
+        "kept while unsaid"
+    );
 }
 
 #[test]

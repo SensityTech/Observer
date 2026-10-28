@@ -39,8 +39,10 @@ pub(crate) fn own_usage() -> io::Result<Usage> {
 
 pub(crate) fn host_usage() -> HostUsage {
     let read = |path: &str| fs::read_to_string(path).ok();
+    let stat = read("/proc/stat");
     HostUsage {
-        cpu: read("/proc/stat").as_deref().and_then(parse_cpu),
+        cpu: stat.as_deref().and_then(parse_cpu),
+        processors: stat.as_deref().and_then(parse_processors),
         memory: read("/proc/meminfo").as_deref().and_then(parse_meminfo),
         interfaces: read("/proc/net/dev").map(|text| {
             physical(parse_net_dev(&text), |name| {
@@ -154,6 +156,17 @@ fn parse_cpu(text: &str) -> Option<CpuTimes> {
         busy: total - idle - iowait,
         total,
     })
+}
+
+/// The `cpuN` lines of `/proc/stat`, one per online processor. The CPUs a container is limited
+/// to change neither them nor the first line.
+fn parse_processors(text: &str) -> Option<u32> {
+    let count = text
+        .lines()
+        .filter_map(|line| line.split_whitespace().next()?.strip_prefix("cpu"))
+        .filter(|number| !number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit()))
+        .count();
+    u32::try_from(count).ok().filter(|&count| count > 0)
 }
 
 fn parse_meminfo(text: &str) -> Option<Memory> {
@@ -270,6 +283,15 @@ mod tests {
         );
         assert_eq!(parse_cpu("cpu  1 2 3\n"), None);
         assert_eq!(parse_cpu("intr 1\n"), None);
+    }
+
+    #[test]
+    fn the_host_s_processors_are_the_numbered_cpu_lines() {
+        let stat = "cpu  100 10 50 800 40 5 5 2 30 0\ncpu0 50 5 25 400 20 2 3 1 15 0\n\
+                    cpu1 50 5 25 400 20 3 2 1 15 0\ncpufreq 1\nintr 1\nctxt 2\n";
+
+        assert_eq!(parse_processors(stat), Some(2));
+        assert_eq!(parse_processors("cpu  1 2 3\nintr 1\n"), None);
     }
 
     #[test]
@@ -401,6 +423,8 @@ mod tests {
 
         let cpu = host.cpu.unwrap();
         assert!(cpu.total > cpu.busy && cpu.busy > 0);
+        let usable = std::thread::available_parallelism().unwrap().get();
+        assert!(host.processors.unwrap() as usize >= usable);
         let memory = host.memory.unwrap();
         assert!(memory.total > memory.used && memory.used > 0);
         assert!(host.interfaces.is_some());

@@ -16,6 +16,7 @@ ts: number, state: ServerState,
  */
 values: { [key in Series]?: number }, children: Array<ChildProcess>, 
 /**
- * The host's logical processors, for shares of the whole machine.
+ * The machine's logical processors, all of those the host's CPU share counts, for shares of
+ * the whole machine. Unknown while the host has not said.
  */
-cores: number, };
+cores: number | null, };

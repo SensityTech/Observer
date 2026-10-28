@@ -361,8 +361,9 @@ pub struct LiveSample {
     /// The series measured in this slot; an unmeasured one is absent.
     pub values: BTreeMap<Series, f64>,
     pub children: Vec<ChildProcess>,
-    /// The host's logical processors, for shares of the whole machine.
-    pub cores: u32,
+    /// The machine's logical processors, all of those the host's CPU share counts, for shares of
+    /// the whole machine. Unknown while the host has not said.
+    pub cores: Option<u32>,
 }
 
 /// A process FXServer started, as the last sample saw it.

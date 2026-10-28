@@ -153,7 +153,7 @@ mod tests {
             state: ServerState::Online,
             values: std::collections::BTreeMap::new(),
             children: Vec::new(),
-            cores: 8,
+            cores: Some(8),
         }
     }
 

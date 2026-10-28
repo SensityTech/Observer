@@ -20,8 +20,9 @@ use windows_sys::Win32::System::ProcessStatus::{
 };
 use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
 use windows_sys::Win32::System::Threading::{
-    GetCurrentProcess, GetProcessHandleCount, GetProcessIoCounters, GetProcessTimes, GetSystemTimes,
-    IO_COUNTERS, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_VM_READ, WaitForSingleObject,
+    ALL_PROCESSOR_GROUPS, GetActiveProcessorCount, GetCurrentProcess, GetProcessHandleCount,
+    GetProcessIoCounters, GetProcessTimes, GetSystemTimes, IO_COUNTERS, OpenProcess,
+    PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_VM_READ, WaitForSingleObject,
 };
 
 use super::{ProcessTree, check, size_u32};
@@ -74,6 +75,7 @@ pub(crate) fn own_usage() -> io::Result<Usage> {
 pub(crate) fn host_usage() -> HostUsage {
     HostUsage {
         cpu: cpu_times(),
+        processors: processors(),
         memory: memory(),
         interfaces: interfaces(),
     }
@@ -199,6 +201,14 @@ fn cpu_times() -> Option<CpuTimes> {
         busy: total.saturating_sub(filetime(idle)),
         total,
     })
+}
+
+/// Every processor group's, as `GetSystemTimes` counts them, not only the ones this process may
+/// run on.
+fn processors() -> Option<u32> {
+    // SAFETY: the call takes a group number and nothing else; it returns 0 when it fails.
+    let count = unsafe { GetActiveProcessorCount(ALL_PROCESSOR_GROUPS) };
+    (count > 0).then_some(count)
 }
 
 fn memory() -> Option<Memory> {
@@ -335,6 +345,8 @@ mod tests {
 
         let cpu = host.cpu.unwrap();
         assert!(cpu.total > cpu.busy && cpu.busy > 0);
+        let usable = std::thread::available_parallelism().unwrap().get();
+        assert!(host.processors.unwrap() as usize >= usable);
         let memory = host.memory.unwrap();
         assert!(memory.total > memory.used && memory.used > 0);
         let interfaces = host.interfaces.unwrap();

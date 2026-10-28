@@ -157,6 +157,16 @@ describe('OverviewPage', () => {
         live.stop();
     });
 
+    it('should leave the share of the machine unknown while the host has not said its processors', async () => {
+        const { say, live } = await page();
+        say({ type: 'snapshot', topic: 'metrics.live', data: { latest: { ...SAMPLE, cores: null } } });
+
+        const cpu = tile(en.tiles.cpu.label);
+        expect(cpu.getByText('182%')).not.toBeNull();
+        expect(cpu.getByText(en.tiles.cpu.machine).nextElementSibling?.textContent).toBe(en.tiles.unknown);
+        live.stop();
+    });
+
     it('should show n/a rather than zero before any sample', async () => {
         const { live } = await page();
 
