@@ -340,7 +340,7 @@ function Notices({
                         <span className="text-meta">{zone.when(notice.at)}</span>
                         <button
                             type="button"
-                            className="inline-flex items-center gap-1 text-meta font-medium underline-offset-2 hover:underline"
+                            className="inline-flex items-center gap-1 text-meta font-medium underline-offset-2 hover:underline max-md:min-h-11 max-md:px-1"
                             aria-label={words.hideLabel}
                             onClick={() => hide(notice.at)}
                         >
@@ -574,12 +574,15 @@ export function JobCard({
               ? entries.done / entries.total
               : null;
     const left = download === null ? null : secondsLeft(download);
+    // The download's figures while it lasts; the files after it.
+    const downloading = job.step === 'download' && download !== null ? download : null;
     const progress = [
-        download === null
+        downloading === null
             ? null
-            : words.downloaded(format.bytes(download.received), format.bytes(download.total)),
-        download === null || download.rate === 0 ? null : words.rate(format.bytes(download.rate)),
-        left === null || job.step !== 'download' ? null : words.left(format.duration(left)),
+            : words.downloaded(format.bytes(downloading.received), format.bytes(downloading.total)),
+        downloading === null || downloading.rate === 0 ? null : words.rate(format.bytes(downloading.rate)),
+        downloading === null || left === null ? null : words.left(format.duration(left)),
+        entries === null || job.step === 'download' ? null : words.files(entries.done, entries.total),
     ].filter((part) => part !== null);
     const canManage = allows(me, Permission.ArtifactsManage);
     const cancelReason = !canManage
@@ -640,7 +643,6 @@ export function JobCard({
                         />
                         <p className="flex flex-wrap gap-x-3 text-small text-ink-2 tabular-nums">
                             {progress.length > 0 && <span>{progress.join(' · ')}</span>}
-                            {entries !== null && <span>{words.files(entries.done, entries.total)}</span>}
                         </p>
                         {job.warnings.includes('longPath') && (
                             <p className="text-small text-warning">{words.longPath}</p>
@@ -791,7 +793,7 @@ function InstalledCard({
                                                         type="button"
                                                         title={build.commit}
                                                         aria-label={words.copyCommit(build.commit)}
-                                                        className="inline-flex items-center gap-1 font-mono hover:text-ink"
+                                                        className="inline-flex items-center gap-1 font-mono hover:text-ink max-md:min-h-11"
                                                         onClick={() => void copyText(build.commit ?? '')}
                                                     >
                                                         {build.commit.slice(0, 7)}
@@ -933,7 +935,7 @@ function AvailableCard({
     const toggle = (name: keyof Omit<Filters, 'search'>, label: string) => (
         <label
             htmlFor={`${id}-${name}`}
-            className="inline-flex cursor-pointer items-center gap-2 text-ui text-ink-2"
+            className="inline-flex cursor-pointer items-center gap-2 text-ui text-ink-2 max-md:min-h-11"
         >
             <Checkbox
                 id={`${id}-${name}`}
@@ -1223,7 +1225,7 @@ function SettingsCard({ status }: { status: ArtifactsStatus }) {
                                         {name}
                                         <button
                                             type="button"
-                                            className="grid size-5 place-items-center rounded-pill hover:bg-hover max-md:size-8"
+                                            className="grid size-5 place-items-center rounded-pill hover:bg-hover max-md:size-11"
                                             aria-label={words.removeBranch(name)}
                                             onClick={() =>
                                                 setDraft({

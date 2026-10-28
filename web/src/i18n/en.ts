@@ -280,8 +280,8 @@ export const en = {
         },
         job: {
             title: 'Job',
-            install: (build: string) => `Installing build ${build}`,
-            import: (build: string) => `Importing build ${build}`,
+            install: (build: string) => `Install of build ${build}`,
+            import: (build: string) => `Import of build ${build}`,
             steps: {
                 preCheck: 'Checking',
                 download: 'Downloading',

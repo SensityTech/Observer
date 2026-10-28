@@ -178,6 +178,23 @@ describe('ArtifactsPage', () => {
         expect(progress.getAttribute('aria-valuetext')).toContain('39.3 MB of 60.6 MB');
     });
 
+    it('should count the files once the download is over, without its figures', async () => {
+        const job = STATUS.job ?? FIXTURE.job!;
+        const { getByText, queryByText } = await page({
+            ...STATUS,
+            job: {
+                ...job,
+                step: 'extract',
+                download: { received: 63_500_000, total: 63_500_000, rate: 4_200_000 },
+                entries: { done: 120, total: 563 },
+            },
+        });
+
+        expect(getByText('120 of 563 files')).toBeTruthy();
+        expect(queryByText(/60\.6 MB of 60\.6 MB/)).toBeNull();
+        expect(queryByText(/\/s/)).toBeNull();
+    });
+
     it('should gate an install past its end of life behind its checkbox', async () => {
         const { getByLabelText, getByRole } = await page({ ...STATUS, job: null });
         fireEvent.click(getByLabelText(en.artifacts.available.showEndOfLife));
