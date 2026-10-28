@@ -14,6 +14,7 @@ import { ReauthDialog } from './auth/ReauthDialog';
 import { RequireOwner, RequirePermission } from './auth/RequirePermission';
 import { AccountPage } from './pages/AccountPage';
 import { AuditPage } from './pages/AuditPage';
+import { ConsolePage } from './pages/ConsolePage';
 import { LoginPage } from './pages/LoginPage';
 import { NotFoundPage } from './pages/NotFoundPage';
 import { OverviewPage } from './pages/OverviewPage';
@@ -110,6 +111,16 @@ const overviewRoute = createRoute({
     component: OverviewPage,
 });
 
+const consoleRoute = createRoute({
+    getParentRoute: () => panelRoute,
+    path: '/console',
+    component: () => (
+        <RequirePermission name="ConsoleView">
+            <ConsolePage />
+        </RequirePermission>
+    ),
+});
+
 const serverRoute = createRoute({
     getParentRoute: () => panelRoute,
     path: '/server',
@@ -150,7 +161,7 @@ const routeTree = rootRoute.addChildren([
     setupRoute,
     loginRoute,
     passwordRoute,
-    panelRoute.addChildren([overviewRoute, serverRoute, usersRoute, auditRoute, accountRoute]),
+    panelRoute.addChildren([overviewRoute, consoleRoute, serverRoute, usersRoute, auditRoute, accountRoute]),
 ]);
 
 export const createPanelRouter = (queryClient: QueryClient) =>

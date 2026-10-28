@@ -5,6 +5,7 @@ import {
     Menu as MenuIcon,
     ScrollText,
     Server,
+    SquareTerminal,
     Users,
     X,
     type LucideIcon,
@@ -27,7 +28,7 @@ import { ThemeSwitch } from './ThemeSwitch';
 import { UserMenu } from './UserMenu';
 
 type NavEntry = {
-    to: '/' | '/server' | '/users' | '/audit';
+    to: '/' | '/console' | '/server' | '/users' | '/audit';
     label: string;
     icon: LucideIcon;
     /** A permission, or the owner alone for what no permission grants. */
@@ -73,6 +74,7 @@ export function AppShell() {
 
     const main: NavEntry[] = [
         { to: '/', label: t.nav.overview, icon: LayoutDashboard, access: Permission.DashboardView },
+        { to: '/console', label: t.nav.console, icon: SquareTerminal, access: Permission.ConsoleView },
     ];
     const administration: NavEntry[] = [
         { to: '/server', label: t.nav.server, icon: Server, access: 'owner' },
