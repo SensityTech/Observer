@@ -49,7 +49,8 @@ const clock = (seconds: number) => {
 type Overlay = {
     markers: { marker: RunMarker; x: number }[];
     peak: { x: number; y: number } | null;
-    slots: { y: number; value: number } | null;
+    /** The slots label, just right of the price scale, whose width depends on its labels. */
+    slots: { x: number; y: number; value: number } | null;
 };
 
 export default function PlayersChart() {
@@ -242,7 +243,7 @@ function Plot({
         setOverlay({
             markers,
             peak: peakX === null || peakY === null ? null : { x: peakX, y: peakY },
-            slots: latest === null || slotsY === null ? null : { y: slotsY, value: latest },
+            slots: latest === null || slotsY === null ? null : { x: scale + 8, y: slotsY, value: latest },
         });
     }, [page, rows, peakTime]);
 
@@ -439,8 +440,8 @@ function Plot({
                     ))}
                     {overlay.slots && (
                         <span
-                            className="absolute left-12 font-mono text-micro leading-none text-ink-3"
-                            style={{ top: overlay.slots.y - 14 }}
+                            className="absolute font-mono text-micro leading-none text-ink-3"
+                            style={{ left: overlay.slots.x, top: overlay.slots.y - 14 }}
                         >
                             {t.charts.players.maxSlotsAt(format.number(overlay.slots.value))}
                         </span>
