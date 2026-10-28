@@ -1336,6 +1336,7 @@ dependencies = [
  "jiff",
  "observer-domain",
  "observer-fxserver",
+ "observer-platform",
  "observer-store",
  "serde_json",
  "sha2",

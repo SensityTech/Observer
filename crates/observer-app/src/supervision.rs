@@ -338,6 +338,11 @@ impl Supervision {
         self.inner.status.clone()
     }
 
+    /// The supervisor itself, whose status, events and readings the statistics follow.
+    pub(crate) fn supervisor(&self) -> &Supervisor {
+        &self.inner.supervisor
+    }
+
     /// The lines after `since` with every line from then on, nothing missed or repeated in
     /// between. Without `since`, the latest lines. A snapshot holds 5,000 lines at most: a
     /// subscriber further behind is told of the gap.
@@ -579,16 +584,7 @@ fn server_status(
 ) -> ServerStatus {
     let at = |ms: i64| Timestamp::from_millisecond(ms).unwrap_or_default();
     ServerStatus {
-        state: match status.state {
-            State::Stopped => ServerState::Stopped,
-            State::Starting => ServerState::Starting,
-            State::Online => ServerState::Online,
-            State::Degraded => ServerState::Degraded,
-            State::Hung => ServerState::Hung,
-            State::Stopping => ServerState::Stopping,
-            State::Crashed => ServerState::Crashed,
-            State::CrashLoop => ServerState::CrashLoop,
-        },
+        state: server_state(status.state),
         cause: cause.map(state_cause),
         since: at(status.since_ms),
         started_at: status.started_ms.map(at),
@@ -601,6 +597,19 @@ fn server_status(
         }),
         restart_at,
         launch,
+    }
+}
+
+pub(crate) fn server_state(state: State) -> ServerState {
+    match state {
+        State::Stopped => ServerState::Stopped,
+        State::Starting => ServerState::Starting,
+        State::Online => ServerState::Online,
+        State::Degraded => ServerState::Degraded,
+        State::Hung => ServerState::Hung,
+        State::Stopping => ServerState::Stopping,
+        State::Crashed => ServerState::Crashed,
+        State::CrashLoop => ServerState::CrashLoop,
     }
 }
 
