@@ -22,10 +22,12 @@ pub use columns::{Affinity, Column, Kind, Values};
 
 const MIGRATIONS: &[M<'static>] = &[M::up(include_str!("../../migrations/metrics/0001_samples.sql"))];
 
-/// The metrics database. One connection owns the file, as for the state database.
+/// The metrics database. One connection writes, as for the state database; reads have their own
+/// beside it, which the write-ahead log allows, so that a burst of them never holds up a sample.
 #[derive(Clone)]
 pub struct MetricsDatabase {
     conn: tokio_rusqlite::Connection,
+    reader: tokio_rusqlite::Connection,
 }
 
 impl MetricsDatabase {
@@ -34,17 +36,23 @@ impl MetricsDatabase {
     /// takes its place.
     pub async fn open(path: impl Into<PathBuf>) -> Result<Self, StoreError> {
         let path = path.into();
-        let conn = tokio::task::spawn_blocking(move || match open_blocking(&path) {
-            Err(error) if unreadable(&error) => {
-                let aside = set_aside(&path)?;
-                warn!(%error, set_aside = %aside.display(), "the metrics database could not be read; starting a new one");
-                open_blocking(&path)
-            }
-            opened => opened,
+        let (conn, reader) = tokio::task::spawn_blocking(move || {
+            let conn = match open_blocking(&path) {
+                Err(error) if unreadable(&error) => {
+                    let aside = set_aside(&path)?;
+                    warn!(%error, set_aside = %aside.display(), "the metrics database could not be read; starting a new one");
+                    open_blocking(&path)
+                }
+                opened => opened,
+            }?;
+            Ok::<_, StoreError>((conn, open_reader(&path)?))
         })
         .await
         .map_err(|_| StoreError::Closed)??;
-        Ok(Self { conn: conn.into() })
+        Ok(Self {
+            conn: conn.into(),
+            reader: reader.into(),
+        })
     }
 
     /// Runs `function` in one transaction, committed when it returns `Ok`.
@@ -54,7 +62,7 @@ impl MetricsDatabase {
         E: From<StoreError> + Send + 'static,
         F: FnOnce(&Transaction<'_>) -> Result<R, E> + Send + 'static,
     {
-        self.call(move |conn| {
+        call(&self.conn, move |conn| {
             let transaction = conn
                 .transaction_with_behavior(TransactionBehavior::Immediate)
                 .map_err(StoreError::from)?;
@@ -65,30 +73,33 @@ impl MetricsDatabase {
         .await
     }
 
+    /// Runs `function` on the read-only connection, which sees what was committed last.
     pub async fn read<R, E, F>(&self, function: F) -> Result<R, E>
     where
         R: Send + 'static,
         E: From<StoreError> + Send + 'static,
         F: FnOnce(&Connection) -> Result<R, E> + Send + 'static,
     {
-        self.call(move |conn| function(conn)).await
+        call(&self.reader, move |conn| function(conn)).await
     }
 
     pub async fn close(self) -> Result<(), StoreError> {
+        // The writer goes last: closing it checkpoints the log into the file.
+        self.reader.close().await.map_err(|_| StoreError::Closed)?;
         self.conn.close().await.map_err(|_| StoreError::Closed)
     }
+}
 
-    async fn call<R, E, F>(&self, function: F) -> Result<R, E>
-    where
-        R: Send + 'static,
-        E: From<StoreError> + Send + 'static,
-        F: FnOnce(&mut Connection) -> Result<R, E> + Send + 'static,
-    {
-        self.conn.call(function).await.map_err(|error| match error {
-            tokio_rusqlite::Error::Error(error) => error,
-            _ => StoreError::Closed.into(),
-        })
-    }
+async fn call<R, E, F>(conn: &tokio_rusqlite::Connection, function: F) -> Result<R, E>
+where
+    R: Send + 'static,
+    E: From<StoreError> + Send + 'static,
+    F: FnOnce(&mut Connection) -> Result<R, E> + Send + 'static,
+{
+    conn.call(function).await.map_err(|error| match error {
+        tokio_rusqlite::Error::Error(error) => error,
+        _ => StoreError::Closed.into(),
+    })
 }
 
 fn open_blocking(path: &Path) -> Result<Connection, StoreError> {
@@ -117,6 +128,18 @@ fn open_blocking(path: &Path) -> Result<Connection, StoreError> {
         });
     }
     migrations.to_latest(&mut conn)?;
+    Ok(conn)
+}
+
+/// Opened once the writer has migrated the file.
+fn open_reader(path: &Path) -> Result<Connection, StoreError> {
+    let conn = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )?;
+    conn.set_db_config(DbConfig::SQLITE_DBCONFIG_DEFENSIVE, true)?;
+    conn.pragma_update(None, "trusted_schema", false)?;
+    conn.busy_timeout(Duration::from_secs(5))?;
     Ok(conn)
 }
 
@@ -239,6 +262,49 @@ mod tests {
             .unwrap();
         assert_eq!(journal, "wal");
         assert_eq!(vacuum, 2, "incremental");
+    }
+
+    #[tokio::test]
+    async fn a_read_does_not_wait_for_a_write_under_way() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = MetricsDatabase::open(dir.path().join("metrics.sqlite3"))
+            .await
+            .unwrap();
+        let (release, held) = std::sync::mpsc::channel::<()>();
+        let (begun, writing) = tokio::sync::oneshot::channel();
+        let write = tokio::spawn({
+            let db = db.clone();
+            async move {
+                db.write(move |tx| -> Result<(), StoreError> {
+                    tx.execute(
+                        "INSERT INTO sample_5s (ts, state) VALUES (1761642000, 'online')",
+                        [],
+                    )?;
+                    let _ = begun.send(());
+                    let _ = held.recv();
+                    Ok(())
+                })
+                .await
+            }
+        });
+        writing.await.unwrap();
+
+        let read = tokio::time::timeout(
+            Duration::from_secs(2),
+            db.read(|conn| -> Result<i64, StoreError> {
+                Ok(conn.query_row("SELECT count(*) FROM sample_5s", [], |row| row.get(0))?)
+            }),
+        )
+        .await;
+        release.send(()).unwrap();
+        write.await.unwrap().unwrap();
+
+        assert_eq!(
+            read.expect("the read waited for the write").unwrap(),
+            0,
+            "the write is not committed yet"
+        );
+        db.close().await.unwrap();
     }
 
     fn set_aside_files(dir: &Path) -> Vec<String> {
