@@ -151,13 +151,13 @@ fn measure(process: RawHandle, threads: Option<u32>) -> io::Result<Usage> {
     })
 }
 
-struct Listed {
+pub(super) struct Listed {
     threads: u32,
     name: String,
 }
 
 /// Every process's thread count and executable name, from one snapshot of the system.
-fn snapshot() -> io::Result<HashMap<u32, Listed>> {
+pub(super) fn snapshot() -> io::Result<HashMap<u32, Listed>> {
     // SAFETY: a process snapshot takes no pid; the handle is checked before use.
     let handle = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
     if handle == INVALID_HANDLE_VALUE {

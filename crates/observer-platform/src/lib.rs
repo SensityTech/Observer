@@ -1,7 +1,8 @@
 //! What Observer needs from the operating system to run FXServer: spawning it with stdin, stdout,
 //! stderr and file descriptor 3, owning its whole process tree, and the console and signal plumbing
 //! around it; and for installing builds, the free space of a volume and the signature check of
-//! FXServer.exe; for the statistics, what the tree, Observer and the host use. The only crate
+//! FXServer.exe, and the processes a build runs; for the statistics, what the tree, Observer and
+//! the host use. The only crate
 //! allowed to use `unsafe` outside test tools.
 #![allow(unsafe_code)]
 
@@ -81,6 +82,18 @@ pub fn spawn(launch: &Launch) -> Result<Spawned, SpawnError> {
     #[cfg(unix)]
     {
         unix::spawn(launch)
+    }
+}
+
+/// The processes whose executable lies under `dir`, by pid: what keeps a build from being deleted.
+pub fn processes_in(dir: &Path) -> io::Result<Vec<u32>> {
+    #[cfg(windows)]
+    {
+        windows::processes::processes_in(dir)
+    }
+    #[cfg(unix)]
+    {
+        unix::processes::processes_in(dir)
     }
 }
 
