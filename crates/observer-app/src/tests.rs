@@ -990,3 +990,36 @@ async fn a_username_naming_no_account_stays_out_of_the_audit_log() {
     assert_eq!(known.target.as_deref(), Some("ada"));
     assert_eq!(known.details["username"], json!("ada"));
 }
+
+#[tokio::test]
+async fn a_password_reset_lifts_the_login_locks_on_the_account() {
+    let lab = Lab::new().await;
+    let owner = lab.owner().await;
+    let grace = lab.user(&owner, "grace", P::CONSOLE_VIEW).await;
+    let grace_id = lab.caller(&grace).await.user_id;
+    for _ in 0..5 {
+        lab.pause();
+        lab.sign_in("grace", "guess guess guess", &office())
+            .await
+            .unwrap_err();
+    }
+    lab.pause();
+
+    let from_cli = lab.accounts.reset_password_from_cli("grace").await.unwrap();
+    lab.sign_in("grace", &from_cli, &office()).await.unwrap();
+
+    for _ in 0..5 {
+        lab.pause();
+        lab.sign_in("grace", "guess guess guess", &office())
+            .await
+            .unwrap_err();
+    }
+    lab.pause();
+    let admin = lab.caller(&owner).await;
+    let from_panel = lab.accounts.reset_password(&admin, grace_id).await.unwrap();
+    lab.sign_in("grace", &from_panel, &office()).await.unwrap();
+
+    let failed = lab.entries(AuditAction::LoginFailed).await;
+    assert_eq!(failed.len(), 2);
+    assert!(failed.iter().all(|entry| entry.details["failures"] == json!(5)));
+}

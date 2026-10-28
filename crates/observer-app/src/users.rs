@@ -1,3 +1,4 @@
+use jiff::Timestamp;
 use observer_domain::accounts::{CreatedUser, User};
 use observer_domain::audit::{ActorKind, AuditAction, Outcome};
 use observer_domain::delegation;
@@ -196,14 +197,7 @@ impl Accounts {
         self.db
             .write(move |tx| -> Result<_, Error> {
                 let user = users::find(tx, &username)?.ok_or(ErrorCode::NotFound)?;
-                let mut locked = 0;
-                for mut row in login_failures::for_username(tx, &user.username)? {
-                    locked += usize::from(throttle::locked_for(&row, now).is_some());
-                    if let Some(failures) = throttle::take_unaudited(&mut row) {
-                        Record::login_failures(tx, &failures)?.write(tx, now)?;
-                    }
-                }
-                login_failures::delete_for_username(tx, &user.username)?;
+                let locked = lift_locks(tx, &user.username, now)?;
                 Record::operator(ActorKind::Cli, AuditAction::UserUnlocked)
                     .target(&user.username)
                     .details(json!({ "userId": user.id, "lockedNetworks": locked }))
@@ -255,6 +249,7 @@ impl Accounts {
     }
 
     /// Hashes a new temporary password, then gives it to the account `target` finds and allows.
+    /// The account's login locks go too: they guard a password that no longer works.
     async fn reset<F>(&self, record: Record, target: F) -> Result<String, Error>
     where
         F: FnOnce(&Connection) -> Result<UserRow, Error> + Send + 'static,
@@ -272,6 +267,7 @@ impl Accounts {
                 user.version += 1;
                 users::update(tx, &user)?;
                 sessions::delete_for_user(tx, user.id, None)?;
+                lift_locks(tx, &user.username, now)?;
                 record
                     .target(&user.username)
                     .details(json!({ "userId": user.id }))
@@ -281,6 +277,20 @@ impl Accounts {
             .await?;
         Ok(temporary_password)
     }
+}
+
+/// Lifts the login locks on `username` from every network. The failures they held still reach the
+/// audit log. Returns how many networks were locked out.
+fn lift_locks(conn: &Connection, username: &str, now: Timestamp) -> Result<usize, Error> {
+    let mut locked = 0;
+    for mut row in login_failures::for_username(conn, username)? {
+        locked += usize::from(throttle::locked_for(&row, now).is_some());
+        if let Some(failures) = throttle::take_unaudited(&mut row) {
+            Record::login_failures(conn, &failures)?.write(conn, now)?;
+        }
+    }
+    login_failures::delete_for_username(conn, username)?;
+    Ok(locked)
 }
 
 /// The account a refused change was aimed at.
