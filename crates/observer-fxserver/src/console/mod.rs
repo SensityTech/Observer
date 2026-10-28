@@ -25,10 +25,13 @@ const RING_BYTES: usize = 4 * 1024 * 1024;
 const LINE_OVERHEAD: usize = 64;
 /// Lines a live subscriber may fall behind before it is told it lagged.
 const LIVE_CAPACITY: usize = 1024;
+/// Numbers available to each millisecond Observer runs, far more than it ever prints.
+const SEQS_PER_MS: u64 = 1000;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ConsoleLine {
-    /// Numbers every line Observer saw since it started, across server restarts.
+    /// Numbers every line Observer saw since it started, across server restarts. Counted from the
+    /// clock at start, so that a number from an earlier Observer is below this one's.
     pub seq: u64,
     pub ts_ms: i64,
     pub generation: u32,
@@ -84,15 +87,16 @@ struct Ring {
 
 impl ConsoleHub {
     pub fn new(log: Option<&ConsoleLog>) -> Self {
-        Self::with_bounds(log, RING_LINES, RING_BYTES)
+        let now = u64::try_from(jiff::Timestamp::now().as_millisecond()).unwrap_or(0);
+        Self::with_bounds(log, RING_LINES, RING_BYTES, now * SEQS_PER_MS + 1)
     }
 
-    fn with_bounds(log: Option<&ConsoleLog>, max_lines: usize, max_bytes: usize) -> Self {
+    fn with_bounds(log: Option<&ConsoleLog>, max_lines: usize, max_bytes: usize, first_seq: u64) -> Self {
         Self {
             ring: Mutex::new(Ring {
                 lines: VecDeque::new(),
                 bytes: 0,
-                next_seq: 1,
+                next_seq: first_seq,
                 max_lines,
                 max_bytes,
             }),
@@ -154,7 +158,7 @@ impl ConsoleHub {
         let first = ring.lines.front().map_or(ring.next_seq, |line| line.seq);
         let (after, gap) = match since {
             None => (0, false),
-            // The client counts from an earlier Observer: everything is new to it.
+            // Not a number of this Observer's: everything is new to the client.
             Some(since) if since > last => (0, true),
             Some(since) => (since, since + 1 < first),
         };
@@ -182,6 +186,11 @@ mod tests {
 
     use super::*;
 
+    /// A hub numbering from 1, for readable numbers.
+    fn hub() -> ConsoleHub {
+        ConsoleHub::with_bounds(None, RING_LINES, RING_BYTES, 1)
+    }
+
     fn push(hub: &ConsoleHub, text: &str) -> u64 {
         hub.push(1, LineKind::Stdout, None, text.to_owned(), LineFlags::default())
             .seq
@@ -193,7 +202,7 @@ mod tests {
 
     #[test]
     fn lines_are_numbered_in_order_and_secrets_masked_before_they_are_kept() {
-        let hub = ConsoleHub::new(None);
+        let hub = hub();
 
         let first = hub.push(
             3,
@@ -216,7 +225,7 @@ mod tests {
 
     #[test]
     fn the_ring_keeps_at_most_its_line_count() {
-        let hub = ConsoleHub::with_bounds(None, 3, usize::MAX);
+        let hub = ConsoleHub::with_bounds(None, 3, usize::MAX, 1);
         for index in 0..5 {
             push(&hub, &format!("line {index}"));
         }
@@ -226,7 +235,7 @@ mod tests {
 
     #[test]
     fn the_ring_keeps_at_most_its_byte_count() {
-        let hub = ConsoleHub::with_bounds(None, usize::MAX, 3 * (LINE_OVERHEAD + 10));
+        let hub = ConsoleHub::with_bounds(None, usize::MAX, 3 * (LINE_OVERHEAD + 10), 1);
         for _ in 0..5 {
             push(&hub, "0123456789");
         }
@@ -236,7 +245,7 @@ mod tests {
 
     #[test]
     fn a_client_resuming_gets_only_what_it_missed() {
-        let hub = ConsoleHub::new(None);
+        let hub = hub();
         for index in 0..4 {
             push(&hub, &format!("line {index}"));
         }
@@ -250,7 +259,7 @@ mod tests {
 
     #[test]
     fn a_client_whose_lines_were_evicted_is_told_of_the_gap() {
-        let hub = ConsoleHub::with_bounds(None, 2, usize::MAX);
+        let hub = ConsoleHub::with_bounds(None, 2, usize::MAX, 1);
         for index in 0..5 {
             push(&hub, &format!("line {index}"));
         }
@@ -270,9 +279,31 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_client_resuming_with_a_number_from_an_earlier_observer_is_told_of_the_gap() {
+        let earlier = ConsoleHub::new(None);
+        let mut last_seen = 0;
+        for index in 0..5 {
+            last_seen = push(&earlier, &format!("earlier {index}"));
+        }
+        drop(earlier);
+        // Even an Observer that starts at once and prints more than its predecessor did.
+        thread::sleep(std::time::Duration::from_millis(2));
+        let hub = ConsoleHub::new(None);
+        for index in 0..8 {
+            push(&hub, &format!("line {index}"));
+        }
+
+        let resumed = hub.subscribe_from(Some(last_seen));
+
+        assert!(resumed.gap);
+        assert_eq!(resumed.backlog.len(), 8);
+        assert_eq!(resumed.backlog[0].text, "line 0");
+    }
+
     #[tokio::test]
     async fn a_subscription_taken_while_lines_pour_in_misses_and_repeats_nothing() {
-        let hub = Arc::new(ConsoleHub::new(None));
+        let hub = Arc::new(hub());
         let writer = thread::spawn({
             let hub = Arc::clone(&hub);
             move || {
