@@ -24,7 +24,7 @@ export function AccountPage() {
                     {t.myAccount.title} <span className="gloss">{t.myAccount.gloss}</span>
                 </h1>
             </div>
-            <div className="grid grid-cols-1 items-start gap-3 2xl:grid-cols-3">
+            <div className="flex flex-col gap-3">
                 <PasswordCard />
                 <SessionsCard />
             </div>
@@ -96,7 +96,7 @@ function PasswordCard() {
                     {t.myAccount.password.title}
                 </h2>
             </div>
-            <form className="flex flex-col gap-4 p-5 max-md:p-4" onSubmit={submit} noValidate>
+            <form className="flex max-w-md flex-col gap-4 p-5 max-md:p-4" onSubmit={submit} noValidate>
                 {outcome && <Notice tone={outcome.tone}>{outcome.message}</Notice>}
                 <PasswordField
                     label={t.myAccount.password.current}
@@ -156,7 +156,7 @@ function SessionsCard() {
     });
 
     return (
-        <section className="card flex flex-col 2xl:col-span-2" aria-labelledby="account-sessions">
+        <section className="card flex flex-col" aria-labelledby="account-sessions">
             <div className="card-head wrap-push">
                 <span className="grid size-6 place-items-center rounded-[6px] border border-line bg-surface-2 text-ink-2">
                     <MonitorSmartphone size={14} strokeWidth={1.5} aria-hidden="true" />
@@ -215,22 +215,22 @@ function SessionsCard() {
                         </thead>
                         <tbody>
                             {sessions.data.map((session) => {
-                                const started = format.timestamp(session.createdAt);
+                                const started = format.timestamp(session.createdAt, { seconds: false });
                                 return (
                                     <tr key={session.id} className={table.row}>
                                         <td className={cn(table.td, table.mono)}>{started}</td>
                                         <td className={cn(table.td, table.mono)}>
-                                            {format.timestamp(session.lastSeenAt)}
+                                            {format.timestamp(session.lastSeenAt, { seconds: false })}
                                         </td>
                                         <td className={cn(table.td, table.mono)}>
-                                            {format.timestamp(session.expiresAt)}
+                                            {format.timestamp(session.expiresAt, { seconds: false })}
                                         </td>
                                         <td className={cn(table.td, table.mono)}>
                                             {session.ip ?? t.myAccount.sessions.unknown}
                                         </td>
-                                        <td className={cn(table.td, 'max-w-80 min-w-56')}>
+                                        <td className={cn(table.td, 'max-w-96 min-w-48')}>
                                             <span
-                                                className="line-clamp-2 [overflow-wrap:anywhere]"
+                                                className="block truncate"
                                                 title={session.userAgent ?? undefined}
                                             >
                                                 {session.userAgent ?? t.myAccount.sessions.unknown}
