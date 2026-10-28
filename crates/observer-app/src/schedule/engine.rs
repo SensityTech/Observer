@@ -97,6 +97,9 @@ pub(crate) struct State {
     warned: BTreeMap<Timestamp, u32>,
     /// The restart asked of the supervisor, until the run it starts shows up.
     asked: Option<Asked>,
+    /// The time of the last step. What came due since, during a stall, a sleep or a clock jump,
+    /// is caught up with at the next one; nothing from before Observer started is.
+    caught_up: Option<Timestamp>,
 }
 
 impl State {
@@ -238,6 +241,10 @@ pub(crate) fn step(
         effects.push(Effect::SettledAhead(settled));
     }
     let settings_change = matches!(input, Input::Settings { .. });
+    if settings_change {
+        // A time the change adds behind now is not owed a restart.
+        state.caught_up = Some(now);
+    }
     let applied = match input {
         Input::Tick => Ok(None),
         Input::Settings { by } => Ok(Some((by, Change::Removed, None))),
@@ -284,6 +291,7 @@ pub(crate) fn step(
         state.tell_of_change(&previous, &by, change, &mut effects);
     }
     state.warn(settings, now, &mut effects);
+    state.caught_up = Some(now);
     if state.plan != before.plan {
         effects.push(Effect::Persist);
     }
@@ -762,14 +770,16 @@ impl State {
         }
     }
 
-    /// The occurrences that may still happen, in the order they would: those after `now` and
-    /// `settled`, and the armed or delayed one even when its own time is past.
+    /// The occurrences that may still happen, in the order they would: those after `settled` and
+    /// the last step, the ones that came due since included, and the armed or delayed one even
+    /// when its own time is past.
     fn candidates(&self, settings: &Settings, now: Timestamp) -> Vec<Candidate> {
         let stored = &settings.stored;
         if !stored.enabled {
             return Vec::new();
         }
-        let floor = self.plan.settled.map_or(now, |settled| settled.max(now));
+        let since = self.caught_up.map_or(now, |caught_up| caught_up.min(now));
+        let floor = self.plan.settled.map_or(since, |settled| settled.max(since));
         let count = UPCOMING + 2;
         let mut found = match stored.mode {
             ScheduleMode::FixedTimes => fixed_occurrences(&stored.times, &settings.zone, floor, count),

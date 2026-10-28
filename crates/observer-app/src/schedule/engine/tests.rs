@@ -414,6 +414,102 @@ fn a_clock_jumping_ten_minutes_past_the_time_misses_it_and_arms_the_next() {
     assert_eq!(sim.next(), Some(ts("2026-10-28T15:00:00Z")));
 }
 
+fn restarted_at(effects: &[Effect]) -> Vec<Timestamp> {
+    effects
+        .iter()
+        .filter_map(|effect| match effect {
+            Effect::Restart(target) => Some(target.at),
+            _ => None,
+        })
+        .collect()
+}
+
+fn missed_at(effects: &[Effect]) -> Vec<Timestamp> {
+    effects
+        .iter()
+        .filter_map(|effect| match effect {
+            Effect::Missed { target, .. } => Some(target.at),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn a_late_wake_misses_each_time_it_passed_and_fires_the_last_one_still_within_grace() {
+    let mut sim = Sim::running(
+        paris(&["04:00", "04:30", "16:00"]),
+        "2026-10-27T20:00:00Z",
+        "2026-10-28T02:20:00Z",
+    );
+    let mut long = Sim::running(
+        paris(&["04:00", "04:30", "05:00", "16:00"]),
+        "2026-10-27T20:00:00Z",
+        "2026-10-28T02:20:00Z",
+    );
+
+    let wake = sim.tick("2026-10-28T03:33:00Z");
+    let long_wake = long.tick("2026-10-28T04:10:00Z");
+
+    assert_eq!(missed_at(&wake), [ts("2026-10-28T03:00:00Z")]);
+    assert_eq!(
+        restarted_at(&wake),
+        [ts("2026-10-28T03:30:00Z")],
+        "3 minutes late"
+    );
+    assert_eq!(
+        missed_at(&long_wake),
+        [
+            ts("2026-10-28T03:00:00Z"),
+            ts("2026-10-28T03:30:00Z"),
+            ts("2026-10-28T04:00:00Z"),
+        ]
+    );
+    assert_eq!(restarted_at(&long_wake), []);
+    assert_eq!(long.next(), Some(ts("2026-10-28T15:00:00Z")));
+}
+
+#[test]
+fn a_missed_one_off_leaves_the_schedules_restart_due_within_grace_to_fire() {
+    let mut sim = Sim::running(
+        paris(&["04:00", "16:00"]),
+        "2026-10-27T20:00:00Z",
+        "2026-10-28T02:40:00Z",
+    );
+    sim.send(Input::OneOff {
+        at: ts("2026-10-28T02:50:00Z"),
+        by: "ada".to_owned(),
+    });
+    sim.tick("2026-10-28T02:45:00Z");
+
+    let wake = sim.tick("2026-10-28T03:02:00Z");
+
+    assert_eq!(missed_at(&wake), [ts("2026-10-28T02:50:00Z")]);
+    assert_eq!(restarted_at(&wake), [ts("2026-10-28T03:00:00Z")]);
+}
+
+#[test]
+fn times_that_passed_before_observer_started_or_a_settings_change_added_are_not_owed() {
+    let plan = SchedulePlan {
+        settled: Some(ts("2026-10-27T15:00:00Z")),
+        ..SchedulePlan::default()
+    };
+    let mut restarted = Sim::restored(paris(&["04:00", "16:00"]), "2026-10-28T03:02:00Z", plan);
+    let mut added = Sim::running(paris(&["16:00"]), "2026-10-27T20:00:00Z", "2026-10-28T02:59:50Z");
+    added.settings.stored.times = vec!["04:00".to_owned(), "16:00".to_owned()];
+
+    let first = restarted.server(
+        "2026-10-28T03:02:00Z",
+        ServerState::Online,
+        1,
+        Some("2026-10-27T20:00:00Z"),
+    );
+    let change = added.at("2026-10-28T03:00:10Z", Input::Settings { by: "ada".to_owned() });
+
+    assert_eq!((missed_at(&first), restarted_at(&first)), (vec![], vec![]));
+    assert_eq!((missed_at(&change), restarted_at(&change)), (vec![], vec![]));
+    assert_eq!(added.next(), Some(ts("2026-10-28T15:00:00Z")));
+}
+
 #[test]
 fn a_clock_set_back_after_the_restart_replays_nothing() {
     let mut sim = Sim::running(paris(&["04:00"]), "2026-10-27T20:00:00Z", "2026-10-28T02:00:00Z");
