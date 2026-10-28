@@ -1,20 +1,23 @@
 import { queryOptions } from '@tanstack/react-query';
 
 import { getJson, send } from './client';
+import type { LaunchChange } from './generated/LaunchChange';
 import type { LaunchField } from './generated/LaunchField';
 import type { LaunchIssue } from './generated/LaunchIssue';
 import type { LaunchProblem } from './generated/LaunchProblem';
 import type { LaunchSettings } from './generated/LaunchSettings';
+import type { StoredLaunch } from './generated/StoredLaunch';
 
 const PATH = '/servers/default/launch';
 
-/** The stored settings, or null until the owner first saves them. */
+/** The stored settings and their version, or null until the owner first saves them. */
 export const launchQuery = queryOptions({
     queryKey: ['launch'],
-    queryFn: ({ signal }) => getJson<LaunchSettings | null>(PATH, signal),
+    queryFn: ({ signal }) => getJson<StoredLaunch | null>(PATH, signal),
 });
 
-export const saveLaunch = (settings: LaunchSettings) => send<LaunchSettings>('PUT', PATH, settings);
+/** Refused with `conflict` when the settings changed since the version the change was made from. */
+export const saveLaunch = (change: LaunchChange) => send<StoredLaunch>('PUT', PATH, change);
 
 /** What the form starts from before anything is saved. */
 export const DEFAULT_LAUNCH: LaunchSettings = {

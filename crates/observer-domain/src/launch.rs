@@ -49,7 +49,7 @@ const WINDOWS_DEVICES: &[&str] = &[
     "LPT7", "LPT8", "LPT9", "LPT¹", "LPT²", "LPT³",
 ];
 
-/// `GET` and `PUT /api/servers/default/launch`.
+/// How FXServer is launched: what `GET /api/servers/default/launch` holds and a change sets.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[ts(export)]
@@ -67,6 +67,25 @@ pub struct LaunchSettings {
     pub txadmin_events: bool,
     /// Each becomes `+set <name> <value>`, after the cfg and Observer's own convars.
     pub extra_arguments: Vec<ExtraArgument>,
+}
+
+/// `GET /api/servers/default/launch` once the owner saved the settings, and what a change returns.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[ts(export)]
+pub struct StoredLaunch {
+    pub settings: LaunchSettings,
+    /// Sent back with a change, which fails with `conflict` if the settings changed in between.
+    pub version: i64,
+}
+
+/// `PUT /api/servers/default/launch`.
+#[derive(Debug, Clone, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+#[ts(export)]
+pub struct LaunchChange {
+    pub settings: LaunchSettings,
+    /// The version the change was made from, null when nothing was saved yet.
+    pub version: Option<i64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]

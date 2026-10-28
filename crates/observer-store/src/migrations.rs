@@ -12,6 +12,7 @@ const MIGRATIONS: &[M<'static>] = &[
     M::up(include_str!("../migrations/0001_instance.sql")),
     M::up(include_str!("../migrations/0002_accounts.sql")),
     M::up(include_str!("../migrations/0003_launch.sql")),
+    M::up(include_str!("../migrations/0004_launch_version.sql")),
 ];
 
 /// The schema version this build migrates to.

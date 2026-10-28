@@ -1,6 +1,6 @@
 use observer_domain::audit::AuditAction;
 use observer_domain::error::{ApiError, ErrorCode};
-use observer_domain::launch::{ExtraArgument, LaunchSettings, Platform};
+use observer_domain::launch::{ExtraArgument, LaunchSettings, Platform, StoredLaunch};
 use observer_store::{Database, launch};
 use serde_json::{Map, Value, json};
 
@@ -25,19 +25,21 @@ impl Servers {
     }
 
     /// `None` until the owner first saves them.
-    pub async fn launch_settings(&self, server: &str) -> Result<Option<LaunchSettings>, Error> {
+    pub async fn launch_settings(&self, server: &str) -> Result<Option<StoredLaunch>, Error> {
         let server = server.to_owned();
         Ok(self.db.read(move |conn| launch::get(conn, &server)).await?)
     }
 
     /// Stores launch settings that pass every check, audited with what changed. FXServer picks
-    /// them up at its next start. Saving the same settings again changes and audits nothing.
+    /// them up at its next start. `version` must be the one the change was made from, `None`
+    /// before the first save. Saving the same settings again changes and audits nothing.
     pub async fn change_launch_settings(
         &self,
         caller: &Caller,
         server: &str,
         settings: LaunchSettings,
-    ) -> Result<LaunchSettings, Error> {
+        version: Option<i64>,
+    ) -> Result<StoredLaunch, Error> {
         let issues = settings.issues(Platform::host());
         if !issues.is_empty() {
             return Err(ApiError::new(ErrorCode::InvalidLaunchSettings)
@@ -51,14 +53,20 @@ impl Servers {
         self.db
             .write(move |tx| -> Result<_, Error> {
                 let before = launch::get(tx, &server)?;
-                if before.as_ref() == Some(&settings) {
-                    return Ok(settings);
+                if before.as_ref().map(|before| before.version) != version {
+                    return Err(ErrorCode::Conflict.into());
                 }
-                launch::save(tx, &server, &settings, now)?;
-                record
-                    .details(changes(before.as_ref(), &settings))
-                    .write(tx, now)?;
-                Ok(settings)
+                if let Some(same) = before.as_ref().filter(|before| before.settings == settings) {
+                    return Ok(same.clone());
+                }
+                let stored = StoredLaunch {
+                    settings,
+                    version: version.map_or(1, |version| version + 1),
+                };
+                launch::save(tx, &server, &stored, now)?;
+                let old = before.as_ref().map(|before| &before.settings);
+                record.details(changes(old, &stored.settings)).write(tx, now)?;
+                Ok(stored)
             })
             .await
     }

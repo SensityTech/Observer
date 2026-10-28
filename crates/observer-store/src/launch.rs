@@ -1,5 +1,5 @@
 use jiff::Timestamp;
-use observer_domain::launch::{LaunchSettings, OneSync};
+use observer_domain::launch::{LaunchSettings, OneSync, StoredLaunch};
 use rusqlite::types::{FromSqlError, Type};
 use rusqlite::{Connection, OptionalExtension, Row, params};
 
@@ -7,10 +7,11 @@ use crate::database::StoreError;
 use crate::time::Utc;
 
 /// A server's launch settings, or `None` until the owner first saves them.
-pub fn get(conn: &Connection, server_id: &str) -> Result<Option<LaunchSettings>, StoreError> {
+pub fn get(conn: &Connection, server_id: &str) -> Result<Option<StoredLaunch>, StoreError> {
     Ok(conn
         .query_row(
-            "SELECT build_path, data_path, cfg_file, onesync, auto_start, txadmin_events, extra_arguments
+            "SELECT build_path, data_path, cfg_file, onesync, auto_start, txadmin_events, extra_arguments,
+                 version
              FROM launch_settings WHERE server_id = ?1",
             [server_id],
             read,
@@ -18,22 +19,25 @@ pub fn get(conn: &Connection, server_id: &str) -> Result<Option<LaunchSettings>,
         .optional()?)
 }
 
+/// Stores the settings under their version, which the caller has already moved on.
 pub fn save(
     conn: &Connection,
     server_id: &str,
-    settings: &LaunchSettings,
+    stored: &StoredLaunch,
     now: Timestamp,
 ) -> Result<(), StoreError> {
+    let settings = &stored.settings;
     let arguments = serde_json::to_string(&settings.extra_arguments)
         .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
     conn.execute(
         "INSERT INTO launch_settings (server_id, build_path, data_path, cfg_file, onesync, auto_start,
-             txadmin_events, extra_arguments, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+             txadmin_events, extra_arguments, version, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
          ON CONFLICT (server_id) DO UPDATE SET build_path = excluded.build_path,
              data_path = excluded.data_path, cfg_file = excluded.cfg_file, onesync = excluded.onesync,
              auto_start = excluded.auto_start, txadmin_events = excluded.txadmin_events,
-             extra_arguments = excluded.extra_arguments, updated_at = excluded.updated_at",
+             extra_arguments = excluded.extra_arguments, version = excluded.version,
+             updated_at = excluded.updated_at",
         params![
             server_id,
             settings.build_path,
@@ -43,16 +47,17 @@ pub fn save(
             settings.auto_start,
             settings.txadmin_events,
             arguments,
+            stored.version,
             Utc(now),
         ],
     )?;
     Ok(())
 }
 
-fn read(row: &Row<'_>) -> rusqlite::Result<LaunchSettings> {
+fn read(row: &Row<'_>) -> rusqlite::Result<StoredLaunch> {
     let onesync: String = row.get(3)?;
     let arguments: String = row.get(6)?;
-    Ok(LaunchSettings {
+    let settings = LaunchSettings {
         build_path: row.get(0)?,
         data_path: row.get(1)?,
         cfg_file: row.get(2)?,
@@ -67,6 +72,10 @@ fn read(row: &Row<'_>) -> rusqlite::Result<LaunchSettings> {
         txadmin_events: row.get(5)?,
         extra_arguments: serde_json::from_str(&arguments)
             .map_err(|error| rusqlite::Error::FromSqlConversionFailure(6, Type::Text, Box::new(error)))?,
+    };
+    Ok(StoredLaunch {
+        settings,
+        version: row.get(7)?,
     })
 }
 
@@ -98,23 +107,27 @@ mod tests {
         }
     }
 
+    fn stored(settings: LaunchSettings, version: i64) -> StoredLaunch {
+        StoredLaunch { settings, version }
+    }
+
     #[test]
     fn settings_are_kept_per_server_and_replaced_on_save() {
         let conn = memory();
         let now: Timestamp = "2026-10-28T09:00:00Z".parse().unwrap();
         assert_eq!(get(&conn, "default").unwrap(), None);
 
-        save(&conn, "default", &settings(), now).unwrap();
+        save(&conn, "default", &stored(settings(), 1), now).unwrap();
         let changed = LaunchSettings {
             onesync: OneSync::Off,
             extra_arguments: Vec::new(),
             ..settings()
         };
-        save(&conn, "other", &changed, now).unwrap();
+        save(&conn, "other", &stored(changed.clone(), 1), now).unwrap();
 
-        assert_eq!(get(&conn, "default").unwrap(), Some(settings()));
-        save(&conn, "default", &changed, now).unwrap();
-        assert_eq!(get(&conn, "default").unwrap(), Some(changed));
+        assert_eq!(get(&conn, "default").unwrap(), Some(stored(settings(), 1)));
+        save(&conn, "default", &stored(changed.clone(), 2), now).unwrap();
+        assert_eq!(get(&conn, "default").unwrap(), Some(stored(changed, 2)));
         let rows: i64 = conn
             .query_row("SELECT count(*) FROM launch_settings", [], |row| row.get(0))
             .unwrap();

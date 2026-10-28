@@ -869,6 +869,13 @@ fn launch_settings() -> Value {
 
 const LAUNCH: &str = "/api/servers/default/launch";
 
+/// A change made from `version`, the one last read.
+fn change(settings: Value, version: Option<i64>) -> Value {
+    let mut change = json!({ "version": version });
+    change["settings"] = settings;
+    change
+}
+
 #[tokio::test]
 async fn the_owner_reads_and_saves_the_launch_settings_with_their_password_again() {
     let server = Server::new().await;
@@ -876,19 +883,39 @@ async fn the_owner_reads_and_saves_the_launch_settings_with_their_password_again
 
     let unset = server.call(Method::GET, LAUNCH, Some(&owner), None).await;
     let saved = server
-        .call(Method::PUT, LAUNCH, Some(&owner), Some(launch_settings()))
+        .call(
+            Method::PUT,
+            LAUNCH,
+            Some(&owner),
+            Some(change(launch_settings(), None)),
+        )
         .await;
     let read = server.call(Method::GET, LAUNCH, Some(&owner), None).await;
+    let mut edited = launch_settings();
+    edited["onesync"] = json!("legacy");
+    let outdated = server
+        .call(
+            Method::PUT,
+            LAUNCH,
+            Some(&owner),
+            Some(change(edited.clone(), None)),
+        )
+        .await;
     server.clock.advance(SignedDuration::from_mins(11));
     let stale = server
-        .call(Method::PUT, LAUNCH, Some(&owner), Some(launch_settings()))
+        .call(Method::PUT, LAUNCH, Some(&owner), Some(change(edited, Some(1))))
         .await;
 
     assert_eq!(unset.status, StatusCode::OK);
     assert_eq!(unset.json(), Value::Null);
     assert_eq!(saved.status, StatusCode::OK, "{}", saved.text);
-    assert_eq!(saved.json(), launch_settings());
-    assert_eq!(read.json(), launch_settings());
+    assert_eq!(
+        saved.json(),
+        json!({ "settings": launch_settings(), "version": 1 })
+    );
+    assert_eq!(read.json(), saved.json());
+    assert_eq!(outdated.status, StatusCode::CONFLICT);
+    assert_eq!(outdated.code(), "conflict");
     assert_eq!(stale.code(), "reauth_required");
 }
 
@@ -903,10 +930,13 @@ async fn launch_settings_with_issues_are_refused_with_each_issue() {
     unknown["onesync"] = json!("sometimes");
 
     let refused = server
-        .call(Method::PUT, LAUNCH, Some(&owner), Some(settings))
+        .call(Method::PUT, LAUNCH, Some(&owner), Some(change(settings, None)))
         .await;
     let malformed = server
-        .call(Method::PUT, LAUNCH, Some(&owner), Some(unknown))
+        .call(Method::PUT, LAUNCH, Some(&owner), Some(change(unknown, None)))
+        .await;
+    let bare = server
+        .call(Method::PUT, LAUNCH, Some(&owner), Some(launch_settings()))
         .await;
 
     assert_eq!(refused.status, StatusCode::BAD_REQUEST);
@@ -922,6 +952,7 @@ async fn launch_settings_with_issues_are_refused_with_each_issue() {
         })
     );
     assert_eq!(malformed.code(), "invalid_request");
+    assert_eq!(bare.code(), "invalid_request", "the version is required");
     let stored = server.call(Method::GET, LAUNCH, Some(&owner), None).await;
     assert_eq!(stored.json(), Value::Null);
 }
@@ -931,14 +962,24 @@ async fn a_user_holding_every_permission_still_cannot_touch_the_launch_settings(
     let server = Server::new().await;
     let owner = server.owner().await;
     let (grace, temporary) = server.user(&owner, "grace", "fff").await;
-    let change = json!({ "current": temporary, "next": "grace chose this one" });
+    let password = json!({ "current": temporary, "next": "grace chose this one" });
     server
-        .call(Method::POST, "/api/account/password", Some(&grace), Some(change))
+        .call(
+            Method::POST,
+            "/api/account/password",
+            Some(&grace),
+            Some(password),
+        )
         .await;
 
     let read = server.call(Method::GET, LAUNCH, Some(&grace), None).await;
     let write = server
-        .call(Method::PUT, LAUNCH, Some(&grace), Some(launch_settings()))
+        .call(
+            Method::PUT,
+            LAUNCH,
+            Some(&grace),
+            Some(change(launch_settings(), None)),
+        )
         .await;
 
     assert_eq!(read.status, StatusCode::FORBIDDEN);

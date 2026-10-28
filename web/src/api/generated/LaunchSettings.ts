@@ -3,7 +3,7 @@ import type { ExtraArgument } from "./ExtraArgument";
 import type { OneSync } from "./OneSync";
 
 /**
- * `GET` and `PUT /api/servers/default/launch`.
+ * How FXServer is launched: what `GET /api/servers/default/launch` holds and a change sets.
  */
 export type LaunchSettings = { 
 /**

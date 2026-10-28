@@ -7,6 +7,7 @@ import type { LaunchField } from '../api/generated/LaunchField';
 import type { LaunchIssue } from '../api/generated/LaunchIssue';
 import type { LaunchSettings } from '../api/generated/LaunchSettings';
 import type { OneSync } from '../api/generated/OneSync';
+import type { StoredLaunch } from '../api/generated/StoredLaunch';
 import { cleaned, countChanges, DEFAULT_LAUNCH, launchIssues, launchQuery, saveLaunch } from '../api/launch';
 import { Button, buttonVariants } from '../components/Button';
 import { Checkbox } from '../components/Checkbox';
@@ -21,7 +22,7 @@ const ONESYNC_MODES: OneSync[] = ['off', 'on', 'legacy'];
 /** An extra argument as the form edits it: the id keeps a row's fields when one above is removed. */
 type Row = { id: number; name: string; value: string };
 
-type Outcome = { tone: 'success' | 'danger'; message: string };
+type Outcome = { tone: 'success' | 'warning' | 'danger'; message: string };
 
 let lastRow = 0;
 const toRows = (settings: LaunchSettings): Row[] =>
@@ -55,15 +56,18 @@ export function ServerPage() {
                     {t.server.loadFailed} {errorMessage(t, launch.error)}
                 </Notice>
             )}
-            {launch.isSuccess && <LaunchForm saved={launch.data} />}
+            {/* A failed refetch keeps the data it had: the form, and what was typed in it, stay. */}
+            {launch.data !== undefined && <LaunchForm saved={launch.data} />}
         </div>
     );
 }
 
-function LaunchForm({ saved }: { saved: LaunchSettings | null }) {
+function LaunchForm({ saved }: { saved: StoredLaunch | null }) {
     const { t } = useI18n();
     const queryClient = useQueryClient();
-    const baseline = saved ?? DEFAULT_LAUNCH;
+    // What the draft was started from: the settings as stored then, and the version a save names.
+    const [shown, setShown] = useState(saved);
+    const baseline = shown?.settings ?? DEFAULT_LAUNCH;
     const [fields, setFields] = useState<LaunchSettings>(baseline);
     const [rows, setRows] = useState<Row[]>(() => toRows(baseline));
     const [issues, setIssues] = useState<LaunchIssue[]>([]);
@@ -74,23 +78,43 @@ function LaunchForm({ saved }: { saved: LaunchSettings | null }) {
         extraArguments: rows.map(({ name, value }) => ({ name, value })),
     };
     const changes = countChanges(baseline, draft);
+    const stale = (saved?.version ?? null) !== (shown?.version ?? null);
+
+    const startFrom = (stored: StoredLaunch | null) => {
+        const settings = stored?.settings ?? DEFAULT_LAUNCH;
+        setShown(stored);
+        setFields(settings);
+        setRows(toRows(settings));
+    };
+
+    // Another session saved since: with nothing typed yet, show what is stored now rather than
+    // what it replaced, which a save would quietly bring back.
+    if (stale && changes === 0) {
+        startFrom(saved);
+    }
 
     const save = useMutation({
-        mutationFn: () => saveLaunch(cleaned(draft)),
+        mutationFn: () => saveLaunch({ settings: cleaned(draft), version: shown?.version ?? null }),
         onSuccess: (stored) => {
             queryClient.setQueryData(launchQuery.queryKey, stored);
-            setFields(stored);
-            setRows(toRows(stored));
+            startFrom(stored);
             setIssues([]);
             setOutcome({ tone: 'success', message: t.server.saved });
         },
         onError: (error) => {
+            const conflict = error instanceof ApiError && error.code === 'conflict';
+            if (conflict) {
+                void queryClient.invalidateQueries({ queryKey: launchQuery.queryKey });
+            }
             setIssues(
                 error instanceof ApiError && error.code === 'invalid_launch_settings'
                     ? launchIssues(error.params)
                     : [],
             );
-            setOutcome({ tone: 'danger', message: errorMessage(t, error) });
+            setOutcome({
+                tone: conflict ? 'warning' : 'danger',
+                message: conflict ? t.server.changedElsewhere : errorMessage(t, error),
+            });
         },
     });
 
@@ -116,8 +140,7 @@ function LaunchForm({ saved }: { saved: LaunchSettings | null }) {
         );
 
     const discard = () => {
-        setFields(baseline);
-        setRows(toRows(baseline));
+        startFrom(saved);
         setIssues([]);
         setOutcome(null);
     };
@@ -133,6 +156,7 @@ function LaunchForm({ saved }: { saved: LaunchSettings | null }) {
     return (
         <form className="flex flex-col gap-3" onSubmit={submit} noValidate>
             {saved === null && <Notice tone="warning">{t.server.unsaved}</Notice>}
+            {stale && outcome === null && <Notice tone="warning">{t.server.changedElsewhere}</Notice>}
             {outcome && <Notice tone={outcome.tone}>{outcome.message}</Notice>}
 
             <Card id="server-files" icon={FolderOpen} title={t.server.files}>

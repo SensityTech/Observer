@@ -447,7 +447,7 @@ async fn the_audit_log_names_changed_launch_settings_without_showing_what_only_t
             Method::PUT,
             "/api/servers/default/launch",
             Some(&owner),
-            Some(settings),
+            Some(json!({ "settings": settings, "version": null })),
         )
         .await;
     assert_eq!(saved.status, StatusCode::OK, "{}", saved.text);

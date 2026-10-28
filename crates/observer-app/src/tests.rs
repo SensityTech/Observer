@@ -3,7 +3,7 @@
 use jiff::SignedDuration;
 use observer_domain::audit::{ActorKind, AuditAction, AuditEntry, AuditFilter, Outcome};
 use observer_domain::error::ErrorCode;
-use observer_domain::launch::{ExtraArgument, LaunchSettings, OneSync};
+use observer_domain::launch::{ExtraArgument, LaunchSettings, OneSync, StoredLaunch};
 use observer_domain::permissions::Permissions as P;
 use observer_store::{Database, StoreError, users};
 use serde_json::json;
@@ -1159,8 +1159,9 @@ async fn launch_settings_are_stored_once_checked_with_what_changed_in_the_audit_
     let owner = lab.caller(&lab.owner().await).await;
     assert_eq!(lab.servers.launch_settings(Servers::DEFAULT).await.unwrap(), None);
 
-    lab.servers
-        .change_launch_settings(&owner, Servers::DEFAULT, launch_settings())
+    let first = lab
+        .servers
+        .change_launch_settings(&owner, Servers::DEFAULT, launch_settings(), None)
         .await
         .unwrap();
     let edited = LaunchSettings {
@@ -1171,18 +1172,24 @@ async fn launch_settings_are_stored_once_checked_with_what_changed_in_the_audit_
         }],
         ..launch_settings()
     };
-    lab.servers
-        .change_launch_settings(&owner, Servers::DEFAULT, edited.clone())
+    let second = lab
+        .servers
+        .change_launch_settings(&owner, Servers::DEFAULT, edited.clone(), Some(1))
         .await
         .unwrap();
-    lab.servers
-        .change_launch_settings(&owner, Servers::DEFAULT, edited.clone())
+    let again = lab
+        .servers
+        .change_launch_settings(&owner, Servers::DEFAULT, edited.clone(), Some(2))
         .await
         .unwrap();
 
+    assert_eq!((first.version, second.version, again.version), (1, 2, 2));
     assert_eq!(
         lab.servers.launch_settings(Servers::DEFAULT).await.unwrap(),
-        Some(edited)
+        Some(StoredLaunch {
+            settings: edited,
+            version: 2,
+        })
     );
     let changes = lab.entries(AuditAction::LaunchSettingsChanged).await;
     assert_eq!(changes.len(), 2, "saving the same settings again records nothing");
@@ -1233,9 +1240,9 @@ async fn a_launch_change_names_the_arguments_set_and_removed_never_their_values(
         ],
         ..launch_settings()
     };
-    for settings in [first, second] {
+    for (settings, version) in [(first, None), (second, Some(1))] {
         lab.servers
-            .change_launch_settings(&owner, Servers::DEFAULT, settings)
+            .change_launch_settings(&owner, Servers::DEFAULT, settings, version)
             .await
             .unwrap();
     }
@@ -1254,6 +1261,44 @@ async fn a_launch_change_names_the_arguments_set_and_removed_never_their_values(
 }
 
 #[tokio::test]
+async fn a_launch_change_made_from_settings_replaced_since_is_refused() {
+    let lab = Lab::new().await;
+    let owner = lab.caller(&lab.owner().await).await;
+    lab.servers
+        .change_launch_settings(&owner, Servers::DEFAULT, launch_settings(), None)
+        .await
+        .unwrap();
+    let from_elsewhere = LaunchSettings {
+        cfg_file: "configs/live.cfg".to_owned(),
+        ..launch_settings()
+    };
+    lab.servers
+        .change_launch_settings(&owner, Servers::DEFAULT, from_elsewhere.clone(), Some(1))
+        .await
+        .unwrap();
+
+    let stale = lab
+        .servers
+        .change_launch_settings(&owner, Servers::DEFAULT, launch_settings(), Some(1))
+        .await;
+    let first_save_again = lab
+        .servers
+        .change_launch_settings(&owner, Servers::DEFAULT, launch_settings(), None)
+        .await;
+
+    assert_eq!(code(stale), ErrorCode::Conflict);
+    assert_eq!(code(first_save_again), ErrorCode::Conflict);
+    assert_eq!(
+        lab.servers.launch_settings(Servers::DEFAULT).await.unwrap(),
+        Some(StoredLaunch {
+            settings: from_elsewhere,
+            version: 2,
+        })
+    );
+    assert_eq!(lab.entries(AuditAction::LaunchSettingsChanged).await.len(), 2);
+}
+
+#[tokio::test]
 async fn launch_settings_with_an_issue_are_refused_with_every_issue_and_change_nothing() {
     let lab = Lab::new().await;
     let owner = lab.caller(&lab.owner().await).await;
@@ -1268,7 +1313,7 @@ async fn launch_settings_with_an_issue_are_refused_with_every_issue_and_change_n
 
     let refused = lab
         .servers
-        .change_launch_settings(&owner, Servers::DEFAULT, broken)
+        .change_launch_settings(&owner, Servers::DEFAULT, broken, None)
         .await;
 
     let crate::Error::Refused(refusal) = refused.err().unwrap() else {

@@ -260,6 +260,8 @@ export const en = {
         nextStart: 'Changes apply at the next start of FXServer',
         loadFailed: 'The launch settings could not be loaded.',
         unsaved: 'Nothing is saved yet: Observer needs these settings to start FXServer.',
+        changedElsewhere:
+            'These settings were changed in another session since you opened them. Discard your changes to see theirs, then make yours again.',
         files: 'Files',
         buildPath: 'FXServer build folder',
         buildPathHint: 'The folder of FXServer.exe on Windows, or the one holding alpine on Linux.',
