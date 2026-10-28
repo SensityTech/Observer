@@ -87,4 +87,14 @@ describe('ServerControls', () => {
         expect(getByText(en.controls.unavailable(en.controls.start, en.controls.running))).not.toBeNull();
         live.stop();
     });
+
+    it('should offer to keep a crashed server stopped rather than warn of a shutdown', async () => {
+        const { getByRole, queryByText, live } = await controls('crashed');
+
+        fireEvent.click(getByRole('button', { name: en.controls.stop }));
+
+        expect(getByRole('alertdialog', { name: en.controls.keepStoppedTitle })).not.toBeNull();
+        expect(queryByText(en.controls.noticeFirst)).toBeNull();
+        live.stop();
+    });
 });

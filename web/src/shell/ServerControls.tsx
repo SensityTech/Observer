@@ -74,6 +74,8 @@ export function ServerControls() {
         );
     };
     const players = status?.players?.online ?? 0;
+    // No process runs while FXServer waits to restart or sits in a crash loop: a stop only keeps it down.
+    const keepsDown = status?.state === 'crashed' || status?.state === 'crashLoop';
 
     return (
         <>
@@ -102,7 +104,13 @@ export function ServerControls() {
             {confirming !== null && confirming !== 'start' && (
                 <Dialog
                     role="alertdialog"
-                    title={confirming === 'stop' ? t.controls.stopTitle : t.controls.restartTitle}
+                    title={
+                        confirming === 'restart'
+                            ? t.controls.restartTitle
+                            : keepsDown
+                              ? t.controls.keepStoppedTitle
+                              : t.controls.stopTitle
+                    }
                     onClose={() => setConfirming(null)}
                     footer={
                         <>
@@ -115,13 +123,23 @@ export function ServerControls() {
                                 pending={mutation.isPending}
                                 onClick={() => mutation.mutate(confirming)}
                             >
-                                {confirming === 'stop' ? t.controls.confirmStop : t.controls.confirmRestart}
+                                {confirming === 'restart'
+                                    ? t.controls.confirmRestart
+                                    : keepsDown
+                                      ? t.controls.confirmKeepStopped
+                                      : t.controls.confirmStop}
                             </Button>
                         </>
                     }
                 >
-                    <p>{t.controls.connected(players)}</p>
-                    <p className="text-ink-3">{t.controls.noticeFirst}</p>
+                    {confirming === 'stop' && keepsDown ? (
+                        <p>{t.controls.keepStopped}</p>
+                    ) : (
+                        <>
+                            <p>{t.controls.connected(players)}</p>
+                            <p className="text-ink-3">{t.controls.noticeFirst}</p>
+                        </>
+                    )}
                 </Dialog>
             )}
         </>

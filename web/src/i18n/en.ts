@@ -240,6 +240,10 @@ export const en = {
             'Resources receive observer:shuttingDown first, then FXServer quits; whatever does not end in 15 seconds is killed.',
         confirmRestart: 'Restart',
         confirmStop: 'Stop server',
+        keepStoppedTitle: 'Keep FXServer stopped?',
+        keepStopped:
+            'FXServer is not running. Stopping it cancels any automatic restart and leaves it stopped until someone starts it.',
+        confirmKeepStopped: 'Keep it stopped',
         failed: (action: string, reason: string) => `${action} failed. ${reason}`,
         unavailable: (action: string, reason: string) => `${action} is not available. ${reason}`,
         dismiss: 'Dismiss',
