@@ -423,6 +423,7 @@ function CommandLine({ onSent }: { onSent: (command: string) => void }) {
                         onChange={(event) => {
                             setCommand(event.target.value);
                             setPosition(START);
+                            setFeedback(null);
                         }}
                         onKeyDown={onKeyDown}
                     />
