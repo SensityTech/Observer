@@ -375,6 +375,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "fake-fxserver"
+version = "0.1.0"
+dependencies = [
+ "observer-fxserver",
+ "observer-platform",
+ "serde_json",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "fallible-iterator"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
