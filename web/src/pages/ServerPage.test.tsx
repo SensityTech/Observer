@@ -14,6 +14,10 @@ const stored = (cfgFile: string, version: number): StoredLaunch => ({
         buildPath: 'C:\\FXServer\\build',
         dataPath: 'C:\\FXServer\\server-data',
         cfgFile,
+        extraArguments: [
+            { name: 'sv_hostname', value: 'Lab' },
+            { name: 'sv_maxclients', value: '48' },
+        ],
     },
     version,
 });
@@ -84,5 +88,49 @@ describe('ServerPage', () => {
             settings: stored('configs/live.cfg', 1).settings,
             version: 1,
         });
+    });
+
+    it('should keep the keyboard on the arguments as they are removed', () => {
+        const { getByLabelText, getByText, getAllByLabelText } = page(stored('server.cfg', 1));
+
+        const first = getByLabelText(en.server.removeArgument(1));
+        first.focus();
+        fireEvent.click(first);
+        expect(document.activeElement).toBe(getAllByLabelText(en.server.argumentName)[0]);
+        expect((document.activeElement as HTMLInputElement).value).toBe('sv_maxclients');
+
+        fireEvent.click(getByLabelText(en.server.removeArgument(1)));
+        expect(document.activeElement).toBe(getByText(en.server.addArgument).closest('button'));
+    });
+
+    it('should move the keyboard to what happened once its button goes', async () => {
+        const fetch = vi.fn(async () => Response.json(stored('configs/live.cfg', 2)));
+        vi.stubGlobal('fetch', fetch);
+        const { input, getByText } = page(stored('server.cfg', 1));
+
+        fireEvent.change(input(en.server.cfgFile), { target: { value: 'configs/other.cfg' } });
+        getByText(en.server.discard).focus();
+        fireEvent.click(getByText(en.server.discard));
+        expect(document.activeElement).toBe(getByText(en.server.discarded).closest('[role]'));
+
+        fireEvent.change(input(en.server.cfgFile), { target: { value: 'configs/live.cfg' } });
+        getByText(en.server.save).focus();
+        fireEvent.click(getByText(en.server.save));
+        await waitFor(() => getByText(en.server.saved));
+        expect(document.activeElement).toBe(getByText(en.server.saved).closest('[role]'));
+    });
+
+    it('should leave the keyboard in an argument saved with Enter', async () => {
+        const fetch = vi.fn(async () => Response.json(stored('server.cfg', 2)));
+        vi.stubGlobal('fetch', fetch);
+        const { getAllByLabelText, getByText } = page(stored('server.cfg', 1));
+        const value = getAllByLabelText(en.server.argumentValue)[0] as HTMLInputElement;
+
+        fireEvent.change(value, { target: { value: 'Lab 2' } });
+        value.focus();
+        fireEvent.submit(value.form as HTMLFormElement);
+        await waitFor(() => getByText(en.server.saved));
+
+        expect(document.activeElement).toBe(value);
     });
 });

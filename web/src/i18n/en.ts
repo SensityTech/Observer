@@ -289,6 +289,7 @@ export const en = {
         notSaved: 'Not saved yet',
         changes: (value: number) => `${count(value, { one: 'unsaved change', other: 'unsaved changes' })}`,
         discard: 'Discard',
+        discarded: 'Changes discarded: the form shows the settings as stored.',
         save: 'Save',
         saved: 'Saved. FXServer uses these settings from its next start.',
         problems: {

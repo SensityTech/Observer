@@ -1,6 +1,6 @@
 import { cva, type VariantProps } from 'class-variance-authority';
 import { CircleAlert, CircleCheck, Info, TriangleAlert } from 'lucide-react';
-import type { ReactNode } from 'react';
+import type { ReactNode, Ref } from 'react';
 
 import { cn } from '../lib/cn';
 
@@ -21,13 +21,18 @@ const ICONS = { neutral: Info, success: CircleCheck, warning: TriangleAlert, dan
 type NoticeProps = VariantProps<typeof noticeVariants> & {
     children: ReactNode;
     className?: string;
+    ref?: Ref<HTMLDivElement>;
+    /** -1 for a notice the keyboard is moved to, when what it was on went away. */
+    tabIndex?: number;
 };
 
 /** A sentence about what just happened, above or below the thing it concerns. */
-export function Notice({ tone, className, children }: NoticeProps) {
+export function Notice({ tone, className, children, ref, tabIndex }: NoticeProps) {
     const Icon = ICONS[tone ?? 'neutral'];
     return (
         <div
+            ref={ref}
+            tabIndex={tabIndex}
             role={tone === 'danger' || tone === 'warning' ? 'alert' : 'status'}
             className={cn(noticeVariants({ tone }), className)}
         >

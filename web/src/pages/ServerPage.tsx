@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { FolderOpen, Plus, Power, RotateCw, SquareTerminal, X, type LucideIcon } from 'lucide-react';
-import { useId, useState, type FormEvent, type ReactNode } from 'react';
+import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode, type Ref } from 'react';
 
 import { ApiError } from '../api/client';
 import type { LaunchField } from '../api/generated/LaunchField';
@@ -22,7 +22,7 @@ const ONESYNC_MODES: OneSync[] = ['off', 'on', 'legacy'];
 /** An extra argument as the form edits it: the id keeps a row's fields when one above is removed. */
 type Row = { id: number; name: string; value: string };
 
-type Outcome = { tone: 'success' | 'warning' | 'danger'; message: string };
+type Outcome = { tone: 'neutral' | 'success' | 'warning' | 'danger'; message: string };
 
 let lastRow = 0;
 const toRows = (settings: LaunchSettings): Row[] =>
@@ -72,6 +72,11 @@ function LaunchForm({ saved }: { saved: StoredLaunch | null }) {
     const [rows, setRows] = useState<Row[]>(() => toRows(baseline));
     const [issues, setIssues] = useState<LaunchIssue[]>([]);
     const [outcome, setOutcome] = useState<Outcome | null>(null);
+    const notice = useRef<HTMLDivElement>(null);
+    const nameInputs = useRef(new Map<number, HTMLInputElement>());
+    const addButton = useRef<HTMLButtonElement>(null);
+    /** Where the keyboard goes once a removed row is gone: another row's name, or the add button. */
+    const focusAfterRemoval = useRef<number | 'add' | null>(null);
 
     const draft: LaunchSettings = {
         ...fields,
@@ -84,7 +89,13 @@ function LaunchForm({ saved }: { saved: StoredLaunch | null }) {
         const settings = stored?.settings ?? DEFAULT_LAUNCH;
         setShown(stored);
         setFields(settings);
-        setRows(toRows(settings));
+        // Rows keep their ids by position, so their inputs, and the keyboard in one, stay put.
+        setRows((current) =>
+            settings.extraArguments.map((argument, index) => ({
+                id: current[index]?.id ?? ++lastRow,
+                ...argument,
+            })),
+        );
     };
 
     // Another session saved since: with nothing typed yet, show what is stored now rather than
@@ -142,8 +153,25 @@ function LaunchForm({ saved }: { saved: StoredLaunch | null }) {
     const discard = () => {
         startFrom(saved);
         setIssues([]);
-        setOutcome(null);
+        setOutcome({ tone: 'neutral', message: t.server.discarded });
     };
+
+    // Saving or discarding takes the save bar away, and with it the button the keyboard was on:
+    // it moves to the notice saying what happened rather than back to the top of the document.
+    useEffect(() => {
+        if (outcome !== null && document.activeElement === document.body) {
+            notice.current?.focus();
+        }
+    }, [outcome]);
+
+    useEffect(() => {
+        const target = focusAfterRemoval.current;
+        if (target === null) {
+            return;
+        }
+        focusAfterRemoval.current = null;
+        (target === 'add' ? addButton.current : nameInputs.current.get(target))?.focus();
+    });
 
     const submit = (event: FormEvent) => {
         event.preventDefault();
@@ -157,7 +185,11 @@ function LaunchForm({ saved }: { saved: StoredLaunch | null }) {
         <form className="flex flex-col gap-3" onSubmit={submit} noValidate>
             {saved === null && <Notice tone="warning">{t.server.unsaved}</Notice>}
             {stale && outcome === null && <Notice tone="warning">{t.server.changedElsewhere}</Notice>}
-            {outcome && <Notice tone={outcome.tone}>{outcome.message}</Notice>}
+            {outcome && (
+                <Notice ref={notice} tabIndex={-1} tone={outcome.tone}>
+                    {outcome.message}
+                </Notice>
+            )}
 
             <Card id="server-files" icon={FolderOpen} title={t.server.files}>
                 <div className="flex max-w-2xl flex-col gap-4">
@@ -241,11 +273,21 @@ function LaunchForm({ saved }: { saved: StoredLaunch | null }) {
                             position={index + 1}
                             nameError={issue('argumentName', index)}
                             valueError={issue('argumentValue', index)}
+                            nameRef={(input) => {
+                                if (input !== null) {
+                                    nameInputs.current.set(row.id, input);
+                                }
+                                return () => {
+                                    nameInputs.current.delete(row.id);
+                                };
+                            }}
                             onChange={(change) => {
                                 editRow(row.id, change);
                                 forget(change.name === undefined ? 'argumentValue' : 'argumentName', index);
                             }}
                             onRemove={() => {
+                                const next = rows[index + 1] ?? rows[index - 1];
+                                focusAfterRemoval.current = next?.id ?? 'add';
                                 setRows((current) => current.filter((other) => other.id !== row.id));
                                 forgetArguments();
                                 setOutcome(null);
@@ -254,6 +296,7 @@ function LaunchForm({ saved }: { saved: StoredLaunch | null }) {
                     ))}
                     {issue('extraArguments') && <FieldError>{issue('extraArguments')}</FieldError>}
                     <Button
+                        ref={addButton}
                         tone="ghost"
                         size="sm"
                         icon={Plus}
@@ -416,6 +459,7 @@ function ArgumentRow({
     position,
     nameError,
     valueError,
+    nameRef,
     onChange,
     onRemove,
 }: {
@@ -423,6 +467,7 @@ function ArgumentRow({
     position: number;
     nameError: string | undefined;
     valueError: string | undefined;
+    nameRef: Ref<HTMLInputElement>;
     onChange: (change: Partial<Row>) => void;
     onRemove: () => void;
 }) {
@@ -438,6 +483,7 @@ function ArgumentRow({
                     +set
                 </span>
                 <input
+                    ref={nameRef}
                     className={cn(inputClass, 'font-mono text-ui')}
                     aria-label={t.server.argumentName}
                     aria-invalid={nameError ? true : undefined}
