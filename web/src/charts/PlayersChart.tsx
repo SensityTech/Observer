@@ -80,7 +80,7 @@ export default function PlayersChart() {
                 : clock(peak.time);
         const figures = [
             format.number(Math.round(average)),
-            range,
+            t.charts.players.ranges[range],
             format.number(Math.round(peak.players)),
             at,
         ] as const;
@@ -117,7 +117,7 @@ export default function PlayersChart() {
                             onClick={() => setRange(choice)}
                             className="inline-flex h-6.5 items-center rounded-[7px] px-2.5 text-small font-medium text-ink-3 transition-colors hover:text-ink focus-visible:outline-offset-1 aria-pressed:bg-raise aria-pressed:text-ink aria-pressed:shadow-[var(--elev-sm),0_0_0_1px_var(--line)] max-md:h-11 max-md:min-w-11 max-md:justify-center"
                         >
-                            {choice}
+                            {t.charts.players.ranges[choice]}
                         </button>
                     ))}
                 </fieldset>
@@ -178,7 +178,7 @@ export default function PlayersChart() {
                     rel="noreferrer"
                     className="underline-offset-2 hover:text-ink-2 hover:underline"
                 >
-                    TradingView Lightweight Charts™
+                    {t.charts.library}
                 </a>
             </footer>
         </section>
@@ -207,13 +207,14 @@ function Plot({
     top: number;
     peakTime: number | null;
 }) {
-    const { t, format } = useI18n();
+    const { t, format, locale } = useI18n();
     const host = useRef<HTMLDivElement>(null);
     const chart = useRef<IChartApi | null>(null);
     const players = useRef<ISeriesApi<'Area'> | null>(null);
     const slots = useRef<ISeriesApi<'Line'> | null>(null);
     const drawn = useRef<MetricsSeries | null>(null);
     const topRef = useRef(top);
+    const localeRef = useRef(locale);
     const [overlay, setOverlay] = useState<Overlay>({ markers: [], peak: null, slots: null });
     const [tooltip, setTooltip] = useState<{ x: number; players: number; time: number } | null>(null);
     const [layout, setLayout] = useState<Side[]>([]);
@@ -258,7 +259,7 @@ function Plot({
         if (element === null) {
             return;
         }
-        const api = createChart(element, chartOptions(element));
+        const api = createChart(element, chartOptions(element, localeRef.current));
         const autoscale = () => ({ priceRange: { minValue: 0, maxValue: topRef.current } });
         players.current = api.addSeries(AreaSeries, {
             priceScaleId: 'left',
@@ -283,7 +284,7 @@ function Plot({
         chart.current = api;
         const paint = () => {
             const accent = tokenColor(element, '--accent');
-            api.applyOptions(chartOptions(element));
+            api.applyOptions(chartOptions(element, localeRef.current));
             players.current?.applyOptions({
                 lineColor: accent,
                 topColor: withAlpha(accent, 0.1),
@@ -325,6 +326,14 @@ function Plot({
             drawn.current = null;
         };
     }, []);
+
+    useEffect(() => {
+        localeRef.current = locale;
+        const element = host.current;
+        if (element !== null) {
+            chart.current?.applyOptions(chartOptions(element, locale));
+        }
+    }, [locale]);
 
     // A new page is set at once, and so is the line picking up after a stop; live samples
     // otherwise move the newest bucket only.
@@ -400,7 +409,7 @@ function Plot({
         const time = clock(marker.at);
         const back =
             marker.kind === 'crash' && marker.backOnlineAt !== null
-                ? ` · ${t.charts.markers.backOnline(clock(marker.backOnlineAt))}`
+                ? t.charts.markers.backOnline(clock(marker.backOnlineAt))
                 : '';
         return [word, time, back] as const;
     };

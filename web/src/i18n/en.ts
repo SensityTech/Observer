@@ -11,6 +11,7 @@ import type { LineKind } from '../api/generated/LineKind';
 import type { OneSync } from '../api/generated/OneSync';
 import type { Outcome } from '../api/generated/Outcome';
 import type { PermissionArea } from '../api/generated/PermissionArea';
+import type { Range } from '../api/generated/Range';
 import type { ServerState } from '../api/generated/ServerState';
 import type { SpawnFailure } from '../api/generated/SpawnFailure';
 import { parsePermissions, permissionKeys, type PermissionKey } from '../auth/permissions';
@@ -93,6 +94,14 @@ const healthProblems = {
     probeUnauthorized: 'its performance probe refuses Observer',
     watchdogBark: 'its watchdog reported a stuck thread',
 } satisfies Record<HealthProblem, string>;
+
+const ranges = {
+    '1h': '1h',
+    '6h': '6h',
+    '24h': '24h',
+    '7d': '7d',
+    '30d': '30d',
+} satisfies Record<Range, string>;
 
 export const en = {
     app: {
@@ -182,6 +191,7 @@ export const en = {
         players: {
             label: 'Players',
             ping: 'Ping',
+            of: (slots: string) => `/ ${slots}`,
             pings: (average: string, p95: string) => `${average} · p95 ${p95}`,
             lastHour: 'Last hour',
             joinedLeft: (joined: string, left: string) => `${joined} joined · ${left} left`,
@@ -245,6 +255,7 @@ export const en = {
             title: 'Online players',
             every: (step: string) => `Every ${step}`,
             range: 'Range',
+            ranges,
             players: 'Players',
             maxSlots: 'Max slots',
             event: 'Event',
@@ -263,9 +274,10 @@ export const en = {
             start: 'Start',
             restart: 'Restart',
             crash: 'Crash',
-            backOnline: (time: string) => `back online ${time}`,
+            backOnline: (time: string) => ` · back online ${time}`,
         },
         attribution: 'Charts by',
+        library: 'TradingView Lightweight Charts™',
     },
     server_state: {
         states: {

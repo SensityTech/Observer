@@ -8,7 +8,7 @@ import {
     type Time,
 } from 'lightweight-charts';
 
-import { formatTimestamp } from '../i18n/format';
+import { formatNumber, formatTimestamp } from '../i18n/format';
 
 let pixel: OffscreenCanvasRenderingContext2D | null = null;
 
@@ -38,17 +38,18 @@ const pad = (value: number) => String(value).padStart(2, '0');
 /** The library counts in UTC seconds; the panel reads every time in the browser's own zone. */
 const local = (time: Time) => new Date((time as number) * 1000);
 
-const DAY = new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short' });
-
-/** Ticks stay where the library puts them; only their words are local: `18:00`, `28 Oct`. */
-const tickMark = (time: Time, type: TickMarkType) => {
-    const date = local(time);
-    return type === TickMarkType.Time || type === TickMarkType.TimeWithSeconds
-        ? `${pad(date.getHours())}:${pad(date.getMinutes())}`
-        : DAY.format(date);
+/** Ticks stay where the library puts them; only their words are local: `18:00`, `Oct 28`. */
+const tickMarks = (locale: string) => {
+    const day = new Intl.DateTimeFormat(locale, { day: 'numeric', month: 'short' });
+    return (time: Time, type: TickMarkType) => {
+        const date = local(time);
+        return type === TickMarkType.Time || type === TickMarkType.TimeWithSeconds
+            ? `${pad(date.getHours())}:${pad(date.getMinutes())}`
+            : day.format(date);
+    };
 };
 
-export function chartOptions(host: Element): DeepPartial<ChartOptions> {
+export function chartOptions(host: Element, locale: string): DeepPartial<ChartOptions> {
     const color = (name: string) => tokenColor(host, name);
     return {
         autoSize: true,
@@ -82,7 +83,7 @@ export function chartOptions(host: Element): DeepPartial<ChartOptions> {
             fixLeftEdge: true,
             fixRightEdge: true,
             lockVisibleTimeRangeOnResize: true,
-            tickMarkFormatter: tickMark,
+            tickMarkFormatter: tickMarks(locale),
         },
         crosshair: {
             mode: CrosshairMode.Magnet,
@@ -97,7 +98,8 @@ export function chartOptions(host: Element): DeepPartial<ChartOptions> {
         handleScroll: false,
         handleScale: false,
         localization: {
-            locale: 'en-GB',
+            locale,
+            priceFormatter: (players: number) => formatNumber(locale, Math.round(players)),
             timeFormatter: (time: Time) => formatTimestamp(local(time), { seconds: false }),
         },
     };

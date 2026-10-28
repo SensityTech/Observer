@@ -149,7 +149,7 @@ function PlayersTile({ latest, trend }: TileProps) {
             icon={Users}
             label={t.tiles.players.label}
             value={shown('players', format.number)}
-            unit={slots === null ? undefined : `/ ${format.number(slots)}`}
+            unit={slots === null ? undefined : t.tiles.players.of(format.number(slots))}
             facts={[
                 [
                     t.tiles.players.ping,
