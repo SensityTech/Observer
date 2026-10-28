@@ -247,6 +247,35 @@ fn a_new_child_counts_at_once_in_count_and_memory_and_in_cpu_from_its_second_sam
 }
 
 #[test]
+fn the_first_tree_of_a_new_run_has_no_children_cpu_as_it_has_no_main_cpu() {
+    let start = Instant::now();
+    let mut assembler = Assembler::new(start);
+    let tree = |main_started, child_pid, child_cpu_ms| Measures {
+        tree: Some(TreeUsage {
+            main: Some(usage(1000, main_started)),
+            children: vec![Member {
+                pid: child_pid,
+                name: "conhost.exe".to_owned(),
+                usage: usage(child_cpu_ms, u64::from(child_pid)),
+            }],
+        }),
+        ..Measures::default()
+    };
+    let generation = |generation| Some(run(generation, no_readings()));
+    sample_at(&mut assembler, start, 1, generation(1), tree(7, 10, 0));
+    sample_at(&mut assembler, start, 2, generation(1), tree(7, 10, 50));
+
+    // Restarted between two wakes: another main process and another console host.
+    let restarted = sample_at(&mut assembler, start, 3, generation(2), tree(9, 20, 0));
+    let next = sample_at(&mut assembler, start, 4, generation(2), tree(9, 20, 250));
+
+    assert_eq!(restarted.get(Column::FxsCpu), None);
+    assert_eq!(restarted.get(Column::Children), Some(1.0));
+    assert_eq!(restarted.get(Column::ChildrenCpu), None);
+    assert!((next.get(Column::ChildrenCpu).unwrap() - 5.0).abs() < 1e-9);
+}
+
+#[test]
 fn players_come_from_a_fresh_dynamic_json_answer_only() {
     let start = Instant::now();
     let mut assembler = Assembler::new(start);

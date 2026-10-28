@@ -352,6 +352,8 @@ struct Heap {
     total: u64,
 }
 
+type Children = HashMap<(u32, u64), Measured>;
+
 /// Turns each wake into a sample, keeping what the next one is measured against: rates and CPU
 /// shares are deltas between two wakes of the same process, joins and ticks deltas between two
 /// readings of the same run.
@@ -359,8 +361,8 @@ pub(super) struct Assembler {
     previous_wake: Instant,
     /// The main process, known by its generation and start stamp.
     main: Option<(u32, Measured)>,
-    /// The children by pid and start stamp, as the last measure of the tree saw them.
-    children: Option<HashMap<(u32, u64), Measured>>,
+    /// The children by pid and start stamp, as the run's last measure of the tree saw them.
+    children: Option<(u32, Children)>,
     observer: Option<Measured>,
     host_cpu: Option<CpuTimes>,
     interfaces: Option<(Instant, Vec<Interface>)>,
@@ -607,7 +609,12 @@ impl Assembler {
             self.main = None;
         }
 
-        let before = self.children.take();
+        // A run's first tree has nothing to compare with, even when the last wake saw another run.
+        let before = self
+            .children
+            .take()
+            .filter(|(generation, _)| *generation == run.generation)
+            .map(|(_, children)| children);
         let mut seen = HashMap::new();
         let mut listed = Vec::new();
         let mut shared = 0.0;
@@ -640,9 +647,8 @@ impl Assembler {
             Column::ChildrenPrivate,
             Some(real(listed.iter().map(|child| child.private).sum())),
         );
-        // A first measure of the tree has nothing to compare with.
         values.set(Column::ChildrenCpu, before.is_some().then_some(shared));
-        self.children = Some(seen);
+        self.children = Some((run.generation, seen));
         listed
     }
 
