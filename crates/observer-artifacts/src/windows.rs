@@ -24,6 +24,30 @@ fn wide(path: &Path) -> Vec<u16> {
     path.as_os_str().encode_wide().chain([0]).collect()
 }
 
+/// The `\\?\` form of a path, which Win32 opens past 260 characters: a staged build can sit that
+/// deep under a long artifacts folder.
+fn verbatim(path: &Path) -> io::Result<Vec<u16>> {
+    let absolute: Vec<u16> = std::path::absolute(path)?.as_os_str().encode_wide().collect();
+    let starts = |prefix: &str| {
+        absolute
+            .iter()
+            .copied()
+            .take(prefix.len())
+            .eq(prefix.encode_utf16())
+    };
+    let prefixed: Vec<u16> = if starts(r"\\?\") || starts(r"\\.\") {
+        absolute
+    } else if starts(r"\\") {
+        r"\\?\UNC\"
+            .encode_utf16()
+            .chain(absolute[2..].iter().copied())
+            .collect()
+    } else {
+        r"\\?\".encode_utf16().chain(absolute).collect()
+    };
+    Ok(prefixed.into_iter().chain([0]).collect())
+}
+
 pub(crate) fn available_space(dir: &Path) -> io::Result<u64> {
     let path = wide(dir);
     let mut available = 0;
@@ -48,7 +72,7 @@ pub(crate) fn available_space(dir: &Path) -> io::Result<u64> {
 /// certificate that signed it was issued to `signer`. Revocation is not checked: that would need
 /// the network at install time, for an archive that already came from Cfx.re over HTTPS.
 pub(crate) fn verify_signature(file: &Path, signer: &str) -> Result<(), String> {
-    let path = wide(file);
+    let path = verbatim(file).map_err(|error| format!("its path cannot be resolved: {error}"))?;
     let mut file_info = WINTRUST_FILE_INFO {
         cbStruct: struct_size::<WINTRUST_FILE_INFO>(),
         pcwszFilePath: path.as_ptr(),
@@ -139,6 +163,7 @@ fn describe(status: i32) -> String {
         0x800B_0109 => "its certificate chain ends at an untrusted root".to_owned(),
         0x800B_0111 => "its certificate is explicitly distrusted".to_owned(),
         0x800B_0101 => "its certificate expired before it was signed".to_owned(),
+        0x8009_2003 => "it cannot be opened".to_owned(),
         code => format!("WinVerifyTrust refused it with 0x{code:08X}"),
     }
 }
@@ -167,6 +192,21 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("FXServer.exe");
         std::fs::write(&path, b"MZ not really").unwrap();
+
+        assert_eq!(
+            verify_signature(&path, "Rockstar Games, Inc."),
+            Err("it is not a Windows executable".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_file_past_260_characters_is_still_checked() {
+        let dir = tempfile::tempdir().unwrap();
+        let deep = dir.path().join("staging-".repeat(30));
+        std::fs::create_dir_all(&deep).unwrap();
+        let path = deep.join("FXServer.exe");
+        std::fs::write(&path, b"MZ not really").unwrap();
+        assert!(path.as_os_str().len() > 260);
 
         assert_eq!(
             verify_signature(&path, "Rockstar Games, Inc."),

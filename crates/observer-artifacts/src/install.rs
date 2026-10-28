@@ -266,11 +266,18 @@ fn extract(
     }
 }
 
+/// The layout first, so that a missing FXServer.exe is reported as missing rather than unsigned.
 fn verify(tree: &Path, platform: Platform) -> Result<(), Error> {
+    layout::validate(tree, platform)?;
     // Only Windows builds are signed, and only Windows can check them; the platforms always match.
     #[cfg(windows)]
-    crate::windows::verify_signature(&tree.join("FXServer.exe"), SIGNER).map_err(Error::Signature)?;
-    layout::validate(tree, platform)
+    {
+        let server = tree.join("FXServer.exe");
+        // Opened first, so that a file a scanner holds is reported as such, not as a bad signature.
+        fs::File::open(&server).map_err(io(&server))?;
+        crate::windows::verify_signature(&server, SIGNER).map_err(Error::Signature)?;
+    }
+    Ok(())
 }
 
 async fn commit(tree: PathBuf, target: PathBuf, build: u32) -> Result<PathBuf, Error> {
@@ -466,6 +473,29 @@ mod tests {
         );
         assert!(!lab.installer.root().join("37872").exists());
         assert!(lab.staging_is_empty());
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn a_windows_build_without_fxserver_is_reported_incomplete_rather_than_unsigned() {
+        use crate::samples::{ZipEntry, zip_archive};
+
+        let lab = Lab::new(vec![zip_archive(&[ZipEntry::Deflated(
+            "citizen/scripting/lua/scheduler.lua",
+            b"-- scheduler",
+        )])])
+        .await;
+
+        let error = lab
+            .installer
+            .install(&lab.request("/server.zip"), |_| {})
+            .await
+            .unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "the extracted build is incomplete: FXServer.exe is missing"
+        );
     }
 
     #[tokio::test]
