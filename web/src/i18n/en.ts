@@ -275,6 +275,7 @@ export const en = {
             'Observer restarted here: whatever the previous one printed after the line above is in the log files.',
         newLines: (lines: number) => count(lines, { one: 'new line', other: 'new lines' }),
         commandLabel: 'Command to send to FXServer',
+        enterKey: 'Enter',
         send: 'to send',
         history: 'history',
         stopped: 'FXServer is stopped.',

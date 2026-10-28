@@ -450,7 +450,7 @@ function CommandLine({ onSent }: { onSent: (command: string) => void }) {
                 </label>
                 <span className="cmd-hints">
                     <span>
-                        <kbd className="kbd">Enter</kbd>
+                        <kbd className="kbd">{t.console.enterKey}</kbd>
                         <span className="label-wide">{t.console.send}</span>
                     </span>
                     <span className="label-wide">
