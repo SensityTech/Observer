@@ -151,7 +151,7 @@ impl Accounts {
         let username: String = username.chars().take(64).collect();
         let network = throttle::network(client.ip);
         let attempt = self.attempts.reserve(&network)?;
-        self.refuse_if_locked(&username, &network).await?;
+        self.refuse_if_locked(&username, &network, true).await?;
         self.slow_down_if_targeted(&username).await?;
 
         let user = {
@@ -291,7 +291,9 @@ impl Accounts {
     }
 
     pub async fn reauthenticate(&self, caller: &Caller, password: String) -> Result<(), Error> {
-        self.confirm_password(caller, password).await?;
+        self.confirm_password(caller, password, AuditAction::Reauthenticated)
+            .await?;
+        let record = Record::by(caller, AuditAction::Reauthenticated).target(&caller.username);
         let (session_id, username) = (caller.session_id, caller.username.clone());
         let network = throttle::network(caller.client.ip);
         let now = self.clock.now();
@@ -301,6 +303,7 @@ impl Accounts {
                 let mut session = sessions::get(tx, session_id)?.ok_or(ErrorCode::Unauthenticated)?;
                 session.reauthenticated_at = Some(now);
                 sessions::update(tx, &session)?;
+                record.write(tx, now)?;
                 Ok(())
             })
             .await
@@ -326,7 +329,8 @@ impl Accounts {
         if next == current {
             return Err(ErrorCode::PasswordUnchanged.into());
         }
-        self.confirm_password(caller, current).await?;
+        self.confirm_password(caller, current, AuditAction::PasswordChanged)
+            .await?;
         let hash = self.passwords.hash(next).await?;
 
         let record = Record::by(caller, AuditAction::PasswordChanged).target(&caller.username);
@@ -395,11 +399,18 @@ impl Accounts {
             .await
     }
 
-    /// Checks the caller's password, throttled like a login.
-    async fn confirm_password(&self, caller: &Caller, password: String) -> Result<(), Error> {
+    /// Checks the caller's password, throttled like a login. A wrong one is audited as a failed
+    /// `attempted`, in the caller's name: they are signed in, not anonymous.
+    async fn confirm_password(
+        &self,
+        caller: &Caller,
+        password: String,
+        attempted: AuditAction,
+    ) -> Result<(), Error> {
         let network = throttle::network(caller.client.ip);
         let attempt = self.attempts.reserve(&network)?;
-        self.refuse_if_locked(&caller.username, &network).await?;
+        // Their failures are in the audit log already, each in their name.
+        self.refuse_if_locked(&caller.username, &network, false).await?;
 
         let user_id = caller.user_id;
         let hash = self
@@ -410,14 +421,29 @@ impl Accounts {
             return Err(ErrorCode::Unauthenticated.into());
         }
         if !self.passwords.verify(password, hash).await?.matches {
-            self.record_failure(&caller.username, &network).await?;
+            let record = Record::by(caller, attempted)
+                .target(&caller.username)
+                .outcome(Outcome::Failure);
+            let username = caller.username.clone();
+            let now = self.clock.now();
+            self.db
+                .write(move |tx| -> Result<_, Error> {
+                    let row = login_failures::get(tx, &username, &network)?;
+                    let row = throttle::record_confirmation_failure(row, &username, &network, now);
+                    login_failures::save(tx, &row)?;
+                    record.write(tx, now)?;
+                    Ok(())
+                })
+                .await?;
             return Err(ErrorCode::WrongPassword.into());
         }
         attempt.succeeded();
         Ok(())
     }
 
-    async fn refuse_if_locked(&self, username: &str, network: &str) -> Result<(), Error> {
+    /// Refuses an attempt on a locked pair. The refusal counts among the pair's anonymous failures
+    /// for the audit log when `audited` is set.
+    async fn refuse_if_locked(&self, username: &str, network: &str, audited: bool) -> Result<(), Error> {
         let (username, network) = (username.to_owned(), network.to_owned());
         let now = self.clock.now();
         let wait = self
@@ -429,6 +455,9 @@ impl Accounts {
                 let Some(wait) = throttle::locked_for(&row, now) else {
                     return Ok(None);
                 };
+                if !audited {
+                    return Ok(Some(wait));
+                }
                 let (row, closed) = throttle::record_refused(row, now);
                 if let Some(failures) = closed {
                     Record::login_failures(tx, &failures)?.write(tx, now)?;

@@ -377,6 +377,7 @@ export const en = {
             user_unlocked: 'User unlocked',
             permission_denied: 'Permission denied',
             audit_exported: 'Audit log exported',
+            reauthenticated: 'Password confirmed',
         } satisfies Record<AuditAction, string>,
         outcomes: {
             success: 'Success',

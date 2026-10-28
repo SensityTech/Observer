@@ -26,10 +26,13 @@ pub enum AuditAction {
     /// Only for actions whose permission is sensitive or critical.
     PermissionDenied,
     AuditExported,
+    /// A signed-in user entered their password again, which unlocks sensitive actions for a while.
+    /// A wrong one is a failure, as a wrong current password is for `PasswordChanged`.
+    Reauthenticated,
 }
 
 impl AuditAction {
-    pub const ALL: [Self; 14] = [
+    pub const ALL: [Self; 15] = [
         Self::SetupCompleted,
         Self::SetupLinkCreated,
         Self::LoginSucceeded,
@@ -44,6 +47,7 @@ impl AuditAction {
         Self::UserUnlocked,
         Self::PermissionDenied,
         Self::AuditExported,
+        Self::Reauthenticated,
     ];
 
     pub const fn as_str(self) -> &'static str {
@@ -62,6 +66,7 @@ impl AuditAction {
             Self::UserUnlocked => "user_unlocked",
             Self::PermissionDenied => "permission_denied",
             Self::AuditExported => "audit_exported",
+            Self::Reauthenticated => "reauthenticated",
         }
     }
 

@@ -1023,3 +1023,60 @@ async fn a_password_reset_lifts_the_login_locks_on_the_account() {
     assert_eq!(failed.len(), 2);
     assert!(failed.iter().all(|entry| entry.details["failures"] == json!(5)));
 }
+
+#[tokio::test]
+async fn a_signed_in_user_confirming_their_password_is_audited_as_themselves() {
+    let lab = Lab::new().await;
+    let owner = lab.owner().await;
+    let grace = lab.user(&owner, "grace", P::CONSOLE_VIEW).await;
+    let grace = lab.caller(&grace).await;
+
+    for _ in 0..3 {
+        let wrong = lab
+            .accounts
+            .reauthenticate(&grace, "not the password".to_owned())
+            .await;
+        assert_eq!(code(wrong), ErrorCode::WrongPassword);
+        lab.pause();
+    }
+    for _ in 0..2 {
+        let wrong = lab
+            .accounts
+            .change_password(
+                &grace,
+                "not the password".to_owned(),
+                "a brand new passphrase".to_owned(),
+            )
+            .await;
+        assert_eq!(code(wrong), ErrorCode::WrongPassword);
+        lab.pause();
+    }
+    // Throttled like a login all the same.
+    let locked = lab.accounts.reauthenticate(&grace, password_of("grace")).await;
+    assert_eq!(code(locked), ErrorCode::TooManyAttempts);
+    lab.clock.advance(SignedDuration::from_mins(1));
+    lab.accounts
+        .reauthenticate(&grace, password_of("grace"))
+        .await
+        .unwrap();
+
+    lab.clock.advance(SignedDuration::from_mins(15));
+    lab.accounts.sweep().await.unwrap();
+    assert_eq!(lab.entries(AuditAction::LoginFailed).await, []);
+    let confirmations = lab.entries(AuditAction::Reauthenticated).await;
+    assert_eq!(confirmations.len(), 4);
+    assert_eq!(confirmations[0].outcome, Outcome::Success);
+    assert!(
+        confirmations[1..]
+            .iter()
+            .all(|entry| entry.outcome == Outcome::Failure && entry.actor_name.as_deref() == Some("grace"))
+    );
+    let changes = lab.entries(AuditAction::PasswordChanged).await;
+    assert_eq!(
+        changes
+            .iter()
+            .filter(|entry| entry.outcome == Outcome::Failure)
+            .count(),
+        2
+    );
+}

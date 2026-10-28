@@ -142,7 +142,28 @@ pub(crate) fn record_failure(
     network: &str,
     now: Timestamp,
 ) -> (LoginFailureRow, Option<Unaudited>) {
-    let mut row = row.unwrap_or_else(|| LoginFailureRow {
+    let mut row = row.unwrap_or_else(|| new_row(username, network, now));
+    let closed = count_for_audit(&mut row, now);
+    count_toward_lock(&mut row, now);
+    (row, closed)
+}
+
+/// Counts a wrong password from a signed-in user toward the pair's lock, like a failed login. The
+/// user's own audit entry records it, so it is not one of the anonymous failures the log
+/// aggregates.
+pub(crate) fn record_confirmation_failure(
+    row: Option<LoginFailureRow>,
+    username: &str,
+    network: &str,
+    now: Timestamp,
+) -> LoginFailureRow {
+    let mut row = row.unwrap_or_else(|| new_row(username, network, now));
+    count_toward_lock(&mut row, now);
+    row
+}
+
+fn new_row(username: &str, network: &str, now: Timestamp) -> LoginFailureRow {
+    LoginFailureRow {
         username: username.to_owned(),
         network: network.to_owned(),
         failures: 0,
@@ -152,9 +173,11 @@ pub(crate) fn record_failure(
         unaudited: 0,
         unaudited_since: None,
         last_failure_at: now,
-    });
-    let closed = count_for_audit(&mut row, now);
+    }
+}
 
+fn count_toward_lock(row: &mut LoginFailureRow, now: Timestamp) {
+    row.last_failure_at = now;
     if now >= row.window_started_at + WINDOW {
         row.failures = 0;
         row.window_started_at = now;
@@ -168,7 +191,6 @@ pub(crate) fn record_failure(
         row.failures = 0;
         row.window_started_at = now;
     }
-    (row, closed)
 }
 
 /// Counts an attempt refused by a lock. It changes nothing about the lock, but the audit log
@@ -211,7 +233,6 @@ fn count_for_audit(row: &mut LoginFailureRow, now: Timestamp) -> Option<Unaudite
     };
     row.unaudited += 1;
     row.unaudited_since.get_or_insert(now);
-    row.last_failure_at = now;
     closed
 }
 
