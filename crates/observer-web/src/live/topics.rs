@@ -31,11 +31,19 @@ pub(super) struct Feed {
     pub events: Option<Events>,
 }
 
-pub(super) fn permission(topic: Topic) -> Permissions {
+/// Whether `held` lets a user follow `topic`. FXServer's state is the dashboard's, and also what
+/// the console and the server controls go by to show whether they can act.
+pub(super) fn allows(topic: Topic, held: Permissions) -> bool {
+    let any = |permissions: &[Permissions]| permissions.iter().any(|&permission| held.contains(permission));
     match topic {
-        Topic::Status | Topic::ServerStatus => Permissions::DASHBOARD_VIEW,
-        Topic::Audit => Permissions::AUDIT_VIEW,
-        Topic::Console => Permissions::CONSOLE_VIEW,
+        Topic::Status => any(&[Permissions::DASHBOARD_VIEW]),
+        Topic::ServerStatus => any(&[
+            Permissions::DASHBOARD_VIEW,
+            Permissions::CONSOLE_VIEW,
+            Permissions::SERVER_CONTROL,
+        ]),
+        Topic::Audit => any(&[Permissions::AUDIT_VIEW]),
+        Topic::Console => any(&[Permissions::CONSOLE_VIEW]),
     }
 }
 

@@ -249,7 +249,7 @@ impl Connection {
     async fn follow(&mut self, topic: Topic, since: Option<u64>) -> Result<(), End> {
         self.recheck().await?;
         self.unfollow(topic);
-        if !self.caller.permissions.contains(topics::permission(topic)) {
+        if !topics::allows(topic, self.caller.permissions) {
             return self.send(&ServerMessage::Unsubscribed {
                 topic,
                 reason: UnsubscribeReason::Forbidden,
@@ -294,7 +294,7 @@ impl Connection {
             .followed
             .keys()
             .copied()
-            .filter(|&topic| !self.caller.permissions.contains(topics::permission(topic)))
+            .filter(|&topic| !topics::allows(topic, self.caller.permissions))
             .collect();
         for topic in withdrawn {
             self.unfollow(topic);

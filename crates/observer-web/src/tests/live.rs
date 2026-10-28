@@ -264,6 +264,34 @@ async fn every_topic_needs_its_permission_on_every_subscription() {
 }
 
 #[tokio::test]
+async fn the_server_state_is_open_to_whoever_uses_the_console_or_the_controls() {
+    let server = Server::new().await;
+    let owner = server.owner().await;
+    // Console write and server control without the dashboard: the console needs to know whether
+    // FXServer runs, and the controls which of them apply.
+    let operator = server.member(&owner, "cid", "e").await;
+    let auditor = server.member(&owner, "kenji", "100").await;
+
+    let mut socket = server.socket(&operator).await;
+    let mut refused = server.socket(&auditor).await;
+    for socket in [&mut socket, &mut refused] {
+        send(socket, json!({ "type": "sub", "topic": "server.status" })).await;
+    }
+
+    assert_eq!(receive(&mut socket).await["type"], "snapshot");
+    assert_eq!(
+        receive(&mut refused).await,
+        json!({ "type": "unsubscribed", "topic": "server.status", "reason": "forbidden" })
+    );
+    send(&mut socket, json!({ "type": "sub", "topic": "status" })).await;
+    assert_eq!(
+        receive(&mut socket).await["type"],
+        "unsubscribed",
+        "the rest stays the dashboard's"
+    );
+}
+
+#[tokio::test]
 async fn the_audit_topic_tells_where_the_log_stands_then_sends_each_new_entry() {
     let server = Server::new().await;
     let owner = server.owner().await;
