@@ -37,6 +37,8 @@ export function Dialog({
     useLayoutEffect(() => {
         const dialog = ref.current;
         dialog?.showModal();
+        // Chrome counts a body that scrolls as the first thing to focus: start on the first field.
+        dialog?.querySelector<HTMLElement>('input:not([type="hidden"]):enabled, select:enabled')?.focus();
         return () => dialog?.close();
     }, []);
 
