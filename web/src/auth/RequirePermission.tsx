@@ -9,17 +9,25 @@ import { allows, useMe } from './me';
 import { keyOf, type PermissionName } from './permissions';
 
 /**
- * Shows a page only to a user who holds its permission. The API refuses the data anyway; this
- * says why in place of an error.
+ * Shows a page only to a user who holds its permission, or any one of a list of them. The API
+ * refuses the data anyway; this says why in place of an error.
  */
-export function RequirePermission({ name, children }: { name: PermissionName; children: ReactNode }) {
+export function RequirePermission({
+    name,
+    children,
+}: {
+    name: PermissionName | PermissionName[];
+    children: ReactNode;
+}) {
     const { t } = useI18n();
     const me = useMe();
+    const names = Array.isArray(name) ? name : [name];
 
-    if (allows(me, Permission[name])) {
+    if (names.some((each) => allows(me, Permission[each]))) {
         return children;
     }
-    return <Forbidden body={t.forbidden.body(t.permissions[keyOf(name)].name)} />;
+    const held = names.map((each) => t.permissions[keyOf(each)].name);
+    return <Forbidden body={held.length === 1 ? t.forbidden.body(held[0] ?? '') : t.forbidden.anyOf(held)} />;
 }
 
 /** Shows a page only to the owner, for what no permission grants. */

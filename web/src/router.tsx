@@ -20,6 +20,7 @@ import { NotFoundPage } from './pages/NotFoundPage';
 import { OverviewPage } from './pages/OverviewPage';
 import { PasswordChangePage } from './pages/PasswordChangePage';
 import { RouteError } from './pages/RouteError';
+import { SchedulePage } from './pages/SchedulePage';
 import { ServerPage } from './pages/ServerPage';
 import { SetupPage } from './pages/SetupPage';
 import { UsersPage } from './pages/UsersPage';
@@ -121,6 +122,16 @@ const consoleRoute = createRoute({
     ),
 });
 
+const scheduleRoute = createRoute({
+    getParentRoute: () => panelRoute,
+    path: '/schedule',
+    component: () => (
+        <RequirePermission name={['DashboardView', 'ScheduleManage', 'ServerControl']}>
+            <SchedulePage />
+        </RequirePermission>
+    ),
+});
+
 const serverRoute = createRoute({
     getParentRoute: () => panelRoute,
     path: '/server',
@@ -161,7 +172,15 @@ const routeTree = rootRoute.addChildren([
     setupRoute,
     loginRoute,
     passwordRoute,
-    panelRoute.addChildren([overviewRoute, consoleRoute, serverRoute, usersRoute, auditRoute, accountRoute]),
+    panelRoute.addChildren([
+        overviewRoute,
+        consoleRoute,
+        scheduleRoute,
+        serverRoute,
+        usersRoute,
+        auditRoute,
+        accountRoute,
+    ]),
 ]);
 
 export const createPanelRouter = (queryClient: QueryClient) =>

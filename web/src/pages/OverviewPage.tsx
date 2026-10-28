@@ -3,12 +3,15 @@ import { Link } from '@tanstack/react-router';
 import { ArrowRight } from 'lucide-react';
 
 import { healthQuery } from '../api/health';
+import type { ScheduleStatus } from '../api/generated/ScheduleStatus';
 import type { ServerStatus } from '../api/generated/ServerStatus';
 import { useMe } from '../auth/me';
+import { formatClock, formatDay, zoneDate } from '../i18n/format';
 import { useI18n } from '../i18n/I18nProvider';
 import { useLinkState, useSnapshot } from '../live/context';
 import { cn } from '../lib/cn';
 import { secondsSince, useNow } from '../lib/useNow';
+import { useSchedule } from '../schedule/context';
 import { useServerStatus } from '../server/context';
 import { STATE_INK, STATE_LED, causeText, isRunning } from '../server/state';
 
@@ -61,10 +64,31 @@ function ServerCard() {
     );
 }
 
+/** The next restart in the schedule's zone, which phones, without the status bar's cell, read here. */
+const nextRestart = (
+    t: ReturnType<typeof useI18n>['t'],
+    locale: string,
+    format: ReturnType<typeof useI18n>['format'],
+    schedule: ScheduleStatus | null,
+    now: number,
+) => {
+    const next = schedule?.next;
+    if (schedule === null || next === undefined || next === null) {
+        return null;
+    }
+    const clock = formatClock(locale, next.at, schedule.zone);
+    const today = zoneDate(next.at, schedule.zone) === zoneDate(now, schedule.zone);
+    return t.overview.nextRestart(
+        today ? clock : `${formatDay(locale, next.at, schedule.zone, { weekday: false })} ${clock}`,
+        format.duration(Math.max(0, Date.parse(next.at) - now) / 1000),
+    );
+};
+
 function ServerState({ status }: { status: ServerStatus }) {
-    const { t, format } = useI18n();
+    const { t, locale, format } = useI18n();
     const me = useMe();
     const now = useNow();
+    const { schedule } = useSchedule();
     const cause = causeText(t, status);
     const running = isRunning(status.state);
 
@@ -89,6 +113,7 @@ function ServerState({ status }: { status: ServerStatus }) {
             : t.server_state.restartIn(
                   format.duration(Math.max(0, Date.parse(status.restartAt) - now) / 1000),
               ),
+        running ? nextRestart(t, locale, format, schedule, now) : null,
     ].filter((fact) => fact !== null);
 
     const launch =

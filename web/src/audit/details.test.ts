@@ -24,6 +24,32 @@ describe('auditDetails', () => {
         );
     });
 
+    it('should word what the schedule did and why', () => {
+        const at = '2026-10-29T03:00:00.000Z';
+        expect(
+            auditDetails(en, format, {
+                at,
+                source: 'oneOff',
+                reason: 'serverBusy',
+                state: 'stopping',
+                lateBySeconds: 420,
+            }),
+        ).toBe(
+            `At: ${formatTimestamp(new Date(at))} · From: a single restart · ` +
+                'Reason: FXServer was busy · State: Stopping · Late by: 420 s',
+        );
+        expect(
+            auditDetails(en, format, {
+                times: { before: [], after: ['04:00', '16:00'] },
+                mode: { before: 'fixedTimes', after: 'interval' },
+                scheduled: { source: 'schedule', plannedBy: 'ada' },
+            }),
+        ).toBe(
+            'Times: not set → 04:00, 16:00 · Mode: Fixed times → Interval · ' +
+                'On schedule: (From: the schedule, Planned by: ada)',
+        );
+    });
+
     it('should word refused attempts from the catalog', () => {
         expect(
             auditDetails(en, format, {
