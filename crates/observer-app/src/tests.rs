@@ -1,6 +1,6 @@
 //! The services end to end, over a real database in a temporary directory.
 
-use jiff::SignedDuration;
+use jiff::{SignedDuration, Timestamp};
 use observer_domain::audit::{ActorKind, AuditAction, AuditEntry, AuditFilter, Outcome};
 use observer_domain::error::ErrorCode;
 use observer_domain::launch::{ExtraArgument, LaunchSettings, OneSync, StoredLaunch};
@@ -841,11 +841,22 @@ async fn audit_entries_are_kept_for_the_retention_in_force_when_written() {
 
     // The floor is 90 days: the login is kept that long, the logout for the default year.
     lab.clock.advance(SignedDuration::from_hours(24 * 90));
+    assert_eq!(lab.audit.purge().await.unwrap(), 0);
+    lab.clock.advance(SignedDuration::from_mins(1));
     assert_eq!(lab.audit.purge().await.unwrap(), 1);
 
     assert_eq!(lab.entries(AuditAction::LoginSucceeded).await, []);
     assert_eq!(lab.entries(AuditAction::Logout).await.len(), 1);
     assert_eq!(lab.entries(AuditAction::SetupCompleted).await.len(), 1);
+}
+
+#[tokio::test]
+async fn the_purge_runs_when_observer_reads_the_present_a_little_ahead_of_sqlite() {
+    let lab = Lab::new().await;
+    let ahead = Timestamp::now() + SignedDuration::from_millis(300);
+    lab.clock.advance(ahead.duration_since(lab.clock.now()));
+
+    lab.audit.purge().await.unwrap();
 }
 
 #[tokio::test]
