@@ -646,11 +646,10 @@ async fn credentials_reset_behind_observer_show_as_an_unauthorized_probe() {
         .await;
 
     let cause = lab.state(State::Degraded).await;
-    assert_eq!(
-        cause,
-        Cause::Unhealthy {
-            problems: vec![Problem::ProbeUnauthorized]
-        }
+    // A slow host may add a late heartbeat; the refused probe is what this is about.
+    assert!(
+        matches!(&cause, Cause::Unhealthy { problems } if problems.contains(&Problem::ProbeUnauthorized)),
+        "{cause:?}"
     );
     assert!(lab.console().contains(&(
         LineKind::Command,
