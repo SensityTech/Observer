@@ -289,6 +289,7 @@ export const en = {
         stateUnknown: 'The state of FXServer is not known: Observer answers when you send.',
         readOnly: 'Read only: your account cannot send commands.',
         sent: (command: string) => `Sent: ${command}`,
+        sentMasked: 'Sent. Its secret is masked in the console and the audit log.',
         pending: 'FXServer has not read the command yet: it runs when the server reads its console again.',
         busy: 'FXServer is not reading its console, so the command was not sent. Try again in a moment.',
         summary: (lines: number, errors: number) =>

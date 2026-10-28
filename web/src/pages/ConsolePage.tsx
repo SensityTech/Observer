@@ -313,8 +313,8 @@ export function ConsolePage() {
                         </button>
                     )}
                     <CommandLine
-                        onSent={(command) => {
-                            setAnnouncement(t.console.sent(command));
+                        onSent={(command, masked) => {
+                            setAnnouncement(masked ? t.console.sentMasked : t.console.sent(command));
                             // Its echo is worth seeing, unless the reader paused the view on purpose.
                             if (!paused) {
                                 setFrozen(null);
@@ -369,7 +369,7 @@ function ConsoleRow({ row }: { row: LineRow }) {
 type Feedback = { tone: 'warning' | 'danger'; text: string };
 
 /** The command line: Enter sends, ↑ and ↓ walk the history, Escape clears. */
-function CommandLine({ onSent }: { onSent: (command: string) => void }) {
+function CommandLine({ onSent }: { onSent: (command: string, masked: boolean) => void }) {
     const { t } = useI18n();
     const me = useMe();
     const { status } = useServerStatus();
@@ -401,7 +401,7 @@ function CommandLine({ onSent }: { onSent: (command: string) => void }) {
             setPosition(START);
             setCommand('');
             setFeedback(delivery === 'pending' ? { tone: 'warning', text: t.console.pending } : null);
-            onSent(line);
+            onSent(line, masked);
         } catch (error) {
             setFeedback({ tone: 'danger', text: errorMessage(t, error) });
         } finally {
