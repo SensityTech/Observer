@@ -17,24 +17,57 @@ export const plural = (locale: string, count: number, forms: PluralForms) => {
 export const formatNumber = (locale: string, value: number, options?: Intl.NumberFormatOptions) =>
     new Intl.NumberFormat(locale, options).format(value);
 
-const BYTE_UNITS = ['byte', 'kilobyte', 'megabyte', 'gigabyte', 'terabyte'] as const;
+/** Three significant digits and one decimal at most: `6.8 ms`, `22.1 GB`, `412 ms`, `182%`. */
+const FIGURE = {
+    maximumSignificantDigits: 3,
+    maximumFractionDigits: 1,
+    roundingPriority: 'lessPrecision',
+} satisfies Intl.NumberFormatOptions;
 
-/** Decimal units (1 GB = 10^9 bytes), as disks and network figures are quoted. */
+const figure = (locale: string, value: number) => formatNumber(locale, value, FIGURE);
+
+const BYTE_UNITS = ['KB', 'MB', 'GB', 'TB'] as const;
+
+/**
+ * Memory and disk in multiples of 1024 labelled `KB` to `TB`, as Windows' Task Manager shows them,
+ * so a host of 64 GiB reads `64 GB`. Whole bytes take Intl's long name: `512 bytes`.
+ */
 export const formatBytes = (locale: string, bytes: number) => {
-    let value = bytes;
+    if (Math.abs(bytes) < 1024) {
+        return new Intl.NumberFormat(locale, {
+            style: 'unit',
+            unit: 'byte',
+            unitDisplay: 'long',
+            maximumFractionDigits: 0,
+        }).format(bytes);
+    }
+    let value = bytes / 1024;
     let unit = 0;
-    while (Math.abs(value) >= 1000 && unit < BYTE_UNITS.length - 1) {
+    while (Math.abs(value) >= 1024 && unit < BYTE_UNITS.length - 1) {
+        value /= 1024;
+        unit += 1;
+    }
+    return `${figure(locale, value)} ${BYTE_UNITS[unit]}`;
+};
+
+const BIT_RATE_UNITS = ['bit/s', 'kbit/s', 'Mbit/s', 'Gbit/s'] as const;
+
+/** A rate in bytes per second, as networks quote it: bits, in multiples of 1000. */
+export const formatBitRate = (locale: string, bytesPerSecond: number) => {
+    let value = bytesPerSecond * 8;
+    let unit = 0;
+    while (Math.abs(value) >= 1000 && unit < BIT_RATE_UNITS.length - 1) {
         value /= 1000;
         unit += 1;
     }
-    // Plain bytes take the long name: the short one reads "512 byte" in English.
-    return new Intl.NumberFormat(locale, {
-        style: 'unit',
-        unit: BYTE_UNITS[unit],
-        unitDisplay: unit === 0 ? 'long' : 'short',
-        maximumFractionDigits: unit === 0 ? 0 : 1,
-    }).format(value);
+    return `${figure(locale, value)} ${BIT_RATE_UNITS[unit]}`;
 };
+
+/** A percentage as the API gives it, `182.0` for 182%, written against its number. */
+export const formatPercent = (locale: string, percent: number) =>
+    formatNumber(locale, percent / 100, { ...FIGURE, style: 'percent' });
+
+export const formatMilliseconds = (locale: string, ms: number) => `${figure(locale, ms)} ms`;
 
 /**
  * A span of time as the panel words it: `12 s`, `15 min`, `2h 14m`, `3h`, `3d 4h`. Intl's own

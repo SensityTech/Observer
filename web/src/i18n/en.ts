@@ -299,7 +299,7 @@ export const en = {
         unavailable: 'The console shows again once the live link is back.',
         logs: {
             title: 'Console log files',
-            body: 'A file a day, continued in a new one past 256 MiB, without colours. The oldest go after 14 days, or sooner once all of them pass 2 GiB. The newest is first.',
+            body: 'A file a day, continued in a new one past 256 MB, without colours. The oldest go after 14 days, or sooner once all of them pass 2 GB. The newest is first.',
             caption: 'Console log files, newest first',
             name: 'File',
             size: 'Size',

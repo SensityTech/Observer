@@ -1,7 +1,16 @@
 import { createContext, use, useEffect, useMemo, useState, type ReactNode } from 'react';
 
 import type { Messages } from './en';
-import { formatBytes, formatDateTime, formatDuration, formatNumber, formatTimestamp } from './format';
+import {
+    formatBitRate,
+    formatBytes,
+    formatDateTime,
+    formatDuration,
+    formatMilliseconds,
+    formatNumber,
+    formatPercent,
+    formatTimestamp,
+} from './format';
 import { DEFAULT_LOCALE, LOCALES, isLocale, type Locale } from './locales';
 
 const STORAGE_KEY = 'observer.locale';
@@ -12,7 +21,13 @@ type I18n = {
     setLocale: (locale: Locale) => void;
     format: {
         number: (value: number, options?: Intl.NumberFormatOptions) => string;
+        /** Memory and disk, in multiples of 1024. */
         bytes: (bytes: number) => string;
+        /** Bytes per second, as bits per second in multiples of 1000. */
+        bitRate: (bytesPerSecond: number) => string;
+        /** `182.0` reads `182%`. */
+        percent: (percent: number) => string;
+        milliseconds: (ms: number) => string;
         dateTime: (date: Date, options?: Intl.DateTimeFormatOptions) => string;
         duration: (seconds: number) => string;
         /** An API timestamp (RFC 3339) as tables show it, in local time. */
@@ -53,6 +68,9 @@ export function I18nProvider({ children }: { children: ReactNode }) {
             format: {
                 number: (number, options) => formatNumber(locale, number, options),
                 bytes: (bytes) => formatBytes(locale, bytes),
+                bitRate: (bytesPerSecond) => formatBitRate(locale, bytesPerSecond),
+                percent: (percent) => formatPercent(locale, percent),
+                milliseconds: (ms) => formatMilliseconds(locale, ms),
                 dateTime: (date, options) => formatDateTime(locale, date, options),
                 duration: (seconds) => formatDuration(locale, seconds),
                 timestamp: (rfc3339, options) => formatTimestamp(new Date(rfc3339), options),
