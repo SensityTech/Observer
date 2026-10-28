@@ -233,6 +233,7 @@ fn count_for_audit(row: &mut LoginFailureRow, now: Timestamp) -> Option<Unaudite
     };
     row.unaudited += 1;
     row.unaudited_since.get_or_insert(now);
+    row.last_failure_at = now;
     closed
 }
 
@@ -353,10 +354,12 @@ mod tests {
         }
         let locked = row.unwrap();
 
-        let (refused, _) = record_refused(locked.clone(), at(4));
+        let later = at(4) + SignedDuration::from_secs(30);
+        let (refused, _) = record_refused(locked.clone(), later);
 
         assert_eq!(refused.locked_until, locked.locked_until);
         assert_eq!(refused.unaudited, 6);
+        assert_eq!(refused.last_failure_at, later);
     }
 
     #[test]
