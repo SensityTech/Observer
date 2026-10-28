@@ -63,7 +63,15 @@ export function chartOptions(host: Element): DeepPartial<ChartOptions> {
             vertLines: { visible: false },
             horzLines: { color: color('--line'), style: LineStyle.Solid },
         },
-        leftPriceScale: { visible: true, borderVisible: false, ticksVisible: false, minimumWidth: 38 },
+        // The scale runs from 0 to the ceiling the series give, which holds the headroom: the top
+        // keeps only the room the ceiling's label needs not to be cut in half.
+        leftPriceScale: {
+            visible: true,
+            borderVisible: false,
+            ticksVisible: false,
+            minimumWidth: 38,
+            scaleMargins: { top: 0.05, bottom: 0 },
+        },
         rightPriceScale: { visible: false },
         timeScale: {
             borderVisible: true,
