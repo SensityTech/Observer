@@ -6,13 +6,12 @@ import {
     Outlet,
     redirect,
 } from '@tanstack/react-router';
-import { lazy } from 'react';
-
 import { meQuery, setupQuery } from './api/auth';
 import { Permission } from './api/generated/Permission';
 import { allows, landing } from './auth/me';
 import { ReauthDialog } from './auth/ReauthDialog';
 import { RequireOwner, RequirePermission } from './auth/RequirePermission';
+import { lazyCode } from './lib/lazyCode';
 import { AccountPage } from './pages/AccountPage';
 import { LoginPage } from './pages/LoginPage';
 import { NotFoundPage } from './pages/NotFoundPage';
@@ -24,10 +23,14 @@ import { AppShell } from './shell/AppShell';
 
 // Pages beyond the Overview load when someone opens them: the console's virtual list and colour
 // parser, the owner's launch settings, the accounts and the audit log are no one's landing page.
-const ConsolePage = lazy(() => import('./pages/ConsolePage').then((page) => ({ default: page.ConsolePage })));
-const ServerPage = lazy(() => import('./pages/ServerPage').then((page) => ({ default: page.ServerPage })));
-const UsersPage = lazy(() => import('./pages/UsersPage').then((page) => ({ default: page.UsersPage })));
-const AuditPage = lazy(() => import('./pages/AuditPage').then((page) => ({ default: page.AuditPage })));
+const ConsolePage = lazyCode(() =>
+    import('./pages/ConsolePage').then((page) => ({ default: page.ConsolePage })),
+);
+const ServerPage = lazyCode(() =>
+    import('./pages/ServerPage').then((page) => ({ default: page.ServerPage })),
+);
+const UsersPage = lazyCode(() => import('./pages/UsersPage').then((page) => ({ default: page.UsersPage })));
+const AuditPage = lazyCode(() => import('./pages/AuditPage').then((page) => ({ default: page.AuditPage })));
 
 type RouterContext = { queryClient: QueryClient };
 

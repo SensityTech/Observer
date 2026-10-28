@@ -14,8 +14,17 @@ import { Realtime, type SocketEvents } from '../live/realtime';
 import { TILE_SERIES } from '../overview/Tiles';
 import { OverviewPage } from './OverviewPage';
 
+const chart = vi.hoisted(() => ({ fails: false }));
+
 // The chart draws on a canvas, which the test DOM does not have.
-vi.mock('../charts/PlayersChart', () => ({ default: () => null }));
+vi.mock('../charts/PlayersChart', () => ({
+    default: () => {
+        if (chart.fails) {
+            throw new Error('the chart could not be drawn');
+        }
+        return null;
+    },
+}));
 
 const settle = () => act(() => new Promise((resolve) => setTimeout(resolve, 0)));
 
@@ -122,7 +131,23 @@ const tile = (label: string) => {
 };
 
 describe('OverviewPage', () => {
-    afterEach(cleanup);
+    afterEach(() => {
+        cleanup();
+        chart.fails = false;
+    });
+
+    it('should keep the tiles when the chart fails, and offer a reload in its card', async () => {
+        chart.fails = true;
+        vi.spyOn(console, 'error').mockImplementation(() => {});
+        const { say, live, findByText } = await page();
+        say({ type: 'snapshot', topic: 'metrics.live', data: { latest: SAMPLE } });
+
+        expect(await findByText(en.charts.players.unavailable)).not.toBeNull();
+        expect(tile(en.tiles.players.label).queryByText('187')).not.toBeNull();
+        expect(document.querySelector('button')?.textContent).toBe(en.common.reload);
+        vi.restoreAllMocks();
+        live.stop();
+    });
 
     it('should fill every tile from the latest sample and the last hour', async () => {
         const { say, live } = await page();

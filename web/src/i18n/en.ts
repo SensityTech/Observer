@@ -108,6 +108,7 @@ export const en = {
         showPassword: 'Show the password',
         loading: 'Loading',
         retry: 'Try again',
+        reload: 'Reload',
         optional: 'optional',
     },
     nav: {
@@ -255,6 +256,7 @@ export const en = {
                 `${now} online now, ${average} on average over ${range}. Peak ${peak} at ${at}.`,
             empty: 'Nothing was measured over this range.',
             failed: 'The players chart could not be read. It is read again in a moment.',
+            unavailable: 'The players chart could not be shown. Reload the page to see it.',
             loading: 'Loading the players chart',
         },
         markers: {
@@ -887,6 +889,7 @@ export const en = {
     failure: {
         unknown: 'Something went wrong. Try again.',
         network: 'Observer cannot be reached. Check that it is running, then try again.',
+        code: 'This page could not be loaded, and stays so until the panel is loaded again. Reload it once Observer answers.',
     },
 };
 

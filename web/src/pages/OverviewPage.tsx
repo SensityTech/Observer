@@ -1,12 +1,15 @@
 import { Link } from '@tanstack/react-router';
-import { ArrowRight } from 'lucide-react';
-import { lazy, Suspense } from 'react';
+import { ArrowRight, RotateCw } from 'lucide-react';
+import { Suspense } from 'react';
 
 import type { ServerStatus } from '../api/generated/ServerStatus';
 import { useMe } from '../auth/me';
+import { Button } from '../components/Button';
+import { ErrorBoundary } from '../components/ErrorBoundary';
 import { useI18n } from '../i18n/I18nProvider';
 import { useLinkState } from '../live/context';
 import { cn } from '../lib/cn';
+import { lazyCode } from '../lib/lazyCode';
 import { secondsSince, useNow } from '../lib/useNow';
 import { LiveMetricsProvider, useLiveMetrics } from '../metrics/live';
 import { Tiles } from '../overview/Tiles';
@@ -14,7 +17,7 @@ import { useServerStatus } from '../server/context';
 import { STATE_INK, STATE_LED, causeText, isRunning } from '../server/state';
 
 // The chart library is the heaviest part of the panel: it loads after the page has painted.
-const PlayersChart = lazy(() => import('../charts/PlayersChart'));
+const PlayersChart = lazyCode(() => import('../charts/PlayersChart'));
 
 export function OverviewPage() {
     const { t } = useI18n();
@@ -29,9 +32,11 @@ export function OverviewPage() {
             <LiveMetricsProvider>
                 <ServerCard />
                 <Tiles />
-                <Suspense fallback={<ChartPlaceholder />}>
-                    <PlayersChart />
-                </Suspense>
+                <ErrorBoundary fallback={<ChartFailed />}>
+                    <Suspense fallback={<ChartPlaceholder />}>
+                        <PlayersChart />
+                    </Suspense>
+                </ErrorBoundary>
             </LiveMetricsProvider>
         </>
     );
@@ -47,6 +52,26 @@ function ChartPlaceholder() {
             </div>
             <div className="card-body">
                 <div className="skeleton h-[260px] w-full max-md:h-[200px]" />
+            </div>
+        </section>
+    );
+}
+
+/** The chart card when its code could not be loaded, or it could not be drawn: the tiles stay. */
+function ChartFailed() {
+    const { t } = useI18n();
+    return (
+        <section className="card" aria-labelledby="overview-chart">
+            <div className="card-head">
+                <h2 id="overview-chart" className="card-title">
+                    {t.charts.players.title}
+                </h2>
+            </div>
+            <div className="card-body flex flex-col items-start gap-3">
+                <p className="text-ui text-ink-3">{t.charts.players.unavailable}</p>
+                <Button icon={RotateCw} onClick={() => window.location.reload()}>
+                    {t.common.reload}
+                </Button>
             </div>
         </section>
     );
