@@ -247,11 +247,12 @@ mod tests {
     fn a_dump_still_growing_past_the_window_counts_as_in_progress() {
         let dir = tempfile::tempdir().unwrap();
         let mut dump = File::create(dir.path().join("0a1b-full.dmp")).unwrap();
+        let memory = vec![0; 64 * 1024];
         let within = Duration::from_millis(500);
         let started = Instant::now();
 
         while started.elapsed() < Duration::from_secs(2) {
-            dump.write_all(&[0; 64 * 1024]).unwrap();
+            dump.write_all(&memory).unwrap();
             thread::sleep(Duration::from_millis(100));
 
             assert!(
