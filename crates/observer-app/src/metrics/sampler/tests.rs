@@ -51,6 +51,7 @@ fn run(generation: u32, readings: Readings) -> RunReadings {
     RunReadings {
         generation,
         started_ms: 0,
+        probe: std::net::SocketAddr::from(([127, 0, 0, 1], 30120)),
         tree: Weak::new(),
         dynamic: readings.dynamic,
         perf: readings.perf,

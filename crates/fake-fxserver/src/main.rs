@@ -23,22 +23,28 @@
 //!   the way FXServer's dump server ends it on Windows (`0xFFFFFFFE`);
 //! - `fake_spawn_child 1`: start a child that inherits the pipes and outlives a crash, like the
 //!   crash dump server;
-//! - on stdin: `fake_crash [code]`, `fake_hang`, `fake_print <text>`, `fake_trace <type>`, and
-//!   `fake_stall_input <ms>`, which stops reading stdin for a while, as FXServer does while its
-//!   main loop is stuck.
+//! - on stdin: `fake_crash [code]`, `fake_hang`, `fake_spin` (a busy loop), `fake_print <text>`,
+//!   `fake_trace <type>`, `fake_stall_input <ms>`, which stops reading stdin for a while, as
+//!   FXServer does while its main loop is stuck; `fake_spawn <program> <args...>`, which starts a
+//!   program as a resource would; `fake_dump_server`, which starts the fake again the way FXServer
+//!   starts its crash dump server; `fake_connect <address>` and `fake_udp <address>`, which open and
+//!   hold a TCP connection or a connected UDP socket, and `fake_disconnect`, which closes them.
+//!
+//! The main loop runs in a thread named `UV loop: svMain`, as FXServer's does.
 //!
 //! The bridge's `observer_cmd <hex>` prints the event it decodes, which the real bridge does not, so
 //! that tests can see it arrive. Unknown commands get FXServer's `No such command <name>.`
 
 mod console;
+mod dump;
 mod http;
 #[allow(unsafe_code)]
 mod traces;
 
 use std::collections::HashMap;
 use std::io::{self, BufRead};
-use std::net::TcpListener;
-use std::process::{self, Command, Stdio};
+use std::net::{TcpListener, TcpStream, UdpSocket};
+use std::process::{self, Child, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError, mpsc};
 use std::thread;
@@ -53,6 +59,10 @@ const TICK: Duration = Duration::from_millis(50);
 const LICENSE_HELP: &str = "Please set the sv_licenseKey console variable to a key from https://portal.cfx.re/servers/registration-keys.";
 /// The argument that turns the process into the child that holds the pipes.
 const HOLD_PIPES: &str = "--fake-hold-pipes";
+/// What FXServer passes the copy of itself that serves as its crash dump server.
+const DUMP_SERVER: &str = "-dumpserver:";
+/// FXServer's main thread, as FXServer 35245 names it.
+const SV_MAIN: &str = "UV loop: svMain";
 
 /// What the HTTP threads share with the main loop.
 pub struct Server {
@@ -147,32 +157,45 @@ struct Fake {
     /// Every resource started, in order.
     started: Vec<String>,
     quit_at: Option<Instant>,
+    /// What `fake_spawn` started, reaped as they end.
+    children: Vec<Child>,
+    connections: Vec<TcpStream>,
+    datagrams: Vec<UdpSocket>,
 }
 
 fn main() {
-    if std::env::args().nth(1).as_deref() == Some(HOLD_PIPES) {
-        loop {
-            thread::sleep(Duration::from_secs(3600));
-        }
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().map(String::as_str) == Some(HOLD_PIPES)
+        || args.iter().any(|arg| arg.starts_with(DUMP_SERVER))
+    {
+        hang();
     }
     // Before anything else opens a file, so that fd 3 is still the parent's.
     let traces = Traces::open();
-    let mut fake = Fake {
-        server: Arc::new(Server {
-            convars: Mutex::new(HashMap::new()),
-            main_ticks: AtomicU64::new(0),
-            main_observed: Mutex::default(),
-            started: Instant::now(),
-            input_stalled_until: AtomicU64::new(0),
-        }),
-        traces,
-        endpoint: None,
-        bridge: None,
-        started: Vec::new(),
-        quit_at: None,
-    };
-    fake.boot(&command_line(std::env::args().skip(1)));
-    fake.run();
+    let main_loop = thread::Builder::new().name(SV_MAIN.to_owned()).spawn(move || {
+        let mut fake = Fake {
+            server: Arc::new(Server {
+                convars: Mutex::new(HashMap::new()),
+                main_ticks: AtomicU64::new(0),
+                main_observed: Mutex::default(),
+                started: Instant::now(),
+                input_stalled_until: AtomicU64::new(0),
+            }),
+            traces,
+            endpoint: None,
+            bridge: None,
+            started: Vec::new(),
+            quit_at: None,
+            children: Vec::new(),
+            connections: Vec::new(),
+            datagrams: Vec::new(),
+        };
+        fake.boot(&command_line(args.into_iter()));
+        fake.run()
+    });
+    // The main loop ends the process itself: it only comes back here if it panicked.
+    let _ = main_loop.map(thread::JoinHandle::join);
+    process::exit(101);
 }
 
 impl Fake {
@@ -237,6 +260,8 @@ impl Fake {
                     self.execute(&command);
                 }
             }
+            self.children
+                .retain_mut(|child| matches!(child.try_wait(), Ok(None)));
             self.beat(now);
             self.server.tick();
             thread::sleep(TICK);
@@ -275,6 +300,25 @@ impl Fake {
             ("quit", reason) => self.quit(reason),
             ("fake_crash", code) => self.crash(code.and_then(|code| code.parse().ok())),
             ("fake_hang", _) => hang(),
+            ("fake_spin", _) => spin(),
+            ("fake_spawn", Some(program)) => self.spawn(program, &args[1..]),
+            ("fake_dump_server", _) => self.spawn_dump_server(),
+            ("fake_connect", Some(address)) => {
+                if let Ok(stream) = TcpStream::connect(address) {
+                    self.connections.push(stream);
+                }
+            }
+            ("fake_udp", Some(address)) => {
+                let socket = UdpSocket::bind("127.0.0.1:0")
+                    .and_then(|socket| socket.connect(address).map(|()| socket));
+                if let Ok(socket) = socket {
+                    self.datagrams.push(socket);
+                }
+            }
+            ("fake_disconnect", _) => {
+                self.connections.clear();
+                self.datagrams.clear();
+            }
             ("fake_stall_input", Some(ms)) => {
                 let until = self.server.uptime_ms() + ms.parse::<u64>().unwrap_or(0);
                 self.server.input_stalled_until.store(until, Ordering::Relaxed);
@@ -423,6 +467,43 @@ impl Fake {
             .number(convar)
             .map(|ms| self.server.started + Duration::from_millis(ms))
     }
+
+    /// A program a resource starts, with nothing of the fake's own: no pipe to hold open.
+    fn spawn(&mut self, program: &str, args: &[String]) {
+        let started = Command::new(program)
+            .args(args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn();
+        match started {
+            Ok(child) => self.children.push(child),
+            Err(error) => console::line(CMD, &format!("cannot start {program}: {error}")),
+        }
+    }
+
+    /// FXServer's crash dump server: FXServer.exe again on Windows; on Linux the build's loader
+    /// running FXServer, which the fake stands for here.
+    fn spawn_dump_server(&mut self) {
+        let Ok(program) = std::env::current_exe() else {
+            return;
+        };
+        let pid = process::id();
+        let args: Vec<String> = if cfg!(windows) {
+            vec![format!("{DUMP_SERVER}0"), format!("-parentpid:{pid}")]
+        } else {
+            let fxserver = program.with_file_name("FXServer");
+            vec![
+                "--library-path".to_owned(),
+                "lib/".to_owned(),
+                "--".to_owned(),
+                fxserver.to_string_lossy().into_owned(),
+                format!("{DUMP_SERVER}0"),
+                format!("-parentppe:{pid}"),
+            ]
+        };
+        self.spawn(&program.to_string_lossy(), &args);
+    }
 }
 
 fn spawn_child() {
@@ -462,12 +543,29 @@ fn dump_and_end() -> ! {
         .ok()
         .and_then(|exe| Some(exe.parent()?.join("crashes")));
     if let Some(crashes) = crashes {
-        let dump = crashes.join(format!("fake-{}.dmp", process::id()));
-        let _ = std::fs::create_dir_all(&crashes).and_then(|()| std::fs::write(&dump, b"MDMP"));
+        let dump = crashes.join(format!("{}.dmp", dump_id()));
+        let _ = std::fs::create_dir_all(&crashes).and_then(|()| std::fs::write(&dump, dump::crash()));
         console::line(MAIN, "FXServer crashed.");
         console::line(MAIN, &format!("A dump can be found at {}.", dump.display()));
     }
     process::exit(0xFFFF_FFFE_u32.cast_signed())
+}
+
+/// A name shaped like the GUIDs FXServer names its dumps by, unique enough for tests.
+fn dump_id() -> String {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let pid = process::id();
+    format!(
+        "{:08x}-{:04x}-4{:03x}-8{:03x}-{:012x}",
+        nanos & 0xffff_ffff,
+        (nanos >> 32) & 0xffff,
+        pid & 0xfff,
+        (nanos >> 48) & 0xfff,
+        (nanos >> 16) & 0xffff_ffff_ffff,
+    )
 }
 
 fn stop(resource: &str) {
@@ -504,6 +602,12 @@ fn crash_natively() -> ! {
 fn hang() -> ! {
     loop {
         thread::sleep(Duration::from_secs(3600));
+    }
+}
+
+fn spin() -> ! {
+    loop {
+        std::hint::black_box(Instant::now());
     }
 }
 

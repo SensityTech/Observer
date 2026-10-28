@@ -1,14 +1,17 @@
 //! The supervisor: one task that starts FXServer, watches its health, stops it gracefully, and
 //! brings it back after a crash or a hang. Every change of state goes out on an event bus.
 
+use std::collections::{HashMap, HashSet};
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant};
 
+use observer_domain::diagnostics::ProcessKind;
 use observer_domain::launch::LaunchSettings;
 use observer_domain::server::SpawnFailure;
-use observer_platform::{Exit, ExitWatch, Output, ProcessTree};
+use observer_platform::{Exit, ExitWatch, Output, ProcessInfo, ProcessTree, TreeChange, TreeChanges};
 use serde::Serialize;
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
@@ -17,7 +20,7 @@ use tracing::{error, info, warn};
 
 use crate::bridge::{self, BridgeEvent, Report, StopReason};
 use crate::console::{ConsoleHub, LineAssembler, LineFlags, LineKind, plain, sanitize};
-use crate::crashes::{self, DumpLimits};
+use crate::crashes::{self, Collected, DumpLimits, HangSnapshotLimits, SnapshotFailure};
 use crate::exit;
 use crate::health::{self, HangCause, Health, HealthLimits, PlayerList, Players, Probe, Problem, Verdict};
 use crate::launch::{self, CfgWarning};
@@ -26,6 +29,7 @@ use crate::perf::TickReport;
 use crate::recovery::{Next, Recovery, RecoveryPolicy};
 use crate::stdin::{CommandRefusal, Credentials, StdinError, StdinWriter, SystemLine, UserCommand, Write};
 use crate::trace::{self, Trace, TraceDecoder, TraceKind};
+use crate::tree::{self, TreeContext};
 
 /// How often health is weighed while a server runs.
 const TICK: Duration = Duration::from_secs(1);
@@ -39,9 +43,22 @@ const DUMP_ACTIVITY: Duration = Duration::from_secs(10);
 /// FXServer's own default, for a cfg that names no TCP endpoint.
 const DEFAULT_PORT: u16 = 30120;
 const EVENTS: usize = 256;
+/// A burst of starts must not push the other events out, so the tree's go on a bus of their own.
+const PROCESS_EVENTS: usize = 1024;
+/// How often the tree's members are compared with what its notifications said.
+const RECONCILE_EVERY: Duration = Duration::from_secs(5);
+/// A member younger than this is the notifications' to report: a fork may not have run its program
+/// yet.
+const RECONCILE_AFTER_MS: i64 = 2_000;
 const CHANNEL: usize = 256;
 const REQUESTS: usize = 16;
 const SUPERVISOR: &str = "supervisor";
+/// What a hang snapshot is, for the console.
+const SNAPSHOT: &str = if cfg!(windows) {
+    "a dump"
+} else {
+    "a report of the threads"
+};
 
 const LICENCE_REJECTIONS: [&str; 3] = [
     "Could not authenticate server license key",
@@ -76,6 +93,11 @@ pub struct Settings {
     pub recovery: RecoveryPolicy,
     pub stop: StopTimings,
     pub dumps: DumpLimits,
+    /// A picture of a hung server before it is killed; `None` kills it at once.
+    pub hang_snapshot: Option<HangSnapshotLimits>,
+    /// Drops the first notification of each run's tree, as the system may: for tests of the
+    /// reconciliation.
+    pub drop_first_tree_change: bool,
 }
 
 impl Settings {
@@ -89,6 +111,8 @@ impl Settings {
             recovery: RecoveryPolicy::default(),
             stop: StopTimings::default(),
             dumps: DumpLimits::default(),
+            hang_snapshot: Some(HangSnapshotLimits::default()),
+            drop_first_tree_change: false,
         }
     }
 }
@@ -154,8 +178,18 @@ pub enum EventKind {
     RestartScheduled {
         delay_ms: u64,
     },
+    /// Dumps moved into Observer's crash folder, and the older files its limits removed.
     CrashDumps {
         paths: Vec<PathBuf>,
+        removed: Vec<PathBuf>,
+    },
+    /// The picture of a hung server taken before the kill, or why there is none.
+    HangSnapshot {
+        path: Option<PathBuf>,
+        bytes: u64,
+        took_ms: u64,
+        failure: Option<SnapshotFailure>,
+        removed: Vec<PathBuf>,
     },
     Hitch {
         thread: String,
@@ -181,6 +215,20 @@ pub enum EventKind {
         rss: u64,
         external: u64,
     },
+}
+
+/// A process of the tree started or ended, the main process left out.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TreeEvent {
+    pub generation: u32,
+    pub at_ms: i64,
+    pub change: ProcessChange,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProcessChange {
+    Started { process: ProcessInfo, kind: ProcessKind },
+    Ended { pid: u32 },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -283,6 +331,8 @@ pub struct Readings {
 pub struct RunReadings {
     pub generation: u32,
     pub started_ms: i64,
+    /// The game endpoint the probes reach.
+    pub probe: SocketAddr,
     /// Upgraded only for one measurement at a time, so that the tree never outlives its run for
     /// longer than that.
     pub tree: Weak<ProcessTree>,
@@ -355,6 +405,7 @@ enum Request {
 pub struct Supervisor {
     requests: mpsc::Sender<Request>,
     events: broadcast::Sender<Event>,
+    processes: broadcast::Sender<TreeEvent>,
     status: watch::Receiver<Status>,
     readings: watch::Receiver<Readings>,
 }
@@ -365,6 +416,7 @@ impl Supervisor {
     pub fn spawn(settings: Settings, console: Arc<ConsoleHub>) -> (Self, JoinHandle<()>) {
         let (requests, requests_rx) = mpsc::channel(REQUESTS);
         let events = broadcast::channel(EVENTS).0;
+        let processes = broadcast::channel(PROCESS_EVENTS).0;
         let initial = Status {
             state: State::Stopped,
             generation: 0,
@@ -385,6 +437,7 @@ impl Supervisor {
             settings,
             console,
             events: events.clone(),
+            processes: processes.clone(),
             status: status_tx,
             readings: readings_tx,
             requests: requests_rx,
@@ -411,6 +464,7 @@ impl Supervisor {
             Self {
                 requests,
                 events,
+                processes,
                 status,
                 readings,
             },
@@ -487,6 +541,11 @@ impl Supervisor {
 
     pub fn events(&self) -> broadcast::Receiver<Event> {
         self.events.subscribe()
+    }
+
+    /// The processes each run's tree starts and ends, classified.
+    pub fn processes(&self) -> broadcast::Receiver<TreeEvent> {
+        self.processes.subscribe()
     }
 
     pub fn status(&self) -> watch::Receiver<Status> {
@@ -659,6 +718,7 @@ struct Actor {
     settings: Settings,
     console: Arc<ConsoleHub>,
     events: broadcast::Sender<Event>,
+    processes: broadcast::Sender<TreeEvent>,
     status: watch::Sender<Status>,
     readings: watch::Sender<Readings>,
     requests: mpsc::Receiver<Request>,
@@ -689,6 +749,8 @@ impl Actor {
     async fn run(mut self) {
         #[cfg(unix)]
         self.sweep_leftovers().await;
+        let folder = self.settings.data_dir.join("crashes");
+        let _ = tokio::task::spawn_blocking(move || crashes::remove_stale_partials(&folder)).await;
         while !self.done {
             let deadline = self.deadline();
             let wake = tokio::select! {
@@ -1073,6 +1135,70 @@ impl Actor {
         };
     }
 
+    /// Pictures the hung server for the crash record, before the kill. Requests wait behind it, up
+    /// to its time limit; a console close kills the tree meanwhile anyway.
+    async fn snapshot(&mut self, limits: HangSnapshotLimits) {
+        let Some(run) = &self.run else {
+            return;
+        };
+        let data_dir = self.settings.data_dir.clone();
+        let started = Instant::now();
+        // The data folder itself may not exist yet; its volume does.
+        let free = tokio::task::spawn_blocking(move || {
+            data_dir
+                .ancestors()
+                .find_map(|dir| observer_platform::available_space(dir).ok())
+        })
+        .await
+        .ok()
+        .flatten();
+        let (path, bytes, failure, removed) = if free.is_some_and(|free| free < limits.min_free) {
+            self.note("no snapshot of the hung server: its data volume has less than 1 GiB free");
+            (None, 0, Some(SnapshotFailure::LowDisk), Vec::new())
+        } else {
+            let (tree, pid, generation) = (Arc::clone(&run.tree), run.pid, run.generation);
+            let (dir, dumps) = (self.settings.data_dir.join("crashes"), self.settings.dumps);
+            let abandoned = Arc::new(AtomicBool::new(false));
+            let late = Arc::clone(&abandoned);
+            let writing = tokio::task::spawn_blocking(move || {
+                let (path, bytes) = crashes::snapshot(&tree, pid, &dir, generation, &late)?;
+                let removed = crashes::trim(&dir, dumps)?;
+                Ok::<_, std::io::Error>((path, bytes, removed))
+            });
+            match tokio::time::timeout(limits.timeout, writing).await {
+                Ok(Ok(Ok((path, bytes, removed)))) => {
+                    let kept = !removed.contains(&path);
+                    self.note(&format!(
+                        "snapshot of the hung server saved to {} ({bytes} bytes)",
+                        path.display()
+                    ));
+                    (kept.then_some(path), bytes, None, removed)
+                }
+                Ok(Ok(Err(error))) => {
+                    warn!(%error, "cannot take a snapshot of the hung server");
+                    self.note(&format!("cannot take a snapshot of the hung server: {error}"));
+                    (None, 0, Some(SnapshotFailure::Failed), Vec::new())
+                }
+                Ok(Err(error)) => {
+                    warn!(%error, "the hang snapshot failed");
+                    (None, 0, Some(SnapshotFailure::Failed), Vec::new())
+                }
+                Err(_) => {
+                    abandoned.store(true, Ordering::Relaxed);
+                    self.note("the snapshot of the hung server took too long; killing without it");
+                    (None, 0, Some(SnapshotFailure::Timeout), Vec::new())
+                }
+            }
+        };
+        self.emit(EventKind::HangSnapshot {
+            path,
+            bytes,
+            took_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+            failure,
+            removed,
+        });
+    }
+
     async fn tick(&mut self) {
         let now = Instant::now();
         self.last_tick = now;
@@ -1143,10 +1269,20 @@ impl Actor {
                     run.end(Ending::Hang { cause });
                 }
                 self.set_state(State::Hung, Cause::Hang { cause });
-                self.note(&format!(
-                    "FXServer is not responding ({}); killing its process tree",
-                    hang_text(cause)
-                ));
+                match self.settings.hang_snapshot {
+                    Some(limits) => {
+                        self.note(&format!(
+                            "FXServer is not responding ({}); writing {SNAPSHOT} of the hung server before killing it",
+                            hang_text(cause)
+                        ));
+                        self.snapshot(limits).await;
+                        self.note("killing FXServer's process tree");
+                    }
+                    None => self.note(&format!(
+                        "FXServer is not responding ({}); killing its process tree",
+                        hang_text(cause)
+                    )),
+                }
                 self.kill();
             }
         }
@@ -1242,6 +1378,7 @@ impl Actor {
                     run: Some(RunReadings {
                         generation: run.generation,
                         started_ms: run.started_ms,
+                        probe,
                         tree: Arc::downgrade(&run.tree),
                         dynamic: None,
                         perf: None,
@@ -1299,8 +1436,9 @@ impl Actor {
         self.current.send_replace(generation);
         let spawned = observer_platform::spawn(&prepared.launch)
             .map_err(|error| SpawnError::new(SpawnFailure::Spawn, error.to_string()))?;
+        let tree = Arc::new(spawned.tree);
         #[cfg(unix)]
-        if let Err(error) = self.pid_file().record(&spawned.tree) {
+        if let Err(error) = self.pid_file().record(&tree) {
             warn!(%error, "cannot record FXServer's process group; a crash of Observer could leave it running");
         }
 
@@ -1331,6 +1469,16 @@ impl Actor {
                 TraceDecoder::new(generation, self.current.subscribe()),
                 self.traces_tx.clone(),
             )),
+            tokio::spawn(follow_tree(TreeFollower {
+                changes: spawned.changes,
+                tree: Arc::downgrade(&tree),
+                context: TreeContext::new(&layout, spawned.pid),
+                generation,
+                bus: self.processes.clone(),
+                cancel: cancel.clone(),
+                drop_next: self.settings.drop_first_tree_change,
+                running: HashMap::new(),
+            })),
         ];
         tasks.extend(health::start(
             probe,
@@ -1351,7 +1499,7 @@ impl Actor {
             build: None,
             layout,
             exit: spawned.exit,
-            tree: Arc::new(spawned.tree),
+            tree,
             stdin,
             stdin_task,
             cancel,
@@ -1530,14 +1678,17 @@ impl Actor {
         self.report_dumps(moved);
     }
 
-    fn report_dumps(&mut self, moved: std::io::Result<Vec<PathBuf>>) {
-        match moved {
-            Ok(paths) if paths.is_empty() => {}
-            Ok(paths) => {
-                for path in &paths {
+    fn report_dumps(&mut self, collected: std::io::Result<Collected>) {
+        match collected {
+            Ok(collected) if collected.moved.is_empty() => {}
+            Ok(Collected { moved, removed }) => {
+                for path in &moved {
                     self.note(&format!("crash dump saved to {}", path.display()));
                 }
-                self.emit(EventKind::CrashDumps { paths });
+                self.emit(EventKind::CrashDumps {
+                    paths: moved,
+                    removed,
+                });
             }
             Err(error) => warn!(%error, "cannot move FXServer's crash dumps"),
         }
@@ -1652,6 +1803,111 @@ async fn read_console(
             }
             () = tokio::time::sleep_until(flush_at.into()) => lines.flush(Instant::now()).into_iter().for_each(&publish),
         }
+    }
+}
+
+/// One run's tree as the supervisor follows it.
+struct TreeFollower {
+    changes: TreeChanges,
+    tree: Weak<ProcessTree>,
+    context: TreeContext,
+    generation: u32,
+    bus: broadcast::Sender<TreeEvent>,
+    cancel: CancellationToken,
+    drop_next: bool,
+    /// The processes reported started and not ended, with their start stamps.
+    running: HashMap<u32, Option<u64>>,
+}
+
+/// Classifies what the tree reports and hands it on. Every few seconds it compares the tree's
+/// members with what it reported, and makes up for the notifications the system never delivered.
+async fn follow_tree(mut follower: TreeFollower) {
+    let start = tokio::time::Instant::now() + RECONCILE_EVERY;
+    let mut reconcile = tokio::time::interval_at(start, RECONCILE_EVERY);
+    loop {
+        tokio::select! {
+            () = follower.cancel.cancelled() => return,
+            change = follower.changes.next() => {
+                let Some(change) = change else {
+                    return;
+                };
+                if std::mem::take(&mut follower.drop_next) {
+                    continue;
+                }
+                follower.apply(change);
+            }
+            _ = reconcile.tick() => follower.reconcile().await,
+        }
+    }
+}
+
+impl TreeFollower {
+    fn apply(&mut self, change: TreeChange) {
+        match change {
+            TreeChange::Started(process) => {
+                if let Some(stamp) = self.running.get(&process.pid) {
+                    if stamp.is_none() || process.stamp.is_none() || *stamp == process.stamp {
+                        return;
+                    }
+                    // The pid was reused by a process started after the one it named.
+                    self.publish(ProcessChange::Ended { pid: process.pid });
+                }
+                self.running.insert(process.pid, process.stamp);
+                let kind = tree::classify(&process, &self.context);
+                self.publish(ProcessChange::Started { process, kind });
+            }
+            TreeChange::Ended { pid } => {
+                if self.running.remove(&pid).is_some() {
+                    self.publish(ProcessChange::Ended { pid });
+                }
+            }
+        }
+    }
+
+    async fn reconcile(&mut self) {
+        let Some(tree) = self.tree.upgrade() else {
+            return;
+        };
+        let main = self.context.main_pid;
+        let members = tokio::task::spawn_blocking(move || {
+            let members = tree.all_members().ok()?;
+            Some(
+                members
+                    .into_iter()
+                    .filter(|&pid| pid != main)
+                    .filter_map(|pid| tree.describe(pid))
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .await;
+        let Ok(Some(members)) = members else {
+            return;
+        };
+        let alive: HashSet<u32> = members.iter().map(|member| member.pid).collect();
+        let gone: Vec<u32> = self
+            .running
+            .keys()
+            .filter(|pid| !alive.contains(pid))
+            .copied()
+            .collect();
+        for pid in gone {
+            self.apply(TreeChange::Ended { pid });
+        }
+        let young = now_ms() - RECONCILE_AFTER_MS;
+        for member in members {
+            if member.created_ms.is_some_and(|created| created > young) {
+                continue;
+            }
+            self.apply(TreeChange::Started(member));
+        }
+    }
+
+    fn publish(&self, change: ProcessChange) {
+        let _ = self.bus.send(TreeEvent {
+            generation: self.generation,
+            at_ms: now_ms(),
+            change,
+        });
     }
 }
 

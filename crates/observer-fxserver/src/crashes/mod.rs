@@ -1,5 +1,6 @@
 //! Crash dumps: FXServer writes them into the build, where they would pile up and get in the way
-//! of the build's verification. Observer moves them into its own folder and keeps a few.
+//! of the build's verification. Observer moves them into its own folder and keeps a few, with its
+//! own pictures of hung servers, and reads what they say.
 
 pub mod analysis;
 pub mod report;
@@ -7,7 +8,14 @@ pub mod report;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, SystemTime};
+
+use observer_platform::ProcessTree;
+use serde::Serialize;
+
+/// A partial file this old was left by an Observer that stopped while writing it.
+const STALE_PARTIAL: Duration = Duration::from_mins(1);
 
 #[derive(Debug, Clone, Copy)]
 pub struct DumpLimits {
@@ -24,14 +32,21 @@ impl Default for DumpLimits {
     }
 }
 
+/// What [`collect`] did: where the moved files went, and the older files the limits removed.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Collected {
+    pub moved: Vec<PathBuf>,
+    pub removed: Vec<PathBuf>,
+}
+
 /// Moves every file in `from` (the build's `crashes/`) into `to`, then removes the oldest dumps in
-/// `to` beyond the limits. Returns where the moved files went. Blocks: a dump can be hundreds of
-/// megabytes, copied if the two folders are on different volumes.
-pub fn collect(from: &Path, to: &Path, limits: DumpLimits) -> io::Result<Vec<PathBuf>> {
+/// `to` beyond the limits. Blocks: a dump can be hundreds of megabytes, copied if the two folders
+/// are on different volumes.
+pub fn collect(from: &Path, to: &Path, limits: DumpLimits) -> io::Result<Collected> {
     let mut moved = Vec::new();
     let entries = match fs::read_dir(from) {
         Ok(entries) => entries,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(moved),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Collected::default()),
         Err(error) => return Err(error),
     };
     for entry in entries {
@@ -44,11 +59,106 @@ pub fn collect(from: &Path, to: &Path, limits: DumpLimits) -> io::Result<Vec<Pat
         move_file(&entry.path(), &target)?;
         moved.push(target);
     }
+    let mut removed = Vec::new();
     if !moved.is_empty() {
-        trim(to, limits)?;
-        moved.retain(|path| path.exists());
+        removed = trim(to, limits)?;
+        moved.retain(|path| !removed.contains(path));
     }
-    Ok(moved)
+    Ok(Collected { moved, removed })
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct HangSnapshotLimits {
+    /// Below this much free space on the data volume, no snapshot is taken.
+    pub min_free: u64,
+    /// The kill waits no longer than this for the snapshot.
+    pub timeout: Duration,
+}
+
+impl Default for HangSnapshotLimits {
+    fn default() -> Self {
+        Self {
+            min_free: 1024 * 1024 * 1024,
+            timeout: Duration::from_secs(15),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SnapshotFailure {
+    LowDisk,
+    Timeout,
+    Failed,
+}
+
+/// Writes a picture of the tree's hung main process into `dir`: a minidump of its stacks on
+/// Windows, a report of its threads on Linux. It goes to a `.partial` file renamed once complete,
+/// and is deleted instead when `abandoned` is set meanwhile: the kill did not wait for it. Returns
+/// the file and its size. Blocks.
+pub fn snapshot(
+    tree: &ProcessTree,
+    pid: u32,
+    dir: &Path,
+    generation: u32,
+    abandoned: &AtomicBool,
+) -> io::Result<(PathBuf, u64)> {
+    fs::create_dir_all(dir)?;
+    let stamp = jiff::Timestamp::now().strftime("%Y%m%dT%H%M%SZ");
+    let extension = if cfg!(windows) { "dmp" } else { "json" };
+    let path = dir.join(format!("hang-{generation}-{stamp}.{extension}"));
+    let partial = path.with_extension(format!("{extension}.partial"));
+    let written = write_snapshot(tree, pid, &partial);
+    match written {
+        Ok(()) if !abandoned.load(Ordering::Relaxed) => {
+            fs::rename(&partial, &path)?;
+            let bytes = fs::metadata(&path)?.len();
+            Ok((path, bytes))
+        }
+        Ok(()) => {
+            let _ = fs::remove_file(&partial);
+            Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "the snapshot came too late",
+            ))
+        }
+        Err(error) => {
+            let _ = fs::remove_file(&partial);
+            Err(error)
+        }
+    }
+}
+
+#[cfg(windows)]
+fn write_snapshot(tree: &ProcessTree, _pid: u32, partial: &Path) -> io::Result<()> {
+    let file = fs::File::create(partial)?;
+    tree.write_dump(&file)?;
+    file.sync_all()
+}
+
+#[cfg(unix)]
+fn write_snapshot(tree: &ProcessTree, pid: u32, partial: &Path) -> io::Result<()> {
+    let states = tree.thread_states(Duration::from_millis(500))?;
+    let report = report::report(pid, states);
+    fs::write(partial, serde_json::to_vec(&report).map_err(io::Error::other)?)
+}
+
+/// Deletes the `.partial` files an earlier Observer left in `dir`: snapshots cut short.
+pub fn remove_stale_partials(dir: &Path) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    let now = SystemTime::now();
+    for entry in entries.filter_map(Result::ok) {
+        let path = entry.path();
+        let stale = entry
+            .metadata()
+            .and_then(|metadata| metadata.modified())
+            .is_ok_and(|modified| now.duration_since(modified).unwrap_or_default() >= STALE_PARTIAL);
+        if stale && path.extension().is_some_and(|extension| extension == "partial") {
+            let _ = fs::remove_file(path);
+        }
+    }
 }
 
 /// Whether a dump is being written now: a crash looks like a hang while the dump server writes.
@@ -89,7 +199,8 @@ fn move_file(from: &Path, to: &Path) -> io::Result<()> {
     fs::remove_file(from)
 }
 
-fn trim(dir: &Path, limits: DumpLimits) -> io::Result<()> {
+/// Removes the oldest files of `dir` beyond the limits, and returns them.
+pub fn trim(dir: &Path, limits: DumpLimits) -> io::Result<Vec<PathBuf>> {
     let mut dumps = Vec::new();
     for entry in fs::read_dir(dir)? {
         let entry = entry?;
@@ -101,15 +212,17 @@ fn trim(dir: &Path, limits: DumpLimits) -> io::Result<()> {
     dumps.sort();
     let mut count = dumps.len();
     let mut total: u64 = dumps.iter().map(|(_, size, _)| size).sum();
+    let mut removed = Vec::new();
     for (_, size, path) in dumps {
         if count <= limits.files && total <= limits.bytes {
             break;
         }
-        fs::remove_file(path)?;
+        fs::remove_file(&path)?;
+        removed.push(path);
         count -= 1;
         total -= size;
     }
-    Ok(())
+    Ok(removed)
 }
 
 #[cfg(test)]
@@ -149,9 +262,10 @@ mod tests {
         dump(&build, "a1b2.dmp", 10, Duration::ZERO);
         dump(&build, "a1b2-full.dmp", 30, Duration::ZERO);
 
-        let moved = collect(&build, &data, DumpLimits::default()).unwrap();
+        let collected = collect(&build, &data, DumpLimits::default()).unwrap();
 
-        assert_eq!(moved.len(), 2);
+        assert_eq!(collected.moved.len(), 2);
+        assert_eq!(collected.removed, Vec::<PathBuf>::new());
         assert_eq!(names(&build), Vec::<String>::new());
         assert_eq!(names(&data), ["a1b2-full.dmp", "a1b2.dmp"]);
     }
@@ -167,7 +281,7 @@ mod tests {
                 DumpLimits::default()
             )
             .unwrap(),
-            Vec::<PathBuf>::new()
+            Collected::default()
         );
         assert!(!dir.path().join("data").exists());
     }
@@ -183,7 +297,7 @@ mod tests {
             DumpLimits::default(),
         );
 
-        assert_eq!(moved.unwrap(), Vec::<PathBuf>::new());
+        assert_eq!(moved.unwrap(), Collected::default());
     }
 
     #[test]
@@ -199,9 +313,13 @@ mod tests {
             ..DumpLimits::default()
         };
 
-        collect(&build, &data, limits).unwrap();
+        let collected = collect(&build, &data, limits).unwrap();
 
         assert_eq!(names(&data), ["new.dmp", "old-1.dmp"]);
+        assert_eq!(
+            collected.removed,
+            [data.join("old-3.dmp"), data.join("old-2.dmp")]
+        );
     }
 
     #[test]
@@ -219,7 +337,8 @@ mod tests {
         let moved = collect(&build, &data, limits).unwrap();
 
         assert_eq!(names(&data), Vec::<String>::new());
-        assert_eq!(moved, Vec::<PathBuf>::new());
+        assert_eq!(moved.moved, Vec::<PathBuf>::new());
+        assert_eq!(moved.removed.len(), 3);
     }
 
     #[test]
