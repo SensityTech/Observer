@@ -4,9 +4,12 @@
 import type { ActorKind } from '../api/generated/ActorKind';
 import type { AuditAction } from '../api/generated/AuditAction';
 import type { ErrorCode } from '../api/generated/ErrorCode';
+import type { LaunchProblem } from '../api/generated/LaunchProblem';
+import type { OneSync } from '../api/generated/OneSync';
 import type { Outcome } from '../api/generated/Outcome';
 import type { PermissionArea } from '../api/generated/PermissionArea';
 import { parsePermissions, permissionKeys, type PermissionKey } from '../auth/permissions';
+import type { LinkState } from '../live/realtime';
 import { formatDuration, formatNumber, plural } from './format';
 import { numberParam, stringParam } from './params';
 
@@ -79,6 +82,7 @@ export const en = {
         close: 'Close the menu',
         overview: 'Overview',
         administration: 'Administration',
+        server: 'Server',
         users: 'Users',
         audit: 'Audit log',
     },
@@ -99,6 +103,14 @@ export const en = {
         ok: 'Running',
         down: 'Unreachable',
         pending: 'Checking',
+        updates: 'Updates',
+        link: {
+            connecting: 'Connecting',
+            live: 'Live',
+            offline: 'Offline',
+            // Only another Observer version or an ended session refuses the link: a reload settles both.
+            refused: 'Reload needed',
+        } satisfies Record<LinkState, string>,
     },
     account: {
         menu: (username: string) => `Account menu for ${username}`,
@@ -113,6 +125,7 @@ export const en = {
         stateTitle: 'State',
         running: 'Observer is running.',
         version: (version: string) => `Version ${version}`,
+        started: (time: string, uptime: string) => `Started ${time} · up ${uptime}`,
         unreachable: 'Observer cannot be reached.',
         unreachableHint: 'The panel keeps trying every few seconds.',
         loading: 'Checking Observer',
@@ -126,6 +139,8 @@ export const en = {
         gloss: 'This page is not for your account.',
         body: (permission: string) =>
             `It needs a permission your account does not hold: ${permission}. Whoever manages users can grant it.`,
+        ownerOnly:
+            'Only the owner opens this page: how FXServer starts decides what runs on the host, which no permission grants.',
         back: 'Open my account',
     },
     signIn: {
@@ -238,6 +253,66 @@ export const en = {
         body: 'This change needs your password again. Once confirmed, it is not asked again for 10 minutes.',
         password: 'Password',
         submit: 'Confirm',
+    },
+    server: {
+        title: 'Server',
+        gloss: 'How Observer starts FXServer.',
+        nextStart: 'Changes apply at the next start of FXServer',
+        loadFailed: 'The launch settings could not be loaded.',
+        unsaved: 'Nothing is saved yet: Observer needs these settings to start FXServer.',
+        changedElsewhere:
+            'These settings were changed in another session since you opened them. Discard your changes to see theirs, then make yours again.',
+        files: 'Files',
+        buildPath: 'FXServer build folder',
+        buildPathHint: 'The folder of FXServer.exe on Windows, or the one holding alpine on Linux.',
+        dataPath: 'Server data folder',
+        dataPathHint: 'The folder of your resources and cfg. FXServer runs from it.',
+        cfgFile: 'Config file',
+        cfgFileHint: 'Relative to the server data folder, such as server.cfg or configs/live.cfg.',
+        start: 'Start',
+        onesync: 'OneSync',
+        onesyncModes: { off: 'Off', on: 'On', legacy: 'Legacy' } satisfies Record<OneSync, string>,
+        onesyncHint: 'Set after your cfg on the command line, so it wins over the cfg.',
+        autoStart: 'Start FXServer with Observer',
+        autoStartHint: 'When Observer starts, FXServer starts too.',
+        txadminEvents: "Send txAdmin's events too",
+        txadminEventsHint:
+            "Resources written for txAdmin also receive txAdmin's events, such as txAdmin:events:scheduledRestart, next to Observer's.",
+        arguments: 'Extra arguments',
+        argumentsMeta: 'Each one goes on the command line as +set <name> <value>, after the cfg.',
+        argument: (position: number) => `Argument ${formatNumber('en', position)}`,
+        argumentName: 'Name',
+        argumentValue: 'Value',
+        removeArgument: (position: number) => `Remove argument ${formatNumber('en', position)}`,
+        addArgument: 'Add an argument',
+        noArguments: 'No extra argument.',
+        notSaved: 'Not saved yet',
+        changes: (value: number) => `${count(value, { one: 'unsaved change', other: 'unsaved changes' })}`,
+        discard: 'Discard',
+        discarded: 'Changes discarded: the form shows the settings as stored.',
+        save: 'Save',
+        saved: 'Saved. FXServer uses these settings from its next start.',
+        problems: {
+            required: 'Fill this in.',
+            tooLong: 'Too long: 1,024 characters at most.',
+            notAbsolute: 'Use a full path, from a drive letter such as C:\\ on Windows or from / on Linux.',
+            networkPath: 'Use a folder of this host: network paths are not supported.',
+            devicePath: 'This names a device, not a folder or a file.',
+            controlCharacter: 'Remove the line breaks, tabs and other control characters.',
+            fxdk: '-fxdk is refused: it would start FXServer for the development kit, outside Observer.',
+            invalidCfgFile:
+                'Use a path inside the server data folder, with letters, digits, dots, dashes, underscores and / between folders.',
+            optionLike:
+                'Start with something other than - or +: FXServer would read it as an option or a command of its own.',
+            invalidName: 'Use 1 to 64 letters, digits or underscores.',
+            forbiddenCharacter:
+                'Remove the quotes, semicolons and backslashes: FXServer reads them as commands.',
+            quoteOrSemicolon: 'Remove the quotes and semicolons: FXServer reads them as commands.',
+            reserved: 'Observer sets this one itself, or it would break supervision.',
+            secret: 'This holds a secret: set it in the cfg, never on the command line, which anyone on the host can read.',
+            duplicate: 'An argument above already sets this name.',
+            tooMany: 'At most 64 extra arguments.',
+        } satisfies Record<LaunchProblem, string>,
     },
     users: {
         title: 'Users',
@@ -378,6 +453,7 @@ export const en = {
             permission_denied: 'Permission denied',
             audit_exported: 'Audit log exported',
             reauthenticated: 'Password confirmed',
+            launch_settings_changed: 'Launch settings changed',
         } satisfies Record<AuditAction, string>,
         outcomes: {
             success: 'Success',
@@ -394,6 +470,14 @@ export const en = {
         // A failed sign-in whose username names no account: it may have been a password.
         unknownUsername: 'Unknown username',
         noPermission: 'none',
+        unset: 'not set',
+        // A launch setting only the owner may read: the log says it changed, never what it holds.
+        changed: 'changed',
+        argumentsSet: (names: string) => `set ${names}`,
+        argumentsRemoved: (names: string) => `removed ${names}`,
+        argumentsReordered: 'reordered',
+        yes: 'yes',
+        no: 'no',
         detail: {
             userId: 'Account id',
             sessionId: 'Session id',
@@ -416,6 +500,14 @@ export const en = {
             outcome: 'Outcome',
             from: 'From',
             to: 'Until',
+            ownerOnly: 'Owner only',
+            buildPath: 'Build folder',
+            dataPath: 'Data folder',
+            cfgFile: 'Config file',
+            onesync: 'OneSync',
+            autoStart: 'Start with Observer',
+            txadminEvents: 'txAdmin events',
+            extraArguments: 'Extra arguments',
         },
         refusals: {
             escalation: 'Permissions they do not hold',
@@ -453,6 +545,8 @@ export const en = {
             `Too many attempts. Try again in ${formatDuration('en', numberParam(params, 'retryAfter'))}.`,
         busy: (params) =>
             `Observer is busy checking other passwords. Try again in ${formatDuration('en', numberParam(params, 'retryAfter'))}.`,
+        too_many_sockets:
+            'Too many tabs of the panel are open in this browser. Close a few, then reload this one.',
         password_change_required: 'Choose a new password before you go on.',
         reauth_required: 'This change needs your password again.',
         wrong_password: 'Wrong password.',
@@ -462,6 +556,7 @@ export const en = {
                 ? `Your account does not hold the permission this needs: ${permissions[key].name}.`
                 : 'Your account does not hold the permission this needs.';
         },
+        owner_only: 'Only the owner can do this.',
         self_edit: 'Your own account changes from My account, not from here.',
         owner_protected: 'Nobody else can change the owner account.',
         escalation: (params) =>
@@ -477,6 +572,7 @@ export const en = {
             `This password is too long: ${formatNumber('en', numberParam(params, 'max'))} bytes at most.`,
         password_unchanged: 'Choose a password different from the current one.',
         unknown_permissions: 'This Observer does not know some of these permissions. Reload the page.',
+        invalid_launch_settings: 'Some settings need fixing. Each one says why below its field.',
         already_set_up: 'Observer is already set up. Sign in instead.',
         invalid_setup_token:
             'This setup link has expired or was already used. Run observer setup-link on the host for a new one.',

@@ -11,7 +11,7 @@ export class ApiError extends Error {
     }
 }
 
-type Method = 'GET' | 'POST' | 'PATCH' | 'DELETE';
+type Method = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
 
 /** What the rest of the panel does when the API says the session changed under it. */
 type SessionHooks = {

@@ -1,8 +1,8 @@
 import { useInfiniteQuery, useMutation } from '@tanstack/react-query';
 import { ChevronDown, Clock, Download, Filter } from 'lucide-react';
-import { useId, useState, type FormEvent, type ReactNode } from 'react';
+import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from 'react';
 
-import { auditQuery, downloadAuditExport } from '../api/audit';
+import { auditQuery, auditSearch, downloadAuditExport, matchesFilter, withLive } from '../api/audit';
 import { auditDetails } from '../audit/details';
 import type { AuditAction } from '../api/generated/AuditAction';
 import type { AuditEntry } from '../api/generated/AuditEntry';
@@ -17,6 +17,7 @@ import { errorMessage } from '../i18n/errors';
 import { useI18n } from '../i18n/I18nProvider';
 import type { Messages } from '../i18n/en';
 import { cn } from '../lib/cn';
+import { useTopic } from '../live/context';
 
 const OUTCOME_TONE = { success: 'success', failure: 'danger', denied: 'warning' } as const;
 
@@ -38,13 +39,54 @@ export function AuditPage() {
     const [draft, setDraft] = useState<Draft>(EMPTY);
     const [filter, setFilter] = useState<AuditFilter>({});
     const audit = useInfiniteQuery(auditQuery(filter));
-    const entries = audit.data?.pages.flatMap((page) => page.entries) ?? [];
+    const loaded = audit.data?.pages.flatMap((page) => page.entries) ?? [];
+    // Entries written since the pages were read, newest first, kept while their filter applies.
+    const [live, setLive] = useState<{ filter: AuditFilter; entries: AuditEntry[] }>({ filter, entries: [] });
+    const liveEntries = live.filter === filter ? live.entries : [];
+    const entries = withLive(liveEntries, loaded);
+    // The newest entry when the topic last started. Events only bring later ones, and the pages
+    // were read at another moment: whatever was written in between comes as neither, so the log
+    // is read again whenever the pages, once settled, stop short of it.
+    const unchecked = useRef<number | null>(null);
+    const catchUp = () => {
+        const latest = unchecked.current;
+        if (latest === null || !audit.isSuccess || audit.isFetching) {
+            return;
+        }
+        unchecked.current = null;
+        if (latest > (loaded[0]?.id ?? 0)) {
+            void audit.refetch();
+        }
+    };
+    useEffect(() => {
+        catchUp();
+    });
+
+    useTopic('audit', {
+        event: (entry) => {
+            if (matchesFilter(entry, filter)) {
+                setLive((current) => ({
+                    filter,
+                    entries: [entry, ...(current.filter === filter ? current.entries : [])],
+                }));
+            }
+        },
+        snapshot: ({ latestId }) => {
+            unchecked.current = latestId;
+            catchUp();
+        },
+    });
 
     const exporting = useMutation({ mutationFn: () => downloadAuditExport(filter) });
 
+    // The same filter keeps its object: the entries that came live are kept while their filter is
+    // the one shown, and the query, already up to date, would not read the log again for them.
+    const show = (next: AuditFilter) =>
+        setFilter((current) => (auditSearch(current) === auditSearch(next) ? current : next));
+
     const apply = (event: FormEvent) => {
         event.preventDefault();
-        setFilter(toFilter(draft));
+        show(toFilter(draft));
     };
 
     return (
@@ -146,7 +188,7 @@ export function AuditPage() {
                             tone="ghost"
                             onClick={() => {
                                 setDraft(EMPTY);
-                                setFilter({});
+                                show({});
                             }}
                         >
                             {t.audit.clear}

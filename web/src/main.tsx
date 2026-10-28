@@ -7,7 +7,10 @@ import { createRoot } from 'react-dom/client';
 
 import { meQuery } from './api/auth';
 import { ApiError, configureSession } from './api/client';
+import { openSocket, requestTicket } from './api/live';
 import { I18nProvider } from './i18n/I18nProvider';
+import { LiveContext } from './live/context';
+import { Realtime } from './live/realtime';
 import { createPanelRouter } from './router';
 
 const queryClient = new QueryClient({
@@ -21,6 +24,12 @@ const queryClient = new QueryClient({
 });
 
 const router = createPanelRouter(queryClient);
+
+const live = new Realtime({
+    ticket: requestTicket,
+    connect: openSocket,
+    refetch: () => void queryClient.invalidateQueries(),
+});
 
 configureSession({
     // The routes' guards run again and send the user where they now belong.
@@ -43,7 +52,9 @@ createRoot(root).render(
     <StrictMode>
         <I18nProvider>
             <QueryClientProvider client={queryClient}>
-                <RouterProvider router={router} />
+                <LiveContext value={live}>
+                    <RouterProvider router={router} />
+                </LiveContext>
             </QueryClientProvider>
         </I18nProvider>
     </StrictMode>,

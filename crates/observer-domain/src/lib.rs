@@ -9,4 +9,6 @@ pub mod api;
 pub mod audit;
 pub mod delegation;
 pub mod error;
+pub mod launch;
+pub mod live;
 pub mod permissions;

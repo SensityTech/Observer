@@ -1,6 +1,7 @@
 import { infiniteQueryOptions } from '@tanstack/react-query';
 
 import { getJson, request } from './client';
+import type { AuditEntry } from './generated/AuditEntry';
 import type { AuditFilter } from './generated/AuditFilter';
 import type { AuditPage } from './generated/AuditPage';
 
@@ -29,6 +30,20 @@ export const auditQuery = (filter: AuditFilter) =>
         initialPageParam: undefined as number | undefined,
         getNextPageParam: (page) => page.next ?? undefined,
     });
+
+/** Whether the API would list the entry under the filter: a live entry joins the page only then. */
+export const matchesFilter = (entry: AuditEntry, filter: AuditFilter) =>
+    (filter.actor === undefined || entry.actorName?.toLowerCase() === filter.actor.toLowerCase()) &&
+    (filter.action === undefined || entry.action === filter.action) &&
+    (filter.outcome === undefined || entry.outcome === filter.outcome) &&
+    (filter.from === undefined || Date.parse(entry.at) >= Date.parse(filter.from)) &&
+    (filter.to === undefined || Date.parse(entry.at) < Date.parse(filter.to));
+
+/** The entries that came live above the loaded pages, newest first, without any the pages hold. */
+export const withLive = (live: AuditEntry[], loaded: AuditEntry[]) => {
+    const newest = loaded[0]?.id ?? 0;
+    return [...live.filter((entry) => entry.id > newest), ...loaded];
+};
 
 const pad = (value: number) => String(value).padStart(2, '0');
 

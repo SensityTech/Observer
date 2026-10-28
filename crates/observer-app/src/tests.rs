@@ -3,13 +3,14 @@
 use jiff::SignedDuration;
 use observer_domain::audit::{ActorKind, AuditAction, AuditEntry, AuditFilter, Outcome};
 use observer_domain::error::ErrorCode;
+use observer_domain::launch::{ExtraArgument, LaunchSettings, OneSync, StoredLaunch};
 use observer_domain::permissions::Permissions as P;
 use observer_store::{Database, StoreError, users};
 use serde_json::json;
 use tempfile::TempDir;
 use tokio::task::JoinHandle;
 
-use crate::{Accounts, AuditLog, Caller, Client, Clock, PasswordCost, SignedIn};
+use crate::{Accounts, AuditLog, Caller, Client, Clock, PasswordCost, Servers, SignedIn};
 
 const OWNER_PASSWORD: &str = "correct horse battery staple";
 
@@ -21,6 +22,7 @@ struct Lab {
     clock: Clock,
     accounts: Accounts,
     audit: AuditLog,
+    servers: Servers,
 }
 
 /// A signed-in browser: the session's two secrets and where it connects from.
@@ -41,12 +43,14 @@ impl Lab {
             .await
             .unwrap();
         let audit = AuditLog::new(db.clone(), clock.clone());
+        let servers = Servers::new(db.clone(), clock.clone());
         Self {
             _dir: dir,
             db,
             clock,
             accounts,
             audit,
+            servers,
         }
     }
 
@@ -1126,4 +1130,401 @@ async fn strangers_filling_the_hash_queue_keep_neither_a_known_network_nor_a_sig
         let refused = code(stranger.await.unwrap());
         assert!(matches!(refused, ErrorCode::InvalidCredentials | ErrorCode::Busy));
     }
+}
+
+/// A folder of the lab's host, as its platform writes paths.
+fn folder(name: &str) -> String {
+    if cfg!(windows) {
+        format!(r"C:\FXServer\{name}")
+    } else {
+        format!("/srv/fxserver/{name}")
+    }
+}
+
+fn launch_settings() -> LaunchSettings {
+    LaunchSettings {
+        build_path: folder("build"),
+        data_path: folder("server-data"),
+        cfg_file: "server.cfg".to_owned(),
+        onesync: OneSync::On,
+        auto_start: false,
+        txadmin_events: false,
+        extra_arguments: Vec::new(),
+    }
+}
+
+#[tokio::test]
+async fn launch_settings_are_stored_once_checked_with_what_changed_in_the_audit_log() {
+    let lab = Lab::new().await;
+    let owner = lab.caller(&lab.owner().await).await;
+    assert_eq!(lab.servers.launch_settings(Servers::DEFAULT).await.unwrap(), None);
+
+    let first = lab
+        .servers
+        .change_launch_settings(&owner, Servers::DEFAULT, launch_settings(), None)
+        .await
+        .unwrap();
+    let edited = LaunchSettings {
+        onesync: OneSync::Legacy,
+        extra_arguments: vec![ExtraArgument {
+            name: "sv_enforceGameBuild".to_owned(),
+            value: "3258".to_owned(),
+        }],
+        ..launch_settings()
+    };
+    let second = lab
+        .servers
+        .change_launch_settings(&owner, Servers::DEFAULT, edited.clone(), Some(1))
+        .await
+        .unwrap();
+    let again = lab
+        .servers
+        .change_launch_settings(&owner, Servers::DEFAULT, edited.clone(), Some(2))
+        .await
+        .unwrap();
+
+    assert_eq!((first.version, second.version, again.version), (1, 2, 2));
+    assert_eq!(
+        lab.servers.launch_settings(Servers::DEFAULT).await.unwrap(),
+        Some(StoredLaunch {
+            settings: edited,
+            version: 2,
+        })
+    );
+    let changes = lab.entries(AuditAction::LaunchSettingsChanged).await;
+    assert_eq!(changes.len(), 2, "saving the same settings again records nothing");
+    assert_eq!(changes[0].target.as_deref(), Some("default"));
+    assert_eq!(changes[0].actor_name.as_deref(), Some("ada"));
+    assert_eq!(
+        changes[0].details,
+        json!({
+            "onesync": { "before": "on", "after": "legacy" },
+            "extraArguments": { "set": ["sv_enforceGameBuild"], "removed": [] },
+        })
+    );
+    assert_eq!(
+        changes[1].details,
+        json!({
+            "buildPath": true,
+            "dataPath": true,
+            "cfgFile": true,
+            "onesync": { "before": null, "after": "on" },
+            "autoStart": { "before": null, "after": false },
+            "txadminEvents": { "before": null, "after": false },
+        })
+    );
+}
+
+#[tokio::test]
+async fn a_launch_change_names_the_arguments_set_and_removed_never_their_values() {
+    let lab = Lab::new().await;
+    let owner = lab.caller(&lab.owner().await).await;
+    let argument = |name: &str, value: &str| ExtraArgument {
+        name: name.to_owned(),
+        value: value.to_owned(),
+    };
+    let first = LaunchSettings {
+        extra_arguments: vec![
+            argument("sv_hostname", "Lab"),
+            argument("sv_maxclients", "48"),
+            argument("sv_projectName", "Observer"),
+        ],
+        ..launch_settings()
+    };
+    let second = LaunchSettings {
+        data_path: folder("other-data"),
+        extra_arguments: vec![
+            argument("sv_maxclients", "48"),
+            argument("sv_hostname", "Lab 2"),
+            argument("sv_enforceGameBuild", "3258"),
+        ],
+        ..launch_settings()
+    };
+    for (settings, version) in [(first, None), (second, Some(1))] {
+        lab.servers
+            .change_launch_settings(&owner, Servers::DEFAULT, settings, version)
+            .await
+            .unwrap();
+    }
+
+    let changes = lab.entries(AuditAction::LaunchSettingsChanged).await;
+    assert_eq!(
+        changes[0].details,
+        json!({
+            "dataPath": true,
+            "extraArguments": {
+                "set": ["sv_hostname", "sv_enforceGameBuild"],
+                "removed": ["sv_projectName"],
+            },
+        })
+    );
+}
+
+#[tokio::test]
+async fn a_launch_change_made_from_settings_replaced_since_is_refused() {
+    let lab = Lab::new().await;
+    let owner = lab.caller(&lab.owner().await).await;
+    lab.servers
+        .change_launch_settings(&owner, Servers::DEFAULT, launch_settings(), None)
+        .await
+        .unwrap();
+    let from_elsewhere = LaunchSettings {
+        cfg_file: "configs/live.cfg".to_owned(),
+        ..launch_settings()
+    };
+    lab.servers
+        .change_launch_settings(&owner, Servers::DEFAULT, from_elsewhere.clone(), Some(1))
+        .await
+        .unwrap();
+
+    let stale = lab
+        .servers
+        .change_launch_settings(&owner, Servers::DEFAULT, launch_settings(), Some(1))
+        .await;
+    let first_save_again = lab
+        .servers
+        .change_launch_settings(&owner, Servers::DEFAULT, launch_settings(), None)
+        .await;
+
+    assert_eq!(code(stale), ErrorCode::Conflict);
+    assert_eq!(code(first_save_again), ErrorCode::Conflict);
+    assert_eq!(
+        lab.servers.launch_settings(Servers::DEFAULT).await.unwrap(),
+        Some(StoredLaunch {
+            settings: from_elsewhere,
+            version: 2,
+        })
+    );
+    assert_eq!(lab.entries(AuditAction::LaunchSettingsChanged).await.len(), 2);
+}
+
+#[tokio::test]
+async fn launch_settings_with_an_issue_are_refused_with_every_issue_and_change_nothing() {
+    let lab = Lab::new().await;
+    let owner = lab.caller(&lab.owner().await).await;
+    let broken = LaunchSettings {
+        data_path: "server-data".to_owned(),
+        extra_arguments: vec![ExtraArgument {
+            name: "rcon_password".to_owned(),
+            value: "hunter2".to_owned(),
+        }],
+        ..launch_settings()
+    };
+
+    let refused = lab
+        .servers
+        .change_launch_settings(&owner, Servers::DEFAULT, broken, None)
+        .await;
+
+    let crate::Error::Refused(refusal) = refused.err().unwrap() else {
+        unreachable!()
+    };
+    assert_eq!(refusal.code, ErrorCode::InvalidLaunchSettings);
+    assert_eq!(
+        refusal.params["issues"],
+        json!([
+            { "field": "dataPath", "index": null, "problem": "notAbsolute" },
+            { "field": "argumentName", "index": 0, "problem": "secret" },
+        ])
+    );
+    assert_eq!(lab.servers.launch_settings(Servers::DEFAULT).await.unwrap(), None);
+    assert_eq!(lab.entries(AuditAction::LaunchSettingsChanged).await, []);
+}
+
+#[tokio::test]
+async fn only_the_owner_passes_the_owner_check_and_a_refused_change_is_audited() {
+    let lab = Lab::new().await;
+    let owner = lab.owner().await;
+    let grace = lab.user(&owner, "grace", P::all()).await;
+    let (owner, grace) = (lab.caller(&owner).await, lab.caller(&grace).await);
+
+    lab.accounts
+        .authorize_owner(&owner, "PUT", "/api/servers/default/launch")
+        .await
+        .unwrap();
+    let read = lab
+        .accounts
+        .authorize_owner(&grace, "GET", "/api/servers/default/launch")
+        .await;
+    let change = lab
+        .accounts
+        .authorize_owner(&grace, "PUT", "/api/servers/default/launch")
+        .await;
+
+    assert_eq!(code(read), ErrorCode::OwnerOnly);
+    assert_eq!(code(change), ErrorCode::OwnerOnly);
+    let denied = lab.entries(AuditAction::PermissionDenied).await;
+    assert_eq!(denied.len(), 1, "a refused read is not audited");
+    assert_eq!(denied[0].actor_name.as_deref(), Some("grace"));
+    assert_eq!(
+        denied[0].target.as_deref(),
+        Some("PUT /api/servers/default/launch")
+    );
+    assert_eq!(denied[0].details, json!({ "ownerOnly": true }));
+}
+
+impl Lab {
+    async fn redeem(&self, ticket: &str, browser: &Browser) -> Result<Caller, ErrorCode> {
+        self.accounts
+            .redeem_ticket(ticket, &browser.signed_in.token, browser.client.clone())
+            .await
+            .map_err(|error| error.code().unwrap())
+    }
+}
+
+#[tokio::test]
+async fn a_websocket_ticket_works_once_for_its_own_session() {
+    let lab = Lab::new().await;
+    let laptop = lab.owner().await;
+    let phone = lab.sign_in("ada", OWNER_PASSWORD, &office()).await.unwrap();
+    let caller = lab.caller(&laptop).await;
+
+    let ticket = lab.accounts.issue_ticket(&caller).unwrap();
+    let opened = lab.redeem(&ticket, &laptop).await.unwrap();
+    let again = lab.redeem(&ticket, &laptop).await;
+
+    assert_eq!(opened.session_id, caller.session_id);
+    assert_eq!(opened.username, "ada");
+    assert_eq!(again.err(), Some(ErrorCode::Unauthenticated));
+
+    // The same account's other session is another session: its cookie does not go with the
+    // ticket, which is spent by the attempt.
+    let ticket = lab.accounts.issue_ticket(&caller).unwrap();
+    assert_eq!(
+        lab.redeem(&ticket, &phone).await.err(),
+        Some(ErrorCode::Unauthenticated)
+    );
+    assert_eq!(
+        lab.redeem(&ticket, &laptop).await.err(),
+        Some(ErrorCode::Unauthenticated)
+    );
+    assert_eq!(
+        lab.redeem("not a ticket", &laptop).await.err(),
+        Some(ErrorCode::Unauthenticated)
+    );
+}
+
+#[tokio::test]
+async fn a_websocket_ticket_expires_after_thirty_seconds_and_dies_with_its_session() {
+    let lab = Lab::new().await;
+    let owner = lab.owner().await;
+    let caller = lab.caller(&owner).await;
+
+    let late = lab.accounts.issue_ticket(&caller).unwrap();
+    lab.clock.advance(SignedDuration::from_secs(29));
+    let in_time = lab.accounts.issue_ticket(&caller).unwrap();
+    lab.clock.advance(SignedDuration::from_secs(2));
+    assert_eq!(
+        lab.redeem(&late, &owner).await.err(),
+        Some(ErrorCode::Unauthenticated)
+    );
+    lab.redeem(&in_time, &owner).await.unwrap();
+
+    let orphan = lab.accounts.issue_ticket(&caller).unwrap();
+    lab.accounts.logout(&caller).await.unwrap();
+    assert_eq!(
+        lab.redeem(&orphan, &owner).await.err(),
+        Some(ErrorCode::Unauthenticated)
+    );
+}
+
+#[tokio::test]
+async fn a_websocket_ticket_does_not_open_before_a_temporary_password_is_replaced() {
+    let lab = Lab::new().await;
+    let owner = lab.caller(&lab.owner().await).await;
+    let created = lab
+        .accounts
+        .create_user(&owner, "grace", P::DASHBOARD_VIEW)
+        .await
+        .unwrap();
+    let grace = lab
+        .sign_in("grace", &created.temporary_password, &office())
+        .await
+        .unwrap();
+    let ticket = lab.accounts.issue_ticket(&lab.caller(&grace).await).unwrap();
+
+    assert_eq!(
+        lab.redeem(&ticket, &grace).await.err(),
+        Some(ErrorCode::PasswordChangeRequired)
+    );
+}
+
+#[tokio::test]
+async fn a_recheck_follows_the_session_and_is_announced_when_sessions_change() {
+    let lab = Lab::new().await;
+    let owner = lab.owner().await;
+    let grace = lab.user(&owner, "grace", P::DASHBOARD_VIEW | P::AUDIT_VIEW).await;
+    let (admin, grace) = (lab.caller(&owner).await, lab.caller(&grace).await);
+    let mut changes = lab.accounts.session_changes();
+    changes.mark_unchanged();
+
+    let live = lab.accounts.recheck(&grace).await.unwrap().unwrap();
+    assert_eq!(live.permissions, P::DASHBOARD_VIEW | P::AUDIT_VIEW);
+    assert!(!changes.has_changed().unwrap());
+
+    let version = lab.accounts.users().await.unwrap()[1].version;
+    lab.accounts
+        .update_user(&admin, grace.user_id, P::DASHBOARD_VIEW, version)
+        .await
+        .unwrap();
+    assert!(changes.has_changed().unwrap());
+    assert!(lab.accounts.recheck(&grace).await.unwrap().is_none());
+    changes.mark_unchanged();
+
+    // Watching is not using: a session nobody sends a request through ends after twelve hours.
+    lab.clock.advance(SignedDuration::from_hours(12));
+    assert!(lab.accounts.recheck(&admin).await.unwrap().is_none());
+    lab.accounts.logout(&admin).await.unwrap();
+    assert!(changes.has_changed().unwrap());
+}
+
+#[tokio::test]
+async fn followers_get_each_new_entry_once_in_order_from_where_the_log_ended() {
+    let lab = Lab::new().await;
+    lab.owner().await;
+    let mut early = lab.audit.follow();
+    assert_eq!(lab.audit.publish_new().await.unwrap(), 0, "setup happened before");
+
+    lab.sign_in("ada", OWNER_PASSWORD, &office()).await.unwrap();
+    // Following starts at the next publication, not at the call: nothing written meanwhile is lost.
+    let mut late = lab.audit.follow();
+    lab.accounts.reset_password_from_cli("ada").await.unwrap();
+
+    assert_eq!(lab.audit.publish_new().await.unwrap(), 2);
+    assert_eq!(lab.audit.publish_new().await.unwrap(), 0);
+    let actions = |receiver: &mut tokio::sync::broadcast::Receiver<_>| {
+        std::iter::from_fn(|| receiver.try_recv().ok())
+            .map(|entry: std::sync::Arc<AuditEntry>| entry.action)
+            .collect::<Vec<_>>()
+    };
+    let expected = [AuditAction::LoginSucceeded, AuditAction::UserPasswordReset];
+    assert_eq!(actions(&mut early), expected);
+    assert_eq!(actions(&mut late), expected);
+    assert_eq!(
+        lab.audit.latest_id().await.unwrap(),
+        Some(lab.entries(AuditAction::UserPasswordReset).await[0].id)
+    );
+}
+
+#[tokio::test]
+async fn a_follower_too_far_behind_is_told_it_missed_entries() {
+    let lab = Lab::new().await;
+    let owner = lab.owner().await;
+    lab.audit.publish_new().await.unwrap();
+    let mut slow = lab.audit.follow();
+    let caller = lab.caller(&owner).await;
+
+    for _ in 0..300 {
+        lab.accounts
+            .reauthenticate(&caller, OWNER_PASSWORD.to_owned())
+            .await
+            .unwrap();
+        lab.pause();
+    }
+    assert_eq!(lab.audit.publish_new().await.unwrap(), 300);
+
+    assert!(matches!(
+        slow.try_recv(),
+        Err(tokio::sync::broadcast::error::TryRecvError::Lagged(44))
+    ));
 }

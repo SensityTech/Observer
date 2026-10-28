@@ -17,12 +17,17 @@ pub enum ErrorCode {
     TooManyAttempts,
     /// Too many passwords are being checked at once. Params: `retryAfter`, in seconds.
     Busy,
+    /// The session already holds as many live sockets, or tickets for them, as it may: a few per
+    /// browser, one for each tab of the panel.
+    TooManySockets,
     PasswordChangeRequired,
     /// The action needs the password again; `POST /api/auth/reauth`, then retry.
     ReauthRequired,
     WrongPassword,
     /// Params: `permission`, the key of the missing permission.
     Forbidden,
+    /// Only the owner may do this, whatever permissions anyone else holds.
+    OwnerOnly,
     SelfEdit,
     OwnerProtected,
     /// Params: `permissions`, the bits the editor would grant or revoke without holding them.
@@ -40,6 +45,8 @@ pub enum ErrorCode {
     PasswordUnchanged,
     /// Params: `permissions`, the bits the catalog does not know.
     UnknownPermissions,
+    /// Params: `issues`, the `LaunchIssue`s found, one per field at most.
+    InvalidLaunchSettings,
     AlreadySetUp,
     InvalidSetupToken,
     OriginMismatch,

@@ -91,10 +91,7 @@ fn known_host(headers: &HeaderMap, names: &[String]) -> bool {
 /// `Sec-Fetch-Site: same-origin` will do.
 fn same_origin(headers: &HeaderMap) -> Result<(), Failure> {
     let same = match headers.get(header::ORIGIN) {
-        Some(origin) => headers
-            .get(header::HOST)
-            .and_then(|host| host.to_str().ok())
-            .is_some_and(|host| origin.as_bytes() == format!("http://{host}").as_bytes()),
+        Some(origin) => is_own_origin(origin, headers),
         None => headers
             .get("sec-fetch-site")
             .is_some_and(|site| site == "same-origin"),
@@ -104,6 +101,27 @@ fn same_origin(headers: &HeaderMap) -> Result<(), Failure> {
     } else {
         Err(ErrorCode::OriginMismatch.into())
     }
+}
+
+/// A browser always sends the `Origin` of the page opening a websocket, and it must be this
+/// server's exact one: no other page, the game server's included, opens a socket with the
+/// user's cookie.
+pub(crate) fn own_origin(headers: &HeaderMap) -> Result<(), Failure> {
+    if headers
+        .get(header::ORIGIN)
+        .is_some_and(|origin| is_own_origin(origin, headers))
+    {
+        Ok(())
+    } else {
+        Err(ErrorCode::OriginMismatch.into())
+    }
+}
+
+fn is_own_origin(origin: &HeaderValue, headers: &HeaderMap) -> bool {
+    headers
+        .get(header::HOST)
+        .and_then(|host| host.to_str().ok())
+        .is_some_and(|host| origin.as_bytes() == format!("http://{host}").as_bytes())
 }
 
 fn json(headers: &HeaderMap) -> Result<(), Failure> {
