@@ -1,8 +1,8 @@
 import { useInfiniteQuery, useMutation } from '@tanstack/react-query';
 import { ChevronDown, Clock, Download, Filter } from 'lucide-react';
-import { useId, useState, type FormEvent, type ReactNode } from 'react';
+import { useId, useRef, useState, type FormEvent, type ReactNode } from 'react';
 
-import { auditQuery, downloadAuditExport } from '../api/audit';
+import { auditQuery, downloadAuditExport, matchesFilter, withLive } from '../api/audit';
 import { auditDetails } from '../audit/details';
 import type { AuditAction } from '../api/generated/AuditAction';
 import type { AuditEntry } from '../api/generated/AuditEntry';
@@ -17,6 +17,7 @@ import { errorMessage } from '../i18n/errors';
 import { useI18n } from '../i18n/I18nProvider';
 import type { Messages } from '../i18n/en';
 import { cn } from '../lib/cn';
+import { useTopic } from '../live/context';
 
 const OUTCOME_TONE = { success: 'success', failure: 'danger', denied: 'warning' } as const;
 
@@ -38,7 +39,31 @@ export function AuditPage() {
     const [draft, setDraft] = useState<Draft>(EMPTY);
     const [filter, setFilter] = useState<AuditFilter>({});
     const audit = useInfiniteQuery(auditQuery(filter));
-    const entries = audit.data?.pages.flatMap((page) => page.entries) ?? [];
+    const loaded = audit.data?.pages.flatMap((page) => page.entries) ?? [];
+    // Entries written since the pages were read, newest first, kept while their filter applies.
+    const [live, setLive] = useState<{ filter: AuditFilter; entries: AuditEntry[] }>({ filter, entries: [] });
+    const liveEntries = live.filter === filter ? live.entries : [];
+    const entries = withLive(liveEntries, loaded);
+    const snapshots = useRef(0);
+
+    useTopic('audit', {
+        event: (entry) => {
+            if (matchesFilter(entry, filter)) {
+                setLive((current) => ({
+                    filter,
+                    entries: [entry, ...(current.filter === filter ? current.entries : [])],
+                }));
+            }
+        },
+        // The first snapshot comes with the page's own first read. A later one follows a lost
+        // event or a lost link: the log is read again when it holds more than the page shows.
+        snapshot: ({ latestId }) => {
+            snapshots.current += 1;
+            if (snapshots.current > 1 && latestId !== null && latestId > (entries[0]?.id ?? 0)) {
+                void audit.refetch();
+            }
+        },
+    });
 
     const exporting = useMutation({ mutationFn: () => downloadAuditExport(filter) });
 
