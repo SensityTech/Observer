@@ -18,8 +18,11 @@ export type LineRow = {
     search: string;
 };
 
-/** Where lines are missing: they left Observer's memory before the panel got them. */
-export type GapRow = { type: 'gap'; seq: number };
+/**
+ * Where lines are missing: they left Observer's memory before the panel got them (`missed`), or
+ * Observer restarted, and what the earlier one printed last only its log files hold (`restarted`).
+ */
+export type GapRow = { type: 'gap'; seq: number; reason: 'missed' | 'restarted' };
 
 export type Row = LineRow | GapRow;
 
@@ -79,17 +82,23 @@ export class ConsoleStore {
     /** How many of them were stderr. */
     errors = () => this.#errors;
 
-    snapshot({ lines, gap }: ConsoleSnapshot) {
-        const first = lines.at(0);
-        if (gap && first !== undefined && this.#last !== null && first[0] <= this.#last) {
-            // Numbers below the panel's own: another Observer's, which keeps none of these lines.
+    snapshot({ lines, gap, restarted, last }: ConsoleSnapshot) {
+        if (restarted && this.#last !== null && last <= this.#last) {
+            // An Observer numbering below the panel's own lines, its clock set back: nothing orders
+            // its lines after these.
             this.#rows = [];
             this.#last = null;
         }
-        if (gap && this.#rows.length > 0) {
-            this.#rows = [...this.#rows, { type: 'gap', seq: (this.#last ?? 0) + 0.5 }];
+        if ((gap || restarted) && this.#rows.length > 0) {
+            const reason = restarted ? 'restarted' : 'missed';
+            this.#rows = [...this.#rows, { type: 'gap', seq: (this.#last ?? 0) + 0.5, reason }];
         }
         this.append(lines);
+        // Even with no line, the next subscription resumes from Observer's own last number, which
+        // it knows to be its own.
+        if (this.#last === null || last > this.#last) {
+            this.#last = last;
+        }
     }
 
     append(lines: ConsoleLine[]) {

@@ -23,13 +23,29 @@ const setup = (limit?: number) => {
     return { store, frame };
 };
 
-const seqs = (rows: readonly Row[]) => rows.map((row) => (row.type === 'line' ? row.seq : 'gap'));
+const seqs = (rows: readonly Row[]) => rows.map((row) => (row.type === 'line' ? row.seq : row.reason));
+
+/** A snapshot of this Observer's, which gave numbers up to the last line's. */
+const snapshot = (lines: ConsoleLine[], gap = false, last = lines.at(-1)?.[0] ?? 0) => ({
+    lines,
+    gap,
+    restarted: false,
+    last,
+});
+
+/** A snapshot of an Observer that started after the panel's last line. */
+const restarted = (lines: ConsoleLine[], last = lines.at(-1)?.[0] ?? 0) => ({
+    lines,
+    gap: false,
+    restarted: true,
+    last,
+});
 
 describe('ConsoleStore', () => {
     it('should keep the lines in order, parsed once, and resume after the last one', () => {
         const { store, frame } = setup();
 
-        store.snapshot({ lines: [line(1), line(2, `${ESC}[91mboom${ESC}[0m`, 'stderr')], gap: false });
+        store.snapshot(snapshot([line(1), line(2, `${ESC}[91mboom${ESC}[0m`, 'stderr')]));
         store.append([line(3)]);
         frame();
 
@@ -62,9 +78,9 @@ describe('ConsoleStore', () => {
 
     it('should drop the lines it already holds when a resumed snapshot repeats them', () => {
         const { store, frame } = setup();
-        store.snapshot({ lines: [line(1), line(2)], gap: false });
+        store.snapshot(snapshot([line(1), line(2)]));
 
-        store.snapshot({ lines: [line(2), line(3)], gap: false });
+        store.snapshot(snapshot([line(2), line(3)]));
         store.append([line(3), line(4)]);
         frame();
 
@@ -73,21 +89,43 @@ describe('ConsoleStore', () => {
 
     it('should mark where lines are missing after a resumption that came too late', () => {
         const { store, frame } = setup();
-        store.snapshot({ lines: [line(1), line(2)], gap: false });
+        store.snapshot(snapshot([line(1), line(2)]));
 
-        store.snapshot({ lines: [line(40), line(41)], gap: true });
+        store.snapshot(snapshot([line(40), line(41)], true));
         frame();
 
-        expect(seqs(store.getRows())).toEqual([1, 2, 'gap', 40, 41]);
+        expect(seqs(store.getRows())).toEqual([1, 2, 'missed', 40, 41]);
         expect(store.since()).toBe(41);
     });
 
-    it('should start over when the lines come from another Observer', () => {
+    it('should mark where Observer restarted, once however often the link comes back', () => {
         const { store, frame } = setup();
-        store.snapshot({ lines: [line(900), line(901)], gap: false });
+        store.snapshot(snapshot([line(1), line(2)]));
 
-        // An Observer started since, numbering from below what the panel holds.
-        store.snapshot({ lines: [line(5), line(6)], gap: true });
+        // The new Observer has printed nothing yet: its last number is below its first line.
+        store.snapshot(restarted([], 999));
+        store.snapshot(snapshot([], false, 999));
+        store.snapshot(snapshot([line(1000)], false, 1000));
+        frame();
+
+        expect(seqs(store.getRows())).toEqual([1, 2, 'restarted', 1000]);
+        expect(store.since()).toBe(1000);
+    });
+
+    it('should resume from the last number Observer gave, even without a line', () => {
+        const { store } = setup();
+
+        store.snapshot(snapshot([], false, 499));
+
+        expect(store.since()).toBe(499);
+    });
+
+    it('should start over when another Observer numbers below what it holds', () => {
+        const { store, frame } = setup();
+        store.snapshot(snapshot([line(900), line(901)]));
+
+        // Its clock was set back.
+        store.snapshot(restarted([line(5), line(6)]));
         frame();
 
         expect(seqs(store.getRows())).toEqual([5, 6]);

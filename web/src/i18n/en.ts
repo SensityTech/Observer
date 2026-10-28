@@ -266,6 +266,8 @@ export const en = {
         empty: 'No line matches the search and the streams shown.',
         nothingYet: 'FXServer has printed nothing yet.',
         gap: 'Earlier lines are no longer in Observer’s memory: the log files keep them.',
+        restarted:
+            'Observer restarted here: whatever the previous one printed after the line above is in the log files.',
         newLines: (lines: number) => count(lines, { one: 'new line', other: 'new lines' }),
         commandLabel: 'Command to send to FXServer',
         send: 'to send',

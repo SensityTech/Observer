@@ -6,7 +6,15 @@ import type { ConsoleLine } from "./ConsoleLine";
  */
 export type ConsoleSnapshot = { lines: Array<ConsoleLine>, 
 /**
- * Lines after `since` are missing: they left Observer's memory, or `since` came from an
- * earlier Observer.
+ * Lines of this Observer after `since` are missing: they left its memory.
  */
-gap: boolean, };
+gap: boolean, 
+/**
+ * `since` came from an earlier Observer: what that one printed after it is in the log files.
+ */
+restarted: boolean, 
+/**
+ * The number of the newest line this Observer gave, sent or not, which the next `sub`
+ * resumes after.
+ */
+last: number, };

@@ -397,9 +397,10 @@ async fn the_console_topic_resumes_after_the_last_line_the_panel_holds() {
     let next = receive(&mut socket).await;
     let from_elsewhere = json!({ "type": "sub", "topic": "console", "since": seq + 1_000_000_000 });
     send(&mut socket, from_elsewhere).await;
-    let gap = receive(&mut socket).await;
+    let restarted = receive(&mut socket).await;
 
     assert_eq!(first["data"]["gap"], false);
+    assert_eq!(first["data"]["last"], seq);
     assert_eq!(first["data"]["lines"].as_array().unwrap().len(), 1);
     assert_eq!(line[3], "observer");
     assert_eq!(line[4], "supervisor");
@@ -407,10 +408,17 @@ async fn the_console_topic_resumes_after_the_last_line_the_panel_holds() {
         line[5].as_str().unwrap().starts_with("cannot start FXServer"),
         "{line}"
     );
-    assert_eq!(resumed["data"], json!({ "lines": [], "gap": false }));
+    assert_eq!(
+        resumed["data"],
+        json!({ "lines": [], "gap": false, "restarted": false, "last": seq })
+    );
     assert_eq!(next["type"], "event");
     assert_eq!(next["topic"], "console");
     assert_eq!(next["data"]["lines"][0][0], seq + 1);
-    assert_eq!(gap["data"]["gap"], true);
-    assert_eq!(gap["data"]["lines"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        (&restarted["data"]["gap"], &restarted["data"]["restarted"]),
+        (&json!(false), &json!(true)),
+        "a number this Observer never gave is an earlier one's"
+    );
+    assert_eq!(restarted["data"]["lines"].as_array().unwrap().len(), 2);
 }

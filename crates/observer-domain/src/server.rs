@@ -205,9 +205,13 @@ pub struct ConsoleLine(
 #[ts(export)]
 pub struct ConsoleSnapshot {
     pub lines: Vec<ConsoleLine>,
-    /// Lines after `since` are missing: they left Observer's memory, or `since` came from an
-    /// earlier Observer.
+    /// Lines of this Observer after `since` are missing: they left its memory.
     pub gap: bool,
+    /// `since` came from an earlier Observer: what that one printed after it is in the log files.
+    pub restarted: bool,
+    /// The number of the newest line this Observer gave, sent or not, which the next `sub`
+    /// resumes after.
+    pub last: u64,
 }
 
 /// New console lines, in order.

@@ -170,6 +170,7 @@ export function ConsolePage() {
 
     const canDownload = allows(me, Permission.LogsDownload);
     const empty = visible.length === 0;
+    const shownLines = visible.filter((row) => row.type === 'line').length;
 
     return (
         <>
@@ -245,7 +246,7 @@ export function ConsolePage() {
                 <section
                     ref={scroller}
                     className="console-out"
-                    aria-label={t.console.output(visible.length)}
+                    aria-label={t.console.output(shownLines)}
                     // oxlint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- the keyboard scrolls the output once it can focus it
                     tabIndex={0}
                     onScroll={onScroll}
@@ -274,7 +275,11 @@ export function ConsolePage() {
                                         style={{ transform: `translateY(${item.start}px)` }}
                                     >
                                         {row.type === 'gap' ? (
-                                            <p className="ln-gap">{t.console.gap}</p>
+                                            <p className="ln-gap">
+                                                {row.reason === 'restarted'
+                                                    ? t.console.restarted
+                                                    : t.console.gap}
+                                            </p>
                                         ) : (
                                             <ConsoleRow row={row} />
                                         )}

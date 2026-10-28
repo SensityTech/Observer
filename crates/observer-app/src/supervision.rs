@@ -352,6 +352,8 @@ impl Supervision {
         let snapshot = ConsoleSnapshot {
             lines: backlog.iter().map(|line| wire(line)).collect(),
             gap,
+            restarted: subscription.restarted,
+            last: subscription.last,
         };
         let lines = ConsoleLines {
             live: subscription.live,

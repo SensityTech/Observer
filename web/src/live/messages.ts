@@ -225,7 +225,12 @@ const isSnapshotData = (topic: Topic, data: unknown) => {
         case 'server.status':
             return isServerStatus(data);
         case 'console':
-            return isLines(data.lines) && typeof data.gap === 'boolean';
+            return (
+                isLines(data.lines) &&
+                typeof data.gap === 'boolean' &&
+                typeof data.restarted === 'boolean' &&
+                isCount(data.last)
+            );
     }
 };
 

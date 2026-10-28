@@ -46,7 +46,11 @@ describe('parseServerMessage', () => {
                 topic: 'server.status',
                 data: { ...STATUS, state: 'stopped', cause: { kind: 'spawnFailed', reason: 'notABuild' } },
             },
-            { type: 'snapshot', topic: 'console', data: { lines: [LINE], gap: true } },
+            {
+                type: 'snapshot',
+                topic: 'console',
+                data: { lines: [LINE], gap: true, restarted: false, last: LINE[0] },
+            },
             {
                 type: 'event',
                 topic: 'console',
@@ -82,7 +86,12 @@ describe('parseServerMessage', () => {
                 topic: 'server.status',
                 data: { ...ONLINE, players: { online: -1, max: null } },
             },
-            { type: 'snapshot', topic: 'console', data: { lines: [LINE] } },
+            { type: 'snapshot', topic: 'console', data: { lines: [LINE], gap: false } },
+            {
+                type: 'snapshot',
+                topic: 'console',
+                data: { lines: [LINE], gap: false, restarted: false, last: -1 },
+            },
             { type: 'event', topic: 'console', data: { lines: [LINE.slice(0, 6)] } },
             {
                 type: 'event',
