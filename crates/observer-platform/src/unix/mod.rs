@@ -1,5 +1,6 @@
 pub mod leftovers;
 pub(crate) mod processes;
+pub(crate) mod sockets;
 pub mod threads;
 pub(crate) mod usage;
 

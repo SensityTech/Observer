@@ -2,11 +2,12 @@
 //! stderr and file descriptor 3, owning its whole process tree, and the console and signal plumbing
 //! around it; and for installing builds, the free space of a volume and the signature check of
 //! FXServer.exe; for the statistics, what the tree, Observer and the host use; for the diagnostics,
-//! the processes the tree starts and a picture of a hung server. The only
+//! the processes the tree starts, the sockets they hold and a picture of a hung server. The only
 //! crate allowed to use `unsafe` outside test tools.
 #![allow(unsafe_code)]
 
 mod processes;
+mod sockets;
 mod stream;
 #[cfg(unix)]
 mod unix;
@@ -22,6 +23,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::watch;
 
 pub use processes::{ProcessInfo, TreeChange, TreeChanges};
+pub use sockets::{Protocol, Socket, SocketState, sockets};
 pub use stream::{Output, Stdin};
 #[cfg(unix)]
 pub use unix::ProcessTree;
