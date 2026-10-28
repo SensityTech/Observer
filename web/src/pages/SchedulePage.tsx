@@ -65,7 +65,15 @@ const ONCE_PRESETS = [5, 15, 30];
 const ONCE_MAX_MINUTES = 1440;
 const MAX_WARNING_MINUTES = 240;
 
-type Outcome = { tone: 'neutral' | 'success' | 'warning' | 'danger'; message: string };
+type Outcome = {
+    tone: 'neutral' | 'success' | 'warning' | 'danger';
+    message: string;
+    /** The next restart and the single one it was said of, by `restartsOf`. */
+    about?: string;
+};
+
+/** What an outcome of the Next restart card holds for: once these move on, it no longer does. */
+const restartsOf = (status: ScheduleStatus) => `${status.next?.at ?? ''} ${status.oneOff?.at ?? ''}`;
 
 /** A schedule time in the schedule's zone, as every screen shows it. */
 const useZoned = (zone: string) => {
@@ -223,6 +231,14 @@ function NextRestart({
     const running = server !== null && server.state !== 'stopped' && server.state !== 'crashLoop';
     const next = schedule.next;
     const skipped = schedule.upcoming.find((occurrence) => occurrence.skipped?.kind === 'manual');
+    const restarts = restartsOf(schedule);
+    const [seen, setSeen] = useState(restarts);
+    if (seen !== restarts) {
+        setSeen(restarts);
+        if (outcome !== null && outcome.about !== restarts) {
+            setOutcome(null);
+        }
+    }
 
     const action = useMutation({
         mutationFn: ({
@@ -236,12 +252,17 @@ function NextRestart({
             refocus.current = document.activeElement !== document.body;
             setOutcome(null);
         },
-        onSuccess: (status, { done }) => setOutcome({ tone: 'success', message: done(status) }),
+        onSuccess: (status, { done }) =>
+            setOutcome({ tone: 'success', message: done(status), about: restartsOf(status) }),
         onError: (error, { label }) =>
-            setOutcome({ tone: 'danger', message: t.schedule.failed(label, errorMessage(t, error)) }),
+            setOutcome({
+                tone: 'danger',
+                message: t.schedule.failed(label, errorMessage(t, error)),
+                about: restarts,
+            }),
     });
     const blocked = (label: string, reason: string) =>
-        setOutcome({ tone: 'warning', message: t.schedule.unavailable(label, reason) });
+        setOutcome({ tone: 'warning', message: t.schedule.unavailable(label, reason), about: restarts });
     const pending = (label: string) => action.isPending && action.variables?.label === label;
     const planReason = canPlan ? null : t.schedule.notPermittedPlan;
     const skipReason =
@@ -423,6 +444,7 @@ function NextRestart({
                         status.oneOff !== null &&
                         setOutcome({
                             tone: 'success',
+                            about: restartsOf(status),
                             message: t.schedule.planned(
                                 `${zoned.day(status.oneOff.at)} ${zoned.clock(status.oneOff.at)}`,
                             ),

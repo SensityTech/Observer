@@ -263,6 +263,38 @@ describe('SchedulePage', () => {
         live.stop();
     });
 
+    it('should drop what an action did once the next restart moves on', async () => {
+        const planned: ScheduleStatus = {
+            ...SCHEDULE,
+            next: { at: '2026-10-28T22:15:00Z', source: 'oneOff', by: 'kenji', delayedFrom: null },
+            oneOff: { at: '2026-10-28T22:15:00Z', by: 'kenji' },
+        };
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(
+                async () =>
+                    new Response(JSON.stringify(planned), {
+                        status: 200,
+                        headers: { 'content-type': 'application/json' },
+                    }),
+            ),
+        );
+        const { getByRole, findByText, queryByText, publish, live } = await page('19');
+        const said = en.schedule.planned('Wed 28 Oct 23:15');
+
+        fireEvent.click(getByRole('button', { name: en.schedule.restartOnce }));
+        fireEvent.click(within(getByRole('dialog')).getByRole('button', { name: en.schedule.onceSubmit }));
+        const outcome = await findByText(said);
+        publish(planned);
+        const stays = queryByText(said);
+        publish(SCHEDULE);
+
+        expect(outcome).not.toBeNull();
+        expect(stays).not.toBeNull();
+        expect(queryByText(said)).toBeNull();
+        live.stop();
+    });
+
     it('should count the changes typed in the save bar', async () => {
         const { getByRole, getByText, queryByText, live } = await page('11');
         expect(queryByText(en.schedule.changes(1))).toBeNull();
