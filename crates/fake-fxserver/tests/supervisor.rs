@@ -424,14 +424,14 @@ async fn a_restart_stops_the_server_then_starts_a_new_generation() {
 
     assert_eq!(
         lab.state(State::Stopping).await,
-        Cause::Requested {
+        Cause::Restart {
             by: "test".to_owned()
         }
     );
     lab.console_until("-> Quitting: restart").await;
     assert_eq!(
         lab.state(State::Starting).await,
-        Cause::Requested {
+        Cause::Restart {
             by: "test".to_owned()
         }
     );

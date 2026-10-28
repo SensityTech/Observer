@@ -195,7 +195,9 @@ export const en = {
         started: (by: string) => `Started by ${by}.`,
         stopped: (by: string) => `Stopped by ${by}.`,
         stopping: (by: string) => `Stopped by ${by}: resources are told first, then FXServer quits.`,
-        restarting: (by: string) => `Restarted by ${by}.`,
+        restarting: (by: string) =>
+            `Restarting, as ${by} asked: resources are told first, then FXServer quits and starts again.`,
+        restarted: (by: string) => `Restarted by ${by}.`,
         observer: 'Observer',
         recovery: 'Started again after a failure.',
         ready: 'Ready: its HTTP endpoint answers and the observer bridge reports in.',

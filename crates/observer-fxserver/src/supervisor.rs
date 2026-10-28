@@ -185,7 +185,12 @@ pub enum EventKind {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Cause {
+    /// A start or a stop someone asked for.
     Requested {
+        by: String,
+    },
+    /// A restart someone asked for: its stop, then the start that follows.
+    Restart {
         by: String,
     },
     /// An automatic restart after a failure.
@@ -761,7 +766,7 @@ impl Actor {
                 Ok(())
             }
             Phase::Running => {
-                let cause = Cause::Requested { by: by.clone() };
+                let cause = Cause::Restart { by: by.clone() };
                 self.begin_stop(StopReason::Restart, cause, After::Restart { by }, false);
                 Ok(())
             }
@@ -836,7 +841,7 @@ impl Actor {
             return;
         };
         let by = match &cause {
-            Cause::Requested { by } => by.clone(),
+            Cause::Requested { by } | Cause::Restart { by } => by.clone(),
             _ => "observer".to_owned(),
         };
         run.after = Some(after);
@@ -1245,7 +1250,7 @@ impl Actor {
                     self.set_state(State::Stopped, Cause::Exited { description });
                 }
                 After::Restart { by } => {
-                    let _ = self.spawn(Cause::Requested { by }).await;
+                    let _ = self.spawn(Cause::Restart { by }).await;
                 }
                 After::Exit => {
                     self.phase = Phase::Idle;

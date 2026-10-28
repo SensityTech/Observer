@@ -57,6 +57,12 @@ describe('causeText', () => {
 
         expect(causeText(en, status({ state: 'starting', cause: by }))).toBe('Started by ada.');
         expect(causeText(en, status({ state: 'stopped', cause: by }))).toBe('Stopped by ada.');
+        expect(causeText(en, status({ state: 'stopping', cause: { kind: 'restart', by: 'ada' } }))).toBe(
+            'Restarting, as ada asked: resources are told first, then FXServer quits and starts again.',
+        );
+        expect(causeText(en, status({ state: 'starting', cause: { kind: 'restart', by: 'ada' } }))).toBe(
+            'Restarted by ada.',
+        );
         expect(
             causeText(en, status({ state: 'starting', cause: { kind: 'requested', by: 'observer' } })),
         ).toBe('Started by Observer.');

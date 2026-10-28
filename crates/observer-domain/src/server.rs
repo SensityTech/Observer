@@ -29,8 +29,12 @@ pub enum ServerState {
 #[serde(tag = "kind", rename_all = "camelCase")]
 #[ts(export)]
 pub enum StateCause {
-    /// A start, stop or restart. `by` is a username, or `observer` for its own.
+    /// A start or a stop. `by` is a username, or `observer` for its own.
     Requested {
+        by: String,
+    },
+    /// A restart someone asked for: its stop, then the start that follows.
+    Restart {
         by: String,
     },
     /// An automatic restart after a failure.

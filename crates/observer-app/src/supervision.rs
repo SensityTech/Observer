@@ -585,6 +585,7 @@ fn server_status(
 fn state_cause(cause: &Cause) -> StateCause {
     match cause.clone() {
         Cause::Requested { by } => StateCause::Requested { by },
+        Cause::Restart { by } => StateCause::Restart { by },
         Cause::Recovery => StateCause::Recovery,
         Cause::Ready => StateCause::Ready,
         Cause::Recovered => StateCause::Recovered,

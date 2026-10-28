@@ -43,6 +43,10 @@ export const causeText = (t: Messages, status: ServerStatus): string | null => {
                 return words.stopping(by(cause.by));
             }
             return status.state === 'stopped' ? words.stopped(by(cause.by)) : words.started(by(cause.by));
+        case 'restart':
+            return status.state === 'stopping'
+                ? words.restarting(by(cause.by))
+                : words.restarted(by(cause.by));
         case 'recovery':
             return words.recovery;
         case 'ready':

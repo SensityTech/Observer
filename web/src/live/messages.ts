@@ -100,6 +100,7 @@ type Shape = 'text' | 'count' | 'problems' | 'hang' | 'spawnFailure';
 /** What each kind of cause carries besides its kind. */
 const CAUSE_FIELDS = {
     requested: { by: 'text' },
+    restart: { by: 'text' },
     recovery: {},
     ready: {},
     recovered: {},
