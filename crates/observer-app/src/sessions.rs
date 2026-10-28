@@ -147,7 +147,7 @@ pub(crate) fn open(
 
 impl Accounts {
     pub async fn login(&self, username: &str, password: String, client: &Client) -> Result<SignedIn, Error> {
-        // A password typed into the username field should not end up whole in the audit log.
+        // Bounds the throttle's key; the audit log only ever names existing accounts.
         let username: String = username.chars().take(64).collect();
         let network = throttle::network(client.ip);
         let attempt = self.attempts.reserve(&network)?;
@@ -431,7 +431,7 @@ impl Accounts {
                 };
                 let (row, closed) = throttle::record_refused(row, now);
                 if let Some(failures) = closed {
-                    Record::login_failures(&failures).write(tx, now)?;
+                    Record::login_failures(tx, &failures)?.write(tx, now)?;
                 }
                 login_failures::save(tx, &row)?;
                 Ok(Some(wait))
@@ -464,7 +464,7 @@ impl Accounts {
                 let row = login_failures::get(tx, &username, &network)?;
                 let (row, closed) = throttle::record_failure(row, &username, &network, now);
                 if let Some(failures) = closed {
-                    Record::login_failures(&failures).write(tx, now)?;
+                    Record::login_failures(tx, &failures)?.write(tx, now)?;
                 }
                 login_failures::save(tx, &row)?;
                 Ok(())

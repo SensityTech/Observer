@@ -959,3 +959,34 @@ async fn a_change_the_delegation_rules_refuse_is_audited_with_its_reason() {
     assert_eq!(denied[2].details["userId"], json!(operator_id));
     assert_eq!(denied[0].actor_name.as_deref(), Some("grace"));
 }
+
+#[tokio::test]
+async fn a_username_naming_no_account_stays_out_of_the_audit_log() {
+    let lab = Lab::new().await;
+    lab.owner().await;
+    lab.sign_in("My owner password 123!", "", &office())
+        .await
+        .unwrap_err();
+    lab.pause();
+    lab.sign_in("ADA", "guess guess guess", &home())
+        .await
+        .unwrap_err();
+
+    lab.clock.advance(SignedDuration::from_mins(15));
+    lab.accounts.sweep().await.unwrap();
+
+    let failed = lab.entries(AuditAction::LoginFailed).await;
+    let unknown = failed
+        .iter()
+        .find(|entry| entry.ip.as_deref() == Some("198.51.100.20"))
+        .unwrap();
+    assert_eq!(unknown.target, None);
+    assert_eq!(unknown.details.get("username"), None);
+    assert_eq!(unknown.details["failures"], json!(1));
+    let known = failed
+        .iter()
+        .find(|entry| entry.ip.as_deref() == Some("203.0.113.7"))
+        .unwrap();
+    assert_eq!(known.target.as_deref(), Some("ada"));
+    assert_eq!(known.details["username"], json!("ada"));
+}

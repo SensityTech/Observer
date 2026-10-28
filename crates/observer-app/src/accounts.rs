@@ -55,7 +55,7 @@ impl Accounts {
                 }
                 for mut row in login_failures::unaudited_since_before(tx, now - throttle::WINDOW)? {
                     if let Some(failures) = throttle::take_unaudited(&mut row) {
-                        Record::login_failures(&failures).write(tx, now)?;
+                        Record::login_failures(tx, &failures)?.write(tx, now)?;
                         login_failures::save(tx, &row)?;
                     }
                 }
@@ -103,7 +103,7 @@ pub(crate) fn clear_failures(
 ) -> Result<(), Error> {
     if let Some(mut row) = login_failures::get(conn, username, network)? {
         if let Some(failures) = throttle::take_unaudited(&mut row) {
-            Record::login_failures(&failures).write(conn, now)?;
+            Record::login_failures(conn, &failures)?.write(conn, now)?;
         }
         login_failures::delete(conn, username, network)?;
     }

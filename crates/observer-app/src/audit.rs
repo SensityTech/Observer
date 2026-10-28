@@ -5,7 +5,7 @@ use jiff::{SignedDuration, Timestamp};
 use observer_domain::audit::{ActorKind, AuditAction, AuditEntry, AuditFilter, AuditPage, Outcome};
 use observer_domain::error::ErrorCode;
 use observer_store::audit::{self, NewAuditEntry};
-use observer_store::users::UserRow;
+use observer_store::users::{self, UserRow};
 use observer_store::{Connection, Database, StoreError, settings};
 use serde_json::{Value, json};
 
@@ -62,21 +62,27 @@ impl Record {
         Self::new(action, kind)
     }
 
-    /// The failures of one closed window, as a single entry.
-    pub(crate) fn login_failures(failures: &Unaudited) -> Self {
-        Self {
-            ip: Some(failures.network.clone()),
-            target: Some(failures.username.clone()),
-            outcome: Outcome::Failure,
-            details: json!({
-                "username": failures.username,
-                "network": failures.network,
-                "failures": failures.failures,
-                "firstAt": failures.first,
-                "lastAt": failures.last,
-            }),
-            ..Self::new(AuditAction::LoginFailed, ActorKind::Anonymous)
+    /// The failures of one closed window, as a single entry. A username that names no account
+    /// is left out: it is as likely to be a password typed in the wrong field, and the audit log
+    /// keeps no secret.
+    pub(crate) fn login_failures(conn: &Connection, failures: &Unaudited) -> Result<Self, StoreError> {
+        let mut details = json!({
+            "network": failures.network,
+            "failures": failures.failures,
+            "firstAt": failures.first,
+            "lastAt": failures.last,
+        });
+        let account = users::find(conn, &failures.username)?.map(|user| user.username);
+        if let Some(username) = &account {
+            details["username"] = json!(username);
         }
+        Ok(Self {
+            ip: Some(failures.network.clone()),
+            target: account,
+            outcome: Outcome::Failure,
+            details,
+            ..Self::new(AuditAction::LoginFailed, ActorKind::Anonymous)
+        })
     }
 
     fn user(id: i64, name: &str, client: &Client, action: AuditAction) -> Self {

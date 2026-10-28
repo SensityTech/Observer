@@ -200,7 +200,7 @@ impl Accounts {
                 for mut row in login_failures::for_username(tx, &user.username)? {
                     locked += usize::from(throttle::locked_for(&row, now).is_some());
                     if let Some(failures) = throttle::take_unaudited(&mut row) {
-                        Record::login_failures(&failures).write(tx, now)?;
+                        Record::login_failures(tx, &failures)?.write(tx, now)?;
                     }
                 }
                 login_failures::delete_for_username(tx, &user.username)?;
