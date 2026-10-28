@@ -196,6 +196,7 @@ impl Accounts {
                 users::update(tx, &user)?;
                 let signed_in = open(tx, &user, &client, now)?;
                 Record::signed_in(&user, &client, AuditAction::LoginSucceeded)
+                    .target(&user.username)
                     .details(json!({ "sessionId": signed_in.session_id }))
                     .write(tx, now)?;
                 Ok(signed_in)
