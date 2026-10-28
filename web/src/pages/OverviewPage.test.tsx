@@ -122,6 +122,9 @@ const page = async () => {
     return { ...view, client, live, say, drop: () => act(() => socket?.close(1006)) };
 };
 
+/** The tile's figure with its unit, as it reads. */
+const figure = (label: string) => document.querySelector(`section[aria-label="${label}"] p`)?.textContent;
+
 const tile = (label: string) => {
     const section = document.querySelector<HTMLElement>(`section[aria-label="${label}"]`);
     if (section === null) {
@@ -198,6 +201,16 @@ describe('OverviewPage', () => {
         const players = tile(en.tiles.players.label);
         expect(players.getAllByText('n/a').length).toBeGreaterThanOrEqual(2);
         expect(players.queryByText('0')).toBeNull();
+        for (const label of [
+            en.tiles.players.label,
+            en.tiles.tick.label,
+            en.tiles.cpu.label,
+            en.tiles.memory.label,
+            en.tiles.host.label,
+            en.tiles.observer.label,
+        ]) {
+            expect(figure(label), label).toBe(en.tiles.unknown);
+        }
         live.stop();
     });
 

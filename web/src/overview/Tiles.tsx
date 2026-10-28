@@ -191,7 +191,7 @@ function TickTile({ latest, trend, hour }: TileProps & { hour: MetricsSeries | n
             icon={Activity}
             label={t.tiles.tick.label}
             value={shown('mainTick', (ms) => split(format.milliseconds(ms))[0])}
-            unit={t.tiles.tick.unit}
+            unit={value('mainTick') === null ? undefined : t.tiles.tick.unit}
             facts={[
                 [t.tiles.tick.overBudget, shown('mainOverBudget', format.percent)],
                 [
@@ -223,7 +223,7 @@ function CpuTile({ latest, trend }: TileProps) {
             icon={Cpu}
             label={t.tiles.cpu.label}
             value={shown('fxsCpu', format.percent)}
-            unit={t.tiles.cpu.unit}
+            unit={value('fxsCpu') === null ? undefined : t.tiles.cpu.unit}
             facts={[
                 [
                     t.tiles.cpu.machine,
@@ -302,7 +302,7 @@ function HostTile({ latest, trend }: TileProps) {
             icon={Server}
             label={t.tiles.host.label}
             value={shown('hostCpu', format.percent)}
-            unit={t.tiles.host.unit}
+            unit={value('hostCpu') === null ? undefined : t.tiles.host.unit}
             facts={[
                 [
                     t.tiles.host.memory,
