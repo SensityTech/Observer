@@ -77,12 +77,15 @@ export function ConsolePage() {
     const [logsOpen, setLogsOpen] = useState(false);
     const [announcement, setAnnouncement] = useState('');
     const scroller = useRef<HTMLDivElement>(null);
+    // What the screen reader summary counts from: the backlog of the first snapshot is not news.
+    const summarised = useRef<{ received: number; errors: number } | null>(null);
 
     useTopic('console', {
         snapshot: (data) => {
             setRefused(false);
             setLoaded(true);
             store.snapshot(data);
+            summarised.current ??= { received: store.received(), errors: store.errors() };
         },
         event: (data) => store.append(data.lines),
         refused: () => setRefused(true),
@@ -157,11 +160,14 @@ export function ConsolePage() {
     const unseen = frozen === null ? 0 : store.received() - frozen.received;
 
     // A short summary now and then, rather than a live region a screen reader would drown in.
-    const summarised = useRef({ received: 0, errors: 0 });
     useEffect(() => {
         const timer = setInterval(() => {
-            const received = store.received() - summarised.current.received;
-            const errors = store.errors() - summarised.current.errors;
+            const since = summarised.current;
+            if (since === null) {
+                return;
+            }
+            const received = store.received() - since.received;
+            const errors = store.errors() - since.errors;
             summarised.current = { received: store.received(), errors: store.errors() };
             if (received > 0) {
                 setAnnouncement(t.console.summary(received, errors));
