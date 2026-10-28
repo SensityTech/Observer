@@ -6,8 +6,10 @@ import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { setupQuery, signIn } from '../api/auth';
 import { ApiError, send } from '../api/client';
 import type { LoginResponse } from '../api/generated/LoginResponse';
+import type { SetupRequest } from '../api/generated/SetupRequest';
 import { confirmationProblem, passwordProblem, usernameProblem, type Problem } from '../auth/validation';
 import { Button } from '../components/Button';
+import { Checkbox } from '../components/Checkbox';
 import { PasswordField, TextField } from '../components/Field';
 import { Notice } from '../components/Notice';
 import { errorMessage, problemMessage } from '../i18n/errors';
@@ -26,6 +28,7 @@ export function SetupPage() {
     const [username, setUsername] = useState('');
     const [password, setPassword] = useState('');
     const [confirmation, setConfirmation] = useState('');
+    const [remember, setRemember] = useState(false);
     const [problems, setProblems] = useState<Problems>({});
     const [failure, setFailure] = useState<{ message: string; signInInstead: boolean } | null>(null);
     const [pending, setPending] = useState(false);
@@ -65,7 +68,12 @@ export function SetupPage() {
         setPending(true);
         setFailure(null);
         try {
-            const response = await send<LoginResponse>('POST', '/setup', { token, username, password });
+            const response = await send<LoginResponse>('POST', '/setup', {
+                token,
+                username,
+                password,
+                remember,
+            } satisfies SetupRequest);
             signIn(queryClient, response);
             queryClient.setQueryData(setupQuery.queryKey, { required: false });
             await navigate({ to: '/' });
@@ -140,6 +148,15 @@ export function SetupPage() {
                         setProblems((current) => ({ ...current, confirmation: null }));
                     }}
                 />
+                <label className="signin-remember" htmlFor="setup-remember">
+                    <Checkbox
+                        id="setup-remember"
+                        name="remember"
+                        checked={remember}
+                        onChange={(event) => setRemember(event.target.checked)}
+                    />
+                    <span>{t.setup.remember}</span>
+                </label>
                 <Button
                     type="submit"
                     tone="ink"

@@ -191,6 +191,7 @@ export const en = {
         },
         forgotAfter: 'You then sign in with the temporary password, valid for 72 hours, and choose your own.',
         closeHelp: 'Close the help',
+        remember: 'Keep me signed in',
         submit: 'Sign in',
         wait: (seconds: number) => `Try again in ${formatDuration('en', seconds)}`,
         throttled: (seconds: number) => `Too many attempts. Try again in ${formatDuration('en', seconds)}.`,
@@ -208,6 +209,7 @@ export const en = {
         password: 'Password',
         passwordHint: 'At least 12 characters.',
         confirm: 'Confirm the password',
+        remember: 'Keep me signed in',
         submit: 'Create the owner account',
         noToken: 'This page needs the setup link Observer printed when it first started.',
         linkNote: {

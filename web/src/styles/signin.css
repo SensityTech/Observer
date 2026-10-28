@@ -231,6 +231,19 @@
         align-items: flex-start;
         gap: 6px;
     }
+    .signin-remember {
+        display: inline-flex;
+        align-self: flex-start;
+        align-items: flex-start;
+        gap: 10px;
+        font-size: 14px;
+        line-height: 1.45;
+        color: var(--ink);
+        cursor: pointer;
+    }
+    .signin-remember:hover input:not(:checked) + span {
+        border-color: color-mix(in srgb, var(--ink) 30%, transparent);
+    }
     .signin-guard > svg {
         flex: none;
         margin-top: 2px;
@@ -782,6 +795,9 @@
             content: '';
             position: absolute;
             inset: -13px -8px;
+        }
+        .signin-remember {
+            padding-block: 12px;
         }
         .signin-logo {
             min-height: 44px;

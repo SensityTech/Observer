@@ -5,9 +5,11 @@ import { useEffect, useRef, useState, type FormEvent } from 'react';
 
 import { signIn } from '../api/auth';
 import { ApiError, send } from '../api/client';
+import type { LoginRequest } from '../api/generated/LoginRequest';
 import type { LoginResponse } from '../api/generated/LoginResponse';
 import { landing } from '../auth/me';
 import { Button } from '../components/Button';
+import { Checkbox } from '../components/Checkbox';
 import { PasswordField, TextField } from '../components/Field';
 import { Notice } from '../components/Notice';
 import { errorMessage } from '../i18n/errors';
@@ -20,6 +22,7 @@ import { useCountdown } from '../signin/useCountdown';
 const USERNAME_ID = 'login-username';
 const REFUSAL_ID = `${USERNAME_ID}-error`;
 const HELP_ID = 'login-forgot';
+const REMEMBER_ID = 'login-remember';
 
 export function LoginPage() {
     const { t } = useI18n();
@@ -30,6 +33,8 @@ export function LoginPage() {
     const helpToggle = useRef<HTMLButtonElement>(null);
     const [username, setUsername] = useState('');
     const [password, setPassword] = useState('');
+    // Unchecked, the cookie ends with the browser: a shared computer forgets the session.
+    const [remember, setRemember] = useState(false);
     const [missing, setMissing] = useState({ username: false, password: false });
     // One message for both fields, which never says which one was wrong.
     const [refusal, setRefusal] = useState<string | null>(null);
@@ -54,7 +59,11 @@ export function LoginPage() {
         setRefusal(null);
         setFailure(null);
         try {
-            const response = await send<LoginResponse>('POST', '/auth/login', { username, password });
+            const response = await send<LoginResponse>('POST', '/auth/login', {
+                username,
+                password,
+                remember,
+            } satisfies LoginRequest);
             signIn(queryClient, response);
             await navigate({ to: response.me.mustChangePassword ? '/password' : landing(response.me) });
         } catch (error) {
@@ -131,6 +140,16 @@ export function LoginPage() {
                         />
                     }
                 />
+
+                <label className="signin-remember" htmlFor={REMEMBER_ID}>
+                    <Checkbox
+                        id={REMEMBER_ID}
+                        name="remember"
+                        checked={remember}
+                        onChange={(event) => setRemember(event.target.checked)}
+                    />
+                    <span>{t.login.remember}</span>
+                </label>
 
                 <Button
                     type="submit"
