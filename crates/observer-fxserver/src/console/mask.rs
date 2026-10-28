@@ -129,8 +129,22 @@ fn until(text: &str, start: usize, ends: impl Fn(char) -> bool) -> usize {
         .map_or(text.len(), |offset| start + offset)
 }
 
+/// A colour sequence ends a word as a blank does: FXServer prints its text right after the one
+/// closing the channel prefix.
 fn starts_word(text: &str, start: usize) -> bool {
-    !text[..start].ends_with(is_word)
+    let before = &text[..start];
+    !before.ends_with(is_word) || ends_with_colour(before)
+}
+
+fn ends_with_colour(text: &str) -> bool {
+    let Some(rest) = text.strip_suffix('m') else {
+        return false;
+    };
+    rest.rfind("\x1b[").is_some_and(|start| {
+        rest[start + 2..]
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || byte == b';')
+    })
 }
 
 fn is_word(c: char) -> bool {
@@ -216,12 +230,18 @@ mod tests {
             masked("[           CmdSystem] mysql_connection_string = mysql://root:pw@localhost/es"),
             "[           CmdSystem] mysql_connection_string = [REDACTED]"
         );
+        // As FXServer prints them: the name comes right after the colour sequences of the prefix.
+        let prefix = "\x1b[38;5;110m[           CmdSystem] \x1b[0m\x1b[0m";
         for name in SECRET_CONVARS {
             assert_eq!(
-                masked(&format!("[           CmdSystem] {name} = hunter2 two\x1b[0m")),
-                format!("[           CmdSystem] {name} = [REDACTED]\x1b[0m"),
+                masked(&format!("{prefix}{name} = hunter2 two\x1b[0m")),
+                format!("{prefix}{name} = [REDACTED]\x1b[0m"),
             );
         }
+        assert_eq!(
+            masked(&format!("{prefix}cfxk_abcdefghijklmnopqrstu_ABC123")),
+            format!("{prefix}cfxk_[REDACTED]")
+        );
     }
 
     #[test]
