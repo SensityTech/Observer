@@ -446,7 +446,10 @@ function NextRestart({
                             tone: 'success',
                             about: restartsOf(status),
                             message: t.schedule.planned(
-                                `${zoned.day(status.oneOff.at)} ${zoned.clock(status.oneOff.at)}`,
+                                t.schedule.dayTime(
+                                    zoned.day(status.oneOff.at),
+                                    zoned.clock(status.oneOff.at),
+                                ),
                             ),
                         })
                     }
@@ -1058,7 +1061,9 @@ function SettingsForm({ schedule }: { schedule: ScheduleStatus }) {
                                 )}
                                 {issue('times') && <FieldError>{issue('times')}</FieldError>}
                                 {timeIssues.map(({ time, message }) => (
-                                    <FieldError key={time}>{`${time}: ${message}`}</FieldError>
+                                    <FieldError key={time}>
+                                        {t.schedule.issueOf(time, message ?? '')}
+                                    </FieldError>
                                 ))}
                             </div>
                             <div className="flex flex-wrap items-end gap-2">
@@ -1230,9 +1235,9 @@ function SettingsForm({ schedule }: { schedule: ScheduleStatus }) {
                         </ul>
                         {issue('warnings') && <FieldError>{issue('warnings')}</FieldError>}
                         {warningIssues.map(({ minutes, message }) => (
-                            <FieldError
-                                key={minutes}
-                            >{`${t.schedule.warningMinutes(minutes)}: ${message}`}</FieldError>
+                            <FieldError key={minutes}>
+                                {t.schedule.issueOf(t.schedule.warningMinutes(minutes), message ?? '')}
+                            </FieldError>
                         ))}
                         <div className="flex flex-wrap items-end gap-2">
                             <TextField

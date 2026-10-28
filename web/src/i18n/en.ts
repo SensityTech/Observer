@@ -202,6 +202,8 @@ export const en = {
         outOfDate: 'The live link is down: the schedule shown may be out of date. Nothing typed is lost.',
         nextTitle: 'Next restart',
         when: (day: string, left: string) => `${day} · in ${left}`,
+        dayTime: (day: string, time: string) => `${day} ${time}`,
+        issueOf: (subject: string, problem: string) => `${subject}: ${problem}`,
         fromSchedule: 'From the schedule.',
         oneOff: (by: string) => `One-off, planned by ${by}.`,
         delayedFrom: (time: string, by: string) => `Delayed from ${time} by ${by}.`,
@@ -289,7 +291,6 @@ export const en = {
         skipAfterStart: 'Skip a fixed time this soon after a start, in minutes',
         skipAfterStartHint:
             'After a start the schedule did not make, by hand or after a crash, a fixed time that comes this soon is skipped. 0 turns this off.',
-        notSaved: 'The schedule is off until it is saved.',
         changes: (value: number) => `${count(value, { one: 'unsaved change', other: 'unsaved changes' })}`,
         discard: 'Discard',
         save: 'Save the schedule',

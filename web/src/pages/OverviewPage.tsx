@@ -79,7 +79,9 @@ const nextRestart = (
     const clock = formatClock(locale, next.at, schedule.zone);
     const today = zoneDate(next.at, schedule.zone) === zoneDate(now, schedule.zone);
     return t.overview.nextRestart(
-        today ? clock : `${formatDay(locale, next.at, schedule.zone, { weekday: false })} ${clock}`,
+        today
+            ? clock
+            : t.schedule.dayTime(formatDay(locale, next.at, schedule.zone, { weekday: false }), clock),
         format.duration(Math.max(0, Date.parse(next.at) - now) / 1000),
     );
 };

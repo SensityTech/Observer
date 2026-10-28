@@ -116,7 +116,10 @@ function NextRestartCell({
                 <span className="font-mono text-[12.5px]">
                     {today
                         ? clock
-                        : `${formatDay(locale, next.at, schedule.zone, { weekday: false })} ${clock}`}
+                        : t.schedule.dayTime(
+                              formatDay(locale, next.at, schedule.zone, { weekday: false }),
+                              clock,
+                          )}
                 </span>
                 <span className="font-normal text-ink-3 xl:max-[1261px]:hidden md:max-[941px]:hidden">
                     · {t.status.inTime(left)}
