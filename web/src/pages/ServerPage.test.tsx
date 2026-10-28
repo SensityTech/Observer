@@ -22,6 +22,9 @@ const stored = (cfgFile: string, version: number): StoredLaunch => ({
     version,
 });
 
+const follows = (first: Node, second: Node) =>
+    Boolean(first.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING);
+
 /** The page over settings already read, which only the test changes. */
 const page = (initial: StoredLaunch | null) => {
     const client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity, retry: false } } });
@@ -132,5 +135,32 @@ describe('ServerPage', () => {
         await waitFor(() => getByText(en.server.saved));
 
         expect(document.activeElement).toBe(value);
+    });
+
+    it('should put each refused argument message under its own field, and the keyboard on the first', async () => {
+        const refusal = {
+            code: 'invalid_launch_settings',
+            params: { issues: [{ field: 'argumentName', index: 1, problem: 'duplicate' }] },
+        };
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(async () => Response.json(refusal, { status: 400 })),
+        );
+        const scrolled = vi.fn();
+        Element.prototype.scrollIntoView = scrolled;
+        const { getAllByLabelText, getByLabelText, getByText } = page(stored('server.cfg', 1));
+        const name = getAllByLabelText(en.server.argumentName)[1] as HTMLInputElement;
+        fireEvent.change(name, { target: { value: 'SV_HOSTNAME' } });
+
+        fireEvent.click(getByText(en.server.save));
+        const message = await waitFor(() => getByText(en.server.problems.duplicate));
+
+        const value = getAllByLabelText(en.server.argumentValue)[1] as HTMLInputElement;
+        const remove = getByLabelText(en.server.removeArgument(2));
+        expect(follows(name, message)).toBe(true);
+        expect(follows(message, value)).toBe(true);
+        expect(follows(value, remove)).toBe(true);
+        expect(document.activeElement).toBe(name);
+        expect(scrolled).toHaveBeenCalledWith({ block: 'center' });
     });
 });

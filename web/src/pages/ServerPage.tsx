@@ -77,6 +77,8 @@ function LaunchForm({ saved }: { saved: StoredLaunch | null }) {
     const addButton = useRef<HTMLButtonElement>(null);
     /** Where the keyboard goes once a removed row is gone: another row's name, or the add button. */
     const focusAfterRemoval = useRef<number | 'add' | null>(null);
+    const form = useRef<HTMLFormElement>(null);
+    const showFirstIssue = useRef(false);
 
     const draft: LaunchSettings = {
         ...fields,
@@ -117,11 +119,9 @@ function LaunchForm({ saved }: { saved: StoredLaunch | null }) {
             if (conflict) {
                 void queryClient.invalidateQueries({ queryKey: launchQuery.queryKey });
             }
-            setIssues(
-                error instanceof ApiError && error.code === 'invalid_launch_settings'
-                    ? launchIssues(error.params)
-                    : [],
-            );
+            const refused = error instanceof ApiError && error.code === 'invalid_launch_settings';
+            showFirstIssue.current = refused;
+            setIssues(refused ? launchIssues(error.params) : []);
             setOutcome({
                 tone: conflict ? 'warning' : 'danger',
                 message: conflict ? t.server.changedElsewhere : errorMessage(t, error),
@@ -164,6 +164,18 @@ function LaunchForm({ saved }: { saved: StoredLaunch | null }) {
         }
     }, [outcome]);
 
+    // The first field to fix may be far up, or under the save bar: it comes to the middle of the
+    // screen, the keyboard in it.
+    useEffect(() => {
+        if (!showFirstIssue.current) {
+            return;
+        }
+        showFirstIssue.current = false;
+        const first = form.current?.querySelector<HTMLInputElement>('input[aria-invalid="true"]');
+        first?.focus({ preventScroll: true });
+        first?.scrollIntoView({ block: 'center' });
+    });
+
     useEffect(() => {
         const target = focusAfterRemoval.current;
         if (target === null) {
@@ -182,7 +194,7 @@ function LaunchForm({ saved }: { saved: StoredLaunch | null }) {
     };
 
     return (
-        <form className="flex flex-col gap-3" onSubmit={submit} noValidate>
+        <form ref={form} className="flex flex-col gap-3" onSubmit={submit} noValidate>
             {saved === null && <Notice tone="warning">{t.server.unsaved}</Notice>}
             {stale && outcome === null && <Notice tone="warning">{t.server.changedElsewhere}</Notice>}
             {outcome && (
@@ -473,18 +485,26 @@ function ArgumentRow({
 }) {
     const { t } = useI18n();
     const id = useId();
-    const errors = [nameError && `${id}-name-error`, valueError && `${id}-value-error`].filter(Boolean);
 
+    // The elements come in the order they read on screen, so the keyboard follows the eye: the
+    // name, its message, the value, its message, then the button, beside the value on phones and
+    // at the end of the line on wider screens. Each message sits under its own field.
     return (
-        <fieldset className="flex min-w-0 flex-col gap-1.5">
+        <fieldset className="min-w-0">
             <legend className="sr-only">{t.server.argument(position)}</legend>
-            <div className="grid grid-cols-[auto_minmax(0,16rem)_minmax(0,1fr)_auto] items-center gap-2 max-md:grid-cols-[minmax(0,1fr)_auto]">
-                <span className="w-9 font-mono text-ui text-ink-3 max-md:hidden" aria-hidden="true">
+            <div className="grid grid-flow-row-dense grid-cols-[minmax(0,1fr)_auto] items-center gap-2 md:grid-cols-[auto_minmax(0,16rem)_minmax(0,1fr)_auto]">
+                <span
+                    className="hidden w-9 font-mono text-ui text-ink-3 md:col-start-1 md:row-start-1 md:block"
+                    aria-hidden="true"
+                >
                     +set
                 </span>
                 <input
                     ref={nameRef}
-                    className={cn(inputClass, 'font-mono text-ui')}
+                    className={cn(
+                        inputClass,
+                        'col-span-2 font-mono text-ui md:col-span-1 md:col-start-2 md:row-start-1',
+                    )}
                     aria-label={t.server.argumentName}
                     aria-invalid={nameError ? true : undefined}
                     aria-describedby={nameError ? `${id}-name-error` : undefined}
@@ -494,8 +514,13 @@ function ArgumentRow({
                     autoComplete="off"
                     onChange={(event) => onChange({ name: event.target.value })}
                 />
+                {nameError && (
+                    <div className="col-span-2 md:col-span-1 md:col-start-2 md:row-start-2">
+                        <FieldError id={`${id}-name-error`}>{nameError}</FieldError>
+                    </div>
+                )}
                 <input
-                    className={cn(inputClass, 'font-mono text-ui max-md:order-last max-md:col-span-2')}
+                    className={cn(inputClass, 'font-mono text-ui md:col-start-3 md:row-start-1')}
                     aria-label={t.server.argumentValue}
                     aria-invalid={valueError ? true : undefined}
                     aria-describedby={valueError ? `${id}-value-error` : undefined}
@@ -505,21 +530,23 @@ function ArgumentRow({
                     autoComplete="off"
                     onChange={(event) => onChange({ value: event.target.value })}
                 />
+                {valueError && (
+                    <div className="col-span-2 md:col-span-1 md:col-start-3 md:row-start-2">
+                        <FieldError id={`${id}-value-error`}>{valueError}</FieldError>
+                    </div>
+                )}
                 <button
                     type="button"
-                    className={buttonVariants({ tone: 'ghost', size: 'icon-sm' })}
+                    className={cn(
+                        buttonVariants({ tone: 'ghost', size: 'icon-sm' }),
+                        'md:col-start-4 md:row-start-1',
+                    )}
                     aria-label={t.server.removeArgument(position)}
                     onClick={onRemove}
                 >
                     <X size={14} strokeWidth={1.5} aria-hidden="true" />
                 </button>
             </div>
-            {errors.length > 0 && (
-                <div className="flex flex-col gap-1 md:pl-11">
-                    {nameError && <FieldError id={`${id}-name-error`}>{nameError}</FieldError>}
-                    {valueError && <FieldError id={`${id}-value-error`}>{valueError}</FieldError>}
-                </div>
-            )}
         </fieldset>
     );
 }
