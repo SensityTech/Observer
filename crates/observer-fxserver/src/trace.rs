@@ -71,8 +71,12 @@ pub struct Dropped {
 pub struct TraceDecoder {
     generation: u32,
     current: watch::Receiver<u32>,
+    /// The object being received, from its opening brace.
     pending: Vec<u8>,
-    skipping: Option<Skip>,
+    /// Where that object ends, followed as its bytes come in so that it is parsed once, whole.
+    frame: Frame,
+    /// The object being received is too big to keep, and is only followed to its end.
+    oversized: bool,
     window: (Instant, u32),
     dropped: Dropped,
 }
@@ -83,7 +87,8 @@ impl TraceDecoder {
             generation,
             current,
             pending: Vec::new(),
-            skipping: None,
+            frame: Frame::default(),
+            oversized: false,
             window: (Instant::now(), 0),
             dropped: Dropped::default(),
         }
@@ -94,78 +99,54 @@ impl TraceDecoder {
     }
 
     /// Feeds the next bytes and returns the traces they complete.
-    pub fn push(&mut self, bytes: &[u8], now: Instant) -> Vec<Trace> {
+    pub fn push(&mut self, mut bytes: &[u8], now: Instant) -> Vec<Trace> {
         let mut traces = Vec::new();
-        let bytes = match &mut self.skipping {
-            None => bytes,
-            Some(skip) => match skip.end_in(bytes) {
-                Some(end) => {
-                    self.skipping = None;
-                    &bytes[end..]
-                }
-                None => return traces,
-            },
-        };
-        self.pending.extend_from_slice(bytes);
-
-        let mut start = 0;
-        while let Some(offset) = self.pending[start..].iter().position(|&byte| byte == b'{') {
-            self.dropped.garbage_bytes += offset as u64;
-            start += offset;
-            let mut values =
-                serde_json::Deserializer::from_slice(&self.pending[start..]).into_iter::<Value>();
-            match values.next() {
-                Some(Ok(value)) => {
-                    let length = values.byte_offset();
-                    start += length;
-                    if length > MAX_OBJECT {
-                        self.drop_oversized();
-                    } else if let Some(kind) = self.classify(value, now) {
-                        traces.push(Trace {
-                            generation: self.generation,
-                            kind,
-                        });
-                    }
-                }
-                Some(Err(error)) if error.is_eof() => {
-                    if self.pending.len() - start <= MAX_OBJECT {
-                        break;
-                    }
+        while !bytes.is_empty() {
+            if !self.frame.inside() {
+                let Some(start) = memchr::memchr(b'{', bytes) else {
+                    self.dropped.garbage_bytes += bytes.len() as u64;
+                    break;
+                };
+                self.dropped.garbage_bytes += start as u64;
+                bytes = &bytes[start..];
+            }
+            let end = self.frame.end_in(bytes);
+            let (object, rest) = bytes.split_at(end.unwrap_or(bytes.len()));
+            bytes = rest;
+            if !self.oversized {
+                self.pending.extend_from_slice(object);
+                if self.pending.len() > MAX_OBJECT {
                     self.drop_oversized();
-                    let mut skip = Skip::default();
-                    if let Some(end) = skip.end_in(&self.pending[start..]) {
-                        start += end;
-                    } else {
-                        self.skipping = Some(skip);
-                        start = self.pending.len();
-                    }
+                    self.oversized = true;
+                    self.pending = Vec::new();
                 }
-                // Not a trace, such as an object nested deeper than the parser goes. It is skipped
-                // whole: resynchronising inside it would read what a resource wrote in its payload
-                // as traces of FXServer's own.
-                Some(Err(_)) => {
-                    let mut skip = Skip::default();
-                    let end = skip.end_in(&self.pending[start..]);
-                    let skipped = end.unwrap_or(self.pending.len() - start);
-                    self.dropped.garbage_bytes += skipped as u64;
-                    start += skipped;
-                    if end.is_none() {
-                        self.skipping = Some(skip);
-                    }
-                }
-                None => break,
+            }
+            if end.is_some() && !std::mem::take(&mut self.oversized) {
+                traces.extend(self.complete(now));
             }
         }
-        if !self.pending[start..].contains(&b'{') {
-            self.dropped.garbage_bytes += (self.pending.len() - start) as u64;
-            start = self.pending.len();
-        }
-        self.pending.drain(..start);
 
         if *self.current.borrow() != self.generation {
             traces.clear();
         }
         traces
+    }
+
+    fn complete(&mut self, now: Instant) -> Option<Trace> {
+        let parsed = serde_json::from_slice::<Value>(&self.pending);
+        let length = self.pending.len();
+        self.pending.clear();
+        // Not a trace, such as an object nested deeper than the parser goes. It goes whole:
+        // nothing a resource wrote in its payload may pass for a trace of FXServer's own.
+        let Ok(value) = parsed else {
+            self.dropped.garbage_bytes += length as u64;
+            return None;
+        };
+        let kind = self.classify(value, now)?;
+        Some(Trace {
+            generation: self.generation,
+            kind,
+        })
     }
 
     fn classify(&mut self, value: Value, now: Instant) -> Option<TraceKind> {
@@ -202,17 +183,21 @@ impl TraceDecoder {
     }
 }
 
-/// Follows an oversized object to its end without keeping it, tracking strings so that braces
-/// inside them do not count.
+/// Follows an object to its end, tracking strings so that braces inside them do not count.
 #[derive(Default)]
-struct Skip {
+struct Frame {
     depth: u32,
     in_string: bool,
     escaped: bool,
 }
 
-impl Skip {
-    /// Where in `bytes` the object ends, if it does.
+impl Frame {
+    /// Whether an object has begun and not ended yet.
+    fn inside(&self) -> bool {
+        self.depth > 0
+    }
+
+    /// Where in `bytes`, the continuation of the object, it ends, if it does.
     fn end_in(&mut self, bytes: &[u8]) -> Option<usize> {
         for (index, &byte) in bytes.iter().enumerate() {
             if self.in_string {
@@ -444,6 +429,32 @@ mod tests {
 
         assert_eq!(kinds(traces), [TraceKind::Probe, heartbeat()]);
         assert_eq!(decoder.dropped().oversized, 1);
+    }
+
+    #[test]
+    fn a_large_trace_arriving_in_pipe_sized_reads_is_parsed_once() {
+        let (_current, mut decoder) = decoder(1);
+        let payload = format!(
+            r#"{{"kind":"x","list":[{}0]}}"#,
+            "0,".repeat(MAX_OBJECT / 2 - 1024)
+        );
+        let trace = native(
+            &json!({ "type": "script_structured_trace", "resource": "spam", "payload": serde_json::from_str::<Value>(&payload).unwrap() }),
+        );
+        let started = Instant::now();
+
+        let mut traces = Vec::new();
+        for chunk in trace.as_bytes().chunks(4096) {
+            traces.extend(decoder.push(chunk, Instant::now()));
+        }
+
+        // Parsing everything received again on each read takes seconds here.
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "{:?}",
+            started.elapsed()
+        );
+        assert!(matches!(&kinds(traces)[..], [TraceKind::Script { resource, .. }] if resource == "spam"));
     }
 
     #[test]
