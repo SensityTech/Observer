@@ -823,9 +823,12 @@ dependencies = [
 name = "observer-fxserver"
 version = "0.1.0"
 dependencies = [
+ "memchr",
  "observer-platform",
  "serde",
  "serde_json",
+ "tempfile",
+ "thiserror",
  "tokio",
  "tracing",
 ]
