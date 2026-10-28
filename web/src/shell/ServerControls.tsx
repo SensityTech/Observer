@@ -21,30 +21,34 @@ const SEND = { start: startServer, stop: stopServer, restart: restartServer } sa
 
 /**
  * Start, Stop and Restart beside the status bar. A button that cannot act now stays in the tab order,
- * marked disabled, with the reason as its description; Stop and Restart ask first, since players are
- * disconnected.
+ * marked disabled; pressed, it says why below, since a touch screen or the keyboard never shows its
+ * title. Stop and Restart ask first, since players are disconnected.
  */
 export function ServerControls() {
     const { t } = useI18n();
     const me = useMe();
     const { status } = useServerStatus();
     const [confirming, setConfirming] = useState<Action | null>(null);
-    const [failure, setFailure] = useState<{ action: Action; reason: string } | null>(null);
+    const [failure, setFailure] = useState<{ tone: 'warning' | 'danger'; text: string } | null>(null);
     const permitted = allows(me, Permission.ServerControl);
 
+    const label = { start: t.controls.start, stop: t.controls.stop, restart: t.controls.restart };
     const mutation = useMutation({
         mutationFn: (action: Action) => SEND[action](),
         onMutate: () => setFailure(null),
-        onError: (error, action) => setFailure({ action, reason: errorMessage(t, error) }),
+        onError: (error, action) =>
+            setFailure({ tone: 'danger', text: t.controls.failed(label[action], errorMessage(t, error)) }),
         onSettled: () => setConfirming(null),
     });
 
     const running = status !== null && isRunning(status.state);
-    const label = { start: t.controls.start, stop: t.controls.stop, restart: t.controls.restart };
     const act = (action: Action) => {
-        if (blocked(t, action, status, permitted) !== null) {
+        const reason = blocked(t, action, status, permitted);
+        if (reason !== null) {
+            setFailure({ tone: 'warning', text: t.controls.unavailable(label[action], reason) });
             return;
         }
+        setFailure(null);
         if (action === 'start') {
             mutation.mutate(action);
         } else {
@@ -81,12 +85,12 @@ export function ServerControls() {
                 {button('stop', Square, 'secondary')}
             </fieldset>
             {failure && (
-                <Notice tone="danger" className="controls-failure">
+                <Notice tone={failure.tone} className="controls-failure">
                     <div className="flex items-start gap-3">
-                        <p className="flex-1">{t.controls.failed(label[failure.action], failure.reason)}</p>
+                        <p className="flex-1">{failure.text}</p>
                         <button
                             type="button"
-                            className="-m-1 rounded-sm p-1 text-danger-ink"
+                            className="-m-1 rounded-sm p-1"
                             aria-label={t.controls.dismiss}
                             onClick={() => setFailure(null)}
                         >

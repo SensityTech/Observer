@@ -241,6 +241,7 @@ export const en = {
         confirmRestart: 'Restart',
         confirmStop: 'Stop server',
         failed: (action: string, reason: string) => `${action} failed. ${reason}`,
+        unavailable: (action: string, reason: string) => `${action} is not available. ${reason}`,
         dismiss: 'Dismiss',
     },
     console: {
