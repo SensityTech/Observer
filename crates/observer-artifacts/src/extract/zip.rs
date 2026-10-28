@@ -43,6 +43,9 @@ pub(crate) fn plan(archive: &Path) -> Result<Plan, Error> {
         let refuse = |refusal| refuse(&name, refusal);
         budget.take(entry.size()).map_err(refuse)?;
         let parts = components(&name).map_err(refuse)?;
+        for part in &parts {
+            windows_name(part).map_err(refuse)?;
+        }
         if entry.encrypted() {
             return Err(refuse(Refusal::Encrypted));
         }
@@ -107,6 +110,33 @@ pub(crate) fn extract(archive: &Path, plan: &Plan, into: &Path) -> Result<(), Er
         file.sync_all().map_err(io(&path))?;
     }
     Ok(())
+}
+
+/// Windows drops a trailing dot or space, so `a.lua.` would write over `a.lua`, and opens a device
+/// for `NUL` or `COM1.txt` in any folder, whatever the extension.
+fn windows_name(name: &str) -> Result<(), Refusal> {
+    if name.ends_with(['.', ' ']) {
+        return Err(Refusal::TrailingDot);
+    }
+    let stem = name
+        .split('.')
+        .next()
+        .unwrap_or(name)
+        .trim_end_matches(' ')
+        .to_ascii_lowercase();
+    let numbered = |prefix| {
+        stem.strip_prefix(prefix).is_some_and(|number| {
+            matches!(
+                number,
+                "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "¹" | "²" | "³"
+            )
+        })
+    };
+    if matches!(stem.as_str(), "con" | "prn" | "aux" | "nul") || numbered("com") || numbered("lpt") {
+        Err(Refusal::Device)
+    } else {
+        Ok(())
+    }
 }
 
 fn open(archive: &Path) -> Result<ZipArchive<BufReader<File>>, Error> {
@@ -186,6 +216,38 @@ mod tests {
         ]);
 
         assert_eq!(refusal(result), ("Citizen/A.lua".to_owned(), Refusal::Duplicate));
+    }
+
+    #[test]
+    fn names_windows_would_change_or_open_as_a_device_are_refused() {
+        for (name, expected) in [
+            ("citizen/a.lua.", Refusal::TrailingDot),
+            ("citizen/a.lua ", Refusal::TrailingDot),
+            ("citizen./a.lua", Refusal::TrailingDot),
+            ("citizen/NUL", Refusal::Device),
+            ("citizen/nul.txt", Refusal::Device),
+            ("aux .lua", Refusal::Device),
+            ("COM1", Refusal::Device),
+            ("citizen/lpt9.dll", Refusal::Device),
+            ("citizen/com\u{b9}.lua", Refusal::Device),
+        ] {
+            let (entry, refusal) = refusal(planned(&[ZipEntry::Stored(name, b"x")]));
+            assert_eq!((entry.as_str(), refusal), (name, expected));
+        }
+    }
+
+    #[test]
+    fn names_that_only_resemble_a_device_are_kept() {
+        let plan = planned(&[
+            ZipEntry::Stored("citizen/console.lua", b"x"),
+            ZipEntry::Stored("citizen/com10.lua", b"x"),
+            ZipEntry::Stored("citizen/nullable.js", b"x"),
+            ZipEntry::Stored("citizen/.gitignore", b"x"),
+            ZipEntry::Stored("citizen/lpt0", b"x"),
+        ])
+        .unwrap();
+
+        assert_eq!(plan.entries.len(), 5);
     }
 
     #[test]
