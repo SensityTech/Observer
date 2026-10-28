@@ -78,7 +78,7 @@ impl ConsoleLog {
             zone,
             current: None,
         };
-        files.retain(None)?;
+        files.retain(None);
         let (entries, received) = mpsc::sync_channel(QUEUE);
         let dropped = Arc::new(AtomicU64::new(0));
         let writer = thread::Builder::new().name("console-log".to_owned()).spawn({
@@ -213,7 +213,8 @@ impl LogFiles {
             file: BufWriter::with_capacity(BUFFER, file),
             size,
         });
-        self.retain(Some(&path))
+        self.retain(Some(&path));
+        Ok(())
     }
 
     fn close_current(&mut self) -> io::Result<()> {
@@ -225,22 +226,32 @@ impl LogFiles {
     }
 
     /// Deletes files older than `keep_days`, then the oldest ones while the folder is too big.
-    /// `keep` is never deleted.
-    fn retain(&self, keep: Option<&Path>) -> io::Result<()> {
+    /// `keep` is never deleted. A file that cannot go now, such as one another program holds open
+    /// on Windows, is left for the next pass: it must not stop the others going, nor the log.
+    fn retain(&self, keep: Option<&Path>) {
         let today = Timestamp::now().to_zoned(self.zone.clone()).date();
         let oldest = today
             .checked_sub(self.limits.keep_days.days())
             .unwrap_or(Date::MIN);
-        let mut files = self.files()?;
+        let mut files = match self.files() {
+            Ok(files) => files,
+            Err(error) => {
+                warn!(%error, dir = %self.dir.display(), "cannot list the console logs to prune them");
+                return;
+            }
+        };
         let mut total: u64 = files.iter().map(|file| file.size).sum();
         files.retain(|file| Some(file.path.as_path()) != keep);
         for file in files {
             if file.date < oldest || total > self.limits.total_bytes {
-                fs::remove_file(&file.path)?;
-                total -= file.size;
+                match fs::remove_file(&file.path) {
+                    Ok(()) => total -= file.size,
+                    Err(error) => {
+                        warn!(%error, file = %file.path.display(), "cannot delete an old console log");
+                    }
+                }
             }
         }
-        Ok(())
     }
 
     /// The log files in the folder, oldest first.
@@ -479,6 +490,34 @@ mod tests {
         assert_eq!(
             names(dir.path()),
             [format!("console-{kept}.log"), "notes.txt".to_owned()]
+        );
+    }
+
+    #[tokio::test]
+    async fn an_old_file_that_cannot_be_deleted_stops_neither_the_pruning_nor_the_log() {
+        let dir = tempfile::tempdir().unwrap();
+        let day = today();
+        let older = day.checked_sub(21.days()).unwrap();
+        let old = day.checked_sub(20.days()).unwrap();
+        // A folder cannot be deleted as a file, like a file another program holds open on Windows.
+        fs::create_dir(dir.path().join(format!("console-{older}.log"))).unwrap();
+        fs::write(
+            dir.path().join(format!("console-{old}.log")),
+            "x
+",
+        )
+        .unwrap();
+
+        write_all(
+            dir.path(),
+            LogLimits::default(),
+            vec![stdout(&format!("{day}T10:00:00+01:00"), "now")],
+        )
+        .await;
+
+        assert_eq!(
+            names(dir.path()),
+            [format!("console-{older}.log"), format!("console-{day}.log")]
         );
     }
 
