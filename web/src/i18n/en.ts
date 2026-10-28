@@ -290,7 +290,7 @@ export const en = {
         saved: 'The schedule is saved. It applies at once.',
         discarded: 'Changes discarded.',
         changedElsewhere:
-            'Someone saved the schedule since you opened it. Saving yours replaces theirs; discard to see what is stored.',
+            'Someone saved the schedule since you opened it. Discard your changes to see theirs, then make yours again.',
         problems: {
             required: 'Add at least one time, or turn the schedule off.',
             tooMany: 'Too many: remove some.',
