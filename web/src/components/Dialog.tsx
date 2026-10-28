@@ -2,6 +2,8 @@ import { useEffect, useId, useLayoutEffect, useRef, type FormEvent, type ReactNo
 
 import { cn } from '../lib/cn';
 
+const FIELD = 'input:not([type="hidden"]):enabled, select:enabled';
+
 type DialogProps = {
     title: ReactNode;
     onClose: () => void;
@@ -36,10 +38,34 @@ export function Dialog({
     // focus back to the trigger; removed open, the dialog would drop it on the body.
     useLayoutEffect(() => {
         const dialog = ref.current;
-        dialog?.showModal();
+        if (dialog === null) {
+            return;
+        }
+        dialog.showModal();
         // Chrome counts a body that scrolls as the first thing to focus: start on the first field.
-        dialog?.querySelector<HTMLElement>('input:not([type="hidden"]):enabled, select:enabled')?.focus();
-        return () => dialog?.close();
+        const field = () => dialog.querySelector<HTMLElement>(FIELD);
+        const first = field();
+        if (first !== null) {
+            first.focus();
+            return () => dialog.close();
+        }
+        // Still loading, so the browser focused a footer button, which Enter would press. The field
+        // takes the focus once it arrives, unless the user has moved it in the meantime.
+        const opened = document.activeElement;
+        const arrival = new MutationObserver(() => {
+            const arrived = field();
+            if (arrived !== null) {
+                arrival.disconnect();
+                if (document.activeElement === opened) {
+                    arrived.focus();
+                }
+            }
+        });
+        arrival.observe(dialog, { childList: true, subtree: true });
+        return () => {
+            arrival.disconnect();
+            dialog.close();
+        };
     }, []);
 
     useEffect(() => {
