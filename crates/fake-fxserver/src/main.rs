@@ -11,13 +11,18 @@
 //! - `fake_heartbeat_ms` (3000): the bridge heartbeat period;
 //! - `fake_crash_after_ms`, `fake_hang_after_ms`: crash or hang the main loop on a timer;
 //! - `fake_bind_error 1`: report the port as taken, as when it really is;
+//! - `fake_license missing|invalid`: refuse to run for want of a valid licence key, with FXServer's
+//!   own messages;
 //! - `fake_fatal_dialog 1`: stay up after a fatal error instead of exiting with code 1, as FXServer
 //!   on Windows does when it shows its `Fatal Error` dialog;
+//! - `fake_crash_dump 1`: on a crash, write a dump into `crashes/` next to the executable and end
+//!   the way FXServer's dump server ends it on Windows (`0xFFFFFFFE`);
 //! - `fake_spawn_child 1`: start a child that inherits the pipes and outlives a crash, like the
 //!   crash dump server;
 //! - on stdin: `fake_crash [code]`, `fake_hang`, `fake_print <text>`, `fake_trace <type>`.
 //!
-//! Unknown commands get FXServer's `No such command <name>.`
+//! The bridge's `observer_cmd <hex>` prints the event it decodes, which the real bridge does not, so
+//! that tests can see it arrive. Unknown commands get FXServer's `No such command <name>.`
 
 mod console;
 mod http;
@@ -39,6 +44,7 @@ use crate::console::{CMD, LICENSE, MAIN, NET, RESOURCES, SCRIPTING, SERVER};
 use crate::traces::Traces;
 
 const TICK: Duration = Duration::from_millis(50);
+const LICENSE_HELP: &str = "Please set the sv_licenseKey console variable to a key from https://portal.cfx.re/servers/registration-keys.";
 /// The argument that turns the process into the child that holds the pipes.
 const HOLD_PIPES: &str = "--fake-hold-pipes";
 
@@ -127,6 +133,19 @@ impl Fake {
         console::line(RESOURCES, "\x1b[32mScanning resources.\x1b[0m");
         console::line(RESOURCES, "\x1b[32mFound 4 resources.\x1b[0m");
         console::line(LICENSE, "Authenticating server license key...");
+        let refusal = match self.server.convar("fake_license").as_deref() {
+            Some("missing") => Some(format!(
+                "This server does not have a license key specified. {LICENSE_HELP}"
+            )),
+            Some("invalid") => {
+                Some("Could not authenticate server license key. Invalid key format specified.".to_owned())
+            }
+            _ => None,
+        };
+        if let Some(message) = refusal {
+            console::line(LICENSE, &format!("Error: {message}"));
+            self.fatal(&message);
+        }
         console::line(LICENSE, "Server license key authentication succeeded. Welcome!");
         for command in commands.iter().filter(|command| !is_set(command)) {
             self.execute(command);
@@ -213,6 +232,7 @@ impl Fake {
                 );
             }
             ("fake_trace", Some(kind)) => self.trace(kind),
+            ("observer_cmd", Some(hex)) if self.bridge.is_some() => bridge_command(hex),
             // Typing a convar's name with a value sets it.
             (convar, Some(value)) if convar.starts_with("sv_") || convar.starts_with("fake_") => {
                 self.server.set(name, value);
@@ -252,8 +272,10 @@ impl Fake {
         };
         if !bridge.ready {
             bridge.ready = true;
-            self.traces
-                .script("observer", &json!({ "type": "observer", "kind": "ready" }));
+            self.traces.script(
+                "observer",
+                &json!({ "type": "observer", "kind": "ready", "contractVersion": 1 }),
+            );
         }
         if now >= bridge.next_heartbeat {
             bridge.next_heartbeat = now + period;
@@ -298,7 +320,13 @@ impl Fake {
         let message = format!("Could not bind on {address} - is this address valid and not already in use?");
         console::line(NET, "Listening on socket failed - libuv error EADDRINUSE.");
         console::line(SERVER, &format!("Error: {message}"));
-        console::fatal(&message);
+        self.fatal(&message)
+    }
+
+    /// FXServer's end after a fatal error: the message on stderr, then exit code 1, or on Windows
+    /// at times an error dialog that keeps the process up.
+    fn fatal(&self, message: &str) -> ! {
+        console::fatal(message);
         self.traces.flush();
         if self.server.flag("fake_fatal_dialog") {
             hang();
@@ -312,6 +340,7 @@ impl Fake {
         self.traces.flush();
         match code {
             Some(code) => process::exit(code.cast_signed()),
+            None if self.server.flag("fake_crash_dump") => dump_and_end(),
             None => crash_natively(),
         }
     }
@@ -333,6 +362,39 @@ fn spawn_child() {
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
         .spawn();
+}
+
+/// What the real bridge raises as `observer:<event>`, printed instead.
+fn bridge_command(hex: &str) {
+    let bytes: Option<Vec<u8>> = (0..hex.len())
+        .step_by(2)
+        .map(|index| u8::from_str_radix(hex.get(index..index + 2)?, 16).ok())
+        .collect();
+    let command = bytes.and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok());
+    if let Some(command) = command {
+        console::script(
+            "observer",
+            &format!(
+                "observer:{} {}",
+                command["event"].as_str().unwrap_or("?"),
+                command["payload"]
+            ),
+        );
+    }
+}
+
+/// The dump FXServer's dump server writes, and the report it prints before it ends the process.
+fn dump_and_end() -> ! {
+    let crashes = std::env::current_exe()
+        .ok()
+        .and_then(|exe| Some(exe.parent()?.join("crashes")));
+    if let Some(crashes) = crashes {
+        let dump = crashes.join(format!("fake-{}.dmp", process::id()));
+        let _ = std::fs::create_dir_all(&crashes).and_then(|()| std::fs::write(&dump, b"MDMP"));
+        console::line(MAIN, "FXServer crashed.");
+        console::line(MAIN, &format!("A dump can be found at {}.", dump.display()));
+    }
+    process::exit(0xFFFF_FFFE_u32.cast_signed())
 }
 
 fn stop(resource: &str) {

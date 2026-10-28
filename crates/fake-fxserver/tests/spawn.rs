@@ -160,7 +160,7 @@ async fn a_started_server_speaks_on_every_channel_then_quits() {
 
     fake.stdout_until("Started resource observer").await;
     assert_eq!(fake.trace(|_| true).await, TraceKind::Probe);
-    let ready = json!({ "type": "observer", "kind": "ready" });
+    let ready = json!({ "type": "observer", "kind": "ready", "contractVersion": 1 });
     fake.trace(|kind| matches!(kind, TraceKind::Script { payload, .. } if *payload == ready))
         .await;
     for _ in 0..3 {
