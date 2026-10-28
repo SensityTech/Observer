@@ -118,6 +118,7 @@ impl Schedule {
             state,
             status: status_tx,
             seen: None,
+            due: None,
         };
         let task = tokio::spawn(driver.run(commands_rx, stop.clone()));
         Ok((Self { commands, status }, ScheduleTask { task, stop }))
@@ -208,6 +209,9 @@ struct Driver {
     status: watch::Sender<ScheduleStatus>,
     /// FXServer as last handed to the engine.
     seen: Option<ServerView>,
+    /// When the engine next has something to do, as worked out at its last step. A clock that
+    /// jumped past it makes it due at once, at the next turn of the loop, whatever woke it.
+    due: Option<Timestamp>,
 }
 
 impl Driver {
@@ -217,11 +221,11 @@ impl Driver {
         self.server(first).await;
         loop {
             let now = self.clock.now();
-            let sleep = engine::deadline(&self.state, &self.settings, now)
-                .and_then(|at| Duration::try_from(now.duration_until(at)).ok())
-                .map_or(self.timings.longest_sleep, |wait| {
-                    wait.min(self.timings.longest_sleep)
-                });
+            let sleep = self.due.map_or(self.timings.longest_sleep, |at| {
+                Duration::try_from(now.duration_until(at))
+                    .unwrap_or(Duration::ZERO)
+                    .min(self.timings.longest_sleep)
+            });
             tokio::select! {
                 () = stop.cancelled() => return,
                 command = commands.recv() => match command {
@@ -240,6 +244,8 @@ impl Driver {
                 () = tokio::time::sleep(sleep) => {
                     if let Err(error) = self.apply(Input::Tick, None, None).await {
                         warn!(%error, "the schedule could not catch up with the clock");
+                        // Tried again after the longest sleep, not in a loop.
+                        self.due = None;
                     }
                 }
             }
@@ -369,6 +375,7 @@ impl Driver {
             if let Some(settings) = new_settings.take() {
                 self.settings = settings;
             }
+            self.due = engine::deadline(&self.state, &self.settings, now);
 
             let mut refused = None;
             for effect in effects {

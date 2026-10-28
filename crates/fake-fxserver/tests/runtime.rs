@@ -62,6 +62,8 @@ struct Observer {
     _port: Port,
     /// The schedule's clock, which the tests move on rather than wait.
     clock: Clock,
+    /// The schedule's longest sleep.
+    longest_sleep: Duration,
     db: Database,
     audit: AuditLog,
     servers: Servers,
@@ -98,7 +100,12 @@ impl Services {
     }
 
     /// The supervision and the schedule, with timings short enough for tests.
-    async fn supervise(&self, dir: &Path, clock: &Clock) -> (Supervision, Running, Schedule, ScheduleTask) {
+    async fn supervise(
+        &self,
+        dir: &Path,
+        clock: &Clock,
+        longest_sleep: Duration,
+    ) -> (Supervision, Running, Schedule, ScheduleTask) {
         let setup = Setup {
             db: self.db.clone(),
             clock: Clock::system(),
@@ -136,7 +143,7 @@ impl Services {
                 clock: clock.clone(),
                 supervision: supervision.clone(),
             },
-            |timings| timings.longest_sleep = Duration::from_millis(50),
+            |timings| timings.longest_sleep = longest_sleep,
         )
         .await
         .unwrap();
@@ -147,6 +154,10 @@ impl Services {
 impl Observer {
     /// An Observer whose owner `ada` saved launch settings for the fake.
     async fn new(auto_start: bool) -> Self {
+        Self::with_longest_sleep(auto_start, Duration::from_millis(50)).await
+    }
+
+    async fn with_longest_sleep(auto_start: bool, longest_sleep: Duration) -> Self {
         let port = Port::lease().await;
         let dir = tempfile::tempdir().unwrap();
         let build = dir.path().join("build");
@@ -200,11 +211,13 @@ impl Observer {
 
         // On a whole second, as a one-off planned in minutes is.
         let clock = Clock::manual(Timestamp::now().round(Unit::Second).unwrap());
-        let (supervision, running, schedule, scheduling) = services.supervise(dir.path(), &clock).await;
+        let (supervision, running, schedule, scheduling) =
+            services.supervise(dir.path(), &clock, longest_sleep).await;
         Self {
             dir,
             _port: port,
             clock,
+            longest_sleep,
             db: services.db,
             audit: services.audit,
             servers: services.servers,
@@ -335,8 +348,9 @@ fake_print running {cfg_file}
         self.stop_observer().await;
         self.db.clone().close().await.unwrap();
         let services = Services::open(self.dir.path()).await;
-        let (supervision, running, schedule, scheduling) =
-            services.supervise(self.dir.path(), &self.clock).await;
+        let (supervision, running, schedule, scheduling) = services
+            .supervise(self.dir.path(), &self.clock, self.longest_sleep)
+            .await;
         self.db = services.db;
         self.audit = services.audit;
         self.servers = services.servers;
@@ -744,4 +758,63 @@ async fn a_planned_one_off_survives_a_restart_of_observer() {
         json!({ "scheduled": { "at": planned.at, "source": "oneOff", "plannedBy": "ada" } })
     );
     observer.stop_observer().await;
+}
+
+/// The schedule sleeps on a monotonic clock while its restarts are wall-clock instants. A clock
+/// that jumps past a restart's time makes it due at the next turn of the schedule's loop, and the
+/// changes of a busy server's status are such turns: they must not each start the wait over.
+#[tokio::test]
+async fn a_restart_the_clock_jumped_past_begins_at_once_while_the_status_keeps_changing() {
+    let mut observer = Observer::with_longest_sleep(false, Duration::from_secs(30)).await;
+    observer.supervision.start_server(&observer.owner).await.unwrap();
+    observer.state(ServerState::Online).await;
+    observer
+        .schedule
+        .restart_once(
+            &observer.owner,
+            OneOffRequest {
+                in_minutes: Some(2),
+                at: None,
+            },
+        )
+        .await
+        .unwrap();
+    observer
+        .line_of(r#""reason":"oneOff","secondsRemaining":120}"#)
+        .await;
+    // Players coming and going, as `sv_maxclients` changing stands in for them on the fake.
+    let churn = {
+        let supervision = observer.supervision.clone();
+        let owner = observer.owner.clone();
+        tokio::spawn(async move {
+            for max in 9..200 {
+                let line = format!("set sv_maxclients {max}");
+                let _ = supervision
+                    .command(&owner, &line, CONSOLE_ROUTE.0, CONSOLE_ROUTE.1)
+                    .await;
+                tokio::time::sleep(Duration::from_millis(400)).await;
+            }
+        })
+    };
+    observer
+        .until(|status| {
+            status
+                .players
+                .is_some_and(|players| players.max.is_some_and(|max| max >= 10))
+        })
+        .await;
+
+    observer
+        .clock
+        .advance(SignedDuration::from_mins(2) + SignedDuration::from_secs(1));
+    let jumped = Instant::now();
+    observer.state(ServerState::Stopping).await;
+    let waited = jumped.elapsed();
+    churn.abort();
+    observer.stop_observer().await;
+
+    assert!(
+        waited < Duration::from_secs(5),
+        "the restart began {waited:?} after the clock passed its time"
+    );
 }
