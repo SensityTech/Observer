@@ -464,8 +464,13 @@ async fn follow(
             }
             event = events.recv() => match event {
                 Ok(event) => match event.kind {
-                    EventKind::State { to, cause: new, .. } => {
-                        cause = Some(new);
+                    EventKind::State { from, to, cause: new } => {
+                        // A server stopped on request ends with its exit; who asked says more.
+                        let asked = matches!(cause, Some(Cause::Requested { .. } | Cause::ConsoleQuit { .. }));
+                        let exit_of_a_stop = from == State::Stopping && matches!(new, Cause::Exited { .. });
+                        if !(exit_of_a_stop && to == State::Stopped && asked) {
+                            cause = Some(new);
+                        }
                         if to != State::Crashed {
                             restart_at = None;
                         }

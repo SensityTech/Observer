@@ -256,7 +256,11 @@ async fn a_server_started_from_the_panel_runs_a_command_then_stops_gracefully() 
     observer.supervision.stop_server(&observer.owner).await.unwrap();
     let stopped = observer.state(ServerState::Stopped).await;
 
-    assert!(matches!(stopped.cause, Some(StateCause::Exited { .. })));
+    assert_eq!(
+        stopped.cause,
+        Some(StateCause::Requested { by: "ada".to_owned() }),
+        "who stopped it says more than its exit code"
+    );
     assert_eq!(
         (stopped.started_at, stopped.players, stopped.build),
         (None, None, None)
