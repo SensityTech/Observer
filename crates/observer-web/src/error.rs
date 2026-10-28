@@ -66,8 +66,13 @@ fn status(code: ErrorCode) -> StatusCode {
         | ErrorCode::LaunchNotConfigured
         | ErrorCode::ServerRunning
         | ErrorCode::ServerNotRunning
-        | ErrorCode::ServerStopping => StatusCode::CONFLICT,
-        ErrorCode::LaunchFailed => StatusCode::UNPROCESSABLE_ENTITY,
+        | ErrorCode::ServerStopping
+        | ErrorCode::NothingToSkip
+        | ErrorCode::AlreadySkipped
+        | ErrorCode::NothingToRestore
+        | ErrorCode::NothingToDelay
+        | ErrorCode::NoOneOff => StatusCode::CONFLICT,
+        ErrorCode::LaunchFailed | ErrorCode::DelayTooLong => StatusCode::UNPROCESSABLE_ENTITY,
         ErrorCode::JsonRequired => StatusCode::UNSUPPORTED_MEDIA_TYPE,
         ErrorCode::UnknownHost => StatusCode::MISDIRECTED_REQUEST,
         ErrorCode::InvalidUsername
@@ -77,7 +82,8 @@ fn status(code: ErrorCode) -> StatusCode {
         | ErrorCode::UnknownPermissions
         | ErrorCode::InvalidLaunchSettings
         | ErrorCode::CommandRefused
-        | ErrorCode::InvalidRequest => StatusCode::BAD_REQUEST,
+        | ErrorCode::InvalidRequest
+        | ErrorCode::InvalidSchedule => StatusCode::BAD_REQUEST,
         ErrorCode::TooManyAttempts | ErrorCode::TooManySockets | ErrorCode::TooManyCommands => {
             StatusCode::TOO_MANY_REQUESTS
         }

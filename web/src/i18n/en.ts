@@ -640,6 +640,13 @@ export const en = {
             console_command_sent: 'Console command',
             console_log_downloaded: 'Console log downloaded',
             server_crash_loop: 'Crash loop: restarts stopped',
+            schedule_changed: 'Schedule changed',
+            scheduled_restart_skipped: 'Scheduled restart skipped',
+            scheduled_restart_restored: 'Scheduled restart restored',
+            scheduled_restart_delayed: 'Scheduled restart delayed',
+            scheduled_restart_missed: 'Scheduled restart missed',
+            one_off_restart_planned: 'Single restart planned',
+            one_off_restart_cancelled: 'Single restart cancelled',
         } satisfies Record<AuditAction, string>,
         outcomes: {
             success: 'Success',
@@ -799,6 +806,19 @@ export const en = {
         json_required: 'Observer refused a malformed request. Reload the page.',
         invalid_request: 'Observer refused a malformed request. Reload the page.',
         internal: 'Observer hit an internal error. Its log has the details.',
+        invalid_schedule: 'Some settings need fixing. Each one says why next to its field.',
+        nothing_to_skip: 'The schedule has no restart ahead to skip.',
+        already_skipped: 'The next restart of the schedule is skipped already.',
+        nothing_to_restore: 'No skipped restart is still ahead.',
+        nothing_to_delay:
+            'Only a restart of the schedule can be delayed, and the next one is a single restart.',
+        delay_too_long: (params) => {
+            const minutes = numberParam(params, 'maxMinutes');
+            return minutes > 0
+                ? `It can move ${formatDuration('en', minutes * 60)} later at most: no more than 12 hours past its time, and before the next one.`
+                : 'It cannot move any later: no more than 12 hours past its time, and before the next one.';
+        },
+        no_one_off: 'No single restart is planned.',
     } satisfies Record<ErrorCode, ErrorMessage>,
     failure: {
         unknown: 'Something went wrong. Try again.',

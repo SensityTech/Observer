@@ -54,6 +54,13 @@ const AUDIT_ACTIONS = {
     console_command_sent: true,
     console_log_downloaded: true,
     server_crash_loop: true,
+    schedule_changed: true,
+    scheduled_restart_skipped: true,
+    scheduled_restart_restored: true,
+    scheduled_restart_delayed: true,
+    scheduled_restart_missed: true,
+    one_off_restart_planned: true,
+    one_off_restart_cancelled: true,
 } satisfies Record<AuditAction, true>;
 
 const OUTCOMES = { success: true, failure: true, denied: true } satisfies Record<Outcome, true>;

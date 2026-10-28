@@ -8,6 +8,7 @@ mod database;
 pub mod launch;
 pub mod login_failures;
 mod migrations;
+pub mod schedule;
 pub mod sessions;
 pub mod settings;
 pub mod setup_tokens;

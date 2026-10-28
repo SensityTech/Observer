@@ -12,4 +12,5 @@ pub mod error;
 pub mod launch;
 pub mod live;
 pub mod permissions;
+pub mod schedule;
 pub mod server;
