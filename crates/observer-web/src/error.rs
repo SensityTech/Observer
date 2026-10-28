@@ -52,6 +52,7 @@ fn status(code: ErrorCode) -> StatusCode {
         | ErrorCode::ReauthRequired
         | ErrorCode::WrongPassword
         | ErrorCode::Forbidden
+        | ErrorCode::OwnerOnly
         | ErrorCode::SelfEdit
         | ErrorCode::OwnerProtected
         | ErrorCode::Escalation
@@ -67,6 +68,7 @@ fn status(code: ErrorCode) -> StatusCode {
         | ErrorCode::PasswordTooLong
         | ErrorCode::PasswordUnchanged
         | ErrorCode::UnknownPermissions
+        | ErrorCode::InvalidLaunchSettings
         | ErrorCode::InvalidRequest => StatusCode::BAD_REQUEST,
         ErrorCode::TooManyAttempts => StatusCode::TOO_MANY_REQUESTS,
         ErrorCode::Busy => StatusCode::SERVICE_UNAVAILABLE,

@@ -2,7 +2,7 @@ use std::net::SocketAddr;
 use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::Context;
-use observer_app::{Accounts, AuditLog, Clock, PasswordCost};
+use observer_app::{Accounts, AuditLog, Clock, PasswordCost, Servers};
 use observer_store::{BackupKind, Database};
 use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
@@ -28,7 +28,8 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
         .with_context(|| format!("cannot open {}", paths.database.display()))?;
     let clock = Clock::system();
     let accounts = Accounts::new(db.clone(), clock.clone(), PasswordCost::STANDARD).await?;
-    let audit = AuditLog::new(db.clone(), clock);
+    let audit = AuditLog::new(db.clone(), clock.clone());
+    let servers = Servers::new(db.clone(), clock);
     let instance_id = db.instance_id().await?;
 
     let listener = TcpListener::bind(config.http.listen)
@@ -42,6 +43,7 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
         VERSION,
         accounts.clone(),
         audit.clone(),
+        servers,
         &instance_id,
         &config.http.hosts,
     );

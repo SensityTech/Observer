@@ -9,7 +9,7 @@ use axum::extract::connect_info::MockConnectInfo;
 use axum::http::{HeaderMap, Method, Request, StatusCode, header};
 use http_body_util::BodyExt;
 use jiff::SignedDuration;
-use observer_app::{Accounts, AuditLog, Clock, PasswordCost};
+use observer_app::{Accounts, AuditLog, Clock, PasswordCost, Servers};
 use observer_domain::audit::ActorKind;
 use observer_store::Database;
 use serde_json::{Value, json};
@@ -75,11 +75,13 @@ impl Server {
             .await
             .unwrap();
         let audit = AuditLog::new(db.clone(), clock.clone());
+        let servers = Servers::new(db.clone(), clock.clone());
         let instance_id = db.instance_id().await.unwrap();
         let state = AppState::new(
             "0.0.0-test",
             accounts.clone(),
             audit,
+            servers,
             &instance_id,
             &["observer.test".to_owned()],
         );
@@ -833,4 +835,116 @@ async fn a_request_for_a_name_observer_was_not_given_is_refused() {
         let reply = server.send(login(known)).await;
         assert_eq!(reply.code(), "invalid_credentials", "{known}");
     }
+}
+
+/// A folder of the test's host, as its platform writes paths.
+fn folder(name: &str) -> String {
+    if cfg!(windows) {
+        format!(r"C:\FXServer\{name}")
+    } else {
+        format!("/srv/fxserver/{name}")
+    }
+}
+
+fn launch_settings() -> Value {
+    json!({
+        "buildPath": folder("build"),
+        "dataPath": folder("server-data"),
+        "cfgFile": "server.cfg",
+        "onesync": "on",
+        "autoStart": true,
+        "txadminEvents": false,
+        "extraArguments": [{ "name": "sv_enforceGameBuild", "value": "3258" }],
+    })
+}
+
+const LAUNCH: &str = "/api/servers/default/launch";
+
+#[tokio::test]
+async fn the_owner_reads_and_saves_the_launch_settings_with_their_password_again() {
+    let server = Server::new().await;
+    let owner = server.owner().await;
+
+    let unset = server.call(Method::GET, LAUNCH, Some(&owner), None).await;
+    let saved = server
+        .call(Method::PUT, LAUNCH, Some(&owner), Some(launch_settings()))
+        .await;
+    let read = server.call(Method::GET, LAUNCH, Some(&owner), None).await;
+    server.clock.advance(SignedDuration::from_mins(11));
+    let stale = server
+        .call(Method::PUT, LAUNCH, Some(&owner), Some(launch_settings()))
+        .await;
+
+    assert_eq!(unset.status, StatusCode::OK);
+    assert_eq!(unset.json(), Value::Null);
+    assert_eq!(saved.status, StatusCode::OK, "{}", saved.text);
+    assert_eq!(saved.json(), launch_settings());
+    assert_eq!(read.json(), launch_settings());
+    assert_eq!(stale.code(), "reauth_required");
+}
+
+#[tokio::test]
+async fn launch_settings_with_issues_are_refused_with_each_issue() {
+    let server = Server::new().await;
+    let owner = server.owner().await;
+    let mut settings = launch_settings();
+    settings["cfgFile"] = json!("../server.cfg");
+    settings["extraArguments"] = json!([{ "name": "exec", "value": "other.cfg; quit" }]);
+    let mut unknown = launch_settings();
+    unknown["onesync"] = json!("sometimes");
+
+    let refused = server
+        .call(Method::PUT, LAUNCH, Some(&owner), Some(settings))
+        .await;
+    let malformed = server
+        .call(Method::PUT, LAUNCH, Some(&owner), Some(unknown))
+        .await;
+
+    assert_eq!(refused.status, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        refused.json(),
+        json!({
+            "code": "invalid_launch_settings",
+            "params": { "issues": [
+                { "field": "cfgFile", "index": null, "problem": "invalidCfgFile" },
+                { "field": "argumentName", "index": 0, "problem": "reserved" },
+                { "field": "argumentValue", "index": 0, "problem": "forbiddenCharacter" },
+            ] },
+        })
+    );
+    assert_eq!(malformed.code(), "invalid_request");
+    let stored = server.call(Method::GET, LAUNCH, Some(&owner), None).await;
+    assert_eq!(stored.json(), Value::Null);
+}
+
+#[tokio::test]
+async fn a_user_holding_every_permission_still_cannot_touch_the_launch_settings() {
+    let server = Server::new().await;
+    let owner = server.owner().await;
+    let (grace, temporary) = server.user(&owner, "grace", "fff").await;
+    let change = json!({ "current": temporary, "next": "grace chose this one" });
+    server
+        .call(Method::POST, "/api/account/password", Some(&grace), Some(change))
+        .await;
+
+    let read = server.call(Method::GET, LAUNCH, Some(&grace), None).await;
+    let write = server
+        .call(Method::PUT, LAUNCH, Some(&grace), Some(launch_settings()))
+        .await;
+
+    assert_eq!(read.status, StatusCode::FORBIDDEN);
+    assert_eq!(read.code(), "owner_only");
+    assert_eq!(write.code(), "owner_only");
+    let denied = server
+        .call(
+            Method::GET,
+            "/api/audit?action=permission_denied",
+            Some(&owner),
+            None,
+        )
+        .await;
+    let entries = denied.json()["entries"].clone();
+    assert_eq!(entries.as_array().unwrap().len(), 1);
+    assert_eq!(entries[0]["target"], "PUT /api/servers/default/launch");
+    assert_eq!(entries[0]["actorName"], "grace");
 }

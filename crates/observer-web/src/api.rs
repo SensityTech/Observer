@@ -5,6 +5,7 @@
 mod account;
 mod audit;
 mod auth;
+mod servers;
 mod setup;
 mod users;
 
@@ -34,7 +35,7 @@ pub(crate) struct Route {
 
 #[rustfmt::skip]
 pub(crate) fn routes() -> Vec<Route> {
-    use Gate::{Account, Permission, Public, Reauthenticated, Session};
+    use Gate::{Account, Owner, Permission, Public, Reauthenticated, ReauthenticatedOwner, Session};
     use Method as M;
     use Permissions as P;
 
@@ -42,6 +43,10 @@ pub(crate) fn routes() -> Vec<Route> {
     let read_users = Permission(P::USERS_MANAGE);
     let change_users = Reauthenticated(P::USERS_MANAGE);
     let read_audit = Permission(P::AUDIT_VIEW);
+    // Launch settings choose what the host runs: the owner's alone, and their password again to
+    // change them.
+    let read_launch = Owner;
+    let edit_launch = ReauthenticatedOwner;
     vec![
         route(M::GET,    "/health",                     Public,       health),
         route(M::GET,    "/setup",                      Public,       setup::status),
@@ -62,6 +67,8 @@ pub(crate) fn routes() -> Vec<Route> {
         route(M::POST,   "/users/{id}/revoke-sessions", change_users, users::revoke_sessions),
         route(M::GET,    "/audit",                      read_audit,   audit::page),
         route(M::GET,    "/audit/export.csv",           read_audit,   audit::export),
+        route(M::GET,    "/servers/default/launch",     read_launch,  servers::launch_settings),
+        route(M::PUT,    "/servers/default/launch",     edit_launch,  servers::change_launch_settings),
     ]
 }
 

@@ -14,7 +14,7 @@ mod tests;
 use std::sync::Arc;
 
 use axum::{Router, middleware};
-use observer_app::{Accounts, AuditLog};
+use observer_app::{Accounts, AuditLog, Servers};
 use tower_http::catch_panic::CatchPanicLayer;
 use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::trace::TraceLayer;
@@ -30,6 +30,7 @@ pub struct AppState {
     pub version: &'static str,
     pub accounts: Accounts,
     pub audit: AuditLog,
+    pub servers: Servers,
     /// Cookies ignore ports, so the name carries the instance id: two Observers on one host never
     /// read each other's sessions.
     cookie: String,
@@ -42,6 +43,7 @@ impl AppState {
         version: &'static str,
         accounts: Accounts,
         audit: AuditLog,
+        servers: Servers,
         instance_id: &str,
         hosts: &[String],
     ) -> Self {
@@ -49,6 +51,7 @@ impl AppState {
             version,
             accounts,
             audit,
+            servers,
             cookie: format!("observer_session_{instance_id}"),
             hosts: hosts.into(),
         }

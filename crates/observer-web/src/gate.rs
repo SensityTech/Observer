@@ -25,6 +25,11 @@ pub(crate) enum Gate {
     Permission(Permissions),
     /// The permission, and the password entered within the last ten minutes.
     Reauthenticated(Permissions),
+    /// The owner, whatever anyone else holds: launch configuration amounts to running code on the
+    /// host, which no permission grants.
+    Owner,
+    /// The owner, with the password entered within the last ten minutes.
+    ReauthenticatedOwner,
 }
 
 #[derive(Clone)]
@@ -78,10 +83,14 @@ async fn admit(
     if caller.must_change_password && guard.gate != Gate::Account {
         return Err(ErrorCode::PasswordChangeRequired.into());
     }
-    if let Gate::Permission(permission) | Gate::Reauthenticated(permission) = guard.gate {
-        accounts.authorize(&caller, permission, method, path).await?;
+    match guard.gate {
+        Gate::Permission(permission) | Gate::Reauthenticated(permission) => {
+            accounts.authorize(&caller, permission, method, path).await?;
+        }
+        Gate::Owner | Gate::ReauthenticatedOwner => accounts.authorize_owner(&caller, method, path).await?,
+        Gate::Public | Gate::Account | Gate::Session => {}
     }
-    if let Gate::Reauthenticated(_) = guard.gate {
+    if let Gate::Reauthenticated(_) | Gate::ReauthenticatedOwner = guard.gate {
         accounts.require_reauthentication(&caller)?;
     }
     Ok(caller)
