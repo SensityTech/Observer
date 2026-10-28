@@ -13,3 +13,4 @@ pub mod recovery;
 pub mod stdin;
 pub mod supervisor;
 pub mod trace;
+pub mod tree;

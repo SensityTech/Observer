@@ -93,6 +93,78 @@ pub fn mask_command(line: &str) -> Option<String> {
     Some(mask(&shown).unwrap_or(shown))
 }
 
+/// A process's command line as the diagnostics and the audit log may show it: what [`mask`] hides,
+/// and the password of a URL (`mysql://user:pass@host`), the `password=` and `pwd=` pairs of a
+/// connection string, `--password value`, the `-p<password>` of `mysql` and `mysqldump`, and the
+/// credentials of an `Authorization` header. Control characters are dropped. PowerShell's
+/// `-enc <base64>` stays: it is what the program was told to run, not a secret.
+pub fn mask_command_line(line: &str) -> String {
+    let line: String = line.chars().filter(|c| !c.is_control()).collect();
+    let lower = line.to_ascii_lowercase();
+    let mut secrets = Vec::new();
+    for (start, _) in lower.match_indices("://") {
+        let authority = start + "://".len();
+        let end = until(&line, authority, |c| {
+            c == '/' || c.is_whitespace() || "\"'?#".contains(c)
+        });
+        if let Some(at) = line[authority..end].rfind('@')
+            && let Some(colon) = line[authority..authority + at].find(':')
+        {
+            secrets.push(authority + colon + 1..authority + at);
+        }
+    }
+    for key in ["password=", "pwd="] {
+        for (start, _) in lower.match_indices(key) {
+            if starts_word(&line, start) {
+                let value = start + key.len();
+                secrets.push(value..until(&line, value, |c| c.is_whitespace() || ";&\"'".contains(c)));
+            }
+        }
+    }
+    for (start, _) in lower.match_indices("--password") {
+        let end = start + "--password".len();
+        if line[end..].starts_with([' ', '\t']) {
+            secrets.push(value_after(&line, end));
+        }
+    }
+    if lower
+        .split(|c: char| !is_word(c))
+        .any(|word| word == "mysql" || word == "mysqldump")
+    {
+        let mut offset = 0;
+        for word in line.split(' ') {
+            if word.len() > 2 && word.starts_with("-p") {
+                secrets.push(offset + 2..offset + word.len());
+            }
+            offset += word.len() + 1;
+        }
+    }
+    for (start, _) in lower.match_indices("authorization:") {
+        let scheme = start + "authorization:".len();
+        let scheme = scheme + line[scheme..].len() - line[scheme..].trim_start().len();
+        let scheme_end = until(&line, scheme, |c| c.is_whitespace() || "\"'".contains(c));
+        let rest = &line[scheme_end..];
+        let token = scheme_end + rest.len() - rest.trim_start_matches([' ', '\t']).len();
+        let credentials = if token > scheme_end { token } else { scheme };
+        secrets.push(credentials..until(&line, credentials, |c| c.is_whitespace() || "\"'".contains(c)));
+    }
+
+    secrets.retain(|secret| !secret.is_empty());
+    secrets.sort_by_key(|secret| secret.start);
+    let mut shown = String::with_capacity(line.len());
+    let mut copied = 0;
+    for secret in secrets {
+        if secret.start < copied {
+            continue;
+        }
+        shown.push_str(&line[copied..secret.start]);
+        shown.push_str(REDACTED);
+        copied = secret.end;
+    }
+    shown.push_str(&line[copied..]);
+    mask(&shown).unwrap_or(shown)
+}
+
 /// How many words name the secret convar a command sets, `set rcon_password` or `rcon_password`
 /// alone, when a value follows them.
 fn sets_secret(words: &[String]) -> Option<usize> {
@@ -382,5 +454,65 @@ mod tests {
         ] {
             assert_eq!(mask(text), None, "{text:?}");
         }
+    }
+
+    #[test]
+    fn a_url_keeps_its_user_and_loses_its_password() {
+        assert_eq!(
+            mask_command_line("node sync.js mysql://fivem:hunter2@127.0.0.1:3306/qbcore"),
+            "node sync.js mysql://fivem:[REDACTED]@127.0.0.1:3306/qbcore"
+        );
+        assert_eq!(
+            mask_command_line("curl https://example.com/a@b"),
+            "curl https://example.com/a@b"
+        );
+    }
+
+    #[test]
+    fn connection_string_passwords_are_masked() {
+        assert_eq!(
+            mask_command_line(r#"tool.exe "Server=db;User Id=sa;Password=hunter2;" pwd=x2"#),
+            r#"tool.exe "Server=db;User Id=sa;Password=[REDACTED];" pwd=[REDACTED]"#
+        );
+    }
+
+    #[test]
+    fn a_password_option_is_masked_with_or_without_an_equals_sign() {
+        assert_eq!(
+            mask_command_line("backup --password hunter2 --password=x3 --host db"),
+            "backup --password [REDACTED] --password=[REDACTED] --host db"
+        );
+    }
+
+    #[test]
+    fn mysql_s_short_password_option_is_masked_and_its_port_is_not() {
+        assert_eq!(
+            mask_command_line("/usr/bin/mysqldump -ufivem -phunter2 -P3306 qbcore"),
+            "/usr/bin/mysqldump -ufivem -p[REDACTED] -P3306 qbcore"
+        );
+        assert_eq!(
+            mask_command_line("ffmpeg -pix_fmt yuv420p"),
+            "ffmpeg -pix_fmt yuv420p"
+        );
+    }
+
+    #[test]
+    fn an_authorization_header_keeps_its_scheme() {
+        assert_eq!(
+            mask_command_line(r#"curl -H "Authorization: Bearer eyJhbGciOi.x.y" https://api.example.com"#),
+            r#"curl -H "Authorization: Bearer [REDACTED]" https://api.example.com"#
+        );
+    }
+
+    #[test]
+    fn console_secrets_and_control_characters_go_and_encoded_commands_stay() {
+        assert_eq!(
+            mask_command_line("FXServer.exe +set sv_licenseKey cfxk_abc123 +set\u{7}x"),
+            "FXServer.exe +set sv_licenseKey [REDACTED] +setx"
+        );
+        assert_eq!(
+            mask_command_line("powershell -NoProfile -enc SQBFAFgAIAAoAE4AZQB3AC0ATwBiAGoA"),
+            "powershell -NoProfile -enc SQBFAFgAIAAoAE4AZQB3AC0ATwBiAGoA"
+        );
     }
 }
