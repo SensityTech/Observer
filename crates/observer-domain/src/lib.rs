@@ -8,6 +8,7 @@ pub mod accounts;
 pub mod api;
 pub mod audit;
 pub mod delegation;
+pub mod diagnostics;
 pub mod error;
 pub mod launch;
 pub mod live;
