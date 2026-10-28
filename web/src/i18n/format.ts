@@ -33,7 +33,8 @@ const BYTE_UNITS = ['KB', 'MB', 'GB', 'TB'] as const;
  * so a host of 64 GiB reads `64 GB`. Whole bytes take Intl's long name: `512 bytes`.
  */
 export const formatBytes = (locale: string, bytes: number) => {
-    if (Math.abs(bytes) < 1024) {
+    // Rates come with decimals: 1023.6 bytes a second would read `1,024 bytes` once rounded.
+    if (Math.round(Math.abs(bytes)) < 1024) {
         return new Intl.NumberFormat(locale, {
             style: 'unit',
             unit: 'byte',

@@ -43,6 +43,11 @@ describe('formatBytes', () => {
         expect(formatBytes('en', 512)).toBe('512 bytes');
         expect(formatBytes('en', 1)).toBe('1 byte');
     });
+
+    it('should pass to kilobytes a rate that rounds to 1024 bytes', () => {
+        expect(formatBytes('en', 1023.4)).toBe('1,023 bytes');
+        expect(formatBytes('en', 1023.6)).toBe('1 KB');
+    });
 });
 
 describe('formatBitRate', () => {
