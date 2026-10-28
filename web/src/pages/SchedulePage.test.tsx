@@ -131,6 +131,14 @@ describe('SchedulePage', () => {
         live.stop();
     });
 
+    it('should not call every time moved when the browser lacks the zone and shows UTC', async () => {
+        const { getByText, queryByText, live } = await page('1', { ...SCHEDULE, zone: 'Atlantis/Lost_City' });
+
+        expect(getByText(en.schedule.zoneUnknown('Atlantis/Lost_City'))).not.toBeNull();
+        expect(queryByText(en.schedule.moved)).toBeNull();
+        live.stop();
+    });
+
     it('should say why an action does nothing for an account that cannot take it', async () => {
         const { getByRole, getByText, live } = await page('1');
 

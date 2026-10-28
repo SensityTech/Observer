@@ -596,6 +596,8 @@ function Upcoming({
     const { t } = useI18n();
     const zoned = useZoned(schedule.zone);
     const offsetNow = zoned.offset(now);
+    // A browser without the zone shows UTC times, which tell nothing of a clock change there.
+    const known = knownZone(schedule.zone) === schedule.zone;
     const waiting =
         schedule.settings.enabled &&
         schedule.settings.mode === 'interval' &&
@@ -612,7 +614,7 @@ function Upcoming({
                     {schedule.upcoming.map((occurrence) => {
                         const clock = zoned.clock(occurrence.at);
                         const offset = zoned.offset(occurrence.at);
-                        const moved = occurrence.time !== null && occurrence.time !== clock;
+                        const moved = known && occurrence.time !== null && occurrence.time !== clock;
                         return (
                             <li
                                 key={occurrence.at}
