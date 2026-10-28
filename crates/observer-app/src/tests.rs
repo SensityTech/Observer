@@ -1154,7 +1154,6 @@ fn folder(name: &str) -> String {
 
 fn launch_settings() -> LaunchSettings {
     LaunchSettings {
-        build_path: folder("build"),
         data_path: folder("server-data"),
         cfg_file: "server.cfg".to_owned(),
         onesync: OneSync::On,
@@ -1200,6 +1199,7 @@ async fn launch_settings_are_stored_once_checked_with_what_changed_in_the_audit_
         Some(StoredLaunch {
             settings: edited,
             version: 2,
+            legacy_build_path: None,
         })
     );
     let changes = lab.entries(AuditAction::LaunchSettingsChanged).await;
@@ -1216,7 +1216,6 @@ async fn launch_settings_are_stored_once_checked_with_what_changed_in_the_audit_
     assert_eq!(
         changes[1].details,
         json!({
-            "buildPath": true,
             "dataPath": true,
             "cfgFile": true,
             "onesync": { "before": null, "after": "on" },
@@ -1304,6 +1303,7 @@ async fn a_launch_change_made_from_settings_replaced_since_is_refused() {
         Some(StoredLaunch {
             settings: from_elsewhere,
             version: 2,
+            legacy_build_path: None,
         })
     );
     assert_eq!(lab.entries(AuditAction::LaunchSettingsChanged).await.len(), 2);

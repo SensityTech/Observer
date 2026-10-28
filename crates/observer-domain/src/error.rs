@@ -86,6 +86,40 @@ pub enum ErrorCode {
     DelayTooLong,
     /// No single restart is planned.
     NoOneOff,
+    /// An install or an import runs already; one at a time.
+    JobRunning,
+    /// No install or import runs.
+    NoJob,
+    /// The job is past its validation: the build is being installed and can no longer be stopped.
+    JobCommitting,
+    /// No source of the catalog answered, and none answered in the last day.
+    CatalogUnavailable,
+    /// The catalog does not list the build, even after a refresh.
+    BuildNotListed,
+    /// Params: `reason`, `noCommit` when only the support policy names the build, `noArchive` when
+    /// there is no archive of it for this platform.
+    NotDownloadable,
+    AlreadyInstalled,
+    /// The build is past its end of life; the request may allow it.
+    EndOfLife,
+    BuildNotInstalled,
+    /// Params: `reason`, a `BrokenReason`.
+    BuildBroken,
+    /// Going below build 6449 after a newer build ran needs a confirmation. Params: `highestRun`.
+    KvpRollback,
+    /// The schedule has no restart ahead to apply the build at.
+    NoScheduledRestart,
+    /// The build is the selected one already.
+    AlreadySelected,
+    NoPending,
+    /// Params: `reasons`, the `Protection`s of the build.
+    BuildProtected,
+    /// A process still runs from the build's folder.
+    BuildInUse,
+    /// Params: `issues`, the `ArtifactSettingsIssue`s found.
+    InvalidArtifactSettings,
+    /// FXServer cannot start before a build is installed or imported and selected.
+    NoBuildSelected,
 }
 
 /// The body of every error response.

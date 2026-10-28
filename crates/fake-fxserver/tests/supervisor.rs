@@ -15,6 +15,7 @@ use observer_domain::server::SpawnFailure;
 use observer_fxserver::bridge::BridgeEvent;
 use observer_fxserver::console::{ConsoleHub, LineKind, plain};
 use observer_fxserver::health::{HangCause, HealthLimits, Problem};
+use observer_fxserver::launch::ServerLaunch;
 use observer_fxserver::perf::Thread;
 use observer_fxserver::recovery::RecoveryPolicy;
 use observer_fxserver::stdin::{StdinError, UserCommand};
@@ -59,7 +60,7 @@ impl Drop for Port {
 
 struct Lab {
     dir: TempDir,
-    launch: LaunchSettings,
+    launch: ServerLaunch,
     console: Arc<ConsoleHub>,
     supervisor: Supervisor,
     task: Option<JoinHandle<()>>,
@@ -94,14 +95,17 @@ impl Lab {
                 value: (*value).to_owned(),
             })
             .collect();
-        let launch = LaunchSettings {
-            build_path: dir.path().join("build").to_str().unwrap().to_owned(),
+        let settings = LaunchSettings {
             data_path: data.to_str().unwrap().to_owned(),
             cfg_file: "server.cfg".to_owned(),
             onesync: OneSync::Off,
             auto_start: false,
             txadmin_events: false,
             extra_arguments,
+        };
+        let launch = ServerLaunch {
+            build: dir.path().join("build"),
+            settings,
         };
         let mut settings = Settings::new(Some(launch.clone()), dir.path().join("observer-data"));
         settings.health = HealthLimits {
@@ -354,7 +358,7 @@ async fn a_new_launch_applies_from_the_next_start() {
     fs::write(&cfg, text).unwrap();
     lab.supervisor.start("test").await.unwrap();
     let mut launch = lab.launch.clone();
-    launch.extra_arguments.push(ExtraArgument {
+    launch.settings.extra_arguments.push(ExtraArgument {
         name: "sv_maxclients".to_owned(),
         value: "16".to_owned(),
     });

@@ -21,7 +21,6 @@ export const saveLaunch = (change: LaunchChange) => send<StoredLaunch>('PUT', PA
 
 /** What the form starts from before anything is saved. */
 export const DEFAULT_LAUNCH: LaunchSettings = {
-    buildPath: '',
     dataPath: '',
     cfgFile: 'server.cfg',
     onesync: 'on',
@@ -31,7 +30,6 @@ export const DEFAULT_LAUNCH: LaunchSettings = {
 };
 
 const FIELDS = {
-    buildPath: true,
     dataPath: true,
     cfgFile: true,
     extraArguments: true,
@@ -83,7 +81,6 @@ export const countChanges = (saved: LaunchSettings, draft: LaunchSettings) =>
 /** The draft as it is sent: names and paths lose the spaces a paste leaves around them. */
 export const cleaned = (draft: LaunchSettings): LaunchSettings => ({
     ...draft,
-    buildPath: draft.buildPath.trim(),
     dataPath: draft.dataPath.trim(),
     cfgFile: draft.cfgFile.trim(),
     extraArguments: draft.extraArguments.map(({ name, value }) => ({ name: name.trim(), value })),

@@ -197,6 +197,12 @@ function LaunchForm({ saved }: { saved: StoredLaunch | null }) {
         <form ref={form} className="flex flex-col gap-3" onSubmit={submit} noValidate>
             {saved === null && <Notice tone="warning">{t.server.unsaved}</Notice>}
             {stale && outcome === null && <Notice tone="warning">{t.server.changedElsewhere}</Notice>}
+            {saved?.legacyBuildPath != null && (
+                <Notice tone="warning">
+                    {t.server.legacyBuild}{' '}
+                    <span className="font-mono break-all">{saved.legacyBuildPath}</span>
+                </Notice>
+            )}
             {outcome && (
                 <Notice ref={notice} tabIndex={-1} tone={outcome.tone}>
                     {outcome.message}
@@ -205,16 +211,6 @@ function LaunchForm({ saved }: { saved: StoredLaunch | null }) {
 
             <Card id="server-files" icon={FolderOpen} title={t.server.files}>
                 <div className="flex max-w-2xl flex-col gap-4">
-                    <PathField
-                        label={t.server.buildPath}
-                        hint={t.server.buildPathHint}
-                        value={fields.buildPath}
-                        error={issue('buildPath')}
-                        onChange={(value) => {
-                            edit('buildPath', value);
-                            forget('buildPath');
-                        }}
-                    />
                     <PathField
                         label={t.server.dataPath}
                         hint={t.server.dataPathHint}

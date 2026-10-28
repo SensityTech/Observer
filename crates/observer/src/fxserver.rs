@@ -14,6 +14,7 @@ use clap::Args;
 use jiff::tz::TimeZone;
 use observer_domain::launch::{ExtraArgument, LaunchSettings, OneSync};
 use observer_fxserver::console::{ConsoleHub, ConsoleLine, ConsoleLog, LineKind, LogLimits, plain};
+use observer_fxserver::launch::ServerLaunch;
 use observer_fxserver::stdin::{StdinError, UserCommand};
 use observer_fxserver::supervisor::{ControlError, Event, EventKind, Settings, State, Supervisor};
 use tokio::sync::{broadcast, mpsc, oneshot};
@@ -85,18 +86,20 @@ pub async fn run(config: Config, args: RunArgs) -> anyhow::Result<()> {
     .context("cannot open the console log")?;
     let console = Arc::new(ConsoleHub::new(Some(&console_log)));
     let mut settings = Settings::new(
-        Some(LaunchSettings {
-            build_path: full_path(&args.build)?,
-            data_path: full_path(&args.data)?,
-            cfg_file: args.cfg,
-            onesync: args.onesync,
-            auto_start: false,
-            txadmin_events: false,
-            extra_arguments: args
-                .extra
-                .into_iter()
-                .map(|(name, value)| ExtraArgument { name, value })
-                .collect(),
+        Some(ServerLaunch {
+            build: PathBuf::from(full_path(&args.build)?),
+            settings: LaunchSettings {
+                data_path: full_path(&args.data)?,
+                cfg_file: args.cfg,
+                onesync: args.onesync,
+                auto_start: false,
+                txadmin_events: false,
+                extra_arguments: args
+                    .extra
+                    .into_iter()
+                    .map(|(name, value)| ExtraArgument { name, value })
+                    .collect(),
+            },
         }),
         &paths.root,
     );

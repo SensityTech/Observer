@@ -119,6 +119,19 @@ const AUDIT_ACTIONS = {
     scheduled_restart_missed: true,
     one_off_restart_planned: true,
     one_off_restart_cancelled: true,
+    build_install_started: true,
+    build_install_cancelled: true,
+    build_install_finished: true,
+    build_selected: true,
+    pending_build_set: true,
+    pending_build_cancelled: true,
+    pending_build_applied: true,
+    pending_build_dropped: true,
+    probation_passed: true,
+    probation_failed: true,
+    build_rolled_back: true,
+    build_deleted: true,
+    artifact_settings_changed: true,
 } satisfies Record<AuditAction, true>;
 
 const OUTCOMES = { success: true, failure: true, denied: true } satisfies Record<Outcome, true>;
@@ -154,7 +167,12 @@ const SPAWN_FAILURES = {
     spawn: true,
 } satisfies Record<SpawnFailure, true>;
 
-const READINESS = { ready: true, notConfigured: true, invalid: true } satisfies Record<LaunchReadiness, true>;
+const READINESS = {
+    ready: true,
+    notConfigured: true,
+    invalid: true,
+    noBuild: true,
+} satisfies Record<LaunchReadiness, true>;
 
 const LINE_KINDS = { stdout: true, stderr: true, command: true, observer: true } satisfies Record<
     LineKind,

@@ -28,6 +28,7 @@ use observer_fxserver::console::plain;
 use observer_fxserver::health::HealthLimits;
 use observer_fxserver::recovery::RecoveryPolicy;
 use observer_fxserver::supervisor::StopTimings;
+use observer_store::artifacts::{self, ArtifactState};
 use observer_store::{Database, StoreError};
 use serde_json::json;
 use tempfile::TempDir;
@@ -36,6 +37,8 @@ use tokio::task::JoinHandle;
 use tokio::time::timeout;
 
 const WAIT: Duration = Duration::from_secs(20);
+/// The build the fake stands in for, installed in Observer's artifacts folder and selected.
+const BUILD: u32 = 35245;
 const CONSOLE_ROUTE: (&str, &str) = ("POST", "/api/servers/default/console");
 /// A quick heartbeat, three players and ticks of 12 ms.
 const FAKE: [(&str, &str); 3] = [
@@ -121,6 +124,7 @@ impl Services {
             accounts: self.accounts.clone(),
             servers: self.servers.clone(),
             data_dir: dir.join("observer-data"),
+            artifacts: dir.join("observer-data/artifacts"),
             console_logs: dir.join("observer-data/logs/console"),
             log: None,
         };
@@ -169,7 +173,7 @@ impl Observer {
     async fn with_longest_sleep(auto_start: bool, longest_sleep: Duration) -> Self {
         let port = Port::lease().await;
         let dir = tempfile::tempdir().unwrap();
-        let build = dir.path().join("build");
+        let build = dir.path().join("observer-data/artifacts").join(BUILD.to_string());
         let program = fake_program(&build);
         fs::create_dir_all(program.parent().unwrap()).unwrap();
         fs::copy(env!("CARGO_BIN_EXE_fake-fxserver"), &program).unwrap();
@@ -201,7 +205,6 @@ impl Observer {
             .await
             .unwrap();
         let launch = LaunchSettings {
-            build_path: build.to_str().unwrap().to_owned(),
             data_path: data.to_str().unwrap().to_owned(),
             cfg_file: "server.cfg".to_owned(),
             onesync: OneSync::On,
@@ -217,6 +220,15 @@ impl Observer {
         services
             .servers
             .change_launch_settings(&owner, Servers::DEFAULT, launch, None)
+            .await
+            .unwrap();
+        let selected = ArtifactState {
+            selected: Some(BUILD),
+            ..ArtifactState::default()
+        };
+        services
+            .db
+            .write(move |tx| artifacts::save_state(tx, Servers::DEFAULT, &selected, Timestamp::now()))
             .await
             .unwrap();
 

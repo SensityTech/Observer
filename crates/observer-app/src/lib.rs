@@ -4,6 +4,7 @@
 //! them.
 
 mod accounts;
+mod artifacts;
 mod audit;
 mod clock;
 mod error;

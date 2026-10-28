@@ -141,5 +141,8 @@ export const blocked = (
     if (status.launch === 'notConfigured') {
         return words.notConfigured;
     }
+    if (status.launch === 'noBuild') {
+        return words.noBuild;
+    }
     return status.launch === 'invalid' ? words.invalid : null;
 };

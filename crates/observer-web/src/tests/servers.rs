@@ -7,7 +7,7 @@ use axum::http::{Method, StatusCode, header};
 use jiff::SignedDuration;
 use observer_domain::launch::{LaunchSettings, OneSync, StoredLaunch};
 use observer_domain::server::{LaunchReadiness, ServerState};
-use observer_store::launch;
+use observer_store::{artifacts, launch};
 use serde_json::{Value, json};
 
 use super::live::{receive, send};
@@ -31,10 +31,21 @@ impl Server {
             .to_owned()
     }
 
-    /// Settings the rules accept, for folders that are not there: a start fails at the launch.
+    /// Settings the rules accept, for folders that are not there, and a build selected that is
+    /// not there either: a start fails at the launch.
     async fn save_unlaunchable(&self, owner: &Session) {
+        let now = self.clock.now();
+        self.db
+            .write(move |tx| {
+                let state = artifacts::ArtifactState {
+                    selected: Some(37872),
+                    ..artifacts::ArtifactState::default()
+                };
+                artifacts::save_state(tx, "default", &state, now)
+            })
+            .await
+            .unwrap();
         let settings = json!({
-            "buildPath": self.missing("build"),
             "dataPath": self.missing("server-data"),
             "cfgFile": "server.cfg",
             "onesync": "on",
@@ -103,14 +114,46 @@ async fn starting_stopping_and_restarting_take_server_control_and_say_why_they_c
 }
 
 #[tokio::test]
+async fn a_start_without_a_selected_build_is_refused_and_the_status_says_why() {
+    let server = Server::new().await;
+    let owner = server.owner().await;
+    let settings = json!({
+        "dataPath": server.missing("server-data"),
+        "cfgFile": "server.cfg",
+        "onesync": "on",
+        "autoStart": false,
+        "txadminEvents": false,
+        "extraArguments": [],
+    });
+    let saved = server
+        .call(
+            Method::PUT,
+            "/api/servers/default/launch",
+            Some(&owner),
+            Some(json!({ "settings": settings, "version": null })),
+        )
+        .await;
+    assert_eq!(saved.status, StatusCode::OK, "{}", saved.text);
+
+    let start = server.call(Method::POST, START, Some(&owner), None).await;
+    let mut socket = server.socket(&owner).await;
+    send(&mut socket, json!({ "type": "sub", "topic": "server.status" })).await;
+    let status = receive(&mut socket).await;
+
+    assert_eq!(start.status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(start.code(), "no_build_selected");
+    assert_eq!(status["data"]["launch"], "noBuild");
+    assert_eq!(server.audited("server_started").await, Vec::<Value>::new());
+}
+
+#[tokio::test]
 async fn stored_settings_this_host_refuses_are_named_before_anything_starts() {
     let server = Server::new().await;
     let owner = server.owner().await;
     // Settings stored by another platform's Observer, or before a rule was added.
     let stored = StoredLaunch {
         settings: LaunchSettings {
-            build_path: "build".to_owned(),
-            data_path: server.missing("server-data"),
+            data_path: "server-data".to_owned(),
             cfg_file: "server.cfg".to_owned(),
             onesync: OneSync::On,
             auto_start: true,
@@ -118,6 +161,7 @@ async fn stored_settings_this_host_refuses_are_named_before_anything_starts() {
             extra_arguments: Vec::new(),
         },
         version: 1,
+        legacy_build_path: None,
     };
     let now = server.clock.now();
     server
@@ -132,7 +176,7 @@ async fn stored_settings_this_host_refuses_are_named_before_anything_starts() {
     assert_eq!(start.code(), "invalid_launch_settings");
     assert_eq!(
         start.json()["params"]["issues"],
-        json!([{ "field": "buildPath", "index": null, "problem": "notAbsolute" }])
+        json!([{ "field": "dataPath", "index": null, "problem": "notAbsolute" }])
     );
 }
 

@@ -7,10 +7,6 @@ import type { OneSync } from "./OneSync";
  */
 export type LaunchSettings = { 
 /**
- * The FXServer build: the folder of `FXServer.exe` on Windows, the one holding `alpine` on Linux.
- */
-buildPath: string, 
-/**
  * The folder of the server's resources and cfg. FXServer runs from it.
  */
 dataPath: string, 

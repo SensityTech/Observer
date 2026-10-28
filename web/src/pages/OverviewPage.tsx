@@ -178,7 +178,9 @@ function ServerState({ status }: { status: ServerStatus }) {
                     t.overview.notConfigured,
                     me.isOwner ? t.overview.notConfiguredOwner : t.overview.notConfiguredOther,
                 ]
-              : [t.overview.invalid, me.isOwner ? t.overview.invalidOwner : t.overview.invalidOther];
+              : status.launch === 'noBuild'
+                ? [t.overview.noBuild, t.overview.noBuildHint]
+                : [t.overview.invalid, me.isOwner ? t.overview.invalidOwner : t.overview.invalidOther];
 
     return (
         <>
@@ -195,7 +197,7 @@ function ServerState({ status }: { status: ServerStatus }) {
                     <p>
                         {launch[0]} {launch[1]}
                     </p>
-                    {me.isOwner && (
+                    {me.isOwner && status.launch !== 'noBuild' && (
                         <Link
                             to="/server"
                             className="inline-flex items-center gap-1.5 font-medium text-ink underline-offset-2 hover:underline"

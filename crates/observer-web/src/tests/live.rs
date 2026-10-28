@@ -448,18 +448,12 @@ async fn the_audit_log_names_changed_launch_settings_without_showing_what_only_t
     send(&mut socket, json!({ "type": "sub", "topic": "audit" })).await;
     assert_eq!(receive(&mut socket).await["type"], "snapshot");
 
-    let build = if cfg!(windows) {
-        r"C:\Hidden\FXServer\build"
-    } else {
-        "/srv/hidden/fxserver/build"
-    };
     let data = if cfg!(windows) {
         r"C:\Hidden\FXServer\server-data"
     } else {
         "/srv/hidden/fxserver/server-data"
     };
     let settings = json!({
-        "buildPath": build,
         "dataPath": data,
         "cfgFile": "configs/hidden.cfg",
         "onesync": "legacy",
@@ -509,7 +503,6 @@ async fn the_audit_log_names_changed_launch_settings_without_showing_what_only_t
     assert_eq!(
         *details,
         json!({
-            "buildPath": true,
             "dataPath": true,
             "cfgFile": true,
             "onesync": { "before": null, "after": "legacy" },

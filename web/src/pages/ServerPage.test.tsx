@@ -11,7 +11,6 @@ import { ServerPage } from './ServerPage';
 const stored = (cfgFile: string, version: number): StoredLaunch => ({
     settings: {
         ...DEFAULT_LAUNCH,
-        buildPath: 'C:\\FXServer\\build',
         dataPath: 'C:\\FXServer\\server-data',
         cfgFile,
         extraArguments: [
@@ -20,6 +19,7 @@ const stored = (cfgFile: string, version: number): StoredLaunch => ({
         ],
     },
     version,
+    legacyBuildPath: null,
 });
 
 const follows = (first: Node, second: Node) =>

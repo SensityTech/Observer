@@ -99,6 +99,7 @@ impl Server {
                 accounts: accounts.clone(),
                 servers: servers.clone(),
                 data_dir: dir.path().join("data"),
+                artifacts: dir.path().join("data/artifacts"),
                 console_logs: dir.path().join("data/logs/console"),
                 log: None,
             },
@@ -923,7 +924,6 @@ fn folder(name: &str) -> String {
 
 fn launch_settings() -> Value {
     json!({
-        "buildPath": folder("build"),
         "dataPath": folder("server-data"),
         "cfgFile": "server.cfg",
         "onesync": "on",
@@ -977,7 +977,7 @@ async fn the_owner_reads_and_saves_the_launch_settings_with_their_password_again
     assert_eq!(saved.status, StatusCode::OK, "{}", saved.text);
     assert_eq!(
         saved.json(),
-        json!({ "settings": launch_settings(), "version": 1 })
+        json!({ "settings": launch_settings(), "version": 1, "legacyBuildPath": null })
     );
     assert_eq!(read.json(), saved.json());
     assert_eq!(outdated.status, StatusCode::CONFLICT);
