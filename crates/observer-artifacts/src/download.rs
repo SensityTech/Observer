@@ -3,7 +3,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use reqwest::header::{CONTENT_RANGE, HeaderMap, HeaderValue, IF_RANGE, LAST_MODIFIED, RANGE};
-use reqwest::{Method, Response, StatusCode, Url};
+use reqwest::{Method, StatusCode, Url};
 use sha2::{Digest, Sha256};
 use tokio::fs::File;
 use tokio::io::{AsyncSeekExt, AsyncWriteExt};
@@ -123,7 +123,7 @@ impl Partial<'_> {
                 self.validator = response.headers().get(LAST_MODIFIED).cloned();
             }
             StatusCode::PARTIAL_CONTENT if resuming => {
-                if content_range(&response) != Some((self.received, self.expected)) {
+                if content_range(response.headers()) != Some((self.received, self.expected)) {
                     self.restart(file).await?;
                     return Err(Error::BadRange {
                         url: self.url.to_string(),
@@ -173,9 +173,10 @@ impl Partial<'_> {
     }
 }
 
-/// `Content-Range: bytes <first>-<last>/<total>`, as `(first, total)`.
-fn content_range(response: &Response) -> Option<(u64, u64)> {
-    let value = response.headers().get(CONTENT_RANGE)?.to_str().ok()?;
+/// `Content-Range: bytes <first>-<last>/<total>`, as `(first, total)`, when the range runs to the
+/// end of the file.
+fn content_range(headers: &HeaderMap) -> Option<(u64, u64)> {
+    let value = headers.get(CONTENT_RANGE)?.to_str().ok()?;
     let (range, total) = value.strip_prefix("bytes ")?.split_once('/')?;
     let (first, last) = range.split_once('-')?;
     let (first, last, total) = (
@@ -183,7 +184,7 @@ fn content_range(response: &Response) -> Option<(u64, u64)> {
         last.parse::<u64>().ok()?,
         total.parse().ok()?,
     );
-    (last + 1 == total).then_some((first, total))
+    (last.checked_add(1)? == total).then_some((first, total))
 }
 
 #[cfg(test)]
@@ -229,6 +230,21 @@ mod tests {
             assert_eq!(seen.last(), Some(&(downloaded.bytes, downloaded.bytes)));
         }
         result
+    }
+
+    fn range(value: &str) -> Option<(u64, u64)> {
+        let mut headers = HeaderMap::new();
+        headers.insert(CONTENT_RANGE, HeaderValue::from_str(value).unwrap());
+        content_range(&headers)
+    }
+
+    #[test]
+    fn a_content_range_is_read_only_when_it_runs_to_the_end_of_the_file() {
+        assert_eq!(range("bytes 1000-399999/400000"), Some((1000, 400_000)));
+        assert_eq!(range("bytes 1000-1999/400000"), None);
+        assert_eq!(range("bytes 1000-18446744073709551615/400000"), None);
+        assert_eq!(range("bytes */400000"), None);
+        assert_eq!(range("1000-399999/400000"), None);
     }
 
     #[tokio::test]
