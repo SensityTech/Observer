@@ -38,6 +38,35 @@ describe('auditDetails', () => {
         );
     });
 
+    it('should show a changed setting as its value before and after', () => {
+        expect(
+            auditDetails(en, format, {
+                onesync: { before: 'on', after: 'legacy' },
+                autoStart: { before: null, after: true },
+            }),
+        ).toBe('OneSync: on → legacy · Start with Observer: not set → yes');
+        expect(auditDetails(en, format, { ownerOnly: true })).toBe('Owner only: yes');
+    });
+
+    it('should say a hidden launch setting changed, and name the arguments set or removed', () => {
+        expect(
+            auditDetails(en, format, {
+                buildPath: true,
+                cfgFile: true,
+                extraArguments: { set: ['sv_hostname', 'sv_enforceGameBuild'], removed: ['sv_projectName'] },
+            }),
+        ).toBe(
+            'Build folder: changed · Config file: changed · ' +
+                'Extra arguments: set sv_hostname, sv_enforceGameBuild; removed sv_projectName',
+        );
+        expect(auditDetails(en, format, { extraArguments: { set: [], removed: ['sv_hostname'] } })).toBe(
+            'Extra arguments: removed sv_hostname',
+        );
+        expect(auditDetails(en, format, { extraArguments: { set: [], removed: [] } })).toBe(
+            'Extra arguments: reordered',
+        );
+    });
+
     it('should show what it does not know as the log stores it', () => {
         expect(auditDetails(en, format, { reason: 'manual', refusal: 'unheard_of', extra: { a: 1 } })).toBe(
             'reason: manual · Reason: unheard_of · extra: {"a":1}',

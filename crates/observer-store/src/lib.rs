@@ -5,6 +5,7 @@
 pub mod audit;
 mod backup;
 mod database;
+pub mod launch;
 pub mod login_failures;
 mod migrations;
 pub mod sessions;

@@ -8,8 +8,9 @@ use observer_domain::error::{ApiError, ErrorCode};
 use observer_domain::permissions::{Danger, Permissions};
 use observer_store::sessions::{self, NewSession, SessionRow};
 use observer_store::users::{self, UserRow};
-use observer_store::{Connection, login_failures};
+use observer_store::{Connection, StoreError, login_failures};
 use serde_json::json;
+use tokio::sync::watch;
 
 use crate::accounts::{self, Accounts, clear_failures, existing};
 use crate::audit::Record;
@@ -62,7 +63,7 @@ pub struct Caller {
 }
 
 impl Caller {
-    fn new(session: &SessionRow, user: &UserRow, client: Client) -> Self {
+    pub(crate) fn new(session: &SessionRow, user: &UserRow, client: Client) -> Self {
         Self {
             session_id: session.id,
             user_id: user.id,
@@ -234,12 +235,7 @@ impl Accounts {
                 if !secrets::same(&session.key_hash, &key_hash) {
                     return Ok(None);
                 }
-                let user = users::get(tx, session.user_id)?.filter(|user| {
-                    user.auth_epoch == session.auth_epoch
-                        && now < session.last_seen_at + IDLE
-                        && now < session.expires_at
-                });
-                let Some(user) = user else {
+                let Some(user) = live_user(tx, &session, now)? else {
                     sessions::delete(tx, session.id)?;
                     return Ok(None);
                 };
@@ -251,6 +247,33 @@ impl Accounts {
             })
             .await?;
         caller.ok_or_else(|| ErrorCode::Unauthenticated.into())
+    }
+
+    /// The caller as their session stands now, or `None` once it has ended: signed out, expired,
+    /// revoked, or its user's password or permissions changed. Unlike a request, this does not
+    /// count as activity: a socket left open alone does not keep a session alive.
+    pub async fn recheck(&self, caller: &Caller) -> Result<Option<Caller>, Error> {
+        let (session_id, client) = (caller.session_id, caller.client.clone());
+        let now = self.clock.now();
+        self.db
+            .read(move |conn| -> Result<_, Error> {
+                let Some(session) = sessions::get(conn, session_id)? else {
+                    return Ok(None);
+                };
+                let user = live_user(conn, &session, now)?;
+                Ok(user.map(|user| Caller::new(&session, &user, client)))
+            })
+            .await
+    }
+
+    /// Changes after anything that may end sessions or take permissions away. Connections that
+    /// outlive a request watch it and recheck their caller.
+    pub fn session_changes(&self) -> watch::Receiver<()> {
+        self.session_changes.subscribe()
+    }
+
+    pub(crate) fn sessions_changed(&self) {
+        self.session_changes.send_replace(());
     }
 
     /// Refuses a caller who lacks `permission`. Refusing a sensitive or critical change is
@@ -278,6 +301,23 @@ impl Accounts {
             self.record_denial(caller, route, record).await?;
         }
         Err(ApiError::new(ErrorCode::Forbidden).with("permission", key).into())
+    }
+
+    /// Refuses anyone but the owner. What only the owner may change amounts to running code on the
+    /// host, so a refused change is audited as a critical permission's would be.
+    pub async fn authorize_owner(&self, caller: &Caller, method: &str, path: &str) -> Result<(), Error> {
+        if caller.is_owner {
+            return Ok(());
+        }
+        if !matches!(method, "GET" | "HEAD") {
+            let route = format!("{method} {path}");
+            let record = Record::by(caller, AuditAction::PermissionDenied)
+                .target(&route)
+                .outcome(Outcome::Denied)
+                .details(json!({ "ownerOnly": true }));
+            self.record_denial(caller, route, record).await?;
+        }
+        Err(ErrorCode::OwnerOnly.into())
     }
 
     /// Refuses a caller who has not entered their password in the last ten minutes.
@@ -317,12 +357,14 @@ impl Accounts {
         let session_id = caller.session_id;
         let now = self.clock.now();
         self.db
-            .write(move |tx| {
+            .write(move |tx| -> Result<_, Error> {
                 sessions::delete(tx, session_id)?;
                 record.write(tx, now)?;
                 Ok(())
             })
-            .await
+            .await?;
+        self.sessions_changed();
+        Ok(())
     }
 
     /// Changes the caller's own password. Every other session of theirs ends; this one stays, and
@@ -340,7 +382,7 @@ impl Accounts {
         let (user_id, session_id) = (caller.user_id, caller.session_id);
         let now = self.clock.now();
         self.db
-            .write(move |tx| {
+            .write(move |tx| -> Result<_, Error> {
                 let mut user = existing(tx, user_id)?;
                 user.password_hash = hash;
                 user.must_change_password = false;
@@ -357,7 +399,9 @@ impl Accounts {
                 record.write(tx, now)?;
                 Ok(())
             })
-            .await
+            .await?;
+        self.sessions_changed();
+        Ok(())
     }
 
     /// The caller's live sessions, the most recently used first.
@@ -391,7 +435,7 @@ impl Accounts {
         let user_id = caller.user_id;
         let now = self.clock.now();
         self.db
-            .write(move |tx| {
+            .write(move |tx| -> Result<_, Error> {
                 match sessions::get(tx, id)? {
                     Some(session) if session.user_id == user_id => sessions::delete(tx, id)?,
                     _ => return Err(ErrorCode::NotFound.into()),
@@ -399,7 +443,9 @@ impl Accounts {
                 record.write(tx, now)?;
                 Ok(())
             })
-            .await
+            .await?;
+        self.sessions_changed();
+        Ok(())
     }
 
     /// Checks the caller's password, throttled like a login. A wrong one is audited as a failed
@@ -503,4 +549,16 @@ impl Accounts {
             })
             .await
     }
+}
+
+/// The user a session belongs to, while the session lives: within its idle and absolute lifetimes,
+/// and of its user's current epoch.
+pub(crate) fn live_user(
+    conn: &Connection,
+    session: &SessionRow,
+    now: Timestamp,
+) -> Result<Option<UserRow>, StoreError> {
+    Ok(users::get(conn, session.user_id)?.filter(|user| {
+        user.auth_epoch == session.auth_epoch && now < session.last_seen_at + IDLE && now < session.expires_at
+    }))
 }

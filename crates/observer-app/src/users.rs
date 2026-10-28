@@ -114,6 +114,7 @@ impl Accounts {
         let user = self
             .audit_refusal(caller, AuditAction::UserPermissionsChanged, Target::Id(id), user)
             .await?;
+        self.sessions_changed();
         Ok(user_view(&user))
     }
 
@@ -135,7 +136,9 @@ impl Accounts {
             })
             .await;
         self.audit_refusal(caller, AuditAction::UserDeleted, Target::Id(id), deleted)
-            .await
+            .await?;
+        self.sessions_changed();
+        Ok(())
     }
 
     /// Gives an account a new temporary password and ends its sessions. Returns the password,
@@ -175,7 +178,9 @@ impl Accounts {
             })
             .await;
         self.audit_refusal(caller, AuditAction::SessionRevoked, Target::Id(id), revoked)
-            .await
+            .await?;
+        self.sessions_changed();
+        Ok(())
     }
 
     /// `observer user reset-password`: the way back in for anyone, the owner included, from the
@@ -275,6 +280,7 @@ impl Accounts {
                 Ok(())
             })
             .await?;
+        self.sessions_changed();
         Ok(temporary_password)
     }
 }

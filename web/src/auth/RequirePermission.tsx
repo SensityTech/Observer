@@ -19,6 +19,18 @@ export function RequirePermission({ name, children }: { name: PermissionName; ch
     if (allows(me, Permission[name])) {
         return children;
     }
+    return <Forbidden body={t.forbidden.body(t.permissions[keyOf(name)].name)} />;
+}
+
+/** Shows a page only to the owner, for what no permission grants. */
+export function RequireOwner({ children }: { children: ReactNode }) {
+    const { t } = useI18n();
+    const me = useMe();
+    return me.isOwner ? children : <Forbidden body={t.forbidden.ownerOnly} />;
+}
+
+function Forbidden({ body }: { body: string }) {
+    const { t } = useI18n();
     return (
         <div className="flex flex-col gap-5 max-md:gap-4">
             <div className="page-head">
@@ -30,9 +42,7 @@ export function RequirePermission({ name, children }: { name: PermissionName; ch
                 <span className="grid size-12 place-items-center rounded-box border border-line-strong bg-surface text-ink-2 shadow-sm">
                     <ShieldAlert size={20} strokeWidth={1.5} aria-hidden="true" />
                 </span>
-                <p className="max-w-empty text-body text-ink-3">
-                    {t.forbidden.body(t.permissions[keyOf(name)].name)}
-                </p>
+                <p className="max-w-empty text-body text-ink-3">{body}</p>
                 <Link to="/account" className={buttonVariants({ tone: 'ink', size: 'sm' })}>
                     {t.forbidden.back}
                 </Link>

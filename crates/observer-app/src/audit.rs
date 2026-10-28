@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::sync::{Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use jiff::{SignedDuration, Timestamp};
 use observer_domain::audit::{ActorKind, AuditAction, AuditEntry, AuditFilter, AuditPage, Outcome};
@@ -8,6 +8,7 @@ use observer_store::audit::{self, NewAuditEntry};
 use observer_store::users::{self, UserRow};
 use observer_store::{Connection, Database, StoreError, settings};
 use serde_json::{Value, json};
+use tokio::sync::broadcast;
 
 use crate::accounts::MAX_USERNAME_BYTES;
 use crate::throttle::{self, Unaudited};
@@ -18,6 +19,8 @@ const MIN_RETENTION_DAYS: i64 = 90;
 const DEFAULT_PAGE: u32 = 50;
 const MAX_PAGE: u32 = 200;
 const EXPORT_BATCH: u32 = 500;
+/// How many new entries a follower may fall behind by before it misses some.
+const FOLLOWERS_BACKLOG: usize = 256;
 
 /// One audit entry in the making. It is written in the transaction of the change it records, so
 /// the change and its trace commit or fail together.
@@ -229,16 +232,68 @@ fn retention(conn: &Connection) -> Result<SignedDuration, StoreError> {
     Ok(SignedDuration::from_hours(days * 24))
 }
 
-/// Reading, exporting and pruning the audit log.
+/// Reading, following, exporting and pruning the audit log.
 #[derive(Clone)]
 pub struct AuditLog {
     db: Database,
     clock: Clock,
+    followers: broadcast::Sender<Arc<AuditEntry>>,
+    /// The newest entry handed to the followers, once `publish_new` has looked.
+    published: Arc<Mutex<Option<i64>>>,
 }
 
 impl AuditLog {
     pub fn new(db: Database, clock: Clock) -> Self {
-        Self { db, clock }
+        Self {
+            db,
+            clock,
+            followers: broadcast::Sender::new(FOLLOWERS_BACKLOG),
+            published: Arc::default(),
+        }
+    }
+
+    /// The entries `publish_new` finds from now on. A follower that falls more than 256 entries
+    /// behind is told it lagged, and reads the log again.
+    pub fn follow(&self) -> broadcast::Receiver<Arc<AuditEntry>> {
+        self.followers.subscribe()
+    }
+
+    /// The newest entry's id, or `None` while the log is empty.
+    pub async fn latest_id(&self) -> Result<Option<i64>, Error> {
+        Ok(self.db.read(audit::latest_id).await?)
+    }
+
+    /// Hands the entries written since the last call to the followers, and says how many there
+    /// were. Every writer of the log is found this way, the command line included, which runs in
+    /// another process. The first call only notes where the log ends.
+    pub async fn publish_new(&self) -> Result<usize, Error> {
+        let published = *self.published.lock().unwrap_or_else(PoisonError::into_inner);
+        let Some(mut after) = published else {
+            let latest = self.latest_id().await?;
+            *self.published.lock().unwrap_or_else(PoisonError::into_inner) = Some(latest.unwrap_or(0));
+            return Ok(0);
+        };
+        let mut published = 0;
+        loop {
+            let entries = self
+                .db
+                .read(move |conn| audit::after(conn, after, EXPORT_BATCH))
+                .await?;
+            let Some(last) = entries.last() else {
+                return Ok(published);
+            };
+            after = last.id;
+            *self.published.lock().unwrap_or_else(PoisonError::into_inner) = Some(after);
+            published += entries.len();
+            let more = entries.len() == EXPORT_BATCH as usize;
+            for entry in entries {
+                // Nobody following is no failure: the entries are in the log for whoever reads it.
+                let _ = self.followers.send(Arc::new(entry));
+            }
+            if !more {
+                return Ok(published);
+            }
+        }
     }
 
     /// One page, newest first. The limit defaults to 50 and is capped at 200.

@@ -91,6 +91,21 @@ pub fn page(
     Ok(rows.collect::<Result<_, _>>()?)
 }
 
+/// The entries written after `after`, oldest first.
+pub fn after(conn: &Connection, after: i64, limit: u32) -> Result<Vec<AuditEntry>, StoreError> {
+    let mut statement = conn.prepare(
+        "SELECT id, at, actor_kind, actor_id, actor_name, ip, user_agent, action, target, outcome, details
+         FROM audit_log WHERE id > ?1 ORDER BY id LIMIT ?2",
+    )?;
+    let rows = statement.query_map(params![after, limit], read)?;
+    Ok(rows.collect::<Result<_, _>>()?)
+}
+
+/// The id of the newest entry, or `None` while the log is empty.
+pub fn latest_id(conn: &Connection) -> Result<Option<i64>, StoreError> {
+    Ok(conn.query_row("SELECT max(id) FROM audit_log", [], |row| row.get(0))?)
+}
+
 /// Lets the retention job delete what expired before `cutoff`. The schema refuses a cutoff that
 /// moves back or lies in the future.
 pub fn advance_cutoff(conn: &Connection, cutoff: Timestamp) -> Result<(), StoreError> {
@@ -160,6 +175,39 @@ mod tests {
             details: json!({ "sessionId": 4 }),
             expires_at: written + SignedDuration::from_hours(24 * 90),
         }
+    }
+
+    #[test]
+    fn entries_after_an_id_come_oldest_first_up_to_the_limit() {
+        let conn = memory();
+        assert_eq!(latest_id(&conn).unwrap(), None);
+        let ids: Vec<i64> = [
+            "2026-01-10T08:00:00Z",
+            "2026-01-10T08:01:00Z",
+            "2026-01-10T08:02:00Z",
+        ]
+        .into_iter()
+        .map(|written| {
+            insert(
+                &conn,
+                &entry(written, AuditAction::LoginSucceeded, "ada", Outcome::Success),
+            )
+            .unwrap()
+        })
+        .collect();
+
+        let ids_after = |after, limit| -> Vec<i64> {
+            self::after(&conn, after, limit)
+                .unwrap()
+                .iter()
+                .map(|entry| entry.id)
+                .collect()
+        };
+
+        assert_eq!(ids_after(0, 10), ids);
+        assert_eq!(ids_after(ids[0], 1), [ids[1]]);
+        assert_eq!(ids_after(ids[2], 10), Vec::<i64>::new());
+        assert_eq!(latest_id(&conn).unwrap(), Some(ids[2]));
     }
 
     #[test]
