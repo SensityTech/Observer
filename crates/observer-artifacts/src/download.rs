@@ -24,10 +24,12 @@ pub(crate) struct Downloaded {
 
 /// Downloads `url` into a new file at `path`. After a cut, the next attempt asks for the rest with
 /// `Range`, guarded by `If-Range` so that a file changed in between is fetched whole again. The
-/// server must announce the length, which is then held to exactly. A failed download leaves no file.
+/// server must announce `length`, what its `HEAD` announced, and is then held to it exactly. A
+/// failed download leaves no file.
 pub(crate) async fn download(
     http: &Http,
     url: &Url,
+    length: u64,
     path: &Path,
     retry_delays: &[Duration],
     progress: &mut (dyn FnMut(u64, u64) + Send),
@@ -38,7 +40,7 @@ pub(crate) async fn download(
         path,
         hasher: Sha256::new(),
         received: 0,
-        expected: 0,
+        expected: length,
         validator: None,
     };
     let result = partial.run(http, &mut file, retry_delays, progress).await;
@@ -119,7 +121,14 @@ impl Partial<'_> {
                 if length > ARCHIVE_LIMIT {
                     return Err(http::too_large(self.url, ARCHIVE_LIMIT));
                 }
-                self.expected = length;
+                // A maintenance page answered with 200 must not pass for the archive.
+                if length != self.expected {
+                    return Err(Error::LengthChanged {
+                        url: self.url.to_string(),
+                        announced: self.expected,
+                        sent: length,
+                    });
+                }
                 self.validator = response.headers().get(LAST_MODIFIED).cloned();
             }
             StatusCode::PARTIAL_CONTENT if resuming => {
@@ -216,11 +225,13 @@ mod tests {
             .header("Last-Modified", LAST_MODIFIED)
     }
 
+    /// Downloads what the server sends for `/server.zip`, which its `HEAD` said was `archive()`.
     async fn fetch(server: &TestServer, path: &Path) -> Result<Downloaded, Error> {
         let mut seen = Vec::new();
         let result = download(
             &Http::local(server.port),
             &server.url("/server.zip"),
+            archive().len() as u64,
             path,
             &NO_WAIT,
             &mut |received, total| seen.push((received, total)),
@@ -357,6 +368,28 @@ mod tests {
         let error = fetch(&server, &path).await.unwrap_err();
 
         assert!(matches!(error, Error::TooLarge { limit_mib: 512, .. }), "{error}");
+    }
+
+    #[tokio::test]
+    async fn a_page_answered_in_place_of_the_announced_archive_is_refused() {
+        let server = TestServer::start(|_, _| Reply::ok(b"<html>maintenance</html>".to_vec())).await;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("server.zip.part");
+
+        let error = fetch(&server, &path).await.unwrap_err();
+
+        assert!(
+            matches!(
+                error,
+                Error::LengthChanged {
+                    announced: 400_000,
+                    sent: 24,
+                    ..
+                }
+            ),
+            "{error}"
+        );
+        assert!(!path.exists());
     }
 
     #[tokio::test]

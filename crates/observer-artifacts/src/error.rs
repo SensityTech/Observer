@@ -27,6 +27,8 @@ pub enum Error {
     LengthMissing { url: String },
     #[error("{url} sent more bytes than it announced")]
     Overlong { url: String },
+    #[error("{url} announced {announced} bytes, then sent {sent}")]
+    LengthChanged { url: String, announced: u64, sent: u64 },
     #[error("the download of {url} stopped at {received} of {expected} bytes")]
     Truncated {
         url: String,
@@ -36,7 +38,7 @@ pub enum Error {
     #[error("{url} resumed the download at the wrong offset")]
     BadRange { url: String },
     #[error(
-        "the archive of build {build} changed since it was first downloaded (sha256 {first}, now {now}); \
+        "the archive of build {build} changed since it was first installed (sha256 {first}, now {now}); \
          Cfx.re publishes no checksum, so the new one is not trusted"
     )]
     ArchiveChanged { build: u32, first: String, now: String },

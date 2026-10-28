@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 
 use jiff::Timestamp;
@@ -57,9 +57,10 @@ pub struct Installed {
 pub struct Installer {
     http: Http,
     root: PathBuf,
-    /// The SHA-256 of each archive the first time it was downloaded. Cfx.re publishes no checksum,
-    /// so a later download that differs is refused rather than trusted. In memory for now.
-    first_seen: Mutex<HashMap<(Platform, u32), [u8; 32]>>,
+    /// The SHA-256, in hexadecimal, of each archive the first time it was installed. Cfx.re
+    /// publishes no checksum, so a later download that differs is refused rather than trusted. In
+    /// memory for now.
+    first_seen: Mutex<HashMap<(Platform, u32), String>>,
 }
 
 impl Installer {
@@ -104,15 +105,15 @@ impl Installer {
 
         // A `HEAD` first: the docs page only links `server.7z`, so this proves `server.zip` is there.
         let head = self.http.head(&request.url, HEAD_TIMEOUT).await?;
-        match head.length {
+        let length = match head.length {
             None => {
                 return Err(Error::LengthMissing {
                     url: request.url.to_string(),
                 });
             }
             Some(length) if length > ARCHIVE_LIMIT => return Err(too_large(&request.url, ARCHIVE_LIMIT)),
-            Some(_) => {}
-        }
+            Some(length) => length,
+        };
         let space = match request.platform {
             Platform::Windows => WINDOWS_SPACE,
             Platform::Linux => LINUX_SPACE,
@@ -123,7 +124,7 @@ impl Installer {
         let name = format!("{}-{}", request.build, suffix()?);
         let archive = staging.join(format!("{name}.part"));
         let tree = staging.join(&name);
-        let staged = self.stage(request, &archive, &tree, &mut progress).await;
+        let staged = self.stage(request, length, &archive, &tree, &mut progress).await;
         let _ = tokio::fs::remove_file(&archive).await;
         let result = match staged {
             Ok(manifest) => commit(tree.clone(), target, request.build)
@@ -131,7 +132,9 @@ impl Installer {
                 .map(|path| Installed { path, manifest }),
             Err(error) => Err(error),
         };
-        if result.is_err() {
+        if let Ok(installed) = &result {
+            self.remember(request, &installed.manifest.archive_sha256);
+        } else {
             let leftover = tree.clone();
             let _ = blocking(move || remove_tree(&leftover).map_err(io(&leftover))).await;
         }
@@ -141,6 +144,7 @@ impl Installer {
     async fn stage(
         &self,
         request: &InstallRequest,
+        length: u64,
         archive: &Path,
         tree: &Path,
         progress: &mut (dyn FnMut(Progress) + Send),
@@ -148,6 +152,7 @@ impl Installer {
         let downloaded = download::download(
             &self.http,
             &request.url,
+            length,
             archive,
             &RETRY_DELAYS,
             &mut |received, total| {
@@ -189,22 +194,29 @@ impl Installer {
     }
 
     fn check_first_seen(&self, request: &InstallRequest, downloaded: &Downloaded) -> Result<(), Error> {
-        let mut first_seen = self
-            .first_seen
-            .lock()
-            .expect("the fingerprint lock is never poisoned");
-        let first = first_seen
-            .entry((request.platform, request.build))
-            .or_insert(downloaded.sha256);
-        if *first == downloaded.sha256 {
-            Ok(())
-        } else {
-            Err(Error::ArchiveChanged {
+        let now = hex(&downloaded.sha256);
+        match self.first_seen().get(&(request.platform, request.build)) {
+            Some(first) if *first != now => Err(Error::ArchiveChanged {
                 build: request.build,
-                first: hex(first),
-                now: hex(&downloaded.sha256),
-            })
+                first: first.clone(),
+                now,
+            }),
+            _ => Ok(()),
         }
+    }
+
+    /// Only an archive that passed every check is remembered: a download refused on the way, a
+    /// maintenance page or a damaged file, would otherwise stand in for the real archive.
+    fn remember(&self, request: &InstallRequest, sha256: &str) {
+        self.first_seen()
+            .entry((request.platform, request.build))
+            .or_insert_with(|| sha256.to_owned());
+    }
+
+    fn first_seen(&self) -> MutexGuard<'_, HashMap<(Platform, u32), String>> {
+        self.first_seen
+            .lock()
+            .expect("the fingerprint lock is never poisoned")
     }
 }
 
@@ -285,6 +297,8 @@ fn hex(bytes: &[u8]) -> String {
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    use sha2::{Digest, Sha256};
+
     use super::*;
     use crate::samples::host_build;
     use crate::test_server::{Reply, TestServer};
@@ -342,8 +356,6 @@ mod tests {
     async fn a_linux_build_is_installed_with_its_links_confined_and_its_modes_kept() {
         use std::os::unix::fs::PermissionsExt;
 
-        use sha2::{Digest, Sha256};
-
         let archive = host_build();
         let lab = Lab::new(vec![archive.clone()]).await;
         let mut downloaded = 0;
@@ -373,6 +385,10 @@ mod tests {
         assert_eq!(installed.manifest.archive_sha256, hex(&Sha256::digest(&archive)));
         assert_eq!(installed.manifest.files, 5);
         assert!(lab.staging_is_empty());
+        assert_eq!(
+            lab.installer.first_seen().get(&(Platform::Linux, 37872)),
+            Some(&installed.manifest.archive_sha256)
+        );
     }
 
     #[cfg(windows)]
@@ -395,15 +411,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_archive_that_changed_since_its_first_download_is_refused() {
-        let first = host_build();
-        let mut changed = first.clone();
+    async fn an_archive_that_changed_since_its_first_install_is_refused() {
+        let mut changed = host_build();
         changed.push(0);
-        let lab = Lab::new(vec![first, changed]).await;
+        let lab = Lab::new(vec![changed]).await;
         let request = lab.request("/archive");
-        // On Windows the sample stops at the signature check, after its hash was recorded.
-        let _ = lab.installer.install(&request, |_| {}).await;
-        let _ = fs::remove_dir_all(lab.installer.root().join("37872"));
+        // What an install of the genuine archive leaves; on Windows the sample cannot get that far,
+        // its FXServer.exe carries no signature.
+        lab.installer
+            .remember(&request, &hex(&Sha256::digest(host_build())));
 
         let error = lab.installer.install(&request, |_| {}).await.unwrap_err();
 
@@ -413,6 +429,22 @@ mod tests {
         );
         assert!(!lab.installer.root().join("37872").exists());
         assert!(lab.staging_is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_refused_first_download_does_not_stand_in_for_the_archive() {
+        let lab = Lab::new(vec![b"<html>maintenance</html>".to_vec(), host_build()]).await;
+        let request = lab.request("/archive");
+        let first = lab.installer.install(&request, |_| {}).await.unwrap_err();
+        assert!(matches!(first, Error::Damaged(_)), "{first}");
+
+        let second = lab.installer.install(&request, |_| {}).await;
+
+        if cfg!(windows) {
+            assert!(matches!(second, Err(Error::Signature(_))), "{second:?}");
+        } else {
+            second.unwrap();
+        }
     }
 
     #[tokio::test]
