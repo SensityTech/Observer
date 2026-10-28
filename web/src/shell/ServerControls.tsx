@@ -3,7 +3,6 @@ import { Play, RotateCw, Square, X } from 'lucide-react';
 import { useState } from 'react';
 
 import { restartServer, startServer, stopServer } from '../api/server';
-import type { ServerState } from '../api/generated/ServerState';
 import { Permission } from '../api/generated/Permission';
 import { allows, useMe } from '../auth/me';
 import { Button } from '../components/Button';
@@ -30,13 +29,19 @@ export function ServerControls() {
     const me = useMe();
     const { status } = useServerStatus();
     const [confirming, setConfirming] = useState<Action | null>(null);
-    // Why a press did nothing holds for the state it was pressed in only.
-    const [failure, setFailure] = useState<{
-        tone: 'warning' | 'danger';
-        text: string;
-        during?: ServerState | null;
-    } | null>(null);
+    const [failure, setFailure] = useState<{ tone: 'warning' | 'danger'; text: string } | null>(null);
     const permitted = allows(me, Permission.ServerControl);
+
+    // Why a blocked control did nothing holds for the state it was pressed in only: it goes with
+    // that state, rather than come back when the server returns to it.
+    const state = status?.state ?? null;
+    const [shownState, setShownState] = useState(state);
+    if (state !== shownState) {
+        setShownState(state);
+        if (failure?.tone === 'warning') {
+            setFailure(null);
+        }
+    }
 
     const label = { start: t.controls.start, stop: t.controls.stop, restart: t.controls.restart };
     const mutation = useMutation({
@@ -51,11 +56,7 @@ export function ServerControls() {
     const act = (action: Action) => {
         const reason = blocked(t, action, status, permitted);
         if (reason !== null) {
-            setFailure({
-                tone: 'warning',
-                text: t.controls.unavailable(label[action], reason),
-                during: status?.state ?? null,
-            });
+            setFailure({ tone: 'warning', text: t.controls.unavailable(label[action], reason) });
             return;
         }
         setFailure(null);
@@ -96,7 +97,7 @@ export function ServerControls() {
                 {button('restart', RotateCw, running ? 'ink' : 'secondary')}
                 {button('stop', Square, 'secondary')}
             </fieldset>
-            {failure && (failure.during === undefined || failure.during === (status?.state ?? null)) && (
+            {failure && (
                 <Notice tone={failure.tone} className="controls-failure">
                     <div className="flex items-start gap-3">
                         <p className="flex-1">{failure.text}</p>

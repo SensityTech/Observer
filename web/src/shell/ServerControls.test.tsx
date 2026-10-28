@@ -103,6 +103,18 @@ describe('ServerControls', () => {
         live.stop();
     });
 
+    it('should not bring back why a control did nothing when the server returns to that state', async () => {
+        const { getByRole, queryByText, live, state } = await controls('online');
+        fireEvent.click(getByRole('button', { name: en.controls.start }));
+
+        state('stopped');
+        state('starting');
+        state('online');
+
+        expect(queryByText(en.controls.unavailable(en.controls.start, en.controls.running))).toBeNull();
+        live.stop();
+    });
+
     it('should offer to keep a crashed server stopped rather than warn of a shutdown', async () => {
         const { getByRole, queryByText, live } = await controls('crashed');
 
