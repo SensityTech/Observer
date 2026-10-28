@@ -17,6 +17,7 @@ use std::sync::Arc;
 use axum::extract::Request;
 use axum::{Router, middleware};
 use observer_app::{Accounts, AuditLog, Metrics, Schedule, Servers, Supervision};
+use observer_domain::about::Build;
 use tower_http::catch_panic::CatchPanicLayer;
 use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::trace::TraceLayer;
@@ -31,7 +32,7 @@ const MAX_BODY_BYTES: usize = 1024 * 1024;
 
 #[derive(Clone)]
 pub struct AppState {
-    pub version: &'static str,
+    pub build: Build,
     pub accounts: Accounts,
     pub audit: AuditLog,
     pub servers: Servers,
@@ -57,7 +58,7 @@ pub struct Services {
 }
 
 impl AppState {
-    pub fn new(version: &'static str, services: Services, instance_id: &str, hosts: &[String]) -> Self {
+    pub fn new(build: Build, services: Services, instance_id: &str, hosts: &[String]) -> Self {
         let Services {
             accounts,
             audit,
@@ -67,7 +68,7 @@ impl AppState {
             schedule,
         } = services;
         Self {
-            version,
+            build,
             accounts,
             audit,
             servers,

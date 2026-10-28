@@ -141,6 +141,6 @@ fn add(router: Router<AppState>, route: Route, state: &AppState) -> Router<AppSt
 async fn health(State(state): State<AppState>) -> Json<Health> {
     Json(Health {
         status: HealthStatus::Ok,
-        version: state.version.to_owned(),
+        version: state.build.version.to_owned(),
     })
 }

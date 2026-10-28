@@ -18,6 +18,7 @@ use observer_app::{
     Accounts, AuditLog, Clock, Metrics, MetricsSetup, PasswordCost, Running, Schedule, ScheduleSetup,
     ScheduleTask, Servers, Setup, Supervision,
 };
+use observer_domain::about::Build;
 use observer_domain::audit::ActorKind;
 use observer_store::Database;
 use serde_json::{Value, json};
@@ -134,7 +135,11 @@ impl Server {
             schedule,
         };
         let state = AppState::new(
-            "0.0.0-test",
+            Build {
+                version: "0.0.0-test",
+                commit: None,
+                commit_date: None,
+            },
             services,
             &instance_id,
             &["observer.test".to_owned()],

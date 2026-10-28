@@ -1,6 +1,7 @@
 //! Project tasks, run with `cargo xtask <task>`.
 
 mod compress;
+mod icons;
 
 use std::fmt::Write as _;
 use std::fs;
@@ -16,15 +17,17 @@ tasks:
   web       build the panel into web/dist and precompress it
   bindings  regenerate the TypeScript types and permission constants in web/src/api/generated
   check     run every check CI runs: formatting, lints, tests, types, panel build
-  dist      build the panel, then a release binary that embeds it";
+  dist      build the panel, then a release binary that embeds it
+  icons     draw the executable's icons from the mark (--check: fail if they differ)";
 
 fn main() -> ExitCode {
-    let task = std::env::args().nth(1);
-    let result = match task.as_deref() {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let result = match args.first().map(String::as_str) {
         Some("web") => web(),
         Some("bindings") => bindings(),
         Some("check") => check(),
         Some("dist") => dist(),
+        Some("icons") => icons::run(&root(), args.iter().any(|arg| arg == "--check")),
         _ => {
             eprintln!("{USAGE}");
             return ExitCode::FAILURE;
@@ -92,6 +95,7 @@ fn check() -> anyhow::Result<()> {
     let web = root().join("web");
 
     run(cargo().args(["fmt", "--all", "--check"]))?;
+    icons::run(&root(), true)?;
     run(cargo().args(["clippy", "--workspace", "--all-targets", "--", "-D", "warnings"]))?;
     run(cargo().args(["test", "--workspace", "--quiet"]))?;
     bindings_unchanged()?;

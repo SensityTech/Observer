@@ -16,22 +16,33 @@ use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
 use crate::config::Config;
-use crate::shutdown::{Shutdown, Signals};
-use crate::{lock, logging, setup};
+use crate::shutdown::{Signals, StopRequest};
+use crate::{BUILD, lock, logging, setup};
 
-const VERSION: &str = env!("CARGO_PKG_VERSION");
 const DAILY: Duration = Duration::from_hours(24);
 const BACKUP_CHECK_INTERVAL: Duration = Duration::from_hours(1);
 const UPKEEP_INTERVAL: Duration = Duration::from_mins(1);
 const AUDIT_FOLLOW_INTERVAL: Duration = Duration::from_secs(1);
 
-pub async fn run(config: Config) -> anyhow::Result<()> {
+#[derive(Debug, Default, clap::Args)]
+pub struct RunArgs {
+    /// Show neither the status window nor the tray icon.
+    #[cfg(windows)]
+    #[arg(long)]
+    no_window: bool,
+}
+
+#[expect(
+    clippy::too_many_lines,
+    reason = "Observer's start, then its stop, each step in the order it must take"
+)]
+pub async fn run(config: Config, args: RunArgs) -> anyhow::Result<()> {
     let paths = config.paths();
     let _lock = lock::acquire(&paths.root)?;
     let log_guard = logging::init(&config.log.level, &paths.logs)?;
     let mut signals = Signals::listen().context("cannot listen for stop requests")?;
 
-    info!(version = VERSION, data_dir = %paths.root.display(), "starting Observer");
+    info!(version = BUILD.version, commit = BUILD.commit, data_dir = %paths.root.display(), "starting Observer");
 
     let db = Database::open(&paths.database, &paths.backups)
         .await
@@ -78,7 +89,7 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
         .await
         .with_context(|| format!("cannot listen on {}", config.http.listen))?;
     announce(config.http.listen);
-    setup::offer_link(&accounts, config.http.listen).await?;
+    let setup_token = setup::offer_link(&accounts, config.http.listen).await?;
 
     let stop = CancellationToken::new();
     let services = observer_web::Services {
@@ -87,9 +98,9 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
         servers,
         supervision: supervision.clone(),
         metrics: metrics.clone(),
-        schedule,
+        schedule: schedule.clone(),
     };
-    let state = observer_web::AppState::new(VERSION, services, &instance_id, &config.http.hosts);
+    let state = observer_web::AppState::new(BUILD, services, &instance_id, &config.http.hosts);
     let live = state.live.clone();
     // Before FXServer starts with Observer, so that the first samples show its start.
     let sampling = metrics.start(Sources {
@@ -103,13 +114,30 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
     });
     let server = tokio::spawn(serve(listener, observer_web::router(state), stop.clone()));
     let backups = tokio::spawn(daily_backups(db.clone(), stop.clone()));
-    let upkeep = tokio::spawn(upkeep(accounts, audit.clone(), stop.clone()));
-    let audit_feed = tokio::spawn(publish_audit(audit, stop.clone()));
+    let upkeep = tokio::spawn(upkeep(accounts.clone(), audit.clone(), stop.clone()));
+    let audit_feed = tokio::spawn(publish_audit(audit.clone(), stop.clone()));
+    let host = Host::start(HostSetup {
+        args,
+        supervision: &supervision,
+        schedule,
+        accounts,
+        listen: config.http.listen,
+        data_dir: &paths.root,
+        setup_token,
+        signals: &signals,
+    });
     if let Err(error) = supervision.boot().await {
         error!(%error, "cannot start FXServer with Observer");
     }
 
-    stop_fxserver(&supervision, scheduling, &mut supervised, &mut signals).await;
+    let first = signals.next().await;
+    info!(shortened = first.shortened, from = ?first.from, "stopping Observer");
+    host.stopping();
+    // Before FXServer stops, so that the log names who stopped it even if the stop goes wrong.
+    if let Err(error) = audit.record_stop(first.from).await {
+        warn!(%error, "cannot audit the stop of Observer");
+    }
+    stop_fxserver(&supervision, scheduling, &mut supervised, &mut signals, first).await;
     supervised.close().await;
     // After the supervision, so that FXServer's stop is in the statistics.
     sampling.close().await;
@@ -128,11 +156,81 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
         .await
         .context("cannot close the metrics database")?;
     db.close().await.context("cannot close the database")?;
+    // Before the release, so that the tray icon leaves the notification area while Windows lets
+    // the process run.
+    host.close().await;
 
     info!("Observer stopped");
     drop(log_guard);
     signals.release();
     Ok(())
+}
+
+/// What the host shows of Observer besides its console: the status window and the tray icon on
+/// Windows.
+struct Host {
+    #[cfg(windows)]
+    desktop: Option<crate::desktop::Desktop>,
+}
+
+#[cfg_attr(
+    not(windows),
+    expect(dead_code, reason = "the window takes what Linux leaves")
+)]
+struct HostSetup<'a> {
+    args: RunArgs,
+    supervision: &'a Supervision,
+    schedule: Schedule,
+    accounts: Accounts,
+    listen: SocketAddr,
+    data_dir: &'a std::path::Path,
+    setup_token: Option<observer_app::SetupToken>,
+    signals: &'a Signals,
+}
+
+impl Host {
+    /// Once the panel listens, before FXServer starts with Observer.
+    #[cfg_attr(
+        not(windows),
+        expect(clippy::needless_pass_by_value, reason = "the window takes what Linux leaves")
+    )]
+    fn start(setup: HostSetup<'_>) -> Self {
+        #[cfg(windows)]
+        {
+            let desktop = (!setup.args.no_window).then(|| {
+                crate::desktop::Desktop::start(crate::desktop::DesktopSetup {
+                    runtime: tokio::runtime::Handle::current(),
+                    supervision: setup.supervision.clone(),
+                    schedule: setup.schedule,
+                    accounts: setup.accounts,
+                    listen: setup.listen,
+                    data_dir: setup.data_dir.to_path_buf(),
+                    setup: setup.setup_token,
+                    stop: setup.signals.requests(),
+                    build: BUILD,
+                })
+            });
+            Self { desktop }
+        }
+        #[cfg(not(windows))]
+        {
+            Self {}
+        }
+    }
+
+    fn stopping(&self) {
+        #[cfg(windows)]
+        if let Some(desktop) = &self.desktop {
+            desktop.stopping();
+        }
+    }
+
+    async fn close(self) {
+        #[cfg(windows)]
+        if let Some(desktop) = self.desktop {
+            desktop.close().await;
+        }
+    }
 }
 
 async fn serve(listener: TcpListener, app: Router, stop: CancellationToken) -> io::Result<()> {
@@ -141,16 +239,16 @@ async fn serve(listener: TcpListener, app: Router, stop: CancellationToken) -> i
         .await
 }
 
-/// Waits for a stop request, then stops FXServer for good. The panel keeps serving meanwhile, so
-/// that it shows the stop as it happens.
+/// Stops FXServer for good, as `first` asked. The panel keeps serving meanwhile, so that it shows
+/// the stop as it happens.
 async fn stop_fxserver(
     supervision: &Supervision,
     scheduling: ScheduleTask,
     supervised: &mut Running,
     signals: &mut Signals,
+    first: StopRequest,
 ) {
-    let mut shortened = signals.next().await == Shutdown::Shortened;
-    info!(shortened, "stopping Observer");
+    let mut shortened = first.shortened;
     // The schedule goes first: it must not restart a server Observer is stopping.
     scheduling.close().await;
     supervision.shutdown(shortened).await;
@@ -158,8 +256,8 @@ async fn stop_fxserver(
         tokio::select! {
             () = supervised.stopped() => return,
             // A console closed during a graceful stop leaves Windows' few seconds only.
-            shutdown = signals.next(), if !shortened => {
-                if shutdown == Shutdown::Shortened {
+            request = signals.next(), if !shortened => {
+                if request.shortened {
                     shortened = true;
                     info!("the console is closing; shortening the stop");
                     supervision.shutdown(true).await;
