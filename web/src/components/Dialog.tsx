@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, type FormEvent, type ReactNode } from 'react';
+import { useEffect, useId, useLayoutEffect, useRef, type FormEvent, type ReactNode } from 'react';
 
 import { cn } from '../lib/cn';
 
@@ -32,10 +32,11 @@ export function Dialog({
     const ref = useRef<HTMLDialogElement>(null);
     const titleId = useId();
 
-    useEffect(() => {
+    // A layout effect's cleanup runs while the element is still in the page, so close() can hand the
+    // focus back to the trigger; removed open, the dialog would drop it on the body.
+    useLayoutEffect(() => {
         const dialog = ref.current;
         dialog?.showModal();
-        // close() rather than removal, so the browser hands the focus back to the trigger.
         return () => dialog?.close();
     }, []);
 
