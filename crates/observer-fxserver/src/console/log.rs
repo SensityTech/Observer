@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, mpsc};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use jiff::civil::Date;
 use jiff::tz::TimeZone;
@@ -16,6 +16,7 @@ use super::{ConsoleLine, LineKind, plain};
 
 /// Lines waiting for the writer. Past this, lines are dropped rather than slowing the console.
 const QUEUE: usize = 8192;
+/// Lines reach the file at most this late, even while they keep coming.
 const FLUSH_EVERY: Duration = Duration::from_secs(1);
 const BUFFER: usize = 64 * 1024;
 
@@ -122,8 +123,9 @@ struct Current {
 impl LogFiles {
     fn run(&mut self, entries: &mpsc::Receiver<Entry>, dropped: &AtomicU64) {
         let mut failing = false;
+        let mut flush_at = Instant::now() + FLUSH_EVERY;
         loop {
-            let result = match entries.recv_timeout(FLUSH_EVERY) {
+            let mut result = match entries.recv_timeout(flush_at.saturating_duration_since(Instant::now())) {
                 Ok(Entry::Line(line)) => {
                     let lost = dropped.swap(0, Ordering::Relaxed);
                     if lost > 0 {
@@ -131,9 +133,13 @@ impl LogFiles {
                     }
                     self.write(&line, lost)
                 }
-                Err(mpsc::RecvTimeoutError::Timeout) => self.flush(),
+                Err(mpsc::RecvTimeoutError::Timeout) => Ok(()),
                 Ok(Entry::Close) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
             };
+            if Instant::now() >= flush_at {
+                result = result.and_then(|()| self.flush());
+                flush_at = Instant::now() + FLUSH_EVERY;
+            }
             match result {
                 Err(error) if !failing => {
                     warn!(%error, dir = %self.dir.display(), "cannot write the console log");
@@ -532,6 +538,30 @@ mod tests {
                  {day}T10:00:00.000+01:00 #1 OUT after the drop\n"
             )
         );
+    }
+
+    #[tokio::test]
+    async fn lines_that_never_stop_coming_still_reach_the_file_every_second() {
+        let dir = tempfile::tempdir().unwrap();
+        let day = today();
+        let log = ConsoleLog::start(
+            dir.path(),
+            LogLimits::default(),
+            TimeZone::fixed(jiff::tz::offset(1)),
+        )
+        .unwrap();
+        let file = dir.path().join(format!("console-{day}.log"));
+
+        let started = Instant::now();
+        while started.elapsed() < FLUSH_EVERY * 2 {
+            log.queue()
+                .offer(stdout(&format!("{day}T10:00:00+01:00"), "a player said hello"));
+            tokio::time::sleep(FLUSH_EVERY / 5).await;
+        }
+
+        let on_disk = fs::metadata(&file).map_or(0, |metadata| metadata.len());
+        log.close().await;
+        assert!(on_disk > 0, "nothing on disk after {:?}", started.elapsed());
     }
 
     #[test]
