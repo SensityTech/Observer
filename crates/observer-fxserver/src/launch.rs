@@ -11,6 +11,7 @@ use observer_platform::Launch;
 use serde::Serialize;
 
 use crate::command;
+use crate::console::SECRET_CONVARS;
 use crate::layout::{Flavour, Layout};
 
 /// Names an extra argument may not set: they switch FXServer into txAdmin's modes, run other
@@ -134,6 +135,10 @@ pub enum LaunchError {
     CommandValue(String),
     #[error("`{0}` cannot be set as an extra argument: Observer manages it or it changes how FXServer runs")]
     DeniedName(String),
+    #[error(
+        "`{0}` holds a secret, which other programs could read in FXServer's command line: set it in the cfg"
+    )]
+    SecretName(String),
     #[error("`-fxdk` is not allowed: it starts FXServer as a development kit")]
     Fxdk,
 }
@@ -248,6 +253,12 @@ fn check_extra(name: &str, value: &str) -> Result<(), LaunchError> {
     }
     if DENIED.iter().any(|denied| denied.eq_ignore_ascii_case(name)) {
         return Err(LaunchError::DeniedName(name.to_owned()));
+    }
+    if SECRET_CONVARS
+        .iter()
+        .any(|secret| secret.eq_ignore_ascii_case(name))
+    {
+        return Err(LaunchError::SecretName(name.to_owned()));
     }
     if value.contains(['"', ';', '\\']) || value.chars().any(char::is_control) {
         return Err(LaunchError::BadValue(name.to_owned()));
@@ -504,6 +515,26 @@ mod tests {
             assert!(
                 refused(&fixture.with_extra("sv_x", value)).is_none(),
                 "{value:?} was refused"
+            );
+        }
+    }
+
+    #[test]
+    fn a_secret_is_refused_as_an_extra_argument() {
+        let fixture = Fixture::new("");
+        for name in [
+            "sv_licenseKey",
+            "RCON_PASSWORD",
+            "mysql_connection_string",
+            "sv_tebexSecret",
+            "steam_webApiKey",
+        ] {
+            assert!(
+                matches!(
+                    refused(&fixture.with_extra(name, "hunter2")),
+                    Some(LaunchError::SecretName(_))
+                ),
+                "{name} was accepted"
             );
         }
     }

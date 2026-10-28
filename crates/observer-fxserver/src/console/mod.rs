@@ -14,6 +14,7 @@ use tokio::sync::broadcast;
 
 pub use assemble::{Assembled, FLUSH_AFTER, LineAssembler, MAX_LINE};
 pub use log::{ConsoleLog, LogLimits};
+pub(crate) use mask::SECRET_CONVARS;
 pub use mask::mask;
 pub use sanitize::{plain, sanitize};
 
