@@ -109,7 +109,10 @@ pub fn expire(tx: &Transaction<'_>, now: i64) -> Result<usize, StoreError> {
 
 /// Gives the pages that deletions freed back to the file system.
 pub fn vacuum(conn: &Connection) -> Result<(), StoreError> {
-    conn.execute_batch("PRAGMA incremental_vacuum")?;
+    // The pragma frees one page per step, and answers a row for each.
+    let mut statement = conn.prepare("PRAGMA incremental_vacuum")?;
+    let mut freed = statement.query([])?;
+    while freed.next()?.is_some() {}
     Ok(())
 }
 
@@ -279,5 +282,38 @@ mod tests {
         );
         vacuum(&conn).unwrap();
         optimize(&conn).unwrap();
+    }
+
+    #[test]
+    fn the_vacuum_gives_back_every_page_the_retention_freed() {
+        let mut conn = memory();
+        let now = MINUTE + 40 * 86_400;
+        let old: Vec<_> = (0..2000)
+            .map(|index| {
+                sample(
+                    now - RAW_KEPT - 5 * (index + 1),
+                    ServerState::Online,
+                    &[
+                        (Column::Players, 187.0),
+                        (Column::FxsCpu, 182.4),
+                        (Column::HostCpu, 41.0),
+                    ],
+                )
+            })
+            .collect();
+        store(&mut conn, &old);
+        let pages = |conn: &Connection| -> (i64, i64) {
+            let read = |pragma: &str| conn.pragma_query_value(None, pragma, |row| row.get(0)).unwrap();
+            (read("page_count"), read("freelist_count"))
+        };
+        let tx = conn.transaction().unwrap();
+        expire(&tx, now).unwrap();
+        tx.commit().unwrap();
+        let (before, freed) = pages(&conn);
+        assert!(freed > 10, "{freed} pages freed");
+
+        vacuum(&conn).unwrap();
+
+        assert_eq!(pages(&conn), (before - freed, 0));
     }
 }

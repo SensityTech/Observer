@@ -156,6 +156,7 @@ fn set_aside(path: &Path) -> Result<PathBuf, StoreError> {
 #[cfg(test)]
 pub(crate) fn memory() -> Connection {
     let mut conn = Connection::open_in_memory().unwrap();
+    conn.pragma_update(None, "auto_vacuum", "INCREMENTAL").unwrap();
     Migrations::from_slice(MIGRATIONS).to_latest(&mut conn).unwrap();
     conn
 }
