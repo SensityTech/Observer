@@ -272,9 +272,10 @@ fn windows_path_problem(path: &str) -> Option<LaunchProblem> {
         .then_some(LaunchProblem::DevicePath)
 }
 
-/// `NUL`, `nul.txt` and `COM1 ` all open a device.
+/// `NUL`, `nul.txt`, `COM1 ` and `CON:x` all open a device: Windows ends the name at its first
+/// dot or colon, then drops trailing spaces.
 fn windows_device(component: &str) -> bool {
-    let stem = component.split('.').next().unwrap_or_default().trim_end();
+    let stem = component.split(['.', ':']).next().unwrap_or_default().trim_end();
     WINDOWS_DEVICES
         .iter()
         .any(|device| device.eq_ignore_ascii_case(stem))
@@ -282,12 +283,20 @@ fn windows_device(component: &str) -> bool {
 
 fn unix_path_problem(path: &str) -> Option<LaunchProblem> {
     if !path.starts_with('/') {
-        Some(LaunchProblem::NotAbsolute)
-    } else if path == "/dev" || path.starts_with("/dev/") {
-        Some(LaunchProblem::DevicePath)
-    } else {
-        None
+        return Some(LaunchProblem::NotAbsolute);
     }
+    // `//dev`, `/./dev` and `/srv/../dev` are all `/dev`.
+    let mut components = Vec::new();
+    for component in path.split('/') {
+        match component {
+            "" | "." => {}
+            ".." => {
+                components.pop();
+            }
+            name => components.push(name),
+        }
+    }
+    (components.first() == Some(&"dev")).then_some(LaunchProblem::DevicePath)
 }
 
 /// The cfg becomes `+exec <cfg>`, read from the data folder: a plain relative path is all it needs.
@@ -434,6 +443,9 @@ mod tests {
             (r"C:\FXServer\NUL", LaunchProblem::DevicePath),
             (r"C:\FXServer\com1.txt\build", LaunchProblem::DevicePath),
             (r"C:\FXServer\CON \build", LaunchProblem::DevicePath),
+            (r"C:\FXServer\NUL:", LaunchProblem::DevicePath),
+            (r"C:\FXServer\COM1:\build", LaunchProblem::DevicePath),
+            (r"C:\FXServer\CON:x", LaunchProblem::DevicePath),
             (r#"C:\FX"Server"#, LaunchProblem::ForbiddenCharacter),
             (r"C:\FXServer;quit", LaunchProblem::ForbiddenCharacter),
         ] {
@@ -441,6 +453,7 @@ mod tests {
         }
         assert_eq!(build_path("D:/FXServer/build", Platform::Windows), []);
         assert_eq!(build_path(r"C:\FXServer\console\build", Platform::Windows), []);
+        assert_eq!(build_path(r"C:\FXServer\nullable.d\build", Platform::Windows), []);
     }
 
     #[test]
@@ -450,12 +463,17 @@ mod tests {
             (r"C:\FXServer\build", LaunchProblem::NotAbsolute),
             ("/dev/sda1", LaunchProblem::DevicePath),
             ("/dev", LaunchProblem::DevicePath),
+            ("//dev/sda1", LaunchProblem::DevicePath),
+            ("/./dev/sda1", LaunchProblem::DevicePath),
+            ("/srv/../dev/sda1", LaunchProblem::DevicePath),
+            ("/../dev/shm/x", LaunchProblem::DevicePath),
             (r"/opt/fx\server", LaunchProblem::ForbiddenCharacter),
             ("/opt/fx;server", LaunchProblem::ForbiddenCharacter),
         ] {
             assert_eq!(build_path(path, Platform::Unix), [problem], "{path:?}");
         }
         assert_eq!(build_path("/opt/devices/fxserver", Platform::Unix), []);
+        assert_eq!(build_path("/opt/dev/../fxserver/", Platform::Unix), []);
     }
 
     #[test]
