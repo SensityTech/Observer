@@ -1147,6 +1147,79 @@ fn a_skip_whose_time_passed_is_forgotten_and_settles_its_occurrence() {
 }
 
 #[test]
+fn a_skipped_delayed_restart_can_be_restored_until_its_delayed_time() {
+    let mut sim = Sim::running(
+        paris(&["04:00", "16:00"]),
+        "2026-10-27T20:00:00Z",
+        "2026-10-28T02:00:00Z",
+    );
+    sim.send(Input::Delay {
+        minutes: 30,
+        by: "ada".to_owned(),
+    });
+
+    let skipped = sim.at(
+        "2026-10-28T03:10:00Z",
+        Input::Skip {
+            by: "grace".to_owned(),
+        },
+    );
+    let status = sim.status();
+    let restored = sim.at(
+        "2026-10-28T03:11:00Z",
+        Input::Restore {
+            by: "grace".to_owned(),
+        },
+    );
+    let next = sim.next();
+    let log = sim.run_until("2026-10-28T04:00:00Z");
+
+    assert!(skipped.contains(&Effect::Applied(Applied::Skipped {
+        at: ts("2026-10-28T03:00:00Z")
+    })));
+    assert_eq!(
+        status.upcoming[0].skipped,
+        Some(Skipped::Manual {
+            by: "grace".to_owned()
+        })
+    );
+    assert!(restored.contains(&Effect::Applied(Applied::Restored {
+        at: ts("2026-10-28T03:00:00Z")
+    })));
+    assert_eq!(next, Some(ts("2026-10-28T03:30:00Z")), "back at its delayed time");
+    assert_eq!(restarts(&log), [ts("2026-10-28T03:30:00Z")]);
+}
+
+#[test]
+fn a_skipped_delayed_restart_is_forgotten_once_its_delayed_time_passes() {
+    let mut sim = Sim::running(
+        paris(&["04:00", "16:00"]),
+        "2026-10-27T20:00:00Z",
+        "2026-10-28T02:00:00Z",
+    );
+    sim.send(Input::Delay {
+        minutes: 30,
+        by: "ada".to_owned(),
+    });
+    sim.send(Input::Skip {
+        by: "grace".to_owned(),
+    });
+
+    let log = sim.run_until("2026-10-28T03:30:01Z");
+
+    assert_eq!(restarts(&log), []);
+    assert_eq!(sim.state.plan.skip, None);
+    assert_eq!(sim.state.plan.delay, None);
+    assert_eq!(
+        refusal(&sim.send(Input::Restore {
+            by: "grace".to_owned()
+        })),
+        Some(ErrorCode::NothingToRestore)
+    );
+    assert_eq!(sim.next(), Some(ts("2026-10-28T15:00:00Z")));
+}
+
+#[test]
 fn a_plan_read_back_after_observer_restarted_still_fires_the_one_off_the_skip_and_the_delay() {
     let plan = SchedulePlan {
         skip: Some(PlannedRestart {

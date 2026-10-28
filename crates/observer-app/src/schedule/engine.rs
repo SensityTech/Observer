@@ -305,7 +305,7 @@ pub(crate) fn deadline(state: &State, settings: &Settings, now: Timestamp) -> Op
                 .map(|&tier| target.at - minutes(tier)),
         );
     }
-    due.extend(state.plan.skip.as_ref().map(|skip| skip.at));
+    due.extend(state.skip_ends());
     due.extend(state.auto_skip.map(|skip| skip.at));
     due.into_iter().filter(|at| *at > now).min()
 }
@@ -457,23 +457,33 @@ impl State {
         if first.skipped.is_some() {
             return Err(ErrorCode::AlreadySkipped.into());
         }
+        // A delay is kept with the skip: restoring brings the restart back at its delayed time.
         self.plan.skip = Some(PlannedRestart {
             at: first.occurrence,
             by: by.to_owned(),
         });
-        self.plan
-            .delay
-            .take_if(|delay| delay.occurrence == first.occurrence);
         Ok(Applied::Skipped { at: first.occurrence })
     }
 
     fn restore(&mut self, now: Timestamp) -> Result<Applied, ApiError> {
+        let ends = self.skip_ends();
         let skip = self
             .plan
             .skip
-            .take_if(|skip| skip.at > now)
+            .take_if(|_| ends.is_some_and(|ends| ends > now))
             .ok_or(ErrorCode::NothingToRestore)?;
         Ok(Applied::Restored { at: skip.at })
+    }
+
+    /// When the skipped restart would have happened: its occurrence, or the time it was delayed to.
+    fn skip_ends(&self) -> Option<Timestamp> {
+        let skip = self.plan.skip.as_ref()?;
+        let delay = self
+            .plan
+            .delay
+            .as_ref()
+            .filter(|delay| delay.occurrence == skip.at);
+        Some(delay.map_or(skip.at, |delay| delay.to))
     }
 
     fn delay(
@@ -566,7 +576,13 @@ impl State {
                 }
             }
         }
-        if let Some(skip) = self.plan.skip.take_if(|skip| skip.at <= now) {
+        // A skip lasts until the restart it skipped would have happened, or another restart
+        // settled its occurrence.
+        let ends = self.skip_ends();
+        let settled = self.plan.settled;
+        if let Some(skip) = self.plan.skip.take_if(|skip| {
+            ends.is_some_and(|ends| ends <= now) || settled.is_some_and(|settled| skip.at <= settled)
+        }) {
             self.settle(skip.at);
         }
         if let Some(skip) = self.auto_skip.take_if(|skip| skip.at <= now) {

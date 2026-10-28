@@ -239,8 +239,10 @@ function NextRestart({
             label: t.schedule.skip,
             call: skipNext,
             done: (status) => {
-                const at = status.upcoming.find((each) => each.skipped?.kind === 'manual')?.at;
-                return at === undefined ? t.schedule.fromSchedule : t.schedule.skipped(zoned.clock(at));
+                const found = status.upcoming.find((each) => each.skipped?.kind === 'manual');
+                return found === undefined
+                    ? t.schedule.fromSchedule
+                    : t.schedule.skipped(zoned.clock(found.delayed?.to ?? found.at));
             },
         });
     const delay = (minutes: number) =>
@@ -352,7 +354,8 @@ function NextRestart({
                                 action.mutate({
                                     label: t.schedule.restore,
                                     call: restoreSkipped,
-                                    done: () => t.schedule.restored(zoned.clock(skipped.at)),
+                                    done: () =>
+                                        t.schedule.restored(zoned.clock(skipped.delayed?.to ?? skipped.at)),
                                 })
                             }
                             onBlocked={blocked}
