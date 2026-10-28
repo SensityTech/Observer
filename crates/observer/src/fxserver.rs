@@ -16,7 +16,7 @@ use observer_fxserver::stdin::UserCommand;
 use observer_fxserver::supervisor::{Event, EventKind, Settings, State, Supervisor};
 use tokio::sync::{broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use crate::config::Config;
 use crate::shutdown::{Shutdown, Signals};
@@ -208,8 +208,11 @@ async fn print_events(mut events: broadcast::Receiver<Event>, stop: Cancellation
             },
         };
         match &event.kind {
-            // State changes are logged already; heap and resource reports are routine.
-            EventKind::State { .. } | EventKind::Heap { .. } | EventKind::Resources { .. } => {}
+            EventKind::State { .. } => {}
+            // Routine reports, every few seconds.
+            kind @ (EventKind::Heap { .. } | EventKind::Resources { .. }) => {
+                debug!(generation = event.generation, ?kind, "bridge report");
+            }
             kind => {
                 let kind = serde_json::to_string(kind).unwrap_or_default();
                 println!("[observer] #{} {kind}", event.generation);
