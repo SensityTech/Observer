@@ -94,7 +94,8 @@ impl Sampler {
             }
 
             let measured_at = Instant::now();
-            let ts = slot_just_ended(clock.now().as_millisecond());
+            let woke_ms = clock.now().as_millisecond();
+            let ts = slot_just_ended(woke_ms);
             let (state, generation, build) = {
                 let status = status.borrow();
                 (server_state(status.state), status.generation, status.build)
@@ -116,9 +117,11 @@ impl Sampler {
                 collect_ms,
             });
             let sample = Sample { ts, state, values };
+            // From the wake, not from the end of the write: a write that waits behind the upkeep
+            // must not cost the next slot.
+            wake = Wake::after(woke_ms);
             writer.write(&metrics, &sample).await;
             metrics.publish(live(&sample, children, assembler.processors));
-            wake = Wake::after(clock.now().as_millisecond());
         }
         // The stop of FXServer that came just before is part of its run.
         while let Ok(event) = events.try_recv() {
