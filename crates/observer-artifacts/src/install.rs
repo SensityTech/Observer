@@ -10,7 +10,7 @@ use reqwest::Url;
 
 use crate::download::{self, Downloaded, RETRY_DELAYS};
 use crate::error::{Error, io};
-use crate::http::{ARCHIVE_LIMIT, Http, MIB, too_large};
+use crate::http::{ARCHIVE_LIMIT, Head, Http, MIB, too_large};
 use crate::layout::{self, MANIFEST_FORMAT, Manifest};
 use crate::{Branch, CommitSha, Platform, disk, extract};
 
@@ -104,7 +104,7 @@ impl Installer {
         }
 
         // A `HEAD` first: the docs page only links `server.7z`, so this proves `server.zip` is there.
-        let head = self.http.head(&request.url, HEAD_TIMEOUT).await?;
+        let head = self.head(&request.url).await?;
         let length = match head.length {
             None => {
                 return Err(Error::LengthMissing {
@@ -191,6 +191,23 @@ impl Installer {
             Ok(manifest)
         })
         .await
+    }
+
+    /// Gets as many attempts as the download after it.
+    async fn head(&self, url: &Url) -> Result<Head, Error> {
+        let mut delays = RETRY_DELAYS.iter();
+        loop {
+            match self.http.head(url, HEAD_TIMEOUT).await {
+                Err(error) if error.is_transient() => {
+                    let Some(delay) = delays.next() else {
+                        return Err(error);
+                    };
+                    tracing::warn!(%url, %error, "the archive did not answer, trying again");
+                    tokio::time::sleep(*delay).await;
+                }
+                result => return result,
+            }
+        }
     }
 
     fn check_first_seen(&self, request: &InstallRequest, downloaded: &Downloaded) -> Result<(), Error> {
@@ -301,7 +318,7 @@ mod tests {
 
     use super::*;
     use crate::samples::host_build;
-    use crate::test_server::{Reply, TestServer};
+    use crate::test_server::{Reply, Request, TestServer};
 
     const COMMIT: &str = "0cfcdb5ead57a4a26fcb6ebad98adbcd0273e607";
 
@@ -315,7 +332,7 @@ mod tests {
         /// Serves `archives[n]` to the n-th download, and the last one to any download after.
         async fn new(archives: Vec<Vec<u8>>) -> Self {
             let downloads = AtomicUsize::new(0);
-            let server = TestServer::start(move |request, _| {
+            Self::serving(move |request, _| {
                 if request.path == "/missing" {
                     return Reply::status(404);
                 }
@@ -325,7 +342,11 @@ mod tests {
                 }
                 Reply::ok(archives[served].clone())
             })
-            .await;
+            .await
+        }
+
+        async fn serving(handler: impl Fn(&Request, usize) -> Reply + Send + Sync + 'static) -> Self {
+            let server = TestServer::start(handler).await;
             let dir = tempfile::tempdir().unwrap();
             let installer = Installer::new(Http::local(server.port), dir.path().join("artifacts"));
             Self {
@@ -480,6 +501,30 @@ mod tests {
             .map(|request| request.method)
             .collect();
         assert_eq!(methods, ["HEAD"]);
+    }
+
+    #[tokio::test]
+    async fn a_head_that_fails_once_is_tried_again_like_the_download() {
+        let archive = host_build();
+        let lab = Lab::serving(move |_, index| {
+            if index == 0 {
+                Reply::status(503)
+            } else {
+                Reply::ok(archive.clone())
+            }
+        })
+        .await;
+
+        let result = lab.installer.install(&lab.request("/archive"), |_| {}).await;
+
+        assert!(!matches!(result, Err(Error::Status { .. })), "{result:?}");
+        let methods: Vec<String> = lab
+            .server
+            .requests()
+            .into_iter()
+            .map(|request| request.method)
+            .collect();
+        assert_eq!(methods, ["HEAD", "HEAD", "GET"]);
     }
 
     #[tokio::test]
