@@ -444,8 +444,11 @@ async fn a_hung_main_loop_is_detected_and_the_server_restarted() {
             cause: HangCause::NoHeartbeat
         }
     );
+    let exit = lab.event(exited).await;
     assert!(
-        matches!(lab.event(exited).await, EventKind::Exited { expected: false, code, .. } if code == KILLED)
+        matches!(&exit, EventKind::Exited { expected: false, code, description, .. }
+            if *code == KILLED && description.starts_with("killed by Observer")),
+        "{exit:?}"
     );
     assert_eq!(
         lab.state(State::Crashed).await,
