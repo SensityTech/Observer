@@ -1,6 +1,40 @@
 import { describe, expect, it } from 'vitest';
 
-import { formatBytes, formatDuration, formatNumber, formatTimestamp, plural } from './format';
+import {
+    formatBytes,
+    formatClock,
+    formatDay,
+    formatDuration,
+    formatNumber,
+    formatTimestamp,
+    knownZone,
+    plural,
+    zoneOffset,
+} from './format';
+
+describe('schedule times', () => {
+    const paris = 'Europe/Paris';
+
+    it('should read a restart in the schedule zone across both clock changes', () => {
+        expect(formatClock('en', '2026-03-29T01:30:00Z', paris)).toBe('03:30');
+        expect(formatClock('en', '2026-10-25T00:30:00Z', paris)).toBe('02:30');
+        expect(formatClock('en', '2026-10-25T01:30:00Z', paris)).toBe('02:30');
+        expect(zoneOffset('en', paris, '2026-10-25T00:30:00Z')).toBe('UTC+2');
+        expect(zoneOffset('en', paris, '2026-10-25T01:30:00Z')).toBe('UTC+1');
+    });
+
+    it('should name the day in the zone, and the offsets Intl calls GMT as UTC', () => {
+        expect(formatDay('en', '2026-10-28T22:30:00Z', 'Asia/Kolkata')).toBe('Thu 29 Oct');
+        expect(formatDay('en', '2026-10-28T22:30:00Z', paris, { weekday: false })).toBe('28 Oct');
+        expect(zoneOffset('en', 'Asia/Kolkata', '2026-10-28T22:30:00Z')).toBe('UTC+5:30');
+        expect(zoneOffset('en', 'UTC', '2026-10-28T22:30:00Z')).toBe('UTC');
+    });
+
+    it('should fall back to UTC for a zone the browser does not know', () => {
+        expect(knownZone('Europe/Atlantis')).toBe('UTC');
+        expect(formatClock('en', '2026-10-28T22:30:00Z', 'Europe/Atlantis')).toBe('22:30');
+    });
+});
 
 describe('plural', () => {
     const players = { one: 'player', other: 'players' };

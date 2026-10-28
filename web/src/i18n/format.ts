@@ -75,3 +75,63 @@ export const formatDateTime = (locale: string, date: Date, options?: Intl.DateTi
         hourCycle: 'h23',
         ...options,
     }).format(date);
+
+// Schedule times read in the schedule's zone on every screen, never in the browser's.
+
+/** `zone` when this browser knows it, else UTC. */
+export const knownZone = (zone: string) => {
+    try {
+        return new Intl.DateTimeFormat('en', { timeZone: zone }).resolvedOptions().timeZone ? zone : 'UTC';
+    } catch {
+        return 'UTC';
+    }
+};
+
+/** A wall time in `zone` on a 24-hour clock: `04:00`. */
+export const formatClock = (locale: string, instant: string | number, zone: string) =>
+    new Intl.DateTimeFormat(locale, {
+        hour: '2-digit',
+        minute: '2-digit',
+        hourCycle: 'h23',
+        timeZone: knownZone(zone),
+    }).format(new Date(instant));
+
+/**
+ * A day in `zone`: `Wed 29 Oct`, or `29 Oct` without the weekday. Intl gives the names; the order
+ * stays the panel's in every language, as the timestamps' does.
+ */
+export const formatDay = (
+    locale: string,
+    instant: string | number,
+    zone: string,
+    { weekday = true } = {},
+) => {
+    const parts = new Intl.DateTimeFormat(locale, {
+        weekday: 'short',
+        day: 'numeric',
+        month: 'short',
+        timeZone: knownZone(zone),
+    }).formatToParts(new Date(instant));
+    const part = (type: Intl.DateTimeFormatPartTypes) =>
+        parts.find((each) => each.type === type)?.value ?? '';
+    const day = `${part('day')} ${part('month')}`;
+    return weekday ? `${part('weekday')} ${day}` : day;
+};
+
+/** The day of `instant` in `zone`, as `2026-10-29`, to tell whether two instants share one. */
+export const zoneDate = (instant: string | number, zone: string) =>
+    new Intl.DateTimeFormat('en-CA', {
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        timeZone: knownZone(zone),
+    }).format(new Date(instant));
+
+/** The offset of `zone` at `instant`: `UTC+1`, `UTC+5:30`, `UTC`. */
+export const zoneOffset = (locale: string, zone: string, instant: string | number) => {
+    const name = new Intl.DateTimeFormat(locale, { timeZoneName: 'shortOffset', timeZone: knownZone(zone) })
+        .formatToParts(new Date(instant))
+        .find((part) => part.type === 'timeZoneName')?.value;
+    const offset = (name ?? 'GMT').replace('GMT', 'UTC');
+    return offset === 'UTC+0' ? 'UTC' : offset;
+};
