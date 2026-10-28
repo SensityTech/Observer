@@ -299,6 +299,8 @@ export const en = {
             fxdk: '-fxdk is refused: it would start FXServer for the development kit, outside Observer.',
             invalidCfgFile:
                 'Use a path inside the server data folder, with letters, digits, dots, dashes, underscores and / between folders.',
+            optionLike:
+                'Start with something other than - or +: FXServer would read it as an option or a command of its own.',
             invalidName: 'Use 1 to 64 letters, digits or underscores.',
             forbiddenCharacter:
                 'Remove the quotes, semicolons and backslashes: FXServer reads them as commands.',

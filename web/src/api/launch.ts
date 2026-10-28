@@ -45,6 +45,7 @@ const PROBLEMS = {
     controlCharacter: true,
     fxdk: true,
     invalidCfgFile: true,
+    optionLike: true,
     invalidName: true,
     forbiddenCharacter: true,
     reserved: true,

@@ -154,6 +154,9 @@ pub enum LaunchProblem {
     Fxdk,
     /// The cfg is not a plain relative path of letters, digits, `.`, `-`, `_` and `/`.
     InvalidCfgFile,
+    /// Starts with `-` or `+`. FXServer hands every argument starting with `-` to Node.js as one of
+    /// its options (`--inspect` opens a debugger to the host), and reads `+` as a new command.
+    OptionLike,
     /// An argument's name is not 1 to 64 letters, digits or underscores.
     InvalidName,
     /// `"`, `;` or `\`, which FXServer's command line reads as syntax.
@@ -302,6 +305,8 @@ fn cfg_problem(cfg: &str, platform: Platform) -> Option<LaunchProblem> {
     });
     if !plain {
         Some(LaunchProblem::InvalidCfgFile)
+    } else if cfg.starts_with('-') {
+        Some(LaunchProblem::OptionLike)
     } else if platform == Platform::Windows && cfg.split('/').any(windows_device) {
         Some(LaunchProblem::DevicePath)
     } else {
@@ -330,9 +335,13 @@ fn name_problem(name: &str) -> Option<LaunchProblem> {
 
 fn value_problem(value: &str) -> Option<LaunchProblem> {
     text_problem(value).or_else(|| {
-        value
-            .contains(['"', ';', '\\'])
-            .then_some(LaunchProblem::ForbiddenCharacter)
+        if value.contains(['"', ';', '\\']) {
+            Some(LaunchProblem::ForbiddenCharacter)
+        } else if value.starts_with(['-', '+']) {
+            Some(LaunchProblem::OptionLike)
+        } else {
+            None
+        }
     })
 }
 
@@ -501,7 +510,15 @@ mod tests {
             cfg("server-fxdk.cfg", Platform::Unix),
             [issue(LaunchField::CfgFile, None, LaunchProblem::Fxdk)]
         );
+        for option in ["--inspect", "-V", "--version"] {
+            assert_eq!(
+                cfg(option, Platform::Unix),
+                [issue(LaunchField::CfgFile, None, LaunchProblem::OptionLike)],
+                "{option:?}"
+            );
+        }
         assert_eq!(cfg("configs/live_2.cfg", Platform::Windows), []);
+        assert_eq!(cfg("configs/-old.cfg", Platform::Windows), []);
     }
 
     #[test]
@@ -569,6 +586,9 @@ mod tests {
             ("Lab\rquit", LaunchProblem::ControlCharacter),
             ("Lab\nquit", LaunchProblem::ControlCharacter),
             ("-fxdk", LaunchProblem::Fxdk),
+            ("--inspect=0.0.0.0:9229", LaunchProblem::OptionLike),
+            ("-V", LaunchProblem::OptionLike),
+            ("+quit", LaunchProblem::OptionLike),
         ] {
             assert_eq!(
                 value(invalid),
@@ -577,6 +597,7 @@ mod tests {
             );
         }
         assert_eq!(value("Observer lab ^2 #1"), []);
+        assert_eq!(value("Lab -1 +2"), []);
     }
 
     #[test]
