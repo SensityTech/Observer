@@ -1080,3 +1080,50 @@ async fn a_signed_in_user_confirming_their_password_is_audited_as_themselves() {
         2
     );
 }
+
+#[tokio::test]
+async fn strangers_filling_the_hash_queue_keep_neither_a_known_network_nor_a_signed_in_user_out() {
+    let lab = Lab::new().await;
+    let owner = lab.owner().await;
+    let ada = lab.caller(&owner).await;
+    let ada = Caller {
+        client: office(),
+        ..ada
+    };
+    lab.pause();
+
+    let held = lab.accounts.passwords.hold().await;
+    let strangers: Vec<_> = (0..24)
+        .map(|network| {
+            let accounts = lab.accounts.clone();
+            let client = Client::new(std::net::IpAddr::from([10, 0, network, 1]), None);
+            tokio::spawn(async move {
+                accounts
+                    .login("ada", "guess guess guess".to_owned(), &client)
+                    .await
+            })
+        })
+        .collect();
+    while lab.accounts.passwords.waiting() < 18 {
+        tokio::task::yield_now().await;
+    }
+    let from_home = tokio::spawn({
+        let accounts = lab.accounts.clone();
+        async move { accounts.login("ada", OWNER_PASSWORD.to_owned(), &home()).await }
+    });
+    let reauthentication = tokio::spawn({
+        let accounts = lab.accounts.clone();
+        async move { accounts.reauthenticate(&ada, OWNER_PASSWORD.to_owned()).await }
+    });
+    for _ in 0..100 {
+        tokio::task::yield_now().await;
+    }
+    drop(held);
+
+    from_home.await.unwrap().unwrap();
+    reauthentication.await.unwrap().unwrap();
+    for stranger in strangers {
+        let refused = code(stranger.await.unwrap());
+        assert!(matches!(refused, ErrorCode::InvalidCredentials | ErrorCode::Busy));
+    }
+}

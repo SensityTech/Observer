@@ -2,7 +2,7 @@
 //! an account as a whole only gets slower, so a stranger cannot lock the owner out.
 
 use std::collections::HashMap;
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
@@ -21,6 +21,8 @@ const LONGEST_LOCK: SignedDuration = SignedDuration::from_mins(15);
 const COOLDOWN: SignedDuration = SignedDuration::from_secs(1);
 const ACCOUNT_SLOWDOWN_AFTER: u32 = 10;
 pub(crate) const ACCOUNT_SLOWDOWN: Duration = Duration::from_secs(1);
+/// A username signed in from a network is known there for this long after.
+const KNOWN_FOR: SignedDuration = SignedDuration::from_hours(30 * 24);
 
 /// The client network a lock applies to: the address itself for IPv4, its /64 for IPv6, since a
 /// single IPv6 host usually holds a whole /64.
@@ -32,9 +34,21 @@ pub(crate) fn network(ip: IpAddr) -> String {
                 ip.to_string()
             } else {
                 let prefix = u128::from(ip) & !u128::from(u64::MAX);
-                format!("{}/64", std::net::Ipv6Addr::from(prefix))
+                format!("{}/64", Ipv6Addr::from(prefix))
             }
         }
+    }
+}
+
+/// The wider network one party usually holds many addresses of: a /24 for IPv4, a /48 for IPv6.
+fn neighbourhood(ip: IpAddr) -> String {
+    let v4 = |ip: Ipv4Addr| format!("{}/24", Ipv4Addr::from(u32::from(ip) & 0xffff_ff00));
+    match ip {
+        IpAddr::V4(ip) => v4(ip),
+        IpAddr::V6(ip) => match ip.to_ipv4_mapped() {
+            Some(ip) => v4(ip),
+            None => format!("{}/48", Ipv6Addr::from(u128::from(ip) & !(u128::MAX >> 48))),
+        },
     }
 }
 
@@ -51,6 +65,8 @@ pub(crate) fn too_many_attempts(wait: SignedDuration) -> Error {
 pub(crate) struct Attempts {
     clock: Clock,
     networks: Mutex<HashMap<String, Slot>>,
+    /// When each lowercased username last signed in from each network.
+    known: Mutex<HashMap<(String, String), Timestamp>>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -64,33 +80,62 @@ impl Attempts {
         Self {
             clock,
             networks: Mutex::default(),
+            known: Mutex::default(),
         }
     }
 
-    /// Takes the network's slot before any password is hashed.
-    pub(crate) fn reserve(&self, network: &str) -> Result<Reservation<'_>, Error> {
+    /// Whether `username` signed in from `network` lately. Such an attempt is no stranger's: it
+    /// skips the strangers' queue for a hash, so that many addresses failing at once cannot keep
+    /// the account's own user out.
+    pub(crate) fn knows(&self, username: &str, network: &str) -> bool {
         let now = self.clock.now();
+        let known = self.known.lock().unwrap_or_else(PoisonError::into_inner);
+        known
+            .get(&(username.to_ascii_lowercase(), network.to_owned()))
+            .is_some_and(|at| now < *at + KNOWN_FOR)
+    }
+
+    pub(crate) fn signed_in(&self, username: &str, network: &str) {
+        let now = self.clock.now();
+        let mut known = self.known.lock().unwrap_or_else(PoisonError::into_inner);
+        known.retain(|_, at| now < *at + KNOWN_FOR);
+        known.insert((username.to_ascii_lowercase(), network.to_owned()), now);
+    }
+
+    /// Takes the network's slot before any password is hashed. A stranger's attempt takes its
+    /// neighbourhood's slot as well: holding many addresses of one network does not multiply the
+    /// attempts it can have in flight.
+    pub(crate) fn reserve(&self, ip: IpAddr, known: bool) -> Result<Reservation<'_>, Error> {
+        let now = self.clock.now();
+        let mut keys = vec![network(ip)];
+        if !known {
+            keys.push(neighbourhood(ip));
+        }
         let mut networks = self.networks.lock().unwrap_or_else(PoisonError::into_inner);
         networks.retain(|_, slot| !matches!(slot, Slot::CoolingUntil(until) if *until <= now));
-        match networks.get(network) {
-            Some(Slot::InFlight) => return Err(too_many_attempts(COOLDOWN)),
-            Some(Slot::CoolingUntil(until)) => return Err(too_many_attempts(until.duration_since(now))),
-            None => {}
+        for key in &keys {
+            match networks.get(key) {
+                Some(Slot::InFlight) => return Err(too_many_attempts(COOLDOWN)),
+                Some(Slot::CoolingUntil(until)) => return Err(too_many_attempts(until.duration_since(now))),
+                None => {}
+            }
         }
-        networks.insert(network.to_owned(), Slot::InFlight);
+        for key in &keys {
+            networks.insert(key.clone(), Slot::InFlight);
+        }
         Ok(Reservation {
             attempts: self,
-            network: network.to_owned(),
+            keys,
             succeeded: false,
         })
     }
 }
 
-/// A network's slot, given back when dropped: at once after a success, after the cooldown
+/// A network's slots, given back when dropped: at once after a success, after the cooldown
 /// otherwise, including when the request was abandoned halfway.
 pub(crate) struct Reservation<'a> {
     attempts: &'a Attempts,
-    network: String,
+    keys: Vec<String>,
     succeeded: bool,
 }
 
@@ -108,10 +153,12 @@ impl Drop for Reservation<'_> {
             .networks
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
-        if self.succeeded {
-            networks.remove(&self.network);
-        } else {
-            networks.insert(self.network.clone(), Slot::CoolingUntil(now + COOLDOWN));
+        for key in &self.keys {
+            if self.succeeded {
+                networks.remove(key);
+            } else {
+                networks.insert(key.clone(), Slot::CoolingUntil(now + COOLDOWN));
+            }
         }
     }
 }
@@ -379,21 +426,54 @@ mod tests {
         assert!(rows.iter().all(|row| locked_for(row, now).is_none()));
     }
 
+    fn ip(address: &str) -> IpAddr {
+        address.parse().unwrap()
+    }
+
     #[test]
     fn one_attempt_per_network_is_in_flight_and_a_failure_cools_it_down() {
         let clock = Clock::manual(at(0));
         let attempts = Attempts::new(clock.clone());
 
-        let first = attempts.reserve("203.0.113.7").unwrap();
-        assert!(attempts.reserve("203.0.113.7").is_err());
-        let other = attempts.reserve("198.51.100.4").unwrap();
+        let first = attempts.reserve(ip("203.0.113.7"), false).unwrap();
+        assert!(attempts.reserve(ip("203.0.113.7"), false).is_err());
+        let other = attempts.reserve(ip("198.51.100.4"), false).unwrap();
         other.succeeded();
         drop(first);
 
-        assert!(attempts.reserve("203.0.113.7").is_err());
-        assert!(attempts.reserve("198.51.100.4").is_ok());
+        assert!(attempts.reserve(ip("203.0.113.7"), false).is_err());
+        assert!(attempts.reserve(ip("198.51.100.4"), false).is_ok());
         clock.advance(COOLDOWN);
-        attempts.reserve("203.0.113.7").unwrap().succeeded();
-        attempts.reserve("203.0.113.7").unwrap();
+        attempts.reserve(ip("203.0.113.7"), false).unwrap().succeeded();
+        attempts.reserve(ip("203.0.113.7"), false).unwrap();
+    }
+
+    #[test]
+    fn strangers_share_one_attempt_per_neighbourhood_and_known_pairs_have_their_own() {
+        let clock = Clock::manual(at(0));
+        let attempts = Attempts::new(clock.clone());
+
+        let first = attempts.reserve(ip("203.0.113.7"), false).unwrap();
+        assert!(attempts.reserve(ip("203.0.113.200"), false).is_err());
+        assert!(attempts.reserve(ip("203.0.114.7"), false).is_ok());
+        let v6 = attempts.reserve(ip("2001:db8:1:2::1"), false).unwrap();
+        assert!(attempts.reserve(ip("2001:db8:1:ffff::1"), false).is_err());
+        assert!(attempts.reserve(ip("2001:db8:2::1"), false).is_ok());
+
+        attempts.signed_in("Ada", &network(ip("203.0.113.200")));
+        assert!(attempts.knows("ada", "203.0.113.200"));
+        assert!(!attempts.knows("grace", "203.0.113.200"));
+        attempts.reserve(ip("203.0.113.200"), true).unwrap();
+        drop((first, v6));
+
+        clock.advance(KNOWN_FOR);
+        assert!(!attempts.knows("ada", "203.0.113.200"));
+    }
+
+    #[test]
+    fn a_neighbourhood_is_a_slash_24_or_a_slash_48() {
+        assert_eq!(neighbourhood(ip("203.0.113.7")), "203.0.113.0/24");
+        assert_eq!(neighbourhood(ip("::ffff:203.0.113.7")), "203.0.113.0/24");
+        assert_eq!(neighbourhood(ip("2001:db8:1:2:3::4")), "2001:db8:1::/48");
     }
 }

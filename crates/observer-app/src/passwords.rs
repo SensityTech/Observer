@@ -13,6 +13,9 @@ pub(crate) const MAX_BYTES: usize = 1024;
 /// Two hashes at 64 MiB each bound the memory a burst of logins can take.
 const RUNNING: usize = 2;
 const QUEUED: usize = 16;
+/// How many of the running hashes may check a stranger's password: the rest are kept for the
+/// people Observer knows, so a crowd of strangers cannot keep them out.
+const STRANGERS: usize = 1;
 
 /// What one Argon2id hash costs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -38,6 +41,8 @@ impl PasswordCost {
 pub(crate) struct Passwords {
     params: Params,
     slots: Arc<Semaphore>,
+    strangers: Arc<Semaphore>,
+    /// Strangers' checks, queued or running.
     pending: Arc<AtomicUsize>,
     /// Checked when the username is unknown, so that it takes as long as a known one.
     dummy: String,
@@ -55,6 +60,7 @@ impl Passwords {
         let mut passwords = Self {
             params,
             slots: Arc::new(Semaphore::new(RUNNING)),
+            strangers: Arc::new(Semaphore::new(STRANGERS)),
             pending: Arc::default(),
             dummy: String::new(),
         };
@@ -62,9 +68,11 @@ impl Passwords {
         Ok(passwords)
     }
 
+    /// Hashes a password someone allowed chose or was given: a signed-in user, the holder of a
+    /// setup token, or Observer itself.
     pub(crate) async fn hash(&self, password: String) -> Result<String, Error> {
         let params = self.params.clone();
-        self.run(move || {
+        self.run(true, move || {
             argon2(params)
                 .hash_password(password.as_bytes())
                 .map(|hash| hash.to_string())
@@ -74,12 +82,18 @@ impl Passwords {
     }
 
     /// Checks `password` against `hash`, or against the dummy hash when there is no account: that
-    /// costs the same and never matches.
-    pub(crate) async fn verify(&self, password: String, hash: Option<String>) -> Result<Verdict, Error> {
-        let known = hash.is_some();
+    /// costs the same and never matches. `known` is for a signed-in user, or a username and
+    /// network that signed in lately; anyone else is a stranger.
+    pub(crate) async fn verify(
+        &self,
+        password: String,
+        hash: Option<String>,
+        known: bool,
+    ) -> Result<Verdict, Error> {
+        let exists = hash.is_some();
         let hash = hash.unwrap_or_else(|| self.dummy.clone());
         let params = self.params.clone();
-        self.run(move || {
+        self.run(known, move || {
             let parsed = PasswordHash::new(&hash).map_err(hashing)?;
             let matches = argon2(params.clone())
                 .verify_password(password.as_bytes(), &parsed)
@@ -90,7 +104,7 @@ impl Passwords {
                         != (params.m_cost(), params.t_cost(), params.p_cost())
                 });
             Ok(Verdict {
-                matches: known && matches,
+                matches: exists && matches,
                 outdated,
             })
         })
@@ -111,23 +125,33 @@ impl Passwords {
             .unwrap()
     }
 
-    /// How many hashes are queued or running.
+    /// How many strangers' checks are queued or running.
     #[cfg(test)]
     pub(crate) fn waiting(&self) -> usize {
         self.pending.load(Ordering::Acquire)
     }
 
-    /// Runs a hash on the blocking pool once a slot is free, or refuses when too many wait already.
-    async fn run<R, F>(&self, job: F) -> Result<R, Error>
+    /// Runs a hash on the blocking pool once a slot is free. A stranger also waits for one of the
+    /// strangers' slots, and is refused when too many strangers wait already.
+    async fn run<R, F>(&self, known: bool, job: F) -> Result<R, Error>
     where
         R: Send + 'static,
         F: FnOnce() -> R + Send + 'static,
     {
-        let pending = Pending::enter(&self.pending)?;
+        let stranger = if known {
+            None
+        } else {
+            let pending = Pending::enter(&self.pending)?;
+            let slot = Arc::clone(&self.strangers)
+                .acquire_owned()
+                .await
+                .map_err(hashing)?;
+            Some((pending, slot))
+        };
         let slot = Arc::clone(&self.slots).acquire_owned().await.map_err(hashing)?;
-        // Both are held by the job, so an abandoned request still counts until its hash ends.
+        // Everything is held by the job, so an abandoned request still counts until its hash ends.
         tokio::task::spawn_blocking(move || {
-            let _held = (pending, slot);
+            let _held = (stranger, slot);
             job()
         })
         .await
@@ -189,11 +213,11 @@ mod tests {
         let hash = passwords.hash("correct horse battery".to_owned()).await.unwrap();
 
         let right = passwords
-            .verify("correct horse battery".to_owned(), Some(hash.clone()))
+            .verify("correct horse battery".to_owned(), Some(hash.clone()), false)
             .await
             .unwrap();
         let wrong = passwords
-            .verify("correct horse battery!".to_owned(), Some(hash.clone()))
+            .verify("correct horse battery!".to_owned(), Some(hash.clone()), false)
             .await
             .unwrap();
 
@@ -207,7 +231,7 @@ mod tests {
         let passwords = Passwords::new(PasswordCost::TEST).await.unwrap();
 
         let verdict = passwords
-            .verify("anything at all".to_owned(), None)
+            .verify("anything at all".to_owned(), None, false)
             .await
             .unwrap();
 
@@ -228,7 +252,7 @@ mod tests {
         let hash = old.hash("correct horse battery".to_owned()).await.unwrap();
 
         let verdict = current
-            .verify("correct horse battery".to_owned(), Some(hash))
+            .verify("correct horse battery".to_owned(), Some(hash), false)
             .await
             .unwrap();
 

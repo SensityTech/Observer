@@ -150,7 +150,8 @@ impl Accounts {
         // Bounds the throttle's key; the audit log only ever names existing accounts.
         let username: String = username.chars().take(64).collect();
         let network = throttle::network(client.ip);
-        let attempt = self.attempts.reserve(&network)?;
+        let known = self.attempts.knows(&username, &network);
+        let attempt = self.attempts.reserve(client.ip, known)?;
         self.refuse_if_locked(&username, &network, true).await?;
         self.slow_down_if_targeted(&username).await?;
 
@@ -163,6 +164,7 @@ impl Accounts {
             .verify(
                 password.clone(),
                 user.as_ref().map(|user| user.password_hash.clone()),
+                known,
             )
             .await?;
         let now = self.clock.now();
@@ -183,7 +185,7 @@ impl Accounts {
             None
         };
 
-        let client = client.clone();
+        let (client, from) = (client.clone(), network.clone());
         let signed_in = self
             .db
             .write(move |tx| -> Result<_, Error> {
@@ -194,7 +196,7 @@ impl Accounts {
                         current.password_hash == user.password_hash && current.auth_epoch == user.auth_epoch
                     })
                     .ok_or(ErrorCode::InvalidCredentials)?;
-                clear_failures(tx, &username, &network, now)?;
+                clear_failures(tx, &username, &from, now)?;
                 if let Some(hash) = rehash {
                     user.password_hash = hash;
                 }
@@ -209,6 +211,7 @@ impl Accounts {
             })
             .await?;
         attempt.succeeded();
+        self.attempts.signed_in(&signed_in.me.username, &network);
         Ok(signed_in)
     }
 
@@ -408,7 +411,7 @@ impl Accounts {
         attempted: AuditAction,
     ) -> Result<(), Error> {
         let network = throttle::network(caller.client.ip);
-        let attempt = self.attempts.reserve(&network)?;
+        let attempt = self.attempts.reserve(caller.client.ip, true)?;
         // Their failures are in the audit log already, each in their name.
         self.refuse_if_locked(&caller.username, &network, false).await?;
 
@@ -420,7 +423,7 @@ impl Accounts {
         if hash.is_none() {
             return Err(ErrorCode::Unauthenticated.into());
         }
-        if !self.passwords.verify(password, hash).await?.matches {
+        if !self.passwords.verify(password, hash, true).await?.matches {
             let record = Record::by(caller, attempted)
                 .target(&caller.username)
                 .outcome(Outcome::Failure);

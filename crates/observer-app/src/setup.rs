@@ -56,7 +56,8 @@ impl Accounts {
             .filter(|bytes| bytes.len() == SETUP_TOKEN_BYTES)
             .map(|bytes| secrets::sha256(&bytes))
             .ok_or(ErrorCode::InvalidSetupToken)?;
-        let attempt = self.attempts.reserve(&throttle::network(client.ip))?;
+        let network = throttle::network(client.ip);
+        let attempt = self.attempts.reserve(client.ip, false)?;
 
         // A wrong token is turned away before it costs a hash.
         let now = self.clock.now();
@@ -109,6 +110,7 @@ impl Accounts {
             })
             .await?;
         attempt.succeeded();
+        self.attempts.signed_in(&signed_in.me.username, &network);
         Ok(signed_in)
     }
 }
