@@ -808,6 +808,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "observer-fxserver"
+version = "0.1.0"
+dependencies = [
+ "observer-platform",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "observer-platform"
 version = "0.1.0"
 dependencies = [
