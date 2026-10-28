@@ -349,7 +349,7 @@ function NextRestart({
                             <p className="flex-1">{outcome.message}</p>
                             <button
                                 type="button"
-                                className="-m-1 rounded-sm p-1"
+                                className="-m-1 grid place-items-center rounded-sm p-1 max-md:-my-3 max-md:-mr-3 max-md:size-11 max-md:p-0"
                                 aria-label={t.schedule.dismiss}
                                 onClick={() => setOutcome(null)}
                             >
@@ -751,7 +751,7 @@ function SwitchTrack({
                 role="switch"
                 aria-checked={checked}
                 checked={checked}
-                className="peer absolute inset-0 m-0 cursor-pointer opacity-0"
+                className="peer absolute inset-0 m-0 cursor-pointer opacity-0 max-md:-inset-3"
                 {...props}
             />
             <span
@@ -791,7 +791,7 @@ function ListChip({
             <button
                 ref={removeRef}
                 type="button"
-                className="grid size-5 place-items-center rounded-pill text-ink-3 hover:bg-hover hover:text-ink focus-visible:outline-2 focus-visible:outline-accent max-md:size-9"
+                className="grid size-5 place-items-center rounded-pill text-ink-3 hover:bg-hover hover:text-ink focus-visible:outline-2 focus-visible:outline-accent max-md:-my-px max-md:-mr-1 max-md:size-11"
                 aria-label={remove}
                 onClick={onRemove}
             >
