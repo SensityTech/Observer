@@ -70,12 +70,21 @@ local function secondsUntil(at)
     return math.max(0, at // 1000 - os.time())
 end
 
+-- txAdmin counts its warnings in whole minutes, and resources written for it divide by 60.
+local function wholeMinutes(seconds)
+    if type(seconds) ~= 'number' then
+        return 0
+    end
+    return math.ceil(seconds / 60) * 60
+end
+
 -- The events txAdmin raised where Observer raises its own, with txAdmin's payloads, for resources
 -- written against txAdmin. Each one lists them in the order txAdmin raised them.
 local TXADMIN = {
     restartScheduled = function(payload)
+        local secondsRemaining = wholeMinutes(payload.secondsRemaining)
         return {
-            { 'txAdmin:events:scheduledRestart', { secondsRemaining = payload.secondsRemaining, translatedMessage = '' } },
+            { 'txAdmin:events:scheduledRestart', { secondsRemaining = secondsRemaining, translatedMessage = '' } },
         }
     end,
     restartSkipped = function(payload)

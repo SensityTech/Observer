@@ -114,7 +114,7 @@ no text.
 
 | Observer's event | txAdmin's events, in order | Their payload |
 |---|---|---|
-| `observer:restartScheduled` | `txAdmin:events:scheduledRestart` | `secondsRemaining`, `translatedMessage = ''` |
+| `observer:restartScheduled` | `txAdmin:events:scheduledRestart` | `secondsRemaining` rounded up to whole minutes, as txAdmin counts them (166 becomes 180), `translatedMessage = ''` |
 | `observer:restartSkipped` | `txAdmin:events:scheduledRestartSkipped`, then the deprecated `txAdmin:events:skippedNextScheduledRestart` | `secondsRemaining` (until `at`), `temporary` (true for `oneOff`), `author` (`by`); the deprecated one without `author` |
 | `observer:restartRescheduled` | none | |
 | `observer:shuttingDown` | `txAdmin:events:serverShuttingDown` | `delay` (`delayMs`), `author` (`by`), `message = ''` |
