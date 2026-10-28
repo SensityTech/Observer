@@ -1,3 +1,4 @@
+pub mod authenticode;
 pub mod console;
 
 use std::ffi::OsStr;
@@ -13,6 +14,7 @@ use std::{ptr, thread};
 use windows_sys::Win32::Foundation::{
     ERROR_MORE_DATA, HANDLE_FLAG_INHERIT, SetHandleInformation, TRUE, WAIT_OBJECT_0,
 };
+use windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
 use windows_sys::Win32::System::JobObjects::{
     AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
     JOBOBJECT_BASIC_ACCOUNTING_INFORMATION, JOBOBJECT_BASIC_PROCESS_ID_LIST,
@@ -38,6 +40,26 @@ const FPIPE: u8 = 0x08;
 
 /// The exit code of every process killed with the tree.
 const KILLED: u32 = 1;
+
+pub(crate) fn available_space(dir: &Path) -> io::Result<u64> {
+    let path: Vec<u16> = dir.as_os_str().encode_wide().chain([0]).collect();
+    let mut available = 0;
+    // SAFETY: `path` is NUL-terminated and outlives the call, `available` is a writable u64, and
+    // the two totals we do not want may be null.
+    let succeeded = unsafe {
+        GetDiskFreeSpaceExW(
+            path.as_ptr(),
+            &raw mut available,
+            ptr::null_mut(),
+            ptr::null_mut(),
+        )
+    };
+    if succeeded == 0 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(available)
+    }
+}
 
 pub(crate) fn spawn(launch: &Launch) -> Result<Spawned, SpawnError> {
     let (child_stdin, stdin) = pipe().map_err(SpawnError::Pipes)?;
