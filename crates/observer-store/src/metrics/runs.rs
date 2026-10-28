@@ -145,20 +145,17 @@ pub fn markers(conn: &Connection, from: i64, end: i64) -> Result<Vec<RunMarker>,
     let crashed = |run: &Run| {
         matches!(run.end_cause.as_deref(), Some("crashed" | "hung")) && run.ended_ms.is_some_and(within)
     };
-    let neighbour = |run: &Run, offset: i64| {
-        runs.iter().find(|other| {
-            other.key.observer_started == run.key.observer_started
-                && i64::from(other.key.generation) == i64::from(run.key.generation) + offset
-        })
-    };
     let mut markers = Vec::new();
-    for run in &runs {
+    for (index, run) in runs.iter().enumerate() {
+        let previous = index
+            .checked_sub(1)
+            .and_then(|previous| beside(&runs, index, previous));
         if within(run.started_ms) {
             let kind = match run.start_cause.as_str() {
                 "requested" => Some(MarkerKind::Start),
                 "restart" => Some(MarkerKind::Restart),
                 // Drawn with the crash it follows, unless that crash is outside the range.
-                _ if neighbour(run, -1).is_some_and(crashed) => None,
+                _ if previous.is_some_and(crashed) => None,
                 _ => Some(MarkerKind::Restart),
             };
             if let Some(kind) = kind {
@@ -170,7 +167,7 @@ pub fn markers(conn: &Connection, from: i64, end: i64) -> Result<Vec<RunMarker>,
             }
         }
         if crashed(run) {
-            let back = neighbour(run, 1)
+            let back = beside(&runs, index, index + 1)
                 .filter(|next| next.start_cause == "recovery")
                 .and_then(|next| next.ready_ms);
             markers.push(RunMarker {
@@ -182,6 +179,14 @@ pub fn markers(conn: &Connection, from: i64, end: i64) -> Result<Vec<RunMarker>,
     }
     markers.sort_by_key(|marker| marker.at);
     Ok(markers)
+}
+
+/// The run at `other` when it is the same Observer's as the one at `index`. The runs come in the
+/// order of their generations, which a spawn that failed used up without starting a run, so the
+/// run next to another is not always one generation away.
+fn beside(runs: &[Run], index: usize, other: usize) -> Option<&Run> {
+    runs.get(other)
+        .filter(|other| other.key.observer_started == runs[index].key.observer_started)
 }
 
 #[cfg(test)]
@@ -235,6 +240,35 @@ mod tests {
                     at: T + 1000,
                     kind: MarkerKind::Restart,
                     back_online_at: None
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn a_recovery_whose_first_spawn_failed_is_still_drawn_with_its_crash() {
+        let mut conn = memory();
+        // Generation 2 was the spawn that failed: it never started a run.
+        with_tx(&mut conn, |tx| {
+            start(tx, key(1), T * 1000, StartCause::Requested).unwrap();
+            ready(tx, key(1), (T + 30) * 1000).unwrap();
+            end(tx, key(1), (T + 600) * 1000, EndCause::Crashed).unwrap();
+            start(tx, key(3), (T + 640) * 1000, StartCause::Recovery).unwrap();
+            ready(tx, key(3), (T + 700) * 1000).unwrap();
+        });
+
+        assert_eq!(
+            markers(&conn, T - 60, T + 3600).unwrap(),
+            [
+                RunMarker {
+                    at: T,
+                    kind: MarkerKind::Start,
+                    back_online_at: None
+                },
+                RunMarker {
+                    at: T + 600,
+                    kind: MarkerKind::Crash,
+                    back_online_at: Some(T + 700)
                 },
             ]
         );
