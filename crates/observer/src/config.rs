@@ -68,6 +68,8 @@ impl Default for LogConfig {
 pub struct DataPaths {
     pub root: PathBuf,
     pub database: PathBuf,
+    /// The statistics, apart from the state: never backed up.
+    pub metrics: PathBuf,
     pub backups: PathBuf,
     pub logs: PathBuf,
     pub artifacts: PathBuf,
@@ -77,6 +79,7 @@ impl DataPaths {
     pub fn new(root: PathBuf) -> Self {
         Self {
             database: root.join("observer.sqlite3"),
+            metrics: root.join("metrics.sqlite3"),
             backups: root.join("backups"),
             logs: root.join("logs"),
             artifacts: root.join("artifacts"),

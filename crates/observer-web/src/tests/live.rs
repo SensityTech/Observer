@@ -413,7 +413,7 @@ async fn a_message_observer_cannot_read_gets_an_error_and_a_ping_its_pong() {
 
     socket.send(Message::Text("not json".into())).await.unwrap();
     let garbled = receive(&mut socket).await;
-    send(&mut socket, json!({ "type": "sub", "topic": "metrics.live" })).await;
+    send(&mut socket, json!({ "type": "sub", "topic": "metrics.history" })).await;
     let unknown = receive(&mut socket).await;
     socket.send(Message::Binary(vec![1, 2, 3].into())).await.unwrap();
     let binary = receive(&mut socket).await;

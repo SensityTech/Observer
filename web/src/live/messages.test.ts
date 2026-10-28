@@ -29,6 +29,14 @@ const ONLINE = {
 
 const LINE = [1_761_660_127_000_001, 1_761_660_127_123, 3, 'command', 'ada', 'ensure chat', 0];
 
+const SAMPLE = {
+    ts: 1_761_660_125,
+    state: 'online',
+    values: { players: 187, slots: 256, fxsCpu: 182.5, mainTick: 6.8 },
+    children: [{ pid: 4120, name: 'node.exe', cpu: null, workingSet: 52_428_800, private: 41_943_040 }],
+    cores: 16,
+};
+
 describe('parseServerMessage', () => {
     it('should accept every message of the contract', () => {
         for (const message of [
@@ -57,6 +65,10 @@ describe('parseServerMessage', () => {
                 data: { lines: [LINE, [...LINE.slice(0, 3), 'stdout', null, 'x', 4]] },
             },
             { type: 'resync', topic: 'audit' },
+            { type: 'snapshot', topic: 'metrics.live', data: { latest: null } },
+            { type: 'snapshot', topic: 'metrics.live', data: { latest: SAMPLE } },
+            { type: 'event', topic: 'metrics.live', data: { ...SAMPLE, values: {}, children: [] } },
+            { type: 'resync', topic: 'metrics.live' },
             { type: 'unsubscribed', topic: 'status', reason: 'forbidden' },
             { type: 'pong' },
             { type: 'error', code: 'invalid_request' },
@@ -73,7 +85,17 @@ describe('parseServerMessage', () => {
             { type: 'snapshot', topic: 'status', data: { version: '0.1.0', startedAt: 'yesterday' } },
             { type: 'snapshot', topic: 'audit' },
             { type: 'unsubscribed', topic: 'audit', reason: 'bored' },
-            { type: 'resync', topic: 'metrics.live' },
+            { type: 'resync', topic: 'metrics.history' },
+            { type: 'snapshot', topic: 'metrics.live', data: {} },
+            { type: 'event', topic: 'metrics.live', data: { ...SAMPLE, values: { players: '187' } } },
+            { type: 'event', topic: 'metrics.live', data: { ...SAMPLE, values: { fxs_cpu: 3 } } },
+            { type: 'event', topic: 'metrics.live', data: { ...SAMPLE, values: { players: null } } },
+            { type: 'event', topic: 'metrics.live', data: { ...SAMPLE, cores: 0 } },
+            {
+                type: 'event',
+                topic: 'metrics.live',
+                data: { ...SAMPLE, children: [{ ...SAMPLE.children[0], workingSet: -1 }] },
+            },
             { type: 'snapshot', topic: 'server.status', data: { ...STATUS, state: 'exploded' } },
             { type: 'snapshot', topic: 'server.status', data: { ...STATUS, cause: { kind: 'exited' } } },
             {

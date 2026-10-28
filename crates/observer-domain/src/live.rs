@@ -8,6 +8,7 @@ use ts_rs::TS;
 
 use crate::audit::AuditEntry;
 use crate::error::ErrorCode;
+use crate::metrics::{LiveSample, MetricsSnapshot};
 use crate::server::{ConsoleBatch, ConsoleSnapshot, ServerStatus};
 
 /// The websocket subprotocol. A change older panels cannot read takes a new one.
@@ -40,10 +41,19 @@ pub enum Topic {
     /// FXServer's console, resumed from `since`, the number of the last line the panel holds.
     /// Needs the console permission.
     Console,
+    /// A sample of the statistics every five seconds. Needs the dashboard permission.
+    #[serde(rename = "metrics.live")]
+    MetricsLive,
 }
 
 impl Topic {
-    pub const ALL: [Self; 4] = [Self::Status, Self::Audit, Self::ServerStatus, Self::Console];
+    pub const ALL: [Self; 5] = [
+        Self::Status,
+        Self::Audit,
+        Self::ServerStatus,
+        Self::Console,
+        Self::MetricsLive,
+    ];
 }
 
 /// What the panel sends.
@@ -106,6 +116,8 @@ pub enum TopicSnapshot {
     #[serde(rename = "server.status")]
     ServerStatus(ServerStatus),
     Console(ConsoleSnapshot),
+    #[serde(rename = "metrics.live")]
+    MetricsLive(MetricsSnapshot),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, TS)]
@@ -117,6 +129,8 @@ pub enum TopicEvent {
     #[serde(rename = "server.status")]
     ServerStatus(ServerStatus),
     Console(ConsoleBatch),
+    #[serde(rename = "metrics.live")]
+    MetricsLive(LiveSample),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
@@ -222,6 +236,13 @@ mod tests {
             parse(r#"{"type":"sub","topic":"server.status"}"#),
             Some(ClientMessage::Sub {
                 topic: Topic::ServerStatus,
+                since: None
+            })
+        );
+        assert_eq!(
+            parse(r#"{"type":"sub","topic":"metrics.live"}"#),
+            Some(ClientMessage::Sub {
+                topic: Topic::MetricsLive,
                 since: None
             })
         );

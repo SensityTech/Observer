@@ -3,7 +3,10 @@ use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::Context;
 use jiff::tz::TimeZone;
-use observer_app::{Accounts, AuditLog, Clock, PasswordCost, Servers, Setup, Supervision};
+use observer_app::{
+    Accounts, AuditLog, Clock, DatabaseFiles, Metrics, MetricsSetup, PasswordCost, Running, Servers, Setup,
+    Sources, Supervision,
+};
 use observer_fxserver::console::{ConsoleLog, LogLimits};
 use observer_store::{BackupKind, Database};
 use tokio::net::TcpListener;
@@ -52,6 +55,12 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
         |_| {},
     )
     .await?;
+    let metrics = Metrics::open(MetricsSetup {
+        path: paths.metrics.clone(),
+        clock: Clock::system(),
+    })
+    .await
+    .with_context(|| format!("cannot open {}", paths.metrics.display()))?;
 
     let listener = TcpListener::bind(config.http.listen)
         .await
@@ -60,16 +69,25 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
     setup::offer_link(&accounts, config.http.listen).await?;
 
     let stop = CancellationToken::new();
-    let state = observer_web::AppState::new(
-        VERSION,
-        accounts.clone(),
-        audit.clone(),
+    let services = observer_web::Services {
+        accounts: accounts.clone(),
+        audit: audit.clone(),
         servers,
-        supervision.clone(),
-        &instance_id,
-        &config.http.hosts,
-    );
+        supervision: supervision.clone(),
+        metrics: metrics.clone(),
+    };
+    let state = observer_web::AppState::new(VERSION, services, &instance_id, &config.http.hosts);
     let live = state.live.clone();
+    // Before FXServer starts with Observer, so that the first samples show its start.
+    let sampling = metrics.start(Sources {
+        supervision: supervision.clone(),
+        sockets: live.sockets(),
+        data_dir: paths.root.clone(),
+        databases: DatabaseFiles {
+            state: paths.database.clone(),
+            metrics: paths.metrics.clone(),
+        },
+    });
     let app = observer_web::router(state);
     let server = tokio::spawn({
         let stop = stop.clone();
@@ -86,24 +104,10 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
         error!(%error, "cannot start FXServer with Observer");
     }
 
-    // The panel keeps serving while FXServer stops, so that it shows the stop as it happens.
-    let mut shortened = signals.next().await == Shutdown::Shortened;
-    info!(shortened, "stopping Observer");
-    supervision.shutdown(shortened).await;
-    loop {
-        tokio::select! {
-            () = supervised.stopped() => break,
-            // A console closed during a graceful stop leaves Windows' few seconds only.
-            shutdown = signals.next(), if !shortened => {
-                if shutdown == Shutdown::Shortened {
-                    shortened = true;
-                    info!("the console is closing; shortening the stop");
-                    supervision.shutdown(true).await;
-                }
-            }
-        }
-    }
+    stop_fxserver(&supervision, &mut supervised, &mut signals).await;
     supervised.close().await;
+    // After the supervision, so that FXServer's stop is in the statistics.
+    sampling.close().await;
     stop.cancel();
     live.shutdown().await;
 
@@ -114,12 +118,37 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
     upkeep.await.context("the upkeep task failed")?;
     audit_feed.await.context("the audit feed task failed")?;
     console_log.close().await;
+    metrics
+        .close()
+        .await
+        .context("cannot close the metrics database")?;
     db.close().await.context("cannot close the database")?;
 
     info!("Observer stopped");
     drop(log_guard);
     signals.release();
     Ok(())
+}
+
+/// Waits for a stop request, then stops FXServer. The panel keeps serving meanwhile, so that it
+/// shows the stop as it happens.
+async fn stop_fxserver(supervision: &Supervision, supervised: &mut Running, signals: &mut Signals) {
+    let mut shortened = signals.next().await == Shutdown::Shortened;
+    info!(shortened, "stopping Observer");
+    supervision.shutdown(shortened).await;
+    loop {
+        tokio::select! {
+            () = supervised.stopped() => return,
+            // A console closed during a graceful stop leaves Windows' few seconds only.
+            shutdown = signals.next(), if !shortened => {
+                if shutdown == Shutdown::Shortened {
+                    shortened = true;
+                    info!("the console is closing; shortening the stop");
+                    supervision.shutdown(true).await;
+                }
+            }
+        }
+    }
 }
 
 fn announce(listen: SocketAddr) {

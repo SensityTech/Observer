@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 use axum::extract::Request;
 use axum::{Router, middleware};
-use observer_app::{Accounts, AuditLog, Servers, Supervision};
+use observer_app::{Accounts, AuditLog, Metrics, Servers, Supervision};
 use tower_http::catch_panic::CatchPanicLayer;
 use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::trace::TraceLayer;
@@ -36,6 +36,7 @@ pub struct AppState {
     pub audit: AuditLog,
     pub servers: Servers,
     pub supervision: Supervision,
+    pub metrics: Metrics,
     pub live: Live,
     /// Cookies ignore ports, so the name carries the instance id: two Observers on one host never
     /// read each other's sessions.
@@ -44,22 +45,31 @@ pub struct AppState {
     hosts: Arc<[String]>,
 }
 
+/// The services the API stands on.
+pub struct Services {
+    pub accounts: Accounts,
+    pub audit: AuditLog,
+    pub servers: Servers,
+    pub supervision: Supervision,
+    pub metrics: Metrics,
+}
+
 impl AppState {
-    pub fn new(
-        version: &'static str,
-        accounts: Accounts,
-        audit: AuditLog,
-        servers: Servers,
-        supervision: Supervision,
-        instance_id: &str,
-        hosts: &[String],
-    ) -> Self {
+    pub fn new(version: &'static str, services: Services, instance_id: &str, hosts: &[String]) -> Self {
+        let Services {
+            accounts,
+            audit,
+            servers,
+            supervision,
+            metrics,
+        } = services;
         Self {
             version,
             accounts,
             audit,
             servers,
             supervision,
+            metrics,
             live: Live::new(),
             cookie: format!("observer_session_{instance_id}"),
             hosts: hosts.into(),
