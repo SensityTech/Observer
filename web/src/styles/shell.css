@@ -318,6 +318,18 @@
         color: var(--ink);
     }
 
+    /* Start, Stop and Restart, at the right of the status bar (DESIGN.md §7.3). */
+    .controls {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        min-width: 0;
+        margin-left: auto;
+    }
+    .controls-failure {
+        flex-basis: 100%;
+    }
+
     .mobilebar,
     .scrim {
         display: none;
@@ -465,6 +477,13 @@
         .status-cell > dd {
             flex-wrap: wrap;
             gap: 2px 6px;
+        }
+        .controls {
+            width: 100%;
+            margin-left: 0;
+        }
+        .controls > button {
+            flex: 1 1 0;
         }
         .content {
             padding: 16px 16px 40px;
