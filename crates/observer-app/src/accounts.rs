@@ -7,10 +7,12 @@ use observer_domain::error::{ApiError, ErrorCode};
 use observer_domain::permissions::Permissions;
 use observer_store::users::{self, UserRow};
 use observer_store::{Connection, Database, login_failures, sessions, setup_tokens};
+use tokio::sync::watch;
 
 use crate::audit::{Denials, Record};
 use crate::passwords::{PasswordCost, Passwords};
 use crate::throttle::{self, Attempts};
+use crate::tickets::Tickets;
 use crate::{Caller, Clock, Error};
 
 /// How long a temporary password works, from its creation.
@@ -29,6 +31,8 @@ pub struct Accounts {
     pub(crate) passwords: Arc<Passwords>,
     pub(crate) attempts: Arc<Attempts>,
     pub(crate) denials: Arc<Denials>,
+    pub(crate) tickets: Arc<Tickets>,
+    pub(crate) session_changes: Arc<watch::Sender<()>>,
 }
 
 impl Accounts {
@@ -39,6 +43,8 @@ impl Accounts {
             passwords: Arc::new(Passwords::new(cost).await?),
             attempts: Arc::new(Attempts::new(clock.clone())),
             denials: Arc::default(),
+            tickets: Arc::default(),
+            session_changes: Arc::new(watch::Sender::new(())),
             clock,
         })
     }

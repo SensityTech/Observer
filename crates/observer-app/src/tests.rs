@@ -1272,3 +1272,118 @@ async fn only_the_owner_passes_the_owner_check_and_a_refused_change_is_audited()
     );
     assert_eq!(denied[0].details, json!({ "ownerOnly": true }));
 }
+
+impl Lab {
+    async fn redeem(&self, ticket: &str, browser: &Browser) -> Result<Caller, ErrorCode> {
+        self.accounts
+            .redeem_ticket(ticket, &browser.signed_in.token, browser.client.clone())
+            .await
+            .map_err(|error| error.code().unwrap())
+    }
+}
+
+#[tokio::test]
+async fn a_websocket_ticket_works_once_for_its_own_session() {
+    let lab = Lab::new().await;
+    let laptop = lab.owner().await;
+    let phone = lab.sign_in("ada", OWNER_PASSWORD, &office()).await.unwrap();
+    let caller = lab.caller(&laptop).await;
+
+    let ticket = lab.accounts.issue_ticket(&caller).unwrap();
+    let opened = lab.redeem(&ticket, &laptop).await.unwrap();
+    let again = lab.redeem(&ticket, &laptop).await;
+
+    assert_eq!(opened.session_id, caller.session_id);
+    assert_eq!(opened.username, "ada");
+    assert_eq!(again.err(), Some(ErrorCode::Unauthenticated));
+
+    // The same account's other session is another session: its cookie does not go with the
+    // ticket, which is spent by the attempt.
+    let ticket = lab.accounts.issue_ticket(&caller).unwrap();
+    assert_eq!(
+        lab.redeem(&ticket, &phone).await.err(),
+        Some(ErrorCode::Unauthenticated)
+    );
+    assert_eq!(
+        lab.redeem(&ticket, &laptop).await.err(),
+        Some(ErrorCode::Unauthenticated)
+    );
+    assert_eq!(
+        lab.redeem("not a ticket", &laptop).await.err(),
+        Some(ErrorCode::Unauthenticated)
+    );
+}
+
+#[tokio::test]
+async fn a_websocket_ticket_expires_after_thirty_seconds_and_dies_with_its_session() {
+    let lab = Lab::new().await;
+    let owner = lab.owner().await;
+    let caller = lab.caller(&owner).await;
+
+    let late = lab.accounts.issue_ticket(&caller).unwrap();
+    lab.clock.advance(SignedDuration::from_secs(29));
+    let in_time = lab.accounts.issue_ticket(&caller).unwrap();
+    lab.clock.advance(SignedDuration::from_secs(2));
+    assert_eq!(
+        lab.redeem(&late, &owner).await.err(),
+        Some(ErrorCode::Unauthenticated)
+    );
+    lab.redeem(&in_time, &owner).await.unwrap();
+
+    let orphan = lab.accounts.issue_ticket(&caller).unwrap();
+    lab.accounts.logout(&caller).await.unwrap();
+    assert_eq!(
+        lab.redeem(&orphan, &owner).await.err(),
+        Some(ErrorCode::Unauthenticated)
+    );
+}
+
+#[tokio::test]
+async fn a_websocket_ticket_does_not_open_before_a_temporary_password_is_replaced() {
+    let lab = Lab::new().await;
+    let owner = lab.caller(&lab.owner().await).await;
+    let created = lab
+        .accounts
+        .create_user(&owner, "grace", P::DASHBOARD_VIEW)
+        .await
+        .unwrap();
+    let grace = lab
+        .sign_in("grace", &created.temporary_password, &office())
+        .await
+        .unwrap();
+    let ticket = lab.accounts.issue_ticket(&lab.caller(&grace).await).unwrap();
+
+    assert_eq!(
+        lab.redeem(&ticket, &grace).await.err(),
+        Some(ErrorCode::PasswordChangeRequired)
+    );
+}
+
+#[tokio::test]
+async fn a_recheck_follows_the_session_and_is_announced_when_sessions_change() {
+    let lab = Lab::new().await;
+    let owner = lab.owner().await;
+    let grace = lab.user(&owner, "grace", P::DASHBOARD_VIEW | P::AUDIT_VIEW).await;
+    let (admin, grace) = (lab.caller(&owner).await, lab.caller(&grace).await);
+    let mut changes = lab.accounts.session_changes();
+    changes.mark_unchanged();
+
+    let live = lab.accounts.recheck(&grace).await.unwrap().unwrap();
+    assert_eq!(live.permissions, P::DASHBOARD_VIEW | P::AUDIT_VIEW);
+    assert!(!changes.has_changed().unwrap());
+
+    let version = lab.accounts.users().await.unwrap()[1].version;
+    lab.accounts
+        .update_user(&admin, grace.user_id, P::DASHBOARD_VIEW, version)
+        .await
+        .unwrap();
+    assert!(changes.has_changed().unwrap());
+    assert!(lab.accounts.recheck(&grace).await.unwrap().is_none());
+    changes.mark_unchanged();
+
+    // Watching is not using: a session nobody sends a request through ends after twelve hours.
+    lab.clock.advance(SignedDuration::from_hours(12));
+    assert!(lab.accounts.recheck(&admin).await.unwrap().is_none());
+    lab.accounts.logout(&admin).await.unwrap();
+    assert!(changes.has_changed().unwrap());
+}

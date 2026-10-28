@@ -14,6 +14,7 @@ mod setup;
 #[cfg(test)]
 mod tests;
 mod throttle;
+mod tickets;
 mod users;
 
 pub use accounts::Accounts;
