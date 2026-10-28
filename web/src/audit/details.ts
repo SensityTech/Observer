@@ -98,5 +98,8 @@ const word = (t: Messages, format: Format, key: string, value: unknown): string 
     if (key === 'refusal' && has(t.audit.refusals, value)) {
         return t.audit.refusals[value];
     }
+    if (key === 'reason' && has(t.audit.launchFailures, value)) {
+        return t.audit.launchFailures[value];
+    }
     return value;
 };

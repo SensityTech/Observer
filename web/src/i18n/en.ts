@@ -679,7 +679,17 @@ export const en = {
             extraArguments: 'Extra arguments',
             command: 'Command',
             automatic: 'With Observer',
+            reason: 'Reason',
         },
+        launchFailures: {
+            notConfigured: 'No launch settings',
+            invalidSettings: 'Settings this host refuses',
+            notABuild: 'Not an FXServer build',
+            missingData: 'No server data folder',
+            cfgUnreadable: 'Unreadable server cfg',
+            bridge: 'Bridge not written',
+            spawn: 'Refused by the system',
+        } satisfies Record<SpawnFailure, string>,
         refusals: {
             reserved: 'Reserved to Observer',
             escalation: 'Permissions they do not hold',
