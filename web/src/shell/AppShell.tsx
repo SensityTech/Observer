@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { Link, Outlet } from '@tanstack/react-router';
-import { LayoutDashboard, Menu as MenuIcon, X, type LucideIcon } from 'lucide-react';
+import { LayoutDashboard, Menu as MenuIcon, Users, X, type LucideIcon } from 'lucide-react';
 import { useEffect, useState } from 'react';
 
 import { meQuery } from '../api/auth';
@@ -15,7 +15,7 @@ import { StatusBar } from './StatusBar';
 import { ThemeSwitch } from './ThemeSwitch';
 import { UserMenu } from './UserMenu';
 
-type NavEntry = { to: '/'; label: string; icon: LucideIcon; permission: bigint };
+type NavEntry = { to: '/' | '/users'; label: string; icon: LucideIcon; permission: bigint };
 
 export function AppShell() {
     const { t } = useI18n();
@@ -44,6 +44,9 @@ export function AppShell() {
 
     const main: NavEntry[] = [
         { to: '/', label: t.nav.overview, icon: LayoutDashboard, permission: Permission.DashboardView },
+    ];
+    const administration: NavEntry[] = [
+        { to: '/users', label: t.nav.users, icon: Users, permission: Permission.UsersManage },
     ];
 
     return (
@@ -75,6 +78,12 @@ export function AppShell() {
                         </div>
                         <nav className="nav" aria-label={t.nav.sections}>
                             <NavEntries me={me} entries={main} onNavigate={closeMenu} />
+                            <NavEntries
+                                me={me}
+                                entries={administration}
+                                group={t.nav.administration}
+                                onNavigate={closeMenu}
+                            />
                         </nav>
                         <div className="rail-foot">
                             <ThemeSwitch />

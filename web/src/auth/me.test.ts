@@ -27,6 +27,7 @@ describe('landing', () => {
     });
 
     it('should fall back to the first page the user may open, then to their account', () => {
+        expect(landing(me('180'))).toBe('/users');
         expect(landing(me('2'))).toBe('/account');
         expect(landing(me('0'))).toBe('/account');
     });

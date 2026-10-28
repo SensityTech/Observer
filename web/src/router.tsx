@@ -11,6 +11,7 @@ import { meQuery, setupQuery } from './api/auth';
 import { Permission } from './api/generated/Permission';
 import { allows, landing } from './auth/me';
 import { ReauthDialog } from './auth/ReauthDialog';
+import { RequirePermission } from './auth/RequirePermission';
 import { AccountPage } from './pages/AccountPage';
 import { LoginPage } from './pages/LoginPage';
 import { NotFoundPage } from './pages/NotFoundPage';
@@ -18,6 +19,7 @@ import { OverviewPage } from './pages/OverviewPage';
 import { PasswordChangePage } from './pages/PasswordChangePage';
 import { RouteError } from './pages/RouteError';
 import { SetupPage } from './pages/SetupPage';
+import { UsersPage } from './pages/UsersPage';
 import { AppShell } from './shell/AppShell';
 
 type RouterContext = { queryClient: QueryClient };
@@ -106,6 +108,16 @@ const overviewRoute = createRoute({
     component: OverviewPage,
 });
 
+const usersRoute = createRoute({
+    getParentRoute: () => panelRoute,
+    path: '/users',
+    component: () => (
+        <RequirePermission name="UsersManage">
+            <UsersPage />
+        </RequirePermission>
+    ),
+});
+
 const accountRoute = createRoute({
     getParentRoute: () => panelRoute,
     path: '/account',
@@ -116,7 +128,7 @@ const routeTree = rootRoute.addChildren([
     setupRoute,
     loginRoute,
     passwordRoute,
-    panelRoute.addChildren([overviewRoute, accountRoute]),
+    panelRoute.addChildren([overviewRoute, usersRoute, accountRoute]),
 ]);
 
 export const createPanelRouter = (queryClient: QueryClient) =>

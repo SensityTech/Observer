@@ -19,4 +19,9 @@ export const useMe = () => {
 export const allows = (me: Me, permission: bigint) => holds(parsePermissions(me.permissions), permission);
 
 /** The first page the user may open, for a landing that is not theirs. */
-export const landing = (me: Me) => (allows(me, Permission.DashboardView) ? '/' : '/account');
+export const landing = (me: Me) => {
+    if (allows(me, Permission.DashboardView)) {
+        return '/';
+    }
+    return allows(me, Permission.UsersManage) ? '/users' : '/account';
+};
