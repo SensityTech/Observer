@@ -1,5 +1,5 @@
 use axum::extract::{Request, State};
-use axum::http::{HeaderMap, header};
+use axum::http::{HeaderMap, Uri, header};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use observer_app::{Caller, Client};
@@ -9,6 +9,7 @@ use observer_domain::permissions::Permissions;
 use crate::AppState;
 use crate::error::Failure;
 use crate::extract::RemoteClient;
+use crate::security;
 
 /// The second half of a session, which only the panel's origin can read from `localStorage`.
 pub const SESSION_KEY_HEADER: &str = "x-observer-session-key";
@@ -30,6 +31,10 @@ pub(crate) enum Gate {
     Owner,
     /// The owner, with the password entered within the last ten minutes.
     ReauthenticatedOwner,
+    /// A websocket ticket in the query, with the cookie of the session it was issued to, from the
+    /// panel's own origin. A browser sends no header of its choosing with a websocket request, so
+    /// the ticket stands in for the session key.
+    Ticket,
 }
 
 #[derive(Clone)]
@@ -54,7 +59,12 @@ pub(crate) async fn enforce(
     // The route rather than the path asked for: a refusal is audited, and the audit log must not
     // take whatever a client puts in a URL.
     let path = format!("/api{}", guard.path);
-    match admit(&guard, client, request.headers(), &method, &path).await {
+    let admitted = if guard.gate == Gate::Ticket {
+        admit_ticket(&guard, client, request.uri(), request.headers()).await
+    } else {
+        admit(&guard, client, request.headers(), &method, &path).await
+    };
+    match admitted {
         Ok(caller) => {
             request.extensions_mut().insert(caller);
             next.run(request).await
@@ -88,12 +98,30 @@ async fn admit(
             accounts.authorize(&caller, permission, method, path).await?;
         }
         Gate::Owner | Gate::ReauthenticatedOwner => accounts.authorize_owner(&caller, method, path).await?,
-        Gate::Public | Gate::Account | Gate::Session => {}
+        Gate::Public | Gate::Account | Gate::Session | Gate::Ticket => {}
     }
     if let Gate::Reauthenticated(_) | Gate::ReauthenticatedOwner = guard.gate {
         accounts.require_reauthentication(&caller)?;
     }
     Ok(caller)
+}
+
+async fn admit_ticket(
+    guard: &Guard,
+    client: Client,
+    uri: &Uri,
+    headers: &HeaderMap,
+) -> Result<Caller, Failure> {
+    security::own_origin(headers)?;
+    let ticket = uri
+        .query()
+        .into_iter()
+        .flat_map(|query| query.split('&'))
+        .find_map(|pair| pair.strip_prefix("ticket="));
+    let (Some(ticket), Some(token)) = (ticket, cookie(headers, &guard.state.cookie)) else {
+        return Err(ErrorCode::Unauthenticated.into());
+    };
+    Ok(guard.state.accounts.redeem_ticket(ticket, token, client).await?)
 }
 
 /// The value of the cookie called `name`, among every `Cookie` header.

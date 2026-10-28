@@ -48,6 +48,7 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
         &instance_id,
         &config.http.hosts,
     );
+    let live = state.live.clone();
     let app = observer_web::router(state);
     let server = tokio::spawn({
         let stop = stop.clone();
@@ -64,6 +65,7 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
     shutdown::requested().await;
     info!("stopping Observer");
     stop.cancel();
+    live.shutdown().await;
 
     if let Err(error) = server.await.context("the HTTP server task failed")? {
         error!(%error, "the HTTP server stopped with an error");

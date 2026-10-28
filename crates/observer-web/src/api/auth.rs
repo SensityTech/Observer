@@ -4,6 +4,7 @@ use axum::response::{IntoResponse, Response};
 use axum::{Extension, Json};
 use observer_app::{Caller, SignedIn};
 use observer_domain::accounts::{LoginRequest, LoginResponse, Me, ReauthRequest};
+use observer_domain::live::WsTicket;
 
 use crate::AppState;
 use crate::error::Failure;
@@ -64,4 +65,12 @@ pub(crate) async fn reauth(
 ) -> Result<StatusCode, Failure> {
     state.accounts.reauthenticate(&caller, request.password).await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+pub(crate) async fn ws_ticket(
+    State(state): State<AppState>,
+    Extension(caller): Extension<Caller>,
+) -> Result<Json<WsTicket>, Failure> {
+    let ticket = state.accounts.issue_ticket(&caller)?;
+    Ok(Json(WsTicket { ticket }))
 }

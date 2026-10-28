@@ -1,6 +1,8 @@
 //! The API over HTTP: requests go through the router, its gates and the services, down to a real
 //! database in a temporary directory.
 
+mod live;
+
 use std::net::SocketAddr;
 
 use axum::Router;
@@ -18,7 +20,7 @@ use tower::ServiceExt;
 
 use crate::api::routes;
 use crate::gate::Gate;
-use crate::{AppState, SESSION_KEY_HEADER, router};
+use crate::{AppState, Live, SESSION_KEY_HEADER, router};
 
 const HOST: &str = "observer.test:40125";
 const ORIGIN: &str = "http://observer.test:40125";
@@ -29,6 +31,9 @@ struct Server {
     app: Router,
     clock: Clock,
     accounts: Accounts,
+    audit: AuditLog,
+    db: Database,
+    live: Live,
     cookie_name: String,
 }
 
@@ -80,17 +85,21 @@ impl Server {
         let state = AppState::new(
             "0.0.0-test",
             accounts.clone(),
-            audit,
+            audit.clone(),
             servers,
             &instance_id,
             &["observer.test".to_owned()],
         );
+        let live = state.live.clone();
         let app = router(state).layer(MockConnectInfo(SocketAddr::from(([203, 0, 113, 7], 50_000))));
         Self {
             _dir: dir,
             app,
             clock,
             accounts,
+            audit,
+            db,
+            live,
             cookie_name: format!("observer_session_{instance_id}"),
         }
     }
