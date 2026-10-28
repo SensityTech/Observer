@@ -275,7 +275,7 @@ export const en = {
         warnings: 'Warnings',
         warningMinutes: (minutes: number) => `${formatNumber('en', minutes)} min`,
         removeWarning: (minutes: number) =>
-            `Remove the warning ${formatNumber('en', minutes)} minutes before`,
+            `Remove the warning ${count(minutes, { one: 'minute', other: 'minutes' })} before`,
         addWarning: 'Add a warning, in minutes before',
         resetWarnings: 'Reset to the defaults',
         warningsHint:

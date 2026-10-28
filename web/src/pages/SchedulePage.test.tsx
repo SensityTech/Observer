@@ -146,6 +146,14 @@ describe('SchedulePage', () => {
         live.stop();
     });
 
+    it('should name each warning in its remove button, one minute in the singular', async () => {
+        const { getByRole, live } = await page('11');
+
+        expect(getByRole('button', { name: 'Remove the warning 1 minute before' })).not.toBeNull();
+        expect(getByRole('button', { name: 'Remove the warning 30 minutes before' })).not.toBeNull();
+        live.stop();
+    });
+
     it('should count the changes typed in the save bar', async () => {
         const { getByRole, getByText, queryByText, live } = await page('11');
         expect(queryByText(en.schedule.changes(1))).toBeNull();
