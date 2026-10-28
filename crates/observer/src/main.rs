@@ -1,5 +1,6 @@
 mod config;
 mod db;
+mod fxserver;
 mod lock;
 mod logging;
 mod run;
@@ -30,6 +31,16 @@ enum Command {
     /// Maintain the state database while Observer is stopped.
     #[command(subcommand)]
     Db(DbCommand),
+    /// Drive FXServer by hand, without the panel.
+    #[command(subcommand)]
+    Fxserver(FxserverCommand),
+}
+
+#[derive(Debug, Subcommand)]
+enum FxserverCommand {
+    /// Run FXServer under the supervisor in the foreground, printing its console and state
+    /// changes. Lines typed here go to its console. Ctrl+C stops it gracefully.
+    Run(fxserver::RunArgs),
 }
 
 #[derive(Debug, Subcommand)]
@@ -49,6 +60,7 @@ async fn main() -> ExitCode {
             Command::Run => run::run(config).await,
             Command::Db(DbCommand::Check) => db::check(&config).await,
             Command::Db(DbCommand::Backup) => db::backup(&config).await,
+            Command::Fxserver(FxserverCommand::Run(args)) => fxserver::run(config, args).await,
         },
         Err(error) => Err(error),
     };
