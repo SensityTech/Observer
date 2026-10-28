@@ -187,7 +187,13 @@ impl Accounts {
         let signed_in = self
             .db
             .write(move |tx| -> Result<_, Error> {
-                let mut user = users::get(tx, user.id)?.ok_or(ErrorCode::InvalidCredentials)?;
+                // The password was checked outside this transaction. A password change or a
+                // sign-out everywhere since then must not let a session in on the old check.
+                let mut user = users::get(tx, user.id)?
+                    .filter(|current| {
+                        current.password_hash == user.password_hash && current.auth_epoch == user.auth_epoch
+                    })
+                    .ok_or(ErrorCode::InvalidCredentials)?;
                 clear_failures(tx, &username, &network, now)?;
                 if let Some(hash) = rehash {
                     user.password_hash = hash;

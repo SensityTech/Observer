@@ -7,6 +7,7 @@ use observer_domain::permissions::Permissions as P;
 use observer_store::{Database, StoreError, users};
 use serde_json::json;
 use tempfile::TempDir;
+use tokio::task::JoinHandle;
 
 use crate::{Accounts, AuditLog, Caller, Client, Clock, PasswordCost, SignedIn};
 
@@ -116,6 +117,23 @@ impl Lab {
             signed_in,
             client: client.clone(),
         })
+    }
+
+    /// Starts a login and returns once its password check waits for a hashing slot, which the
+    /// caller holds with `Passwords::hold`.
+    async fn login_waiting(
+        &self,
+        name: &str,
+        password: &str,
+        client: Client,
+    ) -> JoinHandle<Result<SignedIn, crate::Error>> {
+        let accounts = self.accounts.clone();
+        let (name, password) = (name.to_owned(), password.to_owned());
+        let login = tokio::spawn(async move { accounts.login(&name, password, &client).await });
+        while self.accounts.passwords.waiting() == 0 {
+            tokio::task::yield_now().await;
+        }
+        login
     }
 
     async fn entries(&self, action: AuditAction) -> Vec<AuditEntry> {
@@ -351,6 +369,48 @@ async fn a_login_rehashes_a_password_stored_with_older_parameters() {
         .unwrap();
     assert!(stored.password_hash.starts_with("$argon2id$v=19$m=16,t=2,p=1$"));
     lab.sign_in("ada", OWNER_PASSWORD, &home()).await.unwrap();
+}
+
+#[tokio::test]
+async fn a_login_checked_against_a_password_changed_meanwhile_opens_no_session() {
+    let lab = Lab::new().await;
+    lab.owner().await;
+    let next = lab.accounts.passwords.hash(password_of("ada")).await.unwrap();
+
+    let held = lab.accounts.passwords.hold().await;
+    let login = lab.login_waiting("ada", OWNER_PASSWORD, office()).await;
+    // The new password lands as a password change writes it, while the old one is being checked.
+    lab.db
+        .write(move |tx| {
+            let mut ada = users::find(tx, "ada")?.unwrap();
+            ada.password_hash = next;
+            ada.auth_epoch += 1;
+            users::update(tx, &ada)
+        })
+        .await
+        .unwrap();
+    drop(held);
+
+    assert_eq!(code(login.await.unwrap()), ErrorCode::InvalidCredentials);
+    assert_eq!(lab.entries(AuditAction::LoginSucceeded).await, []);
+}
+
+#[tokio::test]
+async fn a_login_checked_while_its_user_was_signed_out_everywhere_opens_no_session() {
+    let lab = Lab::new().await;
+    let owner = lab.owner().await;
+    let grace = lab.user(&owner, "grace", P::CONSOLE_VIEW).await;
+    let grace_id = lab.caller(&grace).await.user_id;
+    let admin = lab.caller(&owner).await;
+
+    let held = lab.accounts.passwords.hold().await;
+    let login = lab.login_waiting("grace", &password_of("grace"), home()).await;
+    lab.accounts.revoke_sessions(&admin, grace_id).await.unwrap();
+    drop(held);
+
+    assert_eq!(code(login.await.unwrap()), ErrorCode::InvalidCredentials);
+    // Only the sign-in that came before the revocation.
+    assert_eq!(lab.entries(AuditAction::LoginSucceeded).await.len(), 1);
 }
 
 #[tokio::test]

@@ -102,6 +102,21 @@ impl Passwords {
         &self.dummy
     }
 
+    /// Stops every hash from starting until the permit drops, so a test can act while a check waits.
+    #[cfg(test)]
+    pub(crate) async fn hold(&self) -> tokio::sync::OwnedSemaphorePermit {
+        Arc::clone(&self.slots)
+            .acquire_many_owned(u32::try_from(RUNNING).unwrap())
+            .await
+            .unwrap()
+    }
+
+    /// How many hashes are queued or running.
+    #[cfg(test)]
+    pub(crate) fn waiting(&self) -> usize {
+        self.pending.load(Ordering::Acquire)
+    }
+
     /// Runs a hash on the blocking pool once a slot is free, or refuses when too many wait already.
     async fn run<R, F>(&self, job: F) -> Result<R, Error>
     where
