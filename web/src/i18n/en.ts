@@ -16,6 +16,7 @@ import type { ScheduleMode } from '../api/generated/ScheduleMode';
 import type { ScheduleProblem } from '../api/generated/ScheduleProblem';
 import type { ServerState } from '../api/generated/ServerState';
 import type { SpawnFailure } from '../api/generated/SpawnFailure';
+import type { StopSource } from '../api/generated/StopSource';
 import { parsePermissions, permissionKeys, type PermissionKey } from '../auth/permissions';
 import type { LinkState } from '../live/realtime';
 import { formatDuration, formatNumber, plural } from './format';
@@ -890,6 +891,7 @@ export const en = {
             scheduled_restart_missed: 'Scheduled restart missed',
             one_off_restart_planned: 'Single restart planned',
             one_off_restart_cancelled: 'Single restart cancelled',
+            observer_stopped: 'Observer stopped',
         } satisfies Record<AuditAction, string>,
         outcomes: {
             success: 'Success',
@@ -980,6 +982,12 @@ export const en = {
             schedule: 'the schedule',
             oneOff: 'a single restart',
         },
+        // Where the request to stop Observer came from.
+        stopSources: {
+            window: 'the host window',
+            console: "Observer's console",
+            signal: 'a signal',
+        } satisfies Record<StopSource, string>,
         missReasons: {
             late: 'Observer saw the time pass too late',
             serverBusy: 'FXServer was busy',

@@ -1,7 +1,7 @@
 //! The services end to end, over a real database in a temporary directory.
 
 use jiff::{SignedDuration, Timestamp};
-use observer_domain::audit::{ActorKind, AuditAction, AuditEntry, AuditFilter, Outcome};
+use observer_domain::audit::{ActorKind, AuditAction, AuditEntry, AuditFilter, Outcome, StopSource};
 use observer_domain::error::ErrorCode;
 use observer_domain::launch::{ExtraArgument, LaunchSettings, OneSync, StoredLaunch};
 use observer_domain::permissions::Permissions as P;
@@ -224,6 +224,36 @@ async fn the_setup_token_creates_the_owner_once() {
     let link = &lab.entries(AuditAction::SetupLinkCreated).await[0];
     assert_eq!(link.actor_kind, ActorKind::System);
     assert_eq!(link.details, json!({}));
+}
+
+#[tokio::test]
+async fn a_stop_of_observer_is_audited_with_who_asked() {
+    let lab = Lab::new().await;
+
+    for from in [StopSource::Window, StopSource::Console, StopSource::Signal] {
+        lab.audit.record_stop(from).await.unwrap();
+    }
+
+    let stops = lab.entries(AuditAction::ObserverStopped).await;
+    let seen: Vec<_> = stops
+        .iter()
+        .rev()
+        .map(|entry| {
+            (
+                entry.actor_kind,
+                entry.actor_name.as_deref(),
+                entry.details.clone(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        seen,
+        [
+            (ActorKind::Local, None, json!({ "from": "window" })),
+            (ActorKind::Local, None, json!({ "from": "console" })),
+            (ActorKind::System, None, json!({ "from": "signal" })),
+        ]
+    );
 }
 
 #[tokio::test]

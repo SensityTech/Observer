@@ -119,6 +119,7 @@ const AUDIT_ACTIONS = {
     scheduled_restart_missed: true,
     one_off_restart_planned: true,
     one_off_restart_cancelled: true,
+    observer_stopped: true,
 } satisfies Record<AuditAction, true>;
 
 const OUTCOMES = { success: true, failure: true, denied: true } satisfies Record<Outcome, true>;
