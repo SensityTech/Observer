@@ -30,4 +30,5 @@ pub use passwords::PasswordCost;
 pub use schedule::{Schedule, ScheduleSetup, ScheduleTask, ScheduleTimings};
 pub use servers::Servers;
 pub use sessions::{Caller, Client, SignedIn};
+pub use setup::SetupToken;
 pub use supervision::{ConsoleLines, LinesMissed, Running, Setup, Supervision};

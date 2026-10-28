@@ -204,7 +204,8 @@ impl Server {
             .create_setup_token(ActorKind::System)
             .await
             .unwrap()
-            .unwrap();
+            .unwrap()
+            .token;
         let body = json!({ "token": token, "username": "ada", "password": OWNER_PASSWORD });
         let reply = self.call(Method::POST, "/api/setup", None, Some(body)).await;
         assert_eq!(reply.status, StatusCode::CREATED, "{}", reply.text);
@@ -389,7 +390,8 @@ async fn setup_signs_the_owner_in_with_a_strict_http_only_cookie() {
         .create_setup_token(ActorKind::System)
         .await
         .unwrap()
-        .unwrap();
+        .unwrap()
+        .token;
 
     let body = json!({ "token": token, "username": "ada", "password": OWNER_PASSWORD });
     let reply = server

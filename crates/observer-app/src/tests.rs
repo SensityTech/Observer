@@ -61,7 +61,8 @@ impl Lab {
             .create_setup_token(ActorKind::System)
             .await
             .unwrap()
-            .unwrap();
+            .unwrap()
+            .token;
         let signed_in = self
             .accounts
             .complete_setup(&token, "ada", OWNER_PASSWORD.to_owned(), &home())
@@ -187,13 +188,15 @@ fn code<T>(result: Result<T, crate::Error>) -> ErrorCode {
 async fn the_setup_token_creates_the_owner_once() {
     let lab = Lab::new().await;
     assert!(lab.accounts.setup_required().await.unwrap());
-    let token = lab
+    let link = lab
         .accounts
         .create_setup_token(ActorKind::System)
         .await
         .unwrap()
         .unwrap();
+    let token = link.token;
     assert_eq!(token.len(), 32);
+    assert_eq!(link.expires_at, lab.clock.now() + SignedDuration::from_mins(30));
 
     let signed_in = lab
         .accounts
@@ -231,7 +234,8 @@ async fn a_setup_token_expires_after_thirty_minutes_and_a_forged_one_never_works
         .create_setup_token(ActorKind::Cli)
         .await
         .unwrap()
-        .unwrap();
+        .unwrap()
+        .token;
 
     let forged = lab
         .accounts
@@ -256,7 +260,8 @@ async fn setup_refuses_a_bad_username_or_a_short_password_without_spending_the_t
         .create_setup_token(ActorKind::System)
         .await
         .unwrap()
-        .unwrap();
+        .unwrap()
+        .token;
 
     let short = lab
         .accounts

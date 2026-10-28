@@ -191,7 +191,8 @@ impl Observer {
             .create_setup_token(ActorKind::System)
             .await
             .unwrap()
-            .unwrap();
+            .unwrap()
+            .token;
         let signed_in = accounts
             .complete_setup(&token, "ada", "correct horse battery staple".to_owned(), &client)
             .await
