@@ -27,9 +27,10 @@ use observer_fxserver::console::plain;
 use observer_fxserver::health::HealthLimits;
 use observer_fxserver::recovery::RecoveryPolicy;
 use observer_fxserver::supervisor::StopTimings;
-use observer_store::Database;
+use observer_store::{Database, StoreError};
 use serde_json::json;
 use tempfile::TempDir;
+use tokio::task::JoinHandle;
 use tokio::time::timeout;
 
 const WAIT: Duration = Duration::from_secs(20);
@@ -363,6 +364,44 @@ fake_print running {cfg_file}
     /// The position of the first console line holding `needle`, once there is one.
     async fn line_of(&self, needle: &str) -> u64 {
         self.console_until(needle).await.0
+    }
+
+    /// Players coming and going, as `sv_maxclients` changing stands in for them on the fake, from
+    /// the first change the status shows. A change a little over every second stays under the
+    /// console's ten commands in ten seconds, so the changes never pause.
+    async fn churn(&self) -> JoinHandle<()> {
+        let supervision = self.supervision.clone();
+        let owner = self.owner.clone();
+        let churn = tokio::spawn(async move {
+            for max in 9..200 {
+                let line = format!("set sv_maxclients {max}");
+                let _ = supervision
+                    .command(&owner, &line, CONSOLE_ROUTE.0, CONSOLE_ROUTE.1)
+                    .await;
+                tokio::time::sleep(Duration::from_millis(1100)).await;
+            }
+        });
+        self.until(|status| {
+            status
+                .players
+                .is_some_and(|players| players.max.is_some_and(|max| max >= 10))
+        })
+        .await;
+        churn
+    }
+
+    /// Makes every write of the schedule's plan fail, or lets them through again.
+    async fn hold_the_plan(&self, held: bool) {
+        let sql = if held {
+            "CREATE TRIGGER hold_the_plan BEFORE UPDATE ON schedule_plan
+             BEGIN SELECT RAISE(ABORT, 'the plan is held'); END"
+        } else {
+            "DROP TRIGGER hold_the_plan"
+        };
+        self.db
+            .write(move |tx| tx.execute_batch(sql).map_err(StoreError::from))
+            .await
+            .unwrap();
     }
 }
 
@@ -782,27 +821,7 @@ async fn a_restart_the_clock_jumped_past_begins_at_once_while_the_status_keeps_c
     observer
         .line_of(r#""reason":"oneOff","secondsRemaining":120}"#)
         .await;
-    // Players coming and going, as `sv_maxclients` changing stands in for them on the fake.
-    let churn = {
-        let supervision = observer.supervision.clone();
-        let owner = observer.owner.clone();
-        tokio::spawn(async move {
-            for max in 9..200 {
-                let line = format!("set sv_maxclients {max}");
-                let _ = supervision
-                    .command(&owner, &line, CONSOLE_ROUTE.0, CONSOLE_ROUTE.1)
-                    .await;
-                tokio::time::sleep(Duration::from_millis(400)).await;
-            }
-        })
-    };
-    observer
-        .until(|status| {
-            status
-                .players
-                .is_some_and(|players| players.max.is_some_and(|max| max >= 10))
-        })
-        .await;
+    let churn = observer.churn().await;
 
     observer
         .clock
@@ -815,6 +834,53 @@ async fn a_restart_the_clock_jumped_past_begins_at_once_while_the_status_keeps_c
 
     assert!(
         waited < Duration::from_secs(5),
+        "the restart began {waited:?} after the clock passed its time"
+    );
+}
+
+/// A step whose writes fail is tried again after the longest sleep, and the turns a busy server's
+/// status gives the schedule's loop meanwhile must not each start that wait over.
+#[tokio::test]
+async fn a_restart_whose_step_could_not_be_written_is_tried_again_while_the_status_keeps_changing() {
+    let longest_sleep = Duration::from_secs(4);
+    let held = Duration::from_secs(3);
+    let mut observer = Observer::with_longest_sleep(false, longest_sleep).await;
+    observer.supervision.start_server(&observer.owner).await.unwrap();
+    observer.state(ServerState::Online).await;
+    observer
+        .schedule
+        .restart_once(
+            &observer.owner,
+            OneOffRequest {
+                in_minutes: Some(2),
+                at: None,
+            },
+        )
+        .await
+        .unwrap();
+    observer
+        .line_of(r#""reason":"oneOff","secondsRemaining":120}"#)
+        .await;
+    let churn = observer.churn().await;
+
+    observer.hold_the_plan(true).await;
+    observer
+        .clock
+        .advance(SignedDuration::from_mins(2) + SignedDuration::from_secs(1));
+    let jumped = Instant::now();
+    tokio::time::sleep(held).await;
+    observer.hold_the_plan(false).await;
+    observer.state(ServerState::Stopping).await;
+    let waited = jumped.elapsed();
+    churn.abort();
+    observer.stop_observer().await;
+
+    assert!(
+        waited > held,
+        "the restart began {waited:?} after the clock passed its time, while its plan could not be written"
+    );
+    assert!(
+        waited < held + longest_sleep + Duration::from_secs(1),
         "the restart began {waited:?} after the clock passed its time"
     );
 }

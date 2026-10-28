@@ -18,6 +18,7 @@ use observer_store::{Database, schedule};
 use serde_json::{Map, Value, json};
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
+use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
@@ -119,6 +120,7 @@ impl Schedule {
             status: status_tx,
             seen: None,
             due: None,
+            retry: None,
         };
         let task = tokio::spawn(driver.run(commands_rx, stop.clone()));
         Ok((Self { commands, status }, ScheduleTask { task, stop }))
@@ -212,6 +214,9 @@ struct Driver {
     /// When the engine next has something to do, as worked out at its last step. A clock that
     /// jumped past it makes it due at once, at the next turn of the loop, whatever woke it.
     due: Option<Timestamp>,
+    /// When to try again after a step that failed. It is a monotonic instant, as the loop's sleeps
+    /// are, so neither the loop's other turns nor a clock set back put it off.
+    retry: Option<Instant>,
 }
 
 impl Driver {
@@ -220,12 +225,16 @@ impl Driver {
         let first = view(&server.borrow_and_update());
         self.server(first).await;
         loop {
-            let now = self.clock.now();
-            let sleep = self.due.map_or(self.timings.longest_sleep, |at| {
-                Duration::try_from(now.duration_until(at))
-                    .unwrap_or(Duration::ZERO)
-                    .min(self.timings.longest_sleep)
-            });
+            let sleep = if let Some(at) = self.retry {
+                at.saturating_duration_since(Instant::now())
+            } else {
+                let now = self.clock.now();
+                self.due.map_or(self.timings.longest_sleep, |at| {
+                    Duration::try_from(now.duration_until(at))
+                        .unwrap_or(Duration::ZERO)
+                        .min(self.timings.longest_sleep)
+                })
+            };
             tokio::select! {
                 () = stop.cancelled() => return,
                 command = commands.recv() => match command {
@@ -245,7 +254,7 @@ impl Driver {
                     if let Err(error) = self.apply(Input::Tick, None, None).await {
                         warn!(%error, "the schedule could not catch up with the clock");
                         // Tried again after the longest sleep, not in a loop.
-                        self.due = None;
+                        self.retry = Some(Instant::now() + self.timings.longest_sleep);
                     }
                 }
             }
@@ -376,6 +385,7 @@ impl Driver {
                 self.settings = settings;
             }
             self.due = engine::deadline(&self.state, &self.settings, now);
+            self.retry = None;
 
             let mut refused = None;
             for effect in effects {
