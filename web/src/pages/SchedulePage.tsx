@@ -226,6 +226,9 @@ function NextRestart({
         setOutcome({ tone: 'warning', message: t.schedule.unavailable(label, reason) });
     const pending = (label: string) => action.isPending && action.variables?.label === label;
     const planReason = canPlan ? null : t.schedule.notPermittedPlan;
+    const skipReason =
+        planReason ??
+        (skipped === undefined ? null : t.schedule.oneSkip(zoned.clock(skipped.delayed?.to ?? skipped.at)));
     const onceReason = !canRestart
         ? t.schedule.notPermittedOnce
         : !running
@@ -314,7 +317,7 @@ function NextRestart({
                         <Action
                             label={t.schedule.skip}
                             icon={SkipForward}
-                            reason={planReason}
+                            reason={skipReason}
                             pending={pending(t.schedule.skip)}
                             onPress={skip}
                             onBlocked={blocked}

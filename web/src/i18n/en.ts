@@ -220,6 +220,7 @@ export const en = {
         notPermittedOnce: 'Your account cannot restart FXServer.',
         notRunning: 'FXServer is not running.',
         stoppingOnce: 'FXServer is stopping: plan the restart once it runs again.',
+        oneSkip: (time: string) => `Restore ${time} first: one restart can be skipped at a time.`,
         unavailable: (action: string, reason: string) => `${action} does nothing now. ${reason}`,
         failed: (action: string, error: string) => `${action} did not go through. ${error}`,
         dismiss: 'Dismiss',
@@ -977,7 +978,8 @@ export const en = {
         internal: 'Observer hit an internal error. Its log has the details.',
         invalid_schedule: 'Some settings need fixing. Each one says why next to its field.',
         nothing_to_skip: 'The schedule has no restart ahead to skip.',
-        already_skipped: 'The next restart of the schedule is skipped already.',
+        already_skipped:
+            'A restart of the schedule is skipped already: restore it first, one can be skipped at a time.',
         nothing_to_restore: 'No skipped restart is still ahead.',
         nothing_to_delay:
             'Only a restart of the schedule can be delayed, and the next one is a single restart.',

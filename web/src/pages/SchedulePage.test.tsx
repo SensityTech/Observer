@@ -134,6 +134,18 @@ describe('SchedulePage', () => {
         live.stop();
     });
 
+    it('should say to restore the skipped restart before skipping another', async () => {
+        const { getByRole, getByText, live } = await page('11');
+
+        fireEvent.click(getByRole('button', { name: en.schedule.skip }));
+
+        expect(
+            getByText(en.schedule.unavailable(en.schedule.skip, en.schedule.oneSkip('16:00'))),
+        ).not.toBeNull();
+        expect(getByRole('button', { name: en.schedule.restore })).not.toBeNull();
+        live.stop();
+    });
+
     it('should say a single restart waits while FXServer stops', async () => {
         const { getByRole, getByText, say, live } = await page('9');
 
