@@ -877,3 +877,33 @@ async fn audit_pages_are_capped_and_point_to_the_next_one() {
     assert_eq!(rest.entries.len(), 3);
     assert_eq!(rest.next, None);
 }
+
+#[tokio::test]
+async fn repeated_refusals_of_one_action_are_written_once_a_window_with_their_count() {
+    let lab = Lab::new().await;
+    let owner = lab.owner().await;
+    let grace = lab.user(&owner, "grace", P::CONSOLE_VIEW).await;
+    let grace = lab.caller(&grace).await;
+
+    for _ in 0..3 {
+        lab.accounts
+            .authorize(&grace, P::USERS_MANAGE, "DELETE", "/api/users/{id}")
+            .await
+            .unwrap_err();
+    }
+    lab.accounts
+        .authorize(&grace, P::USERS_MANAGE, "POST", "/api/users")
+        .await
+        .unwrap_err();
+    assert_eq!(lab.entries(AuditAction::PermissionDenied).await.len(), 2);
+
+    lab.clock.advance(SignedDuration::from_mins(15));
+    lab.accounts.sweep().await.unwrap();
+
+    let denied = lab.entries(AuditAction::PermissionDenied).await;
+    assert_eq!(denied.len(), 3);
+    assert_eq!(denied[0].target.as_deref(), Some("DELETE /api/users/{id}"));
+    assert_eq!(denied[0].details["repeated"], json!(2));
+    lab.accounts.sweep().await.unwrap();
+    assert_eq!(lab.entries(AuditAction::PermissionDenied).await.len(), 3);
+}

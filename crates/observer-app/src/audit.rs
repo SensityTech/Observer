@@ -1,11 +1,16 @@
+use std::collections::HashMap;
+use std::sync::{Mutex, PoisonError};
+
 use jiff::{SignedDuration, Timestamp};
 use observer_domain::audit::{ActorKind, AuditAction, AuditEntry, AuditFilter, AuditPage, Outcome};
+use observer_domain::error::ErrorCode;
 use observer_store::audit::{self, NewAuditEntry};
 use observer_store::users::UserRow;
 use observer_store::{Connection, Database, StoreError, settings};
 use serde_json::{Value, json};
 
-use crate::throttle::Unaudited;
+use crate::accounts::MAX_USERNAME_BYTES;
+use crate::throttle::{self, Unaudited};
 use crate::{Caller, Client, Clock, Error};
 
 const DEFAULT_RETENTION_DAYS: i64 = 365;
@@ -16,6 +21,7 @@ const EXPORT_BATCH: u32 = 500;
 
 /// One audit entry in the making. It is written in the transaction of the change it records, so
 /// the change and its trace commit or fail together.
+#[derive(Clone)]
 pub(crate) struct Record {
     actor_kind: ActorKind,
     actor_id: Option<i64>,
@@ -122,6 +128,92 @@ impl Record {
     }
 }
 
+/// Refusals come in bursts when someone probes. The first refusal of a caller on one action is
+/// written at once; the ones that follow within the window are counted, and the count is written
+/// when the window closes. The log then grows with the number of things tried, not of attempts.
+#[derive(Default)]
+pub(crate) struct Denials {
+    bursts: Mutex<HashMap<(i64, String), Burst>>,
+}
+
+struct Burst {
+    first: Record,
+    since: Timestamp,
+    repeated: u32,
+    last: Timestamp,
+}
+
+impl Burst {
+    /// The entry for the refusals that followed the first, if any did.
+    fn repeats(&self) -> Option<Record> {
+        (self.repeated > 0).then(|| {
+            let mut record = self.first.clone();
+            if let Some(details) = record.details.as_object_mut() {
+                details.insert("repeated".to_owned(), json!(self.repeated));
+                details.insert("lastAt".to_owned(), json!(self.last));
+            }
+            record
+        })
+    }
+}
+
+impl Denials {
+    /// The entries to write when `user_id` is refused `action`: none while a window for the pair
+    /// is open, else the refusal itself, after the count of the window it replaces.
+    pub(crate) fn refuse(&self, user_id: i64, action: String, record: Record, now: Timestamp) -> Vec<Record> {
+        let mut bursts = self.bursts.lock().unwrap_or_else(PoisonError::into_inner);
+        let key = (user_id, action);
+        let mut due = Vec::new();
+        if let Some(burst) = bursts.get_mut(&key) {
+            if now < burst.since + throttle::WINDOW {
+                burst.repeated += 1;
+                burst.last = now;
+                return due;
+            }
+            due.extend(burst.repeats());
+        }
+        bursts.insert(
+            key,
+            Burst {
+                first: record.clone(),
+                since: now,
+                repeated: 0,
+                last: now,
+            },
+        );
+        due.push(record);
+        due
+    }
+
+    /// The counts of the windows closed by `now`, which are then forgotten.
+    pub(crate) fn closed(&self, now: Timestamp) -> Vec<Record> {
+        let mut bursts = self.bursts.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut due = Vec::new();
+        bursts.retain(|_, burst| {
+            let open = now < burst.since + throttle::WINDOW;
+            if !open {
+                due.extend(burst.repeats());
+            }
+            open
+        });
+        due
+    }
+}
+
+/// A filter's actor is a username: one longer than any username matches nothing, and an export
+/// would only carry it into the audit log.
+fn check_filter(filter: &AuditFilter) -> Result<(), Error> {
+    if filter
+        .actor
+        .as_ref()
+        .is_some_and(|actor| actor.len() > MAX_USERNAME_BYTES)
+    {
+        Err(ErrorCode::InvalidRequest.into())
+    } else {
+        Ok(())
+    }
+}
+
 /// The owner sets it; it never goes under the floor, whatever is stored.
 fn retention(conn: &Connection) -> Result<SignedDuration, StoreError> {
     let days = settings::get(conn, "audit_retention_days")?
@@ -145,6 +237,7 @@ impl AuditLog {
 
     /// One page, newest first. The limit defaults to 50 and is capped at 200.
     pub async fn page(&self, filter: AuditFilter) -> Result<AuditPage, Error> {
+        check_filter(&filter)?;
         let limit = filter.limit.unwrap_or(DEFAULT_PAGE).clamp(1, MAX_PAGE);
         let mut entries = self
             .db
@@ -161,6 +254,7 @@ impl AuditLog {
 
     /// Records an export before it starts, with the filters it uses.
     pub async fn record_export(&self, caller: &Caller, filter: &AuditFilter) -> Result<(), Error> {
+        check_filter(filter)?;
         let record = Record::by(caller, AuditAction::AuditExported)
             .details(serde_json::to_value(filter).unwrap_or_default());
         let now = self.clock.now();

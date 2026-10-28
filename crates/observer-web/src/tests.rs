@@ -672,3 +672,49 @@ async fn a_stale_edit_never_reaches_an_account_created_after_a_deletion() {
     assert_eq!(listed.json()[1]["username"], "bob");
     assert_eq!(listed.json()[1]["permissions"], "0");
 }
+
+#[tokio::test]
+async fn a_denied_request_is_audited_by_its_route_rather_than_its_path() {
+    let server = Server::new().await;
+    let owner = server.owner().await;
+    let (grace, temporary) = server.user(&owner, "grace", "1").await;
+    let change = json!({ "current": temporary, "next": "grace chose this one" });
+    server
+        .call(Method::POST, "/api/account/password", Some(&grace), Some(change))
+        .await;
+
+    let long = format!("/api/users/{}", "A".repeat(4000));
+    let denied = server.call(Method::DELETE, &long, Some(&grace), None).await;
+
+    assert_eq!(denied.code(), "forbidden");
+    let audit = server
+        .call(
+            Method::GET,
+            "/api/audit?action=permission_denied",
+            Some(&owner),
+            None,
+        )
+        .await;
+    assert_eq!(audit.json()["entries"][0]["target"], "DELETE /api/users/{id}");
+}
+
+#[tokio::test]
+async fn an_audit_filter_naming_no_possible_user_is_refused_before_it_is_recorded() {
+    let server = Server::new().await;
+    let owner = server.owner().await;
+
+    let path = format!("/api/audit/export.csv?actor={}", "Z".repeat(33));
+    let export = server.call(Method::GET, &path, Some(&owner), None).await;
+
+    assert_eq!(export.status, StatusCode::BAD_REQUEST);
+    assert_eq!(export.code(), "invalid_request");
+    let audit = server
+        .call(
+            Method::GET,
+            "/api/audit?action=audit_exported",
+            Some(&owner),
+            None,
+        )
+        .await;
+    assert_eq!(audit.json()["entries"], json!([]));
+}

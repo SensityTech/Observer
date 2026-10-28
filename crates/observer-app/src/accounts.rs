@@ -8,13 +8,15 @@ use observer_domain::permissions::Permissions;
 use observer_store::users::{self, UserRow};
 use observer_store::{Connection, Database, login_failures, sessions, setup_tokens};
 
-use crate::audit::Record;
+use crate::audit::{Denials, Record};
 use crate::passwords::{PasswordCost, Passwords};
 use crate::throttle::{self, Attempts};
-use crate::{Clock, Error};
+use crate::{Caller, Clock, Error};
 
 /// How long a temporary password works, from its creation.
 pub(crate) const TEMPORARY_PASSWORD_LIFETIME: SignedDuration = SignedDuration::from_hours(72);
+/// The longest username `check_username` accepts.
+pub(crate) const MAX_USERNAME_BYTES: usize = 32;
 /// A row of login failures with no lock and no failure for this long is forgotten.
 const FORGET_FAILURES_AFTER: SignedDuration = SignedDuration::from_hours(24);
 
@@ -26,6 +28,7 @@ pub struct Accounts {
     pub(crate) clock: Clock,
     pub(crate) passwords: Arc<Passwords>,
     pub(crate) attempts: Arc<Attempts>,
+    pub(crate) denials: Arc<Denials>,
 }
 
 impl Accounts {
@@ -35,16 +38,21 @@ impl Accounts {
             db,
             passwords: Arc::new(Passwords::new(cost).await?),
             attempts: Arc::new(Attempts::new(clock.clone())),
+            denials: Arc::default(),
             clock,
         })
     }
 
-    /// Upkeep, run every minute: closed windows of failed logins go to the audit log, and expired
-    /// sessions, setup tokens and old failures are forgotten.
+    /// Upkeep, run every minute: closed windows of failed logins and of repeated refusals go to the
+    /// audit log, and expired sessions, setup tokens and old failures are forgotten.
     pub async fn sweep(&self) -> Result<(), Error> {
         let now = self.clock.now();
+        let denials = self.denials.closed(now);
         self.db
             .write(move |tx| {
+                for record in denials {
+                    record.write(tx, now)?;
+                }
                 for mut row in login_failures::unaudited_since_before(tx, now - throttle::WINDOW)? {
                     if let Some(failures) = throttle::take_unaudited(&mut row) {
                         Record::login_failures(&failures).write(tx, now)?;
@@ -54,6 +62,31 @@ impl Accounts {
                 login_failures::delete_quiet(tx, now - FORGET_FAILURES_AFTER, now)?;
                 sessions::delete_expired(tx, now - crate::sessions::IDLE, now)?;
                 setup_tokens::delete_expired(tx, now)?;
+                Ok(())
+            })
+            .await
+    }
+}
+
+impl Accounts {
+    /// Audits a refusal worth knowing about, unless the caller was refused the same `action` a
+    /// moment ago: that one is only counted.
+    pub(crate) async fn record_denial(
+        &self,
+        caller: &Caller,
+        action: String,
+        record: Record,
+    ) -> Result<(), Error> {
+        let now = self.clock.now();
+        let due = self.denials.refuse(caller.user_id, action, record, now);
+        if due.is_empty() {
+            return Ok(());
+        }
+        self.db
+            .write(move |tx| {
+                for record in due {
+                    record.write(tx, now)?;
+                }
                 Ok(())
             })
             .await
@@ -115,7 +148,7 @@ pub(crate) fn existing(conn: &Connection, id: i64) -> Result<UserRow, Error> {
 
 /// 3 to 32 characters among letters, digits, `_`, `.` and `-`.
 pub(crate) fn check_username(username: &str) -> Result<(), Error> {
-    let valid = (3..=32).contains(&username.len())
+    let valid = (3..=MAX_USERNAME_BYTES).contains(&username.len())
         && username
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'-'));

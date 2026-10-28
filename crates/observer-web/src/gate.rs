@@ -1,4 +1,4 @@
-use axum::extract::{OriginalUri, Request, State};
+use axum::extract::{Request, State};
 use axum::http::{HeaderMap, header};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
@@ -31,6 +31,8 @@ pub(crate) enum Gate {
 pub(crate) struct Guard {
     pub state: AppState,
     pub gate: Gate,
+    /// The route as the table declares it, relative to `/api`.
+    pub path: &'static str,
 }
 
 /// Runs a route's gate, then hands the handler the caller it found.
@@ -44,11 +46,9 @@ pub(crate) async fn enforce(
         return next.run(request).await;
     }
     let method = request.method().to_string();
-    let path = request
-        .extensions()
-        .get::<OriginalUri>()
-        .map_or_else(|| request.uri().path(), |uri| uri.path())
-        .to_owned();
+    // The route rather than the path asked for: a refusal is audited, and the audit log must not
+    // take whatever a client puts in a URL.
+    let path = format!("/api{}", guard.path);
     match admit(&guard, client, request.headers(), &method, &path).await {
         Ok(caller) => {
             request.extensions_mut().insert(caller);

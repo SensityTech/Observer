@@ -251,7 +251,8 @@ impl Accounts {
     }
 
     /// Refuses a caller who lacks `permission`. Refusing a sensitive or critical change is
-    /// audited: those are the attempts worth knowing about.
+    /// audited: those are the attempts worth knowing about. `path` is the route as the table
+    /// declares it, never the one a client typed.
     pub async fn authorize(
         &self,
         caller: &Caller,
@@ -266,12 +267,12 @@ impl Accounts {
         let key = info.map_or("", |info| info.key);
         let mutation = !matches!(method, "GET" | "HEAD");
         if mutation && info.is_some_and(|info| info.danger >= Danger::Sensitive) {
+            let route = format!("{method} {path}");
             let record = Record::by(caller, AuditAction::PermissionDenied)
-                .target(format!("{method} {path}"))
+                .target(&route)
                 .outcome(Outcome::Denied)
                 .details(json!({ "permission": key }));
-            let now = self.clock.now();
-            self.db.write(move |tx| record.write(tx, now)).await?;
+            self.record_denial(caller, route, record).await?;
         }
         Err(ApiError::new(ErrorCode::Forbidden).with("permission", key).into())
     }

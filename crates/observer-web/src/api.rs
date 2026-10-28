@@ -85,6 +85,7 @@ pub(crate) fn router(state: &AppState) -> Router<AppState> {
             let guard = Guard {
                 state: state.clone(),
                 gate: route.gate,
+                path: route.path,
             };
             let handler = route
                 .handler
