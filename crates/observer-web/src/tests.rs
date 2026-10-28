@@ -76,7 +76,13 @@ impl Server {
             .unwrap();
         let audit = AuditLog::new(db.clone(), clock.clone());
         let instance_id = db.instance_id().await.unwrap();
-        let state = AppState::new("0.0.0-test", accounts.clone(), audit, &instance_id);
+        let state = AppState::new(
+            "0.0.0-test",
+            accounts.clone(),
+            audit,
+            &instance_id,
+            &["observer.test".to_owned()],
+        );
         let app = router(state).layer(MockConnectInfo(SocketAddr::from(([203, 0, 113, 7], 50_000))));
         Self {
             _dir: dir,
@@ -748,4 +754,46 @@ async fn the_session_cookie_outlives_the_browser_only_when_asked() {
         assert!(browser_only.contains("; HttpOnly; SameSite=Strict"));
     }
     assert!(cookies[2].ends_with(&format!("; Max-Age={}", 7 * 24 * 3600)));
+}
+
+#[tokio::test]
+async fn a_request_for_a_name_observer_was_not_given_is_refused() {
+    let server = Server::new().await;
+    server.owner().await;
+    let login = |host: &str| {
+        Request::post("/api/auth/login")
+            .header(header::HOST, host)
+            .header(header::ORIGIN, format!("http://{host}"))
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                json!({ "username": "ada", "password": "not the password" }).to_string(),
+            ))
+            .unwrap()
+    };
+
+    // A stranger's page whose name now resolves to this host would pass as its own origin.
+    let rebound = server.send(login("rebind.attacker.example:40125")).await;
+    let read = server
+        .send(
+            Request::get("/api/setup")
+                .header(header::HOST, "rebind.attacker.example:40125")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+
+    assert_eq!(rebound.status, StatusCode::MISDIRECTED_REQUEST);
+    assert_eq!(rebound.code(), "unknown_host");
+    assert_eq!(read.code(), "unknown_host");
+    for known in [
+        "OBSERVER.test:40125",
+        "localhost:40125",
+        "127.0.0.1:40125",
+        "192.168.1.20:40125",
+        "[::1]:40125",
+    ] {
+        server.clock.advance(SignedDuration::from_secs(2));
+        let reply = server.send(login(known)).await;
+        assert_eq!(reply.code(), "invalid_credentials", "{known}");
+    }
 }

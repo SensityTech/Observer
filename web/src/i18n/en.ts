@@ -448,6 +448,8 @@ export const en = {
         invalid_setup_token:
             'This setup link has expired or was already used. Run observer setup-link on the host for a new one.',
         origin_mismatch: 'Observer refused a request from another address. Reload the page.',
+        unknown_host:
+            'Observer does not answer to this name. Open it by its address, or add the name to http.hosts in observer.toml.',
         json_required: 'Observer refused a malformed request. Reload the page.',
         invalid_request: 'Observer refused a malformed request. Reload the page.',
         internal: 'Observer hit an internal error. Its log has the details.',

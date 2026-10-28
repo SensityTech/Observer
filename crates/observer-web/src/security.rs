@@ -1,9 +1,13 @@
-use axum::extract::Request;
+use std::net::IpAddr;
+
+use axum::extract::{Request, State};
+use axum::http::uri::Authority;
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, header};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use observer_domain::error::ErrorCode;
 
+use crate::AppState;
 use crate::error::Failure;
 
 /// Everything the panel loads comes from Observer itself. `data:` images carry the grain texture.
@@ -42,10 +46,14 @@ pub(crate) async fn headers(request: Request, next: Next) -> Response {
     response
 }
 
-/// Every API change must come from the panel's own origin, as JSON. A page on another origin, the
-/// game server's port on the same host included, can send neither without a preflight that Observer
-/// never answers. Reads change nothing, and no API answer is ever cached.
-pub(crate) async fn api(request: Request, next: Next) -> Response {
+/// Every API request must name a host Observer is reached by, and every change must come from the
+/// panel's own origin, as JSON. A page on another origin, the game server's port on the same host
+/// included, can send neither without a preflight that Observer never answers. Reads change
+/// nothing, and no API answer is ever cached.
+pub(crate) async fn api(State(state): State<AppState>, request: Request, next: Next) -> Response {
+    if !known_host(request.headers(), &state.hosts) {
+        return Failure::from(ErrorCode::UnknownHost).into_response();
+    }
     let mutation = !matches!(*request.method(), Method::GET | Method::HEAD | Method::OPTIONS);
     if mutation && let Err(failure) = same_origin(request.headers()).and_then(|()| json(request.headers())) {
         return failure.into_response();
@@ -56,6 +64,27 @@ pub(crate) async fn api(request: Request, next: Next) -> Response {
         .headers_mut()
         .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     response
+}
+
+/// The origin check compares the `Origin` with the `Host` the browser sent, so it alone cannot tell
+/// this server from a stranger's page whose name was rebound to this host's address: that page is
+/// its own origin. Only the name tells them apart. An address cannot be rebound, nor can
+/// `localhost`; any other name must be one the owner listed. A request without a `Host` is not
+/// from a browser.
+fn known_host(headers: &HeaderMap, names: &[String]) -> bool {
+    let Some(host) = headers.get(header::HOST) else {
+        return true;
+    };
+    let Some(authority) = host.to_str().ok().and_then(|host| host.parse::<Authority>().ok()) else {
+        return false;
+    };
+    let name = authority.host();
+    name.trim_start_matches('[')
+        .trim_end_matches(']')
+        .parse::<IpAddr>()
+        .is_ok()
+        || name.eq_ignore_ascii_case("localhost")
+        || names.iter().any(|known| known.eq_ignore_ascii_case(name))
 }
 
 /// The `Origin` must be this server's exact scheme, host and port. Without one, the browser's own

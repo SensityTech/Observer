@@ -61,6 +61,7 @@ fn status(code: ErrorCode) -> StatusCode {
         ErrorCode::NotFound => StatusCode::NOT_FOUND,
         ErrorCode::Conflict | ErrorCode::NameTaken | ErrorCode::AlreadySetUp => StatusCode::CONFLICT,
         ErrorCode::JsonRequired => StatusCode::UNSUPPORTED_MEDIA_TYPE,
+        ErrorCode::UnknownHost => StatusCode::MISDIRECTED_REQUEST,
         ErrorCode::InvalidUsername
         | ErrorCode::PasswordTooShort
         | ErrorCode::PasswordTooLong

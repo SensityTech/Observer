@@ -94,7 +94,7 @@ pub(crate) fn router(state: &AppState) -> Router<AppState> {
         })
         // Without this, unknown API paths would fall through to the panel's index page.
         .fallback(|| async { Failure::from(ErrorCode::NotFound) })
-        .layer(middleware::from_fn(security::api))
+        .layer(middleware::from_fn_with_state(state.clone(), security::api))
 }
 
 async fn health(State(state): State<AppState>) -> Json<Health> {

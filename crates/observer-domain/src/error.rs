@@ -43,6 +43,9 @@ pub enum ErrorCode {
     AlreadySetUp,
     InvalidSetupToken,
     OriginMismatch,
+    /// The request named a host Observer was not told it is reached by: an address, `localhost`
+    /// and the names in `http.hosts` of `observer.toml` are.
+    UnknownHost,
     JsonRequired,
     InvalidRequest,
     Internal,

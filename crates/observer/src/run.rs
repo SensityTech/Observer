@@ -38,7 +38,13 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
     setup::offer_link(&accounts, config.http.listen).await?;
 
     let stop = CancellationToken::new();
-    let state = observer_web::AppState::new(VERSION, accounts.clone(), audit.clone(), &instance_id);
+    let state = observer_web::AppState::new(
+        VERSION,
+        accounts.clone(),
+        audit.clone(),
+        &instance_id,
+        &config.http.hosts,
+    );
     let app = observer_web::router(state);
     let server = tokio::spawn({
         let stop = stop.clone();

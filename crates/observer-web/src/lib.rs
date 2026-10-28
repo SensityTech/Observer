@@ -11,6 +11,8 @@ mod security;
 #[cfg(test)]
 mod tests;
 
+use std::sync::Arc;
+
 use axum::{Router, middleware};
 use observer_app::{Accounts, AuditLog};
 use tower_http::catch_panic::CatchPanicLayer;
@@ -31,15 +33,24 @@ pub struct AppState {
     /// Cookies ignore ports, so the name carries the instance id: two Observers on one host never
     /// read each other's sessions.
     cookie: String,
+    /// The names the panel is reached by, besides addresses and `localhost`.
+    hosts: Arc<[String]>,
 }
 
 impl AppState {
-    pub fn new(version: &'static str, accounts: Accounts, audit: AuditLog, instance_id: &str) -> Self {
+    pub fn new(
+        version: &'static str,
+        accounts: Accounts,
+        audit: AuditLog,
+        instance_id: &str,
+        hosts: &[String],
+    ) -> Self {
         Self {
             version,
             accounts,
             audit,
             cookie: format!("observer_session_{instance_id}"),
+            hosts: hosts.into(),
         }
     }
 }
