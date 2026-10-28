@@ -66,10 +66,33 @@ pub enum StateCause {
     CrashLoop {
         failures: u32,
     },
-    /// The process could not be started; `error` is the operating system's or the launch's reason.
+    /// The process could not be started.
     SpawnFailed {
-        error: String,
+        reason: SpawnFailure,
     },
+}
+
+/// Why FXServer could not be started. The full reason names the owner's folders, which only the
+/// owner reads in the launch settings, so it goes to the console and Observer's log; the status
+/// and the API only say which step failed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum SpawnFailure {
+    /// No launch settings were saved yet.
+    NotConfigured,
+    /// The rules in force on this host refuse the launch settings.
+    InvalidSettings,
+    /// The build folder holds no FXServer program.
+    NotABuild,
+    /// The server data folder does not exist.
+    MissingData,
+    /// The server cfg cannot be read.
+    CfgUnreadable,
+    /// The observer bridge could not be written into the build.
+    Bridge,
+    /// The operating system refused to start the process.
+    Spawn,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
@@ -293,6 +316,12 @@ mod tests {
                 json!({ "kind": "crashLoop", "failures": 5 }),
             ),
             (StateCause::Shutdown, json!({ "kind": "shutdown" })),
+            (
+                StateCause::SpawnFailed {
+                    reason: SpawnFailure::NotABuild,
+                },
+                json!({ "kind": "spawnFailed", "reason": "notABuild" }),
+            ),
         ];
 
         for (cause, expected) in causes {

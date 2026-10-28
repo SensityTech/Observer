@@ -72,6 +72,9 @@ describe('causeText', () => {
         expect(causeText(en, status({ state: 'crashLoop', cause: { kind: 'crashLoop', failures: 5 } }))).toBe(
             '5 failures in a row: automatic restarts are off until someone starts FXServer.',
         );
+        expect(causeText(en, status({ cause: { kind: 'spawnFailed', reason: 'missingData' } }))).toBe(
+            'FXServer could not start: the server data folder does not exist.',
+        );
         expect(causeText(en, status({}))).toBeNull();
     });
 });

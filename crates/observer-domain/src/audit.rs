@@ -33,7 +33,7 @@ pub enum AuditAction {
     /// value before and after.
     LaunchSettingsChanged,
     /// Someone started FXServer, or Observer did as it started (`automatic`). A start that failed
-    /// is a failure, with the launch's `error`.
+    /// is a failure, with the step that failed as its `reason`.
     ServerStarted,
     ServerStopped,
     ServerRestarted,

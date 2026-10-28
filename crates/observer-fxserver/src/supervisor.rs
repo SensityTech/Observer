@@ -7,6 +7,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use observer_domain::launch::LaunchSettings;
+use observer_domain::server::SpawnFailure;
 use observer_platform::{Exit, ExitWatch, Output, ProcessTree};
 use serde::Serialize;
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
@@ -217,8 +218,32 @@ pub enum Cause {
         failures: usize,
     },
     SpawnFailed {
-        error: String,
+        reason: SpawnFailure,
     },
+}
+
+/// Why a spawn failed: the step, which anyone may see, and the full text, which names folders, for
+/// the console and the log.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("{message}")]
+pub struct SpawnError {
+    pub failure: SpawnFailure,
+    pub message: String,
+}
+
+impl SpawnError {
+    fn new(failure: SpawnFailure, message: impl Into<String>) -> Self {
+        Self {
+            failure,
+            message: message.into(),
+        }
+    }
+}
+
+impl From<launch::LaunchError> for SpawnError {
+    fn from(error: launch::LaunchError) -> Self {
+        Self::new(error.failure(), error.to_string())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -247,7 +272,7 @@ pub enum ControlError {
     #[error("Observer is shutting down")]
     ShuttingDown,
     #[error("cannot start FXServer: {0}")]
-    Launch(String),
+    Launch(SpawnError),
     #[error(transparent)]
     Refused(#[from] CommandRefusal),
     #[error(transparent)]
@@ -1028,7 +1053,7 @@ impl Actor {
         }
     }
 
-    async fn spawn(&mut self, cause: Cause) -> Result<(), String> {
+    async fn spawn(&mut self, cause: Cause) -> Result<(), SpawnError> {
         match self.launch().await {
             Ok((run, probe, warnings)) => {
                 let pid = run.pid;
@@ -1047,7 +1072,9 @@ impl Actor {
             Err(error) => {
                 error!(%error, "cannot start FXServer");
                 self.note(&format!("cannot start FXServer: {error}"));
-                let failed = Cause::SpawnFailed { error: error.clone() };
+                let failed = Cause::SpawnFailed {
+                    reason: error.failure,
+                };
                 if cause == Cause::Recovery {
                     // What stops a respawn is often brief (a cfg being saved, a scan holding the
                     // executable), so it is one more failure for the breaker to count.
@@ -1061,35 +1088,26 @@ impl Actor {
         }
     }
 
-    async fn launch(&mut self) -> Result<(Run, SocketAddr, Vec<CfgWarning>), String> {
+    async fn launch(&mut self) -> Result<(Run, SocketAddr, Vec<CfgWarning>), SpawnError> {
         let Some(settings) = &self.settings.launch else {
-            return Err("no launch settings are configured".to_owned());
+            return Err(SpawnError::new(
+                SpawnFailure::NotConfigured,
+                "no launch settings are configured",
+            ));
         };
-        let prepared = launch::prepare(settings, self.settings.flavour).map_err(|error| error.to_string())?;
+        let prepared = launch::prepare(settings, self.settings.flavour)?;
         let layout = prepared.layout.clone();
-        let dumps = (
-            layout.crashes(),
-            self.settings.data_dir.join("crashes"),
-            self.settings.dumps,
-        );
-        let installing = layout.clone();
-        let (installed, moved) = tokio::task::spawn_blocking(move || {
-            let installed = bridge::install(&installing);
-            // Dumps left by a run Observer did not see end, such as before Observer itself crashed.
-            let moved = crashes::collect(&dumps.0, &dumps.1, dumps.2);
-            (installed, moved)
-        })
-        .await
-        .map_err(|error| error.to_string())?;
-        installed.map_err(|error| format!("cannot install the observer bridge: {error}"))?;
-        self.report_dumps(moved);
-        let credentials = Credentials::generate()
-            .map_err(|error| format!("cannot generate the launch credentials: {error}"))?;
+        self.install(&layout).await?;
+        let credentials = Credentials::generate().map_err(|error| {
+            let message = format!("cannot generate the launch credentials: {error}");
+            SpawnError::new(SpawnFailure::Spawn, message)
+        })?;
 
         self.generation += 1;
         let generation = self.generation;
         self.current.send_replace(generation);
-        let spawned = observer_platform::spawn(&prepared.launch).map_err(|error| error.to_string())?;
+        let spawned = observer_platform::spawn(&prepared.launch)
+            .map_err(|error| SpawnError::new(SpawnFailure::Spawn, error.to_string()))?;
         #[cfg(unix)]
         if let Err(error) = self.pid_file().record(&spawned.tree) {
             warn!(%error, "cannot record FXServer's process group; a crash of Observer could leave it running");
@@ -1155,6 +1173,29 @@ impl Actor {
             killed: false,
         };
         Ok((run, probe, prepared.warnings))
+    }
+
+    /// Writes the bridge into the build, and moves away the dumps of a run Observer did not see
+    /// end, such as before Observer itself crashed.
+    async fn install(&mut self, layout: &Layout) -> Result<(), SpawnError> {
+        let installing = layout.clone();
+        let dumps = (
+            layout.crashes(),
+            self.settings.data_dir.join("crashes"),
+            self.settings.dumps,
+        );
+        let (installed, moved) = tokio::task::spawn_blocking(move || {
+            let installed = bridge::install(&installing);
+            (installed, crashes::collect(&dumps.0, &dumps.1, dumps.2))
+        })
+        .await
+        .map_err(|error| SpawnError::new(SpawnFailure::Spawn, error.to_string()))?;
+        if let Err(error) = installed {
+            let message = format!("cannot install the observer bridge: {error}");
+            return Err(SpawnError::new(SpawnFailure::Bridge, message));
+        }
+        self.report_dumps(moved);
+        Ok(())
     }
 
     async fn exited(&mut self, exit: Exit) {

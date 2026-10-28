@@ -413,8 +413,10 @@ impl Supervision {
     async fn record_control(&self, record: Record, result: &Result<(), ControlError>) -> Result<(), Error> {
         let record = match result {
             Ok(()) => record,
-            // The reason names folders, which only the owner reads: the console has it.
-            Err(ControlError::Launch(_)) => record.outcome(Outcome::Failure),
+            // The full reason names folders, which only the owner reads: the console has it.
+            Err(ControlError::Launch(error)) => record
+                .outcome(Outcome::Failure)
+                .details(json!({ "reason": error.failure })),
             Err(_) => return Ok(()),
         };
         self.audit(record.target(Servers::DEFAULT)).await
@@ -571,7 +573,7 @@ fn state_cause(cause: &Cause) -> StateCause {
         Cause::CrashLoop { failures } => StateCause::CrashLoop {
             failures: u32::try_from(failures).unwrap_or(u32::MAX),
         },
-        Cause::SpawnFailed { error } => StateCause::SpawnFailed { error },
+        Cause::SpawnFailed { reason } => StateCause::SpawnFailed { reason },
     }
 }
 
@@ -633,7 +635,9 @@ fn control_error(error: ControlError) -> Error {
         }
         ControlError::Stopping => ErrorCode::ServerStopping.into(),
         ControlError::ShuttingDown => ErrorCode::ShuttingDown.into(),
-        ControlError::Launch(error) => ApiError::new(ErrorCode::LaunchFailed).with("error", error).into(),
+        ControlError::Launch(error) => ApiError::new(ErrorCode::LaunchFailed)
+            .with("reason", serde_json::to_value(error.failure).unwrap_or_default())
+            .into(),
         ControlError::Refused(refusal) => ApiError::new(ErrorCode::CommandRefused)
             .with(
                 "reason",

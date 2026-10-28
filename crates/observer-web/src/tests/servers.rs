@@ -6,7 +6,7 @@ use std::fs;
 use axum::http::{Method, StatusCode, header};
 use jiff::SignedDuration;
 use observer_domain::launch::{LaunchSettings, OneSync, StoredLaunch};
-use observer_domain::server::{LaunchReadiness, ServerState, StateCause};
+use observer_domain::server::{LaunchReadiness, ServerState};
 use observer_store::launch;
 use serde_json::{Value, json};
 
@@ -137,25 +137,44 @@ async fn stored_settings_this_host_refuses_are_named_before_anything_starts() {
 }
 
 #[tokio::test]
-async fn a_start_that_cannot_launch_fxserver_says_why_and_is_audited_as_failed() {
+async fn a_failed_start_names_the_step_that_failed_but_none_of_the_owners_folders() {
     let server = Server::new().await;
     let owner = server.owner().await;
     server.save_unlaunchable(&owner).await;
+    // Neither reads the launch settings: they are the owner's.
+    let operator = server.member(&owner, "kenji", "9").await;
+    let viewer = server.member(&owner, "grace", "1").await;
 
-    let start = server.call(Method::POST, START, Some(&owner), None).await;
+    let start = server.call(Method::POST, START, Some(&operator), None).await;
+    let mut socket = server.socket(&viewer).await;
+    send(&mut socket, json!({ "type": "sub", "topic": "server.status" })).await;
+    let status = receive(&mut socket).await;
+    let started = server.audited("server_started").await;
 
     assert_eq!(start.status, StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(start.code(), "launch_failed");
-    let reason = start.json()["params"]["error"].as_str().unwrap().to_owned();
-    assert!(reason.contains("does not exist"), "{reason}");
-    let started = server.audited("server_started").await;
+    assert_eq!(start.json()["params"], json!({ "reason": "missingData" }));
+    assert_eq!(
+        status["data"]["cause"],
+        json!({ "kind": "spawnFailed", "reason": "missingData" })
+    );
     assert_eq!(started.len(), 1);
     assert_eq!(started[0]["outcome"], "failure");
-    assert_eq!(started[0]["actorName"], "ada");
-    assert_eq!(started[0]["details"], json!({}), "the reason names folders");
-    let status = server.supervision.status().borrow().clone();
-    assert_eq!(status.state, ServerState::Stopped);
-    assert!(matches!(status.cause, Some(StateCause::SpawnFailed { .. })));
+    assert_eq!(started[0]["actorName"], "kenji");
+    assert_eq!(started[0]["details"], json!({ "reason": "missingData" }));
+    for seen in [start.text, status.to_string(), started[0].to_string()] {
+        assert!(!seen.contains("nowhere"), "a folder reached a non-owner: {seen}");
+    }
+    let (console, _) = server.supervision.console(None);
+    assert!(
+        console.lines.iter().any(|line| line
+            .5
+            .starts_with("cannot start FXServer: the server data folder")
+            && line.5.contains("nowhere")),
+        "the console keeps the full reason: {:?}",
+        console.lines
+    );
+    assert_eq!(server.supervision.status().borrow().state, ServerState::Stopped);
 }
 
 #[tokio::test]

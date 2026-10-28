@@ -10,6 +10,7 @@ import type { Outcome } from '../api/generated/Outcome';
 import type { ServerMessage } from '../api/generated/ServerMessage';
 import type { ServerState } from '../api/generated/ServerState';
 import type { ServerStatus } from '../api/generated/ServerStatus';
+import type { SpawnFailure } from '../api/generated/SpawnFailure';
 import type { StateCause } from '../api/generated/StateCause';
 import type { Topic } from '../api/generated/Topic';
 
@@ -77,6 +78,16 @@ const PROBLEMS = {
 
 const HANG_CAUSES = { noHeartbeat: true, noHttp: true } satisfies Record<HangCause, true>;
 
+const SPAWN_FAILURES = {
+    notConfigured: true,
+    invalidSettings: true,
+    notABuild: true,
+    missingData: true,
+    cfgUnreadable: true,
+    bridge: true,
+    spawn: true,
+} satisfies Record<SpawnFailure, true>;
+
 const READINESS = { ready: true, notConfigured: true, invalid: true } satisfies Record<LaunchReadiness, true>;
 
 const LINE_KINDS = { stdout: true, stderr: true, command: true, observer: true } satisfies Record<
@@ -84,7 +95,7 @@ const LINE_KINDS = { stdout: true, stderr: true, command: true, observer: true }
     true
 >;
 
-type Shape = 'text' | 'count' | 'problems' | 'hang';
+type Shape = 'text' | 'count' | 'problems' | 'hang' | 'spawnFailure';
 
 /** What each kind of cause carries besides its kind. */
 const CAUSE_FIELDS = {
@@ -101,7 +112,7 @@ const CAUSE_FIELDS = {
     consoleQuit: { by: 'text' },
     shutdown: {},
     crashLoop: { failures: 'count' },
-    spawnFailed: { error: 'text' },
+    spawnFailed: { reason: 'spawnFailure' },
 } satisfies Record<StateCause['kind'], Record<string, Shape>>;
 
 type Json = Record<string, unknown>;
@@ -151,6 +162,8 @@ const isCause = (value: unknown): value is StateCause => {
                 return isProblems(field);
             case 'hang':
                 return oneOf<HangCause>(HANG_CAUSES)(field);
+            case 'spawnFailure':
+                return oneOf<SpawnFailure>(SPAWN_FAILURES)(field);
         }
     });
 };

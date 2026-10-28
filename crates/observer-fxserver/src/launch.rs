@@ -9,6 +9,7 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 
 use observer_domain::launch::{LaunchIssue, LaunchSettings, Platform};
+use observer_domain::server::SpawnFailure;
 use observer_platform::Launch;
 use serde::Serialize;
 
@@ -75,6 +76,18 @@ pub enum LaunchError {
         #[source]
         source: io::Error,
     },
+}
+
+impl LaunchError {
+    /// Which step failed, without the folders the message names.
+    pub fn failure(&self) -> SpawnFailure {
+        match self {
+            Self::Invalid(_) | Self::Resolve { .. } => SpawnFailure::InvalidSettings,
+            Self::NotABuild { .. } => SpawnFailure::NotABuild,
+            Self::MissingData(_) => SpawnFailure::MissingData,
+            Self::Cfg { .. } => SpawnFailure::CfgUnreadable,
+        }
+    }
 }
 
 /// `buildPath notAbsolute, argumentName 2 reserved`: the issues as the API names them.

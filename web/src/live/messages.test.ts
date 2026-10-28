@@ -41,6 +41,11 @@ describe('parseServerMessage', () => {
             { type: 'snapshot', topic: 'audit', data: { latestId: null } },
             { type: 'snapshot', topic: 'server.status', data: STATUS },
             { type: 'event', topic: 'server.status', data: ONLINE },
+            {
+                type: 'event',
+                topic: 'server.status',
+                data: { ...STATUS, state: 'stopped', cause: { kind: 'spawnFailed', reason: 'notABuild' } },
+            },
             { type: 'snapshot', topic: 'console', data: { lines: [LINE], gap: true } },
             {
                 type: 'event',
@@ -67,6 +72,11 @@ describe('parseServerMessage', () => {
             { type: 'resync', topic: 'metrics.live' },
             { type: 'snapshot', topic: 'server.status', data: { ...STATUS, state: 'exploded' } },
             { type: 'snapshot', topic: 'server.status', data: { ...STATUS, cause: { kind: 'exited' } } },
+            {
+                type: 'snapshot',
+                topic: 'server.status',
+                data: { ...STATUS, cause: { kind: 'spawnFailed', reason: 'the folder D:/prod is missing' } },
+            },
             {
                 type: 'event',
                 topic: 'server.status',

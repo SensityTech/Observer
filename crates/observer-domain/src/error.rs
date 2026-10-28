@@ -49,8 +49,8 @@ pub enum ErrorCode {
     InvalidLaunchSettings,
     /// FXServer cannot start before the owner saves its launch settings.
     LaunchNotConfigured,
-    /// FXServer could not be started. Params: `error`, the reason as the operating system or the
-    /// launch gave it.
+    /// FXServer could not be started. Params: `reason`, the step that failed as a
+    /// [`SpawnFailure`](crate::server::SpawnFailure); the console has the full reason.
     LaunchFailed,
     ServerRunning,
     ServerNotRunning,

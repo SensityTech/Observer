@@ -68,7 +68,7 @@ export const causeText = (t: Messages, status: ServerStatus): string | null => {
         case 'crashLoop':
             return words.crashLoop(cause.failures);
         case 'spawnFailed':
-            return words.spawnFailed(cause.error);
+            return words.spawnFailed(cause.reason);
     }
 };
 

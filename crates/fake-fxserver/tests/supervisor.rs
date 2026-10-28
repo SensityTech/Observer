@@ -10,6 +10,7 @@ use std::sync::{Arc, LazyLock, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use observer_domain::launch::{ExtraArgument, LaunchSettings, OneSync};
+use observer_domain::server::SpawnFailure;
 use observer_fxserver::console::{ConsoleHub, LineKind, plain};
 use observer_fxserver::health::{HangCause, HealthLimits, Problem};
 use observer_fxserver::recovery::RecoveryPolicy;
@@ -481,10 +482,14 @@ async fn a_respawn_that_fails_backs_off_and_tries_again() {
 
     lab.state(State::Crashed).await;
     let cause = lab.state(State::Crashed).await;
-    assert!(
-        matches!(&cause, Cause::SpawnFailed { error } if error.contains("server.cfg")),
-        "{cause:?}"
+    assert_eq!(
+        cause,
+        Cause::SpawnFailed {
+            reason: SpawnFailure::CfgUnreadable
+        }
     );
+    lab.console_until("cannot start FXServer: cannot read the server cfg")
+        .await;
     fs::rename(&aside, &cfg).unwrap();
     assert_eq!(lab.state(State::Starting).await, Cause::Recovery);
     lab.state(State::Online).await;

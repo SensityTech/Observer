@@ -12,6 +12,7 @@ import type { OneSync } from '../api/generated/OneSync';
 import type { Outcome } from '../api/generated/Outcome';
 import type { PermissionArea } from '../api/generated/PermissionArea';
 import type { ServerState } from '../api/generated/ServerState';
+import type { SpawnFailure } from '../api/generated/SpawnFailure';
 import { parsePermissions, permissionKeys, type PermissionKey } from '../auth/permissions';
 import type { LinkState } from '../live/realtime';
 import { formatDuration, formatNumber, plural } from './format';
@@ -71,6 +72,19 @@ const commandRefusals = {
 } satisfies Record<CommandRefusal, string>;
 
 const isCommandRefusal = (key: string): key is CommandRefusal => Object.hasOwn(commandRefusals, key);
+
+// What failed, without the folders it names: those are the owner's, and the console has them.
+const spawnFailures = {
+    notConfigured: 'no launch settings are saved.',
+    invalidSettings: 'this host refuses its launch settings.',
+    notABuild: 'the build folder holds no FXServer program.',
+    missingData: 'the server data folder does not exist.',
+    cfgUnreadable: 'the server cfg cannot be read.',
+    bridge: 'the observer bridge could not be written into the build.',
+    spawn: 'the system refused to start the process.',
+} satisfies Record<SpawnFailure, string>;
+
+const isSpawnFailure = (key: string): key is SpawnFailure => Object.hasOwn(spawnFailures, key);
 
 const healthProblems = {
     httpLate: 'its HTTP endpoint answers late',
@@ -199,7 +213,7 @@ export const en = {
         shutdown: 'Observer is stopping, and FXServer with it.',
         crashLoop: (failures: number) =>
             `${count(failures, { one: 'failure', other: 'failures' })} in a row: automatic restarts are off until someone starts FXServer.`,
-        spawnFailed: (error: string) => `FXServer could not start: ${error}`,
+        spawnFailed: (reason: SpawnFailure) => `FXServer could not start: ${spawnFailures[reason]}`,
         restartIn: (delay: string) => `Restarting in ${delay}.`,
     },
     controls: {
@@ -730,7 +744,12 @@ export const en = {
         invalid_launch_settings: 'Some settings need fixing. Each one says why below its field.',
         launch_not_configured:
             'FXServer has no launch settings yet. The owner saves them on the Server page.',
-        launch_failed: (params) => `FXServer could not start: ${stringParam(params, 'error')}`,
+        launch_failed: (params) => {
+            const reason = stringParam(params, 'reason');
+            return isSpawnFailure(reason)
+                ? `FXServer could not start: ${spawnFailures[reason]}`
+                : 'FXServer could not start. The console says why.';
+        },
         server_running: 'FXServer is already running.',
         server_not_running: 'FXServer is not running.',
         server_stopping: 'FXServer is stopping. Start it again once it has stopped.',
