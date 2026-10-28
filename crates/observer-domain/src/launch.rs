@@ -2,6 +2,8 @@
 //! argument amounts to choosing what the host runs. The checks here are pure, so the panel's form
 //! and the launch builder refuse exactly the same things.
 
+use std::collections::HashSet;
+
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
@@ -198,11 +200,11 @@ impl LaunchSettings {
         if self.extra_arguments.len() > MAX_EXTRA_ARGUMENTS {
             note(LaunchField::ExtraArguments, None, Some(LaunchProblem::TooMany));
         }
-        for (index, argument) in self.extra_arguments.iter().enumerate() {
-            let earlier = &self.extra_arguments[..index];
-            let duplicate = earlier
-                .iter()
-                .any(|other| other.name.eq_ignore_ascii_case(&argument.name));
+        // The list is refused past the limit anyway: checking the rest one by one would only let
+        // a huge request keep the server busy.
+        let mut names = HashSet::new();
+        for (index, argument) in self.extra_arguments.iter().take(MAX_EXTRA_ARGUMENTS).enumerate() {
+            let duplicate = !names.insert(argument.name.to_ascii_lowercase());
             let name = name_problem(&argument.name).or(duplicate.then_some(LaunchProblem::Duplicate));
             note(LaunchField::ArgumentName, Some(index), name);
             note(
@@ -645,6 +647,23 @@ mod tests {
         };
         assert_eq!(
             many.issues(Platform::Windows),
+            [issue(LaunchField::ExtraArguments, None, LaunchProblem::TooMany)]
+        );
+    }
+
+    #[test]
+    fn arguments_past_the_limit_are_not_checked_one_by_one() {
+        let mut extra_arguments: Vec<_> = (0..MAX_EXTRA_ARGUMENTS)
+            .map(|index| argument(&format!("observer_lab_{index}"), "1"))
+            .collect();
+        extra_arguments.extend((0..30_000).map(|_| argument("exec", "a;b")));
+        let flood = LaunchSettings {
+            extra_arguments,
+            ..settings()
+        };
+
+        assert_eq!(
+            flood.issues(Platform::Windows),
             [issue(LaunchField::ExtraArguments, None, LaunchProblem::TooMany)]
         );
     }
