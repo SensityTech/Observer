@@ -40,6 +40,8 @@ use crate::{Accounts, Caller, Clock, Error, Servers};
 
 /// Who the console and the bridge's events name for what Observer does by itself.
 const OBSERVER: &str = "observer";
+/// Who they name for someone at the host's own window, who signs in to nothing.
+const LOCAL: &str = "local";
 /// Who the console names for the schedule's notes.
 const SCHEDULE: &str = "schedule";
 /// Commands one user may send within a window.
@@ -277,27 +279,52 @@ impl Supervision {
 
     /// Starts FXServer with the stored launch settings, as they are now.
     pub async fn start_server(&self, caller: &Caller) -> Result<(), Error> {
-        self.hand_over_launch().await?;
-        let started = self.inner.supervisor.start(&caller.username).await;
-        self.record_control(Record::by(caller, AuditAction::ServerStarted), &started)
-            .await?;
-        started.map_err(control_error)
+        self.start_by(&caller.username, Record::by(caller, AuditAction::ServerStarted))
+            .await
     }
 
     pub async fn stop_server(&self, caller: &Caller) -> Result<(), Error> {
-        let stopped = self.inner.supervisor.stop(&caller.username).await;
-        self.record_control(Record::by(caller, AuditAction::ServerStopped), &stopped)
-            .await?;
-        stopped.map_err(control_error)
+        self.stop_by(&caller.username, Record::by(caller, AuditAction::ServerStopped))
+            .await
     }
 
     /// Stops FXServer gracefully and starts it again with the stored settings, which must be fit
     /// to start before anything stops.
     pub async fn restart_server(&self, caller: &Caller) -> Result<(), Error> {
+        self.restart_by(&caller.username, Record::by(caller, AuditAction::ServerRestarted))
+            .await
+    }
+
+    /// [`Supervision::start_server`] for someone at the host's own window.
+    pub async fn start_local(&self) -> Result<(), Error> {
+        self.start_by(LOCAL, local(AuditAction::ServerStarted)).await
+    }
+
+    pub async fn stop_local(&self) -> Result<(), Error> {
+        self.stop_by(LOCAL, local(AuditAction::ServerStopped)).await
+    }
+
+    pub async fn restart_local(&self) -> Result<(), Error> {
+        self.restart_by(LOCAL, local(AuditAction::ServerRestarted)).await
+    }
+
+    async fn start_by(&self, by: &str, record: Record) -> Result<(), Error> {
         self.hand_over_launch().await?;
-        let restarted = self.inner.supervisor.restart(&caller.username).await;
-        self.record_control(Record::by(caller, AuditAction::ServerRestarted), &restarted)
-            .await?;
+        let started = self.inner.supervisor.start(by).await;
+        self.record_control(record, &started).await?;
+        started.map_err(control_error)
+    }
+
+    async fn stop_by(&self, by: &str, record: Record) -> Result<(), Error> {
+        let stopped = self.inner.supervisor.stop(by).await;
+        self.record_control(record, &stopped).await?;
+        stopped.map_err(control_error)
+    }
+
+    async fn restart_by(&self, by: &str, record: Record) -> Result<(), Error> {
+        self.hand_over_launch().await?;
+        let restarted = self.inner.supervisor.restart(by).await;
+        self.record_control(record, &restarted).await?;
         restarted.map_err(control_error)
     }
 
@@ -638,6 +665,10 @@ async fn follow(
             changed
         });
     }
+}
+
+fn local(action: AuditAction) -> Record {
+    Record::operator(ActorKind::Local, action)
 }
 
 fn readiness(stored: Option<&StoredLaunch>) -> LaunchReadiness {

@@ -438,6 +438,8 @@ export const en = {
             `Restarting, as ${by} planned: resources are told first, then FXServer quits and starts again.`,
         restartedAsPlanned: (by: string) => `Restarted as ${by} planned.`,
         observer: 'Observer',
+        // Someone at the host's own status window, who signs in to nothing.
+        local: 'someone at the host',
         recovery: 'Started again after a failure.',
         ready: 'Ready: its HTTP endpoint answers and the observer bridge reports in.',
         recovered: 'Healthy again.',

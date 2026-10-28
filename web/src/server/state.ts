@@ -36,7 +36,12 @@ export const causeText = (t: Messages, status: ServerStatus): string | null => {
     if (cause === null) {
         return null;
     }
-    const by = (name: string) => (name === 'observer' ? words.observer : name);
+    const by = (name: string) => {
+        if (name === 'observer') {
+            return words.observer;
+        }
+        return name === 'local' ? words.local : name;
+    };
     switch (cause.kind) {
         case 'requested':
             if (status.state === 'stopping') {

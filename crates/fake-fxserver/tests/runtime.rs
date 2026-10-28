@@ -494,6 +494,42 @@ async fn a_server_started_from_the_panel_runs_a_command_then_stops_gracefully() 
 }
 
 #[tokio::test]
+async fn a_start_from_the_host_window_is_audited_as_local() {
+    let mut observer = Observer::new(false).await;
+    let local = || "local".to_owned();
+
+    observer.supervision.start_local().await.unwrap();
+    let starting = observer.state(ServerState::Starting).await;
+    observer.state(ServerState::Online).await;
+    observer.supervision.restart_local().await.unwrap();
+    let restarting = observer.state(ServerState::Stopping).await;
+    observer.state(ServerState::Online).await;
+    observer.supervision.stop_local().await.unwrap();
+    let stopped = observer.state(ServerState::Stopped).await;
+
+    assert_eq!(starting.cause, Some(StateCause::Requested { by: local() }));
+    assert_eq!(restarting.cause, Some(StateCause::Restart { by: local() }));
+    assert_eq!(stopped.cause, Some(StateCause::Requested { by: local() }));
+    let notice = observer.console_until("observer:shuttingDown").await;
+    assert!(plain(&notice.5).contains(r#""by":"local""#), "{notice:?}");
+    for action in [
+        AuditAction::ServerStarted,
+        AuditAction::ServerRestarted,
+        AuditAction::ServerStopped,
+    ] {
+        let entries = observer.audited(action).await;
+        assert_eq!(entries.len(), 1, "{action:?}");
+        assert_eq!(
+            (entries[0].actor_kind, entries[0].actor_name.as_deref()),
+            (ActorKind::Local, None),
+            "{action:?}"
+        );
+        assert_eq!(entries[0].target.as_deref(), Some("default"));
+    }
+    observer.stop_observer().await;
+}
+
+#[tokio::test]
 async fn a_server_started_with_observer_stops_with_it() {
     let mut observer = Observer::new(true).await;
 
