@@ -747,6 +747,40 @@ fn a_delay_stays_before_the_following_time_and_within_twelve_hours() {
 }
 
 #[test]
+fn a_restart_before_a_delayed_time_takes_the_delay_with_it() {
+    let mut sim = Sim::running(
+        paris(&["04:00", "16:00"]),
+        "2026-10-27T20:00:00Z",
+        "2026-10-28T02:50:00Z",
+    );
+    sim.send(Input::Delay {
+        minutes: 30,
+        by: "ada".to_owned(),
+    });
+    sim.send(Input::OneOff {
+        at: ts("2026-10-28T03:10:00Z"),
+        by: "grace".to_owned(),
+    });
+
+    let log = sim.run_until("2026-10-28T03:10:00Z");
+    sim.server(
+        "2026-10-28T03:10:20Z",
+        ServerState::Starting,
+        2,
+        Some("2026-10-28T03:10:20Z"),
+    );
+    let after = sim.run_until("2026-10-28T04:00:00Z");
+
+    assert_eq!(restarts(&log), [ts("2026-10-28T03:10:00Z")]);
+    assert_eq!(restarts(&after), []);
+    assert_eq!(
+        sim.state.plan.delay, None,
+        "the plan keeps no delay of a settled occurrence"
+    );
+    assert_eq!(sim.next(), Some(ts("2026-10-28T15:00:00Z")));
+}
+
+#[test]
 fn a_one_off_replaces_the_previous_one_and_can_be_cancelled() {
     let mut sim = Sim::running(paris(&["04:00"]), "2026-10-27T20:00:00Z", "2026-10-28T01:00:00Z");
 

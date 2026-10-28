@@ -563,6 +563,12 @@ impl State {
         if let Some(skip) = self.auto_skip.take_if(|skip| skip.at <= now) {
             self.settle(skip.at);
         }
+        // A restart settles every occurrence whose own time passed, a delayed one included: what
+        // it was delayed for is done.
+        let settled = self.plan.settled;
+        self.plan
+            .delay
+            .take_if(|delay| settled.is_some_and(|settled| delay.occurrence <= settled));
     }
 
     /// A restart whose time came: it fires, or it is given up on.
