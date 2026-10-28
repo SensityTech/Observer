@@ -83,7 +83,7 @@ pub async fn run(config: Config, args: RunArgs) -> anyhow::Result<()> {
     settings.probe = args
         .port
         .map(|port| SocketAddr::from((Ipv4Addr::LOCALHOST, port)));
-    let (supervisor, task) = Supervisor::spawn(settings, Arc::clone(&console));
+    let (supervisor, mut task) = Supervisor::spawn(settings, Arc::clone(&console));
 
     let (terminal, terminal_drained) =
         Terminal::start(io::stdout()).context("cannot print to the terminal")?;
@@ -118,7 +118,22 @@ pub async fn run(config: Config, args: RunArgs) -> anyhow::Result<()> {
     }
     let last = status.borrow().state;
     supervisor.shutdown(shortened).await;
-    task.await.context("the supervisor failed")?;
+    loop {
+        tokio::select! {
+            ended = &mut task => {
+                ended.context("the supervisor failed")?;
+                break;
+            }
+            // A console closed during a graceful stop leaves Windows' few seconds only.
+            shutdown = signals.next(), if !shortened => {
+                if shutdown == Shutdown::Shortened {
+                    shortened = true;
+                    info!("the console is closing; shortening the stop");
+                    supervisor.shutdown(true).await;
+                }
+            }
+        }
+    }
 
     stop.cancel();
     let _ = printer.await;
