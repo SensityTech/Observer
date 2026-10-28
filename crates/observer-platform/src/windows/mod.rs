@@ -51,7 +51,11 @@ pub(crate) fn spawn(launch: &Launch) -> Result<Spawned, SpawnError> {
     let created = create_suspended(launch, inherited);
     // The parent must not keep the child's ends, or the pipes never report end of file.
     drop((child_stdin, child_stdout, child_stderr, child_traces));
-    let Created { process, thread, pid } = created?;
+    let Created {
+        process,
+        main_thread,
+        pid,
+    } = created?;
 
     if let Err(error) = job.assign(&process) {
         // SAFETY: `process` is an open handle with every access right; the process never ran.
@@ -59,8 +63,8 @@ pub(crate) fn spawn(launch: &Launch) -> Result<Spawned, SpawnError> {
         return Err(SpawnError::Tree(error));
     }
     let tree = ProcessTree { job };
-    // SAFETY: `thread` is the open handle of the process's suspended main thread.
-    if unsafe { ResumeThread(thread.as_raw_handle()) } == u32::MAX {
+    // SAFETY: `main_thread` is the open handle of the process's suspended main thread.
+    if unsafe { ResumeThread(main_thread.as_raw_handle()) } == u32::MAX {
         return Err(SpawnError::Tree(io::Error::last_os_error()));
     }
 
@@ -87,8 +91,9 @@ pub(crate) fn spawn(launch: &Launch) -> Result<Spawned, SpawnError> {
     })
 }
 
-/// Every process FXServer starts, including its crash dump server: a Job Object that kills them
-/// all when its last handle closes, so even a crash of Observer leaves nothing behind.
+/// FXServer and every process it starts (its console host, its crash dump server, the Node
+/// processes of resources): a Job Object that kills them all when its last handle closes, so even
+/// a crash of Observer leaves nothing behind.
 pub struct ProcessTree {
     job: Job,
 }
@@ -150,8 +155,9 @@ impl ProcessTree {
                 }
                 return Err(error);
             }
-            return Ok(buffer[header..header + listed as usize]
+            return Ok(buffer[header..]
                 .iter()
+                .take(listed as usize)
                 .filter_map(|&id| u32::try_from(id).ok())
                 .collect());
         }
@@ -197,7 +203,7 @@ impl Job {
 
 struct Created {
     process: OwnedHandle,
-    thread: OwnedHandle,
+    main_thread: OwnedHandle,
     pid: u32,
 }
 
@@ -261,7 +267,7 @@ fn create_suspended(launch: &Launch, inherited: [RawHandle; 4]) -> Result<Create
         return Err(start(io::Error::last_os_error()));
     }
     // SAFETY: CreateProcessW succeeded, so both handles are open and belong to us alone.
-    let (process, thread) = unsafe {
+    let (process, main_thread) = unsafe {
         (
             OwnedHandle::from_raw_handle(created.hProcess),
             OwnedHandle::from_raw_handle(created.hThread),
@@ -269,7 +275,7 @@ fn create_suspended(launch: &Launch, inherited: [RawHandle; 4]) -> Result<Create
     };
     Ok(Created {
         process,
-        thread,
+        main_thread,
         pid: created.dwProcessId,
     })
 }
