@@ -16,6 +16,7 @@ use crate::command;
 use crate::console::{ConsoleHub, LineFlags, LineKind};
 
 pub const MAX_COMMAND: usize = 1024;
+const BRIDGE_COMMAND: &str = "observer_cmd";
 /// The user name FXServer's `/perf/` endpoint expects from Observer.
 pub const PERF_USER: &str = "observer";
 const TOKEN_BYTES: usize = 16;
@@ -163,6 +164,12 @@ impl UserCommand {
         if line.chars().any(char::is_control) {
             return Err(CommandRefusal::ControlCharacter);
         }
+        // A convar's value runs as a command through `vstr`, and quotes and `\` only disguise a
+        // word, so the name is refused anywhere in the line and not only as a command.
+        let bare: String = line.chars().filter(|c| !matches!(c, '"' | '\\')).collect();
+        if bare.to_ascii_lowercase().contains(BRIDGE_COMMAND) {
+            return Err(CommandRefusal::Reserved);
+        }
         let commands = command::split(line);
         if commands.is_empty() {
             return Err(CommandRefusal::Empty);
@@ -175,14 +182,14 @@ impl UserCommand {
                 .get(1)
                 .is_some_and(|resource| resource.eq_ignore_ascii_case(crate::bridge::NAME));
             match name.as_str() {
-                "observer_cmd" => return Err(CommandRefusal::Reserved),
                 "quit" => {
                     quits = true;
                     server_control = true;
                 }
                 "stop" | "start" | "restart" | "ensure" if on_bridge => server_control = true,
-                // Both run commands Observer cannot see: a file's, or a convar's value.
-                "exec" | "vstr" => server_control = true,
+                // `_crash` ends the server with a dump; the others run commands Observer cannot
+                // see, a file's or a convar's value.
+                "_crash" | "exec" | "vstr" | "+vstr" | "-vstr" => server_control = true,
                 _ => {}
             }
         }
@@ -434,8 +441,22 @@ mod tests {
 
     #[test]
     fn commands_that_run_hidden_commands_need_server_control() {
-        assert!(needs_control("exec resources.cfg"));
-        assert!(needs_control("set x quit; vstr x"));
+        for line in [
+            "exec resources.cfg",
+            "set x quit; vstr x",
+            "+vstr x x",
+            "say hi; -VSTR x x",
+        ] {
+            assert!(needs_control(line), "{line:?}");
+        }
+    }
+
+    #[test]
+    fn crashing_the_server_needs_server_control() {
+        let command = UserCommand::parse("_crash").unwrap();
+
+        assert!(command.needs_server_control());
+        assert!(!command.quits());
     }
 
     #[test]
@@ -446,6 +467,10 @@ mod tests {
             "say hi;observer_cmd 7b7d",
             "say \"x \\\" ; observer_cmd 7b7d",
             "\"observer_cmd\" 7b7d",
+            "set x \"observer_cmd 7b7d\"; vstr x",
+            "set x \"observer\\_cmd 7b7d\"",
+            "set x \"\\\"observer\\\\_cmd\\\" 7b7d\"",
+            "say observer_cmd",
         ] {
             assert_eq!(refusal(line), Some(CommandRefusal::Reserved), "{line:?}");
         }
