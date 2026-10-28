@@ -1,0 +1,131 @@
+/*
+ * Observer's design tokens, copied from the validated mockup (docs/design/mockups/style-a-client.html,
+ * chosen on 2026-10-28). Every colour is redefined per theme on <html data-theme>; components only
+ * ever read these variables.
+ */
+
+/* ---------- Tokens shared by both themes ---------- */
+:root {
+    --r-xs: 5px;
+    --r-sm: 8px;
+    --r: 10px;
+    --r-card: 14px;
+    --r-rail: 18px;
+    --r-pill: 9999px;
+    --font:
+        'Inter Variable', 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+    --mono:
+        'JetBrains Mono Variable', 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+    --rail-width: 272px;
+    --rail-gap: 12px;
+    --rail-pad: 8px;
+}
+
+/* ---------- Dark, the default: Aperture's dark with its film grain ---------- */
+:root[data-theme='dark'] {
+    color-scheme: dark;
+    --bg: #0b0b0b;
+    --bg-subtle: #0f0f10;
+    --surface: #141414;
+    --surface-2: #1a1a1a;
+    --surface-3: #222222;
+    --raise: #262626;
+    --line: rgba(255, 255, 255, 0.08);
+    --line-strong: rgba(255, 255, 255, 0.14);
+    --ink: #f5f5f5;
+    --ink-2: #c4c4c4;
+    --ink-3: #8a8a8a;
+    --accent: #4d8dff;
+    --accent-ink: #8ab4ff;
+    --accent-soft: rgba(77, 141, 255, 0.12);
+    --on-accent: #0a0a0a;
+    --btn-bg: #f5f5f5;
+    --btn-ink: #0b0b0b;
+    --success: #4ade80;
+    --success-soft: rgba(74, 222, 128, 0.12);
+    --warning: #fbbf24;
+    --warning-fill: #fbbf24;
+    --warning-soft: rgba(251, 191, 36, 0.12);
+    --danger: #f87171;
+    --danger-ink: #f87171;
+    --danger-soft: rgba(248, 113, 113, 0.12);
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.5);
+    --shadow-btn: 0 1px 2px rgba(0, 0, 0, 0.5), 0 10px 24px -12px rgba(0, 0, 0, 0.9);
+    --shadow-pop: 0 1px 2px rgba(0, 0, 0, 0.4), 0 18px 48px -16px rgba(0, 0, 0, 0.85);
+    --shadow-rail: inset 0 1px 0 rgba(255, 255, 255, 0.04), 0 24px 48px -28px rgba(0, 0, 0, 0.9);
+    --overlay: rgba(0, 0, 0, 0.62);
+    --rail-bg: var(--surface);
+    --console-bg: var(--bg);
+    --term-fg: #d4d4d4;
+    --term-dim: #8a8a8a;
+    --term-cyan: #22d3ee;
+    --term-green: #4ade80;
+    --term-yellow: #fbbf24;
+    --term-red: #f87171;
+    --term-magenta: #e879f9;
+    /*
+   * Aperture's film grain (site/grain.css), copied as is: four tiles of 59, 67,
+   * 73 and 89px, prime sides so the stack never repeats on one screen. Dark
+   * surfaces only; on white it reads as dirt.
+   */
+    --grain:
+        url('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADsAAAA7BAMAAAA3C++AAAAAMFBMVEX///////////////////////////////////////////////////////////////9Or7hAAAAAEHRSTlMAAQIDBAUGBwgJCgsMDQ4PPFyWBgAAA69JREFUeNo1VcuV5DYMBED5DlDeO8ieAEj1BKBeR+D3nH8sroJm56SWSKB+wIh6RF7qLvwbohkp+DVUnj/VfLtsV7wNUZzGF5shcooEnr9XiIubtJbm20Xn9FTjZVMVlNMlS8UkX3jtfaiZs2OgIr7mUDXPPqLFMJ1b1GUJriYg4eDfTeI0l0CJSZREO/6dFpKBeuyeYherJZ6k4XvqBgB/WfokMXtNkFoamTh3i5mN+NbxjY+nXiQ1gPtQigHcgNhTgf73kHGcgDPFeJVstR0n1LBSCWiuie9RqhHBSjkCnU4fYv0fKUnjGFCqlJ7gC1HwPmaRwZNuO0HQpY/O0lBc7WwlIOC7r+zgKb2JdrSbNAdG3cvk2viwcYGFZAAGHQSnKA/9eNzEcaNnIedeCqAmCqjpRaL5LV43Q7pYBOSdBJmmfmtPhoEVD5dzuOQXLFlNWuZn8Ld00oc60PbBZo6nmfJwlBO/QAR4kR/7bWLDHrOgNvGll8CyRoPvkwVw+cMr4lfEDVf11ibzi+cpV8/FC9KdsQJqFGjO4Mlo7s3IGSSiQUblrU9jJxBR9kYEd6lGW1eAJiKMZyg8UAhnSAoZqfFAPwTVD7NL3rF73495vGqcD/1RGmolzWSGM+kXOqEp8TzNeKj/KYuYyHvjLY7DiS5fiCHINvroA9LCwtjZDSe3J4CNcHuaw8rQqqR0HK3ZZbrDlP+gl4HlyzBJ9I89VtmsdSEgFVqdfD6IqmWjXFUPakMiKjU5FrMP9FzyNIZpoAj38Sverijas+oCrictQSseR9GbU5XB/DLiFRM18O9yK2fdwNz83eDmapwNYg0cvEGQpoIFV5MytRwipD3AqvTuZklYvhjARXcXkqOdgUaqOhgDjccHYP/EHd/oj1ZauVMwsJDA6L++ycQ4G5Dnlke6FRkb7K6rplaP9F8ApX8Je5sdwWFlGpnbm2bUxIU3tYGJv7BImQttKN34cVudR6OXACREGHkSl/6kJNPjhcUEzVWXc/5gEHi+HSsG6K9u32pTPlxWjxwMLwq0rCRzGHB5cLJeVA1FejZuPI6bc9dgwpXX78GB0E/IwitvGGm0yZ79mRFhL+Hb7s/gAlCAL/MXAysXQ8OZcIx2KFe7VDZr9TSu0wWOl5dOyuWOelwtcP14puz5x8FwHvhUMZhM1ac2A4D+gj3MgdT4qDLtaO01Tg4VsXhn2jOKFVicarpvrf8xgOIYH2Wsrf+s8OBeVKw7LD1we3MGR+1glf8BpklYEpPfM5IAAAAASUVORK5CYII='),
+        url('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEMAAABDBAMAAAA15KVAAAAAMFBMVEX///////////////////////////////////////////////////////////////9Or7hAAAAAEHRSTlMAAQIDBAUGBwgJCgsMDQ4PPFyWBgAABMJJREFUeNo9VkFyJDkIBNS+g2TfkWoeoKrevVd7PzAR+/+/bCbtWU/Y065CKEkywTJVTtGpKinS/TtVPt1kyxLzUMGXuuN/FzPTEH4S36k7t7gPlSby6jj+leqzp4l/bUGkdgZu7XieCLXompIZkmEuQxpOIvPCNcxbd3VvQjR4YT7Fu2u2U/H8FGSRZwt9Pn0hYCICyHL5nNlv3OBxEZMQTTZfOq8DSY+J9D4idKEsYKhMbny8JeqyQFV4w8KGs0gCQ6kPppuOz4KUYUaUBvAI138RBJYMePneAweQamjiaSd5t6B+BxM9p1sDuy7NcT/jDSUgC4HLd8fJ5RcwBB519Y23gbzJQAMdM5ldHa+jAalI5MftFzl00IoOBYLljOrJIjld2MxR1E4WqIBw8yGBKtCxVG/q5kWL2uF+Fj8dQYheKYB5foviRlkAguSQSrJ4TTQX8NWKEDIHwFFVySvYHlwEyASOmPM4ZBKkHZCIMpVTJm6paN5BzoJHxAYEJ53cvunq9iMRNmrULx64Ph9ohwrwob2AC0jZwPbub0mjxjh1BqE0SITYoLJbDmIkYioiJOLCT/AQ7u0f6ZeFpqOT4BUB6CNVitu/XY6TrhgjydtbEzJdJ2PJRsEcTxyYmhtygM3kMjB4NUhOr0U+oAmV+qdtth8HGES/iGtqtKYyty6lOmG+YNvyjMiIsuTUl57D+AtBbJhS/ldzNWWeAJKoAhSWj6dR1pIOgeUJelEvEPkH/JCAxbOLrHSl/eYXWUx2AT/68DIHWwwZT+JMtap41IyouHcl3q9k11cvnS2Puhf5cOAlDUxvflzs/95mHA3g82IU2o8Ak7ATV+IDhsHsrMBXI0hDBbQG725Q5jAv2ChalWYIvQyzxTmKsne95d7Q+WAXzVyRxV4cAAotfADng6BfnISjAQuA4j66rVSnD1zHvBBX7wOfYS7awUnVpkd/0Sw1K9+HIH844jEU9kWp5OJtPmRa0D/vcIciZvkNgvyEItqD3q720gEI5ejj+bFNb04HpazexsA7oUgzDuSd4OlxKJQC/Y7qJS2gBFUWzdJHYiRL1Gjp0DYyQQdbDVLV8p7lwMsP1GS/iZGlhPZ438qQJ65CrT1meA5mDdQKwmRjglCwE8VOtPARWBT35DhE/cv3wF4B/1mqQoVRQzCoKO4NWLTX9Ock0ZG28WlxK8irLKtQMJxQg2dNXPE4TV72u7+3lZUKFGZ8prFfzmGANTGKUSR1ei1Jyu8mn2m914mTBkEB90HzPjhIgQ2s/XpMplmy3eddQxisS0P7aoDiOfmFiaMmILeNxt9OFC6ftiam1NkudkKu3vN+S2R2W88yMjI2+Em5ZOfA6s29k+4H5HvWgPnOZW9VaS0q+3EZPYC9yumNNkE7YA87BgLgKGSGfdNBHCyUoMzFNmG3GJXOae0HqInRhBdiYpDqzgnRWc0LoieAi7O6NidXvHNNKu0MYRoX6QoKPOXOM+UtOO5u2q+Dh4muN9WiGjdv7l90ZqINdCxW66LdufOVkTWZ5Q+f0CaYYMsoY3xzaXAjUa+IafAVUZQD7vkXl7dtEufvv1h4wI4nr/KSJ6/Fw402llz410nPGlBXctPXRO1CCe3m/wHN42/YGRnhBAAAAABJRU5ErkJggg=='),
+        url('data:image/png;base64,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'),
+        url('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAFkAAABZBAMAAACnJZWcAAAAMFBMVEX///////////////////////////////////////////////////////////////9Or7hAAAAAEHRSTlMAAQIDBAUGBwgJCgsMDQ4PPFyWBgAACBxJREFUeNo9l0ty5bYSRAuF63kBVM8BUm8Osr2Aqw4vwA7vfy8+WVA/qaPFL1CfzKyk2VeUaGYxwtssIzgspbRaLA7jjnsxs8FTa9hh+pk8785xs9F68EpZNuaY3d/GmUV0463vw8YKLy0625h6egy/uOW2SsywEsO0Ygtd46Q4e3h3K7PkNSslvGs9nbPEsDl+2ot7nNxudw+LHmUOtuXYTYn0XEiRVBunNY/HrQ1eCRJjcWutRCg//tM2dfGonW316cNWG9pa14mnEZoyLzWsLf5yfymNKH54D2fTQm7F17pNy/axQ9bl0nU4lIBrvTKpg7VghbhJ3YsXRVL4Pa3b/llNrek3f3jXXqxys9Scyu9s9tiO/affOuq0yG5r5VW99lyJdGYlDsXlo5U13CoNWaqrkwl73hTB54i/47yDLebRskZTcZT2arl0p0n9ZfekGURTBBCiHVG19Zg70XeWk3hZscShoONs2cExFiAJIUAvqO3PQaUMDJAOKwzh76QBMRWSq5Wk51QnWqu7/VxR295fay5aLDwMq1dTQB6A7eCpUU+qrH3bsUpba4afQ1DQ+73ZR6kUYlKZckaoesL2ynYL2D/Pbl7uGKCrEYIJYEX1eLHckagcie92KnwwWJpTABUrTmJdWom0hVZu6wVqs06jrrSk9wOahXJpYzOF9wi9KXEj9tOUIUsWrdZLRp/hlQ+HSFEepwWJFZh1sg/7tv0Mq6qF8acCHxlEol6pFtJxe3WRLWCRBAB+HFQz+dmijRH3ohanUGu+4IoiSThwqnTcsvs89PJakqSmCqMUtSALZL6o3Kj2zooqRVfTl8hDEYTo8EvRgQ3Tay+tcma1R3a7jSLOTYHAaAcdGsAM8sBnou2nCksHx3sqJmW9wMvuQivjHggU7VlzU6UM/8peUGYV6i11Yq91C2qbr7UJpGFiEAWSPI6LVCZb+l9K4ci8716F0OZP3F1gfZUUSzRH/3iQR9V20hhVKcIFl3ixriNWtY/Uk2onV15tZgBqy6oqcR/IsHNbML1B11IZlCDb+JD41XYVkaAhf0N6I0Wh2k0bOyUGUmLNLxVOreQt8YRABYfk2RB3EGdhfyjp+t2vciRk7et29pgpdlP5qBIfyUUCSoU0+7ikJweHDSiqMYp0+Tfw9euVkxoKyzbZeRjxjHJ8mUCquLc8HGwYqFGSzCIxSrQQ4kVT6Q1DpKtTJFJnZO/DrpXTQXv65qha97BoQ3kyp5oV/mGzWzYnibGW5J3TPZ/IY4gk0qIm2S1Lw0lUG5pVKyMqTw6NlPcY/7NjtgYWpag1xhbw4U3aUsaTRWBsufgvOPdOLroQunO1DAXmUEVRkgjOpWCq71EAB2r1sZKIrqhzYIpo5Xsy7s4Q0SkYIvuXVAhSCJOayYkqaDOENE2vE40rKOYvNfGkaB+PKrBQ58vV6t7FzLtvgRqaQ9nLY34IQkS3NAGFqQF2HgaowD1kAb4UJbEUiFEyvs//S9gf6hSMR//fe20LzSkCRpWhl1jju/M5L5kegs1Ww3FO+1OE9Bx4U43IwbMcjDF6UmIO849yOFtDURLHHbyZ2V/fqxq1fL/kNiQBJwi45TvojabpEB79H8vKql5cYJcDtbN5tleVDuCeHmuflr5p3Hu8WFya7HqdeFit9JQaBAn5DLpRi21waubUlJ3nFipkH95kWMSlwSSfDGsKvqImn6yK698DUwH8HmnW6r5/WA7YSfLai8M6CeN1hH0z6ytze+jI2vxl82+h0zAdUkqxvgsfqAYooz7UcOwZkGok4nKbRLpmsMimLBwIoLXqQ1oMHv1sIHyWbzPYOg0+o6yk67AfJ7VBLphnPWTGQBwQxoDI3aH9WdmbKtZ62B6BDCtQo3zf0BWjJumu8eKhpcerI5lrV5h9V3TPkboHdg5bFI+Mup9YXlNXEJ40slR7nmkdm6zXek8iQdWXPGoAoJ8aHUM+gEnaVJn1oD0UDJznhJzSSJwjmHVZTEv6RY5GlcXa9ajWz7Y6Jl8rVWfwCdu3hLFS9YsQn1SzHPEzxyUan9dCXQYnKHQSQtkiaBjFJE5s24o+plNzXyP+xZ+oSf6O0bdtLJrNUeNQdVLhwERW6g+AR9coFiTrsfW7SN1/4+jSeJu2jnS0kEZPwTUe/CvjQXUFXLwtgfdjU0DzksIztjynyXlGVmj8Y2lh12bGAxbazD0Rdcsa6SvDRdFBa1B/Cj5kUNsedTlK1YOp7vUcYPK60S/Nytgd2LGjUyo+SNQqCABeL1qlpp8fmU2NU2+o6EXDBTR9KI2lPoBe29OTpk+QxcH95EwY+giwa/g534smUtRaU4LZRSl/aLA8WJr9JVBEGIpErml2cd9S4fRd8mrjiKXGy3BvB6WwTpeFSKdFLPEGBvdMh9l+oXqZaF2fQLmkGRJL9bQQHkIk11Myf3MCU3rBk7MvYafJdZEiJ5hAzXfk70jTj5IItMJ21yiMVJirpqEE57j/GukLgY0EU+rKBOzsJ0+WvmV/nS25cEH6fLTMlNXffv9tCZkNKzsP+5tjtqjAdYCS3sr2WGKuezqtsO0z0msMKp3eNbLjbK65g/Lk5+QPRoC+ZuVlYV9647kNj0p03HLCCdZLWfpsDBsZMDWcQC7qBFflk/Pj4YjtkQlJYzc2guGe3VXzdqY55lMlDXRODdzTiv2J5XvnNzb4UM8rChZSlG2/7NtHCCRiHwaq2efZR8LWUdH0UiBfI7ek89syxFjXN+y9cHb6lvB16asxBWmO12ij2X/aRr7avTM1pgAAAABJRU5ErkJggg==');
+}
+
+/* ---------- Light: Aperture's light, white and very light grey panels ---------- */
+:root[data-theme='light'] {
+    color-scheme: light;
+    --bg: #ffffff;
+    --bg-subtle: #fafafa;
+    --surface: #ffffff;
+    --surface-2: #f6f6f7;
+    --surface-3: #efeff1;
+    --raise: #ffffff;
+    --line: rgba(10, 10, 12, 0.08);
+    --line-strong: rgba(10, 10, 12, 0.14);
+    --ink: #1c1d1f;
+    --ink-2: #4b5058;
+    --ink-3: #6b7079;
+    --accent: #1f5bea;
+    --accent-ink: #1d4fd7;
+    --accent-soft: #edf2fd;
+    --on-accent: #ffffff;
+    --btn-bg: #1c1d1f;
+    --btn-ink: #ffffff;
+    --success: #137337;
+    --success-soft: #ecfdf3;
+    --warning: #a34b08;
+    --warning-fill: #d97706;
+    --warning-soft: #fff7e6;
+    --danger: #dc2626;
+    --danger-ink: #b91c1c;
+    --danger-soft: #fef2f2;
+    --shadow-sm: 0 1px 2px rgba(16, 17, 19, 0.06);
+    --shadow-btn: 0 1px 2px rgba(0, 0, 0, 0.22), 0 10px 24px -12px rgba(0, 0, 0, 0.45);
+    --shadow-pop: 0 1px 2px rgba(16, 17, 19, 0.06), 0 18px 40px -16px rgba(16, 17, 19, 0.28);
+    --shadow-rail: 0 1px 2px rgba(16, 17, 19, 0.06);
+    --overlay: rgba(16, 17, 19, 0.32);
+    --rail-bg: var(--bg-subtle);
+    --console-bg: var(--bg-subtle);
+    --term-fg: #2a2b2e;
+    --term-dim: #6b7079;
+    --term-cyan: #0e7490;
+    --term-green: #137337;
+    --term-yellow: #a34b08;
+    --term-red: #b91c1c;
+    --term-magenta: #a21caf;
+    --grain: none;
+}
+
+/* Mixes of the theme's own tokens, so hover and bar tints follow both themes. */
+:root {
+    --hover: color-mix(in srgb, var(--ink) 6%, transparent);
+    --active: color-mix(in srgb, var(--ink) 8%, transparent);
+    /* Grey data marks (bars, shares, flat trends): half the ink holds 3:1 on every surface they sit on, the light track included. */
+    --chart-muted: color-mix(in srgb, var(--ink) 50%, transparent);
+    --focus-ring: color-mix(in srgb, var(--accent) 22%, transparent);
+}
