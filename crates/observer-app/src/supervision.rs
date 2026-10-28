@@ -423,6 +423,20 @@ impl Supervision {
         }
     }
 
+    /// Starts the last healthy build after a new one failed its probation: at once when FXServer
+    /// is down or waiting to come back, or by a restart when it came back on the failed build first.
+    pub(crate) async fn start_after_rollback(&self) -> Result<(), Error> {
+        self.hand_over_launch().await?;
+        let mut result = self.inner.supervisor.start(OBSERVER).await;
+        if result == Err(ControlError::AlreadyRunning) {
+            result = self.inner.supervisor.restart(OBSERVER).await;
+        }
+        let record = Record::operator(ActorKind::System, AuditAction::ServerStarted)
+            .details(json!({ "rollback": true }));
+        self.record_control(record, &result).await?;
+        result.map_err(control_error)
+    }
+
     /// Raises an event of the integration contract on a running server whose bridge reported.
     pub(crate) async fn announce(&self, event: BridgeEvent) -> Result<(), ControlError> {
         self.inner.supervisor.announce(event).await
