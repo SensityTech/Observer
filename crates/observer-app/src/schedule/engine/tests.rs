@@ -669,6 +669,46 @@ fn the_schedules_own_restart_never_skips_the_next_time() {
 }
 
 #[test]
+fn a_start_by_hand_after_a_scheduled_restart_that_ended_stopped_skips_the_next_time() {
+    // A stop overtook the restart during its notice; or the restart's start failed, after the
+    // supervisor counted a new generation.
+    for stopped_generation in [1, 2] {
+        let mut sim = Sim::running(recent_start(120), "2026-10-27T20:00:00Z", "2026-10-28T02:59:00Z");
+        let fired = sim.run_until("2026-10-28T03:00:00Z");
+        sim.server(
+            "2026-10-28T03:00:01Z",
+            ServerState::Stopping,
+            1,
+            Some("2026-10-27T20:00:00Z"),
+        );
+        sim.server(
+            "2026-10-28T03:00:20Z",
+            ServerState::Stopped,
+            stopped_generation,
+            None,
+        );
+        sim.run_until("2026-10-28T14:50:00Z");
+
+        let started = sim.server(
+            "2026-10-28T14:50:00Z",
+            ServerState::Starting,
+            stopped_generation + 1,
+            Some("2026-10-28T14:50:00Z"),
+        );
+
+        assert_eq!(restarts(&fired), [ts("2026-10-28T03:00:00Z")]);
+        assert_eq!(
+            started,
+            [Effect::AutoSkipped {
+                at: ts("2026-10-28T15:00:00Z"),
+                started_at: ts("2026-10-28T14:50:00Z"),
+            }],
+            "stopped as generation {stopped_generation}"
+        );
+    }
+}
+
+#[test]
 fn a_one_off_restart_counts_as_a_start_by_hand() {
     let mut sim = Sim::running(recent_start(120), "2026-10-27T20:00:00Z", "2026-10-28T02:30:00Z");
     sim.send(Input::OneOff {

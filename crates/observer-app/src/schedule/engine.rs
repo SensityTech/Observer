@@ -387,8 +387,13 @@ struct Candidate {
 
 impl State {
     fn observe(&mut self, view: ServerView, settings: &Settings, effects: &mut Vec<Effect>) {
-        if matches!(view.state, ServerState::Stopped | ServerState::CrashLoop) && self.one_off_run.is_some() {
-            self.drop_one_off(DropReason::ServerStopped, effects);
+        if matches!(view.state, ServerState::Stopped | ServerState::CrashLoop) {
+            // A restart asked of the supervisor that ends here never started its run: a stop
+            // overtook it, or its start failed. The next start is someone else's.
+            self.asked = None;
+            if self.one_off_run.is_some() {
+                self.drop_one_off(DropReason::ServerStopped, effects);
+            }
         }
         if let Some(started_at) = view.started_at
             && self.run != Some(view.generation)
