@@ -49,7 +49,13 @@ export function StatusBar() {
                                 {t.server_state.states[status.state]}
                             </span>
                             {uptime !== null && (
-                                <span className="font-normal text-ink-3 xl:max-[1261px]:hidden md:max-[941px]:hidden">
+                                <span
+                                    className={cn(
+                                        'font-normal text-ink-3 xl:max-[1261px]:hidden md:max-[941px]:hidden',
+                                        // Where the next restart's cell only just fits, it takes the uptime's room.
+                                        !refused && 'min-[1320px]:max-[1400px]:hidden',
+                                    )}
+                                >
                                     · {uptime}
                                 </span>
                             )}
@@ -88,7 +94,8 @@ export function StatusBar() {
 
 /**
  * When FXServer restarts next, in the schedule's zone: the time alone today there, with its day
- * otherwise. Phones leave it out of their 2 × 2 grid; the Overview says it there.
+ * otherwise, and the time left on the widest screens. Below 1320 px the bar and the server's
+ * controls would no longer share a row with it: the Overview and the Schedule page say it there.
  */
 function NextRestartCell({
     schedule,
@@ -121,14 +128,12 @@ function NextRestartCell({
                               clock,
                           )}
                 </span>
-                <span className="font-normal text-ink-3 xl:max-[1261px]:hidden md:max-[941px]:hidden">
-                    · {t.status.inTime(left)}
-                </span>
+                <span className="font-normal text-ink-3 max-4xl:hidden">· {t.status.inTime(left)}</span>
             </>
         );
     }
     return (
-        <div className="status-cell status-next max-[760px]:hidden">
+        <div className="status-cell status-next max-[1320px]:hidden">
             <dt>{t.status.nextRestart}</dt>
             <dd className="tabular-nums">{value}</dd>
         </div>
