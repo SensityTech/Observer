@@ -98,7 +98,8 @@ const page = async (permissions: string, schedule: ScheduleStatus = SCHEDULE) =>
     say({ type: 'snapshot', topic: 'server.status', data: ONLINE });
     say({ type: 'snapshot', topic: 'server.schedule', data: schedule });
     const publish = (next: ScheduleStatus) => say({ type: 'event', topic: 'server.schedule', data: next });
-    return { ...view, live, publish, say };
+    const drop = () => act(() => socket?.close(1006));
+    return { ...view, live, publish, say, drop };
 };
 
 describe('SchedulePage', () => {
@@ -176,6 +177,26 @@ describe('SchedulePage', () => {
         expect(getByText(en.schedule.changes(2))).not.toBeNull();
         fireEvent.click(getByRole('button', { name: en.schedule.discard }));
         expect(queryByText(en.schedule.changes(2))).toBeNull();
+        live.stop();
+    });
+
+    it('should keep the settings typed while the live link drops and comes back', async () => {
+        const { getByRole, getByText, queryByText, say, drop, live } = await page('11');
+        fireEvent.click(getByRole('button', { name: en.schedule.removeTime('16:00') }));
+
+        drop();
+        const down = queryByText(en.schedule.outOfDate);
+        const keptDown = queryByText(en.schedule.changes(1));
+        // The client tries again after a second.
+        await act(() => new Promise((resolve) => setTimeout(resolve, 1_200)));
+        say({ type: 'hello', connectionId: 2, contract: 1 });
+        say({ type: 'snapshot', topic: 'server.status', data: ONLINE });
+        say({ type: 'snapshot', topic: 'server.schedule', data: SCHEDULE });
+
+        expect(down).not.toBeNull();
+        expect(keptDown).not.toBeNull();
+        expect(getByText(en.schedule.changes(1))).not.toBeNull();
+        expect(queryByText(en.schedule.outOfDate)).toBeNull();
         live.stop();
     });
 

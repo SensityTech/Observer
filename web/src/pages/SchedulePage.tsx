@@ -77,9 +77,16 @@ const useZoned = (zone: string) => {
 export function SchedulePage() {
     const { t } = useI18n();
     const link = useLinkState();
-    const { schedule } = useSchedule();
+    const { schedule: live, refused } = useSchedule();
     const { status: server } = useServerStatus();
     const now = useNow();
+    // While the link is down the page keeps the last status it had, so that the settings form,
+    // and what is typed in it, stays.
+    const [last, setLast] = useState(live);
+    if (live !== null && live !== last) {
+        setLast(live);
+    }
+    const schedule = live ?? (refused ? null : last);
 
     return (
         <div className="flex flex-col gap-5 max-md:gap-4">
@@ -89,6 +96,7 @@ export function SchedulePage() {
                 </h1>
                 {schedule !== null && <ZoneNote zone={schedule.zone} now={now} />}
             </div>
+            {schedule !== null && live === null && <Notice tone="warning">{t.schedule.outOfDate}</Notice>}
             {schedule === null ? (
                 <section className="card">
                     <div className="card-body flex flex-col gap-3" aria-busy={link !== 'offline'}>

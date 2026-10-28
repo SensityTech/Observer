@@ -199,6 +199,7 @@ export const en = {
         zoneUnknown: (zone: string) => `Times in UTC: this browser does not know ${zone}`,
         loading: 'Reading the schedule',
         unknown: 'The schedule is not known while the live link is down.',
+        outOfDate: 'The live link is down: the schedule shown may be out of date. Nothing typed is lost.',
         nextTitle: 'Next restart',
         when: (day: string, left: string) => `${day} · in ${left}`,
         fromSchedule: 'From the schedule.',
