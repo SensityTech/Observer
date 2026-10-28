@@ -1674,6 +1674,7 @@ dependencies = [
  "anyhow",
  "brotli",
  "flate2",
+ "observer-domain",
  "walkdir",
 ]
 
