@@ -19,60 +19,6 @@
         top: 12px;
     }
 
-    /* Buttons */
-    .btn {
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        gap: 8px;
-        height: 38px;
-        padding: 0 14px;
-        border: 1px solid transparent;
-        border-radius: var(--r);
-        font-size: 14px;
-        font-weight: 500;
-        line-height: 1;
-        letter-spacing: -0.005em;
-        white-space: nowrap;
-        user-select: none;
-        transition:
-            background-color 0.15s,
-            border-color 0.15s,
-            color 0.15s,
-            transform 0.15s;
-    }
-    .btn:active {
-        transform: translateY(0.5px);
-    }
-    .btn-primary {
-        background: var(--btn-bg);
-        color: var(--btn-ink);
-        box-shadow: var(--elev-btn);
-    }
-    .btn-primary:hover {
-        background: color-mix(in srgb, var(--btn-bg) 86%, var(--btn-ink));
-    }
-    .btn-secondary {
-        background: var(--surface);
-        color: var(--ink);
-        border-color: var(--line-strong);
-        box-shadow: var(--elev-sm);
-    }
-    .btn-secondary:hover {
-        background: var(--surface-2);
-    }
-    .btn-ghost {
-        color: var(--ink-2);
-    }
-    .btn-ghost:hover {
-        background: var(--hover);
-        color: var(--ink);
-    }
-    .btn-icon {
-        width: 38px;
-        padding: 0;
-    }
-
     /* Cards */
     .card {
         min-width: 0;
@@ -131,9 +77,6 @@
         letter-spacing: -0.015em;
         line-height: 1;
         color: var(--ink);
-    }
-    .rail-close {
-        margin-left: auto;
     }
 
     .nav {
@@ -195,6 +138,27 @@
         background: var(--accent);
     }
 
+    .nav-group {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 14px 10px 6px;
+        font-family: var(--mono);
+        font-size: 10.5px;
+        font-weight: 500;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--ink-3);
+        font-variant-ligatures: none;
+    }
+    .nav-group::after {
+        content: '';
+        flex: 1 1 auto;
+        height: 1px;
+        margin-right: calc(-1 * var(--rail-pad));
+        background: var(--line);
+    }
+
     .rail-foot {
         display: flex;
         flex-direction: column;
@@ -242,6 +206,61 @@
     }
     .theme-switch > button[aria-pressed='true'] > svg {
         color: var(--accent);
+    }
+    .user {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        width: 100%;
+        padding: 6px 8px;
+        border-radius: 10px;
+        text-align: left;
+        transition: background-color 0.12s;
+    }
+    .user:hover,
+    .user:has(+ :popover-open) {
+        background: var(--hover);
+    }
+    .user > svg {
+        flex: none;
+        color: var(--ink-3);
+    }
+    .avatar {
+        display: grid;
+        place-items: center;
+        width: 32px;
+        height: 32px;
+        flex: none;
+        border-radius: 50%;
+        background: var(--surface-3);
+        color: var(--ink);
+        font-size: 12px;
+        font-weight: 600;
+        letter-spacing: 0.02em;
+    }
+    .user-meta {
+        display: flex;
+        flex-direction: column;
+        flex: 1 1 0;
+        min-width: 0;
+        line-height: 1.35;
+    }
+    .user-name {
+        overflow: hidden;
+        font-size: 13.5px;
+        font-weight: 500;
+        color: var(--ink);
+        white-space: nowrap;
+        text-overflow: ellipsis;
+    }
+    .user-role {
+        font-size: 12px;
+        color: var(--ink-3);
+    }
+    /* ink-3 under the hover tint falls below 4.5:1 on the light rail. */
+    .user:hover .user-role,
+    .user:has(+ :popover-open) .user-role {
+        color: var(--ink-2);
     }
 
     /* The page and its status bar */
@@ -350,9 +369,6 @@
             height: 100dvh;
             padding: var(--rail-gap) 0 var(--rail-gap) var(--rail-gap);
         }
-        .rail-close {
-            display: none;
-        }
     }
 
     /* Up to 1024px: the rail becomes a drawer. */
@@ -421,12 +437,6 @@
 
     /* Phones: 44px touch targets, the status bar stacks. */
     @media (max-width: 760px) {
-        .btn {
-            height: 44px;
-        }
-        .btn-icon {
-            width: 44px;
-        }
         .topbar {
             padding: 12px 16px 0;
         }
