@@ -814,8 +814,10 @@ name = "observer-store"
 version = "0.1.0"
 dependencies = [
  "jiff",
+ "observer-domain",
  "rusqlite",
  "rusqlite_migration",
+ "serde_json",
  "tempfile",
  "thiserror",
  "tokio",
