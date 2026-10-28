@@ -18,7 +18,7 @@ use crate::bridge::{self, BridgeEvent, Report, StopReason};
 use crate::console::{ConsoleHub, LineAssembler, LineFlags, LineKind, plain, sanitize};
 use crate::crashes::{self, DumpLimits};
 use crate::exit;
-use crate::health::{self, HangCause, Health, HealthLimits, Probe, Problem, Verdict};
+use crate::health::{self, HangCause, Health, HealthLimits, Players, Probe, Problem, Verdict};
 use crate::launch::{self, CfgWarning};
 use crate::layout::{Flavour, Layout};
 use crate::recovery::{Next, Recovery, RecoveryPolicy};
@@ -63,6 +63,7 @@ pub enum State {
 
 #[derive(Debug, Clone)]
 pub struct Settings {
+    /// What the next spawn launches; [`Supervisor::configure`] replaces it.
     pub launch: LaunchSettings,
     pub flavour: Flavour,
     /// Where `/dynamic.json` and `/perf/` answer; by default the cfg's first TCP endpoint.
@@ -227,6 +228,12 @@ pub struct Status {
     pub pid: Option<u32>,
     pub since_ms: i64,
     pub problems: Vec<Problem>,
+    /// When the server that runs now was started.
+    pub started_ms: Option<i64>,
+    /// What `/dynamic.json` said last, while a server runs.
+    pub players: Option<Players>,
+    /// The build the running server reports, once it has.
+    pub build: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -270,6 +277,7 @@ enum Request {
     Shutdown {
         shortened: bool,
     },
+    Configure(Box<LaunchSettings>),
 }
 
 /// The handle to the supervisor task. Clones talk to the same task.
@@ -292,6 +300,9 @@ impl Supervisor {
             pid: None,
             since_ms: now_ms(),
             problems: Vec::new(),
+            started_ms: None,
+            players: None,
+            build: None,
         };
         let (status_tx, status) = watch::channel(initial);
         let (traces_tx, traces) = mpsc::channel(CHANNEL);
@@ -369,6 +380,12 @@ impl Supervisor {
             })
             .await?;
         Ok(written.await.map_err(|_| StdinError::Closed)??)
+    }
+
+    /// Sets what the next spawn launches, whether started by hand or after a failure. A running
+    /// server keeps the launch it was started with.
+    pub async fn configure(&self, launch: LaunchSettings) {
+        let _ = self.requests.send(Request::Configure(Box::new(launch))).await;
     }
 
     /// Stops the server, then the supervisor. `shortened` is for a closing console, which leaves
@@ -497,6 +514,9 @@ fn on_channel<'a>(line: &'a str, channel: &str) -> Option<&'a str> {
 struct Run {
     generation: u32,
     pid: u32,
+    started_ms: i64,
+    players: Option<Players>,
+    build: Option<u32>,
     layout: Layout,
     exit: ExitWatch,
     tree: ProcessTree,
@@ -591,11 +611,7 @@ impl Actor {
                 Wake::Exit(exit) => self.exited(exit).await,
                 Wake::Trace(trace) => self.trace(trace),
                 Wake::Signal(generation, signal) => self.signal(generation, signal),
-                Wake::Probe(generation, probe) => {
-                    if let Some(run) = self.run.as_mut().filter(|run| run.generation == generation) {
-                        run.health.probed(&probe, Instant::now());
-                    }
-                }
+                Wake::Probe(generation, probe) => self.probed(generation, &probe),
                 Wake::Tick => self.tick().await,
             }
         }
@@ -638,6 +654,28 @@ impl Actor {
                 let _ = reply.send(self.command(command, actor));
             }
             Request::Shutdown { shortened } => self.shutdown(shortened),
+            Request::Configure(launch) => self.settings.launch = *launch,
+        }
+    }
+
+    fn probed(&mut self, generation: u32, probe: &Probe) {
+        let Some(run) = self.run.as_mut().filter(|run| run.generation == generation) else {
+            return;
+        };
+        run.health.probed(probe, Instant::now());
+        let changed = match probe {
+            Probe::Dynamic(Ok(players)) if run.players != Some(*players) => {
+                run.players = Some(*players);
+                true
+            }
+            Probe::Info(Ok(build)) if run.build != Some(*build) => {
+                run.build = Some(*build);
+                true
+            }
+            _ => false,
+        };
+        if changed {
+            self.publish_status();
         }
     }
 
@@ -1097,6 +1135,9 @@ impl Actor {
         let run = Run {
             generation,
             pid: spawned.pid,
+            started_ms: now_ms(),
+            players: None,
+            build: None,
             layout,
             exit: spawned.exit,
             tree: spawned.tree,
@@ -1302,12 +1343,16 @@ impl Actor {
     }
 
     fn publish_status(&self) {
+        let run = self.run.as_ref();
         self.status.send_replace(Status {
             state: self.state,
             generation: self.generation,
-            pid: self.run.as_ref().map(|run| run.pid),
+            pid: run.map(|run| run.pid),
             since_ms: self.since_ms,
             problems: self.problems.clone(),
+            started_ms: run.map(|run| run.started_ms),
+            players: run.and_then(|run| run.players),
+            build: run.and_then(|run| run.build),
         });
     }
 

@@ -55,6 +55,7 @@ impl Drop for Port {
 
 struct Lab {
     dir: TempDir,
+    launch: LaunchSettings,
     console: Arc<ConsoleHub>,
     supervisor: Supervisor,
     task: Option<JoinHandle<()>>,
@@ -89,18 +90,16 @@ impl Lab {
                 value: (*value).to_owned(),
             })
             .collect();
-        let mut settings = Settings::new(
-            LaunchSettings {
-                build_path: dir.path().join("build").to_str().unwrap().to_owned(),
-                data_path: data.to_str().unwrap().to_owned(),
-                cfg_file: "server.cfg".to_owned(),
-                onesync: OneSync::Off,
-                auto_start: false,
-                txadmin_events: false,
-                extra_arguments,
-            },
-            dir.path().join("observer-data"),
-        );
+        let launch = LaunchSettings {
+            build_path: dir.path().join("build").to_str().unwrap().to_owned(),
+            data_path: data.to_str().unwrap().to_owned(),
+            cfg_file: "server.cfg".to_owned(),
+            onesync: OneSync::Off,
+            auto_start: false,
+            txadmin_events: false,
+            extra_arguments,
+        };
+        let mut settings = Settings::new(launch.clone(), dir.path().join("observer-data"));
         settings.health = HealthLimits {
             boot_grace: Duration::from_secs(2),
             heartbeat_late: Duration::from_secs(1),
@@ -130,6 +129,7 @@ impl Lab {
         let events = supervisor.events();
         Self {
             dir,
+            launch,
             console,
             supervisor,
             task: Some(task),
@@ -261,6 +261,77 @@ fn starting(kind: &EventKind) -> bool {
             ..
         }
     )
+}
+
+#[tokio::test]
+async fn the_status_tells_the_players_the_build_and_when_the_server_started() {
+    let mut lab = Lab::online(&[]).await;
+    let mut status = lab.supervisor.status();
+
+    let running = timeout(
+        WAIT,
+        status.wait_for(|status| status.players.is_some() && status.build.is_some()),
+    )
+    .await
+    .expect("the probes never filled the status")
+    .unwrap()
+    .clone();
+
+    let players = running.players.unwrap();
+    assert_eq!((players.clients, players.max_clients), (0, Some(8)));
+    assert_eq!(running.build, Some(35245));
+    assert!(
+        running
+            .started_ms
+            .is_some_and(|started| started <= running.since_ms)
+    );
+    lab.supervisor.stop("test").await.unwrap();
+    lab.state(State::Stopped).await;
+    let stopped = lab.supervisor.status().borrow().clone();
+    assert_eq!(
+        (stopped.players, stopped.build, stopped.started_ms),
+        (None, None, None)
+    );
+    lab.shut_down(false).await;
+}
+
+#[tokio::test]
+async fn a_new_launch_applies_from_the_next_start() {
+    let mut lab = Lab::new(&[]).await;
+    // A cfg that leaves the player limit to the command line.
+    let cfg = lab.dir.path().join("server-data/server.cfg");
+    let text = fs::read_to_string(&cfg).unwrap().replace("sv_maxclients 8\n", "");
+    fs::write(&cfg, text).unwrap();
+    lab.supervisor.start("test").await.unwrap();
+    let mut launch = lab.launch.clone();
+    launch.extra_arguments.push(ExtraArgument {
+        name: "sv_maxclients".to_owned(),
+        value: "16".to_owned(),
+    });
+    let mut status = lab.supervisor.status();
+    let max_clients = |status: &observer_fxserver::supervisor::Status| {
+        status.players.and_then(|players| players.max_clients)
+    };
+    // FXServer's own default.
+    timeout(WAIT, status.wait_for(|status| max_clients(status) == Some(48)))
+        .await
+        .unwrap()
+        .unwrap();
+
+    lab.supervisor.configure(launch).await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(
+        max_clients(&status.borrow()),
+        Some(48),
+        "the running server keeps its launch"
+    );
+    lab.supervisor.restart("test").await.unwrap();
+
+    timeout(WAIT, status.wait_for(|status| max_clients(status) == Some(16)))
+        .await
+        .expect("the restart did not take the new launch")
+        .unwrap();
+    lab.shut_down(false).await;
 }
 
 #[tokio::test]

@@ -60,6 +60,8 @@ fn respond(mut stream: TcpStream, server: &Server) -> io::Result<()> {
         ("200 OK", dynamic(server))
     } else if path.starts_with("/players.json") {
         ("200 OK", "[]".to_owned())
+    } else if path.starts_with("/info.json") {
+        ("200 OK", info())
     } else if path.starts_with("/perf") {
         if authorized(server, authorization.as_deref()) {
             ("200 OK", perf(server))
@@ -97,6 +99,17 @@ fn dynamic(server: &Server) -> String {
         "iv": "0",
         "mapname": "",
         "sv_maxclients": server.convar("sv_maxclients").unwrap_or_else(|| "48".to_owned()),
+    })
+    .to_string()
+}
+
+/// The build is FXServer 35245's, whose formats the fake follows.
+fn info() -> String {
+    let platform = if cfg!(windows) { "win32" } else { "linux" };
+    json!({
+        "resources": ["observer"],
+        "server": format!("FXServer-master SERVER v1.0.0.35245 {platform}"),
+        "version": 0,
     })
     .to_string()
 }

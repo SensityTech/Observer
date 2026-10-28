@@ -1,8 +1,8 @@
 //! A stand-in for FXServer in Observer's tests. It takes FXServer's arguments (`+set`, `+exec`,
 //! `+ensure`), prints lines shaped like FXServer 35245's, runs the commands it reads on stdin from
-//! its main loop, writes structured traces on fd 3 and serves `/dynamic.json`, `/perf/` and
-//! `/players.json` on the cfg's `endpoint_add_tcp`. With `+ensure observer` it also plays the
-//! bridge: `ready` once, then a heartbeat.
+//! its main loop, writes structured traces on fd 3 and serves `/dynamic.json`, `/perf/`,
+//! `/players.json` and `/info.json` on the cfg's `endpoint_add_tcp`. With `+ensure observer` it
+//! also plays the bridge: `ready` once, then a heartbeat.
 //!
 //! Failures on demand, through convars (`+set fake_x y`, or in the cfg) or console commands:
 //! - `fake_quit_delay_ms` (500): time between `quit` and the end, which is what FXServer 35245 does:
