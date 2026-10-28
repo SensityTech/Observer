@@ -240,6 +240,8 @@ export const en = {
         onceHint:
             'It replaces any single restart planned before. Resources hear of it at once when it is inside the warnings, then at each one.',
         onceSubmit: 'Plan the restart',
+        onceRange: `A whole number of minutes, from 1 to ${formatNumber('en', 1440)}.`,
+        onceTimeRequired: 'Pick a time, hours and minutes.',
         upcomingTitle: 'Upcoming',
         upcomingEmpty: 'No restart ahead.',
         skippedBy: (by: string) => `Skipped by ${by}`,
@@ -303,9 +305,9 @@ export const en = {
             unknownTimeZone: 'Observer does not know this time zone.',
         } satisfies Record<ScheduleProblem, string>,
         ranges: {
-            intervalMinutes: 'Between 30 minutes and 7 days.',
-            warning: 'Between 1 and 240 minutes.',
-            skipAfterStart: 'Between 0 and 720 minutes.',
+            intervalMinutes: 'Whole minutes, from 30 minutes to 7 days.',
+            warning: 'A whole number of minutes, from 1 to 240.',
+            skipAfterStart: 'A whole number of minutes, from 0 to 720.',
             times: 'At most 48 times.',
             warnings: 'At most 16 warnings.',
         },

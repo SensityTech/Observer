@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, cleanup, fireEvent, render, within } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import type { ScheduleStatus } from '../api/generated/ScheduleStatus';
 import { MeContext } from '../auth/me';
@@ -103,6 +103,16 @@ const page = async (permissions: string, schedule: ScheduleStatus = SCHEDULE) =>
 };
 
 describe('SchedulePage', () => {
+    beforeAll(() => {
+        // jsdom has the element but not its modal methods.
+        HTMLDialogElement.prototype.showModal ??= function (this: HTMLDialogElement) {
+            this.open = true;
+        };
+        HTMLDialogElement.prototype.close ??= function (this: HTMLDialogElement) {
+            this.open = false;
+        };
+    });
+
     afterEach(() => {
         cleanup();
         vi.useRealTimers();
@@ -237,6 +247,31 @@ describe('SchedulePage', () => {
 
         expect(await findByText(`04:00: ${en.schedule.problems.tooClose}`)).not.toBeNull();
         expect(fetch).toHaveBeenCalledOnce();
+        live.stop();
+    });
+
+    it('should say what a number or a time needs by its field rather than send what Observer refuses', async () => {
+        const fetch = vi.fn();
+        vi.stubGlobal('fetch', fetch);
+        Element.prototype.scrollIntoView = () => {};
+        const { getByRole, getByLabelText, getByText, live } = await page('19');
+
+        fireEvent.change(getByLabelText(en.schedule.skipAfterStart), { target: { value: '1.5' } });
+        fireEvent.click(getByRole('button', { name: en.schedule.save }));
+        const skipError = getByText(en.schedule.ranges.skipAfterStart);
+        fireEvent.click(getByRole('button', { name: en.schedule.restartOnce }));
+        const dialog = within(getByRole('dialog'));
+        fireEvent.change(dialog.getByLabelText(en.schedule.onceMinutes), { target: { value: '2000' } });
+        fireEvent.click(dialog.getByRole('button', { name: en.schedule.onceSubmit }));
+        const rangeError = dialog.getByText(en.schedule.onceRange);
+        fireEvent.click(dialog.getByText(en.schedule.onceAt));
+        fireEvent.click(dialog.getByRole('button', { name: en.schedule.onceSubmit }));
+
+        expect(skipError).not.toBeNull();
+        expect(getByLabelText(en.schedule.skipAfterStart).getAttribute('aria-invalid')).toBe('true');
+        expect(rangeError).not.toBeNull();
+        expect(dialog.getByText(en.schedule.onceTimeRequired)).not.toBeNull();
+        expect(fetch).not.toHaveBeenCalled();
         live.stop();
     });
 

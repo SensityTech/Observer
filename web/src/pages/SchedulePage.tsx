@@ -61,6 +61,7 @@ import { isRunning } from '../server/state';
 const MODES: ScheduleMode[] = ['fixedTimes', 'interval'];
 const DELAYS = [15, 30, 60, 120];
 const ONCE_PRESETS = [5, 15, 30];
+const ONCE_MAX_MINUTES = 1440;
 
 type Outcome = { tone: 'neutral' | 'success' | 'warning' | 'danger'; message: string };
 
@@ -429,6 +430,7 @@ function OnceDialog({
     const [mode, setMode] = useState<'in' | 'at'>('in');
     const [minutes, setMinutes] = useState('15');
     const [time, setTime] = useState('');
+    const [problem, setProblem] = useState<string | null>(null);
     const hint = useId();
     const plan = useMutation({
         mutationFn: () =>
@@ -444,7 +446,23 @@ function OnceDialog({
             title={t.schedule.onceTitle}
             onClose={onClose}
             closeOnBackdrop={false}
-            onSubmit={() => plan.mutate()}
+            onSubmit={() => {
+                // Said here, by the field: Observer would refuse these as a malformed request.
+                const count = Number(minutes);
+                if (
+                    mode === 'in' &&
+                    (minutes.trim() === '' ||
+                        !Number.isInteger(count) ||
+                        count < 1 ||
+                        count > ONCE_MAX_MINUTES)
+                ) {
+                    setProblem(t.schedule.onceRange);
+                } else if (mode === 'at' && minuteOf(time.slice(0, 5)) === null) {
+                    setProblem(t.schedule.onceTimeRequired);
+                } else {
+                    plan.mutate();
+                }
+            }}
             footer={
                 <>
                     <Button tone="ghost" onClick={onClose}>
@@ -465,7 +483,10 @@ function OnceDialog({
                         { value: 'at', label: t.schedule.onceAt },
                     ]}
                     value={mode}
-                    onChange={setMode}
+                    onChange={(next) => {
+                        setMode(next);
+                        setProblem(null);
+                    }}
                 />
                 {mode === 'in' ? (
                     <div className="flex flex-col gap-2">
@@ -474,9 +495,13 @@ function OnceDialog({
                             type="number"
                             inputMode="numeric"
                             min={1}
-                            max={1440}
+                            max={ONCE_MAX_MINUTES}
                             value={minutes}
-                            onChange={(event) => setMinutes(event.target.value)}
+                            error={problem ?? undefined}
+                            onChange={(event) => {
+                                setMinutes(event.target.value);
+                                setProblem(null);
+                            }}
                         />
                         <div className="flex flex-wrap gap-2">
                             {ONCE_PRESETS.map((preset) => (
@@ -486,7 +511,10 @@ function OnceDialog({
                                     tone={String(preset) === minutes ? 'ink' : 'secondary'}
                                     aria-pressed={String(preset) === minutes}
                                     className="max-md:flex-1"
-                                    onClick={() => setMinutes(String(preset))}
+                                    onClick={() => {
+                                        setMinutes(String(preset));
+                                        setProblem(null);
+                                    }}
                                 >
                                     {t.schedule.onceMinutesShort(preset)}
                                 </Button>
@@ -501,7 +529,11 @@ function OnceDialog({
                         className="max-w-48"
                         inputClassName="font-mono"
                         value={time}
-                        onChange={(event) => setTime(event.target.value)}
+                        error={problem ?? undefined}
+                        onChange={(event) => {
+                            setTime(event.target.value);
+                            setProblem(null);
+                        }}
                     />
                 )}
                 <p id={hint} className="text-small text-ink-3">
@@ -728,6 +760,15 @@ const zones = (() => {
     }
 })();
 
+/**
+ * The numbers Observer takes as whole only, checked before sending: a fraction, or an emptied field,
+ * would be refused as a malformed request rather than next to its field.
+ */
+const wholeNumberIssues = (settings: ScheduleSettings): ScheduleIssue[] =>
+    (['intervalMinutes', 'skipAfterStart'] as const)
+        .filter((field) => !Number.isInteger(settings[field]))
+        .map((field) => ({ field, index: null, problem: 'outOfRange' }));
+
 function SettingsForm({ schedule }: { schedule: ScheduleStatus }) {
     const { t } = useI18n();
     const me = useMe();
@@ -831,7 +872,11 @@ function SettingsForm({ schedule }: { schedule: ScheduleStatus }) {
     const submit = (event: FormEvent) => {
         event.preventDefault();
         setOutcome(null);
-        if (!save.isPending) {
+        const local = wholeNumberIssues(draft);
+        if (local.length > 0) {
+            showFirstIssue.current = true;
+            setIssues(local);
+        } else if (!save.isPending) {
             save.mutate();
         }
     };
@@ -1094,9 +1139,14 @@ function SettingsForm({ schedule }: { schedule: ScheduleStatus }) {
                         min={0}
                         max={720}
                         className="max-w-md"
-                        value={draft.skipAfterStart}
+                        value={Number.isNaN(draft.skipAfterStart) ? '' : draft.skipAfterStart}
                         error={issue('skipAfterStart')}
-                        onChange={(event) => edit({ skipAfterStart: Number(event.target.value) })}
+                        onChange={(event) =>
+                            edit({
+                                skipAfterStart:
+                                    event.target.value === '' ? Number.NaN : Number(event.target.value),
+                            })
+                        }
                     />
                 </fieldset>
             </Card>
