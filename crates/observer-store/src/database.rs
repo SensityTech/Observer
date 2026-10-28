@@ -23,12 +23,22 @@ pub enum StoreError {
     Migration(#[from] rusqlite_migration::Error),
     #[error(transparent)]
     Io(#[from] io::Error),
+    #[error("no database at {}", .0.display())]
+    Missing(PathBuf),
     #[error("the database connection is closed")]
     Closed,
 }
 
+/// What `Database::inspect` found in a database file, without changing it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Inspection {
+    pub schema: usize,
+    pub latest: usize,
+}
+
 /// The state database. One connection owns the file: every statement runs on its thread, in
-/// order, so writes never contend.
+/// order, so writes never contend. Clones share that connection.
+#[derive(Clone)]
 pub struct Database {
     conn: tokio_rusqlite::Connection,
     backups: PathBuf,
@@ -42,14 +52,42 @@ impl Database {
         let backups = backups.into();
         let dir = backups.clone();
 
-        let conn = tokio::task::spawn_blocking(move || open_blocking(&path, &dir))
-            .await
-            .map_err(|_| StoreError::Closed)??;
+        let conn = blocking(move || open_blocking(&path, &dir)).await?;
 
         Ok(Self {
             conn: conn.into(),
             backups,
         })
+    }
+
+    /// Checks an existing database's integrity and schema version, read-only and without migrating.
+    pub async fn inspect(path: impl Into<PathBuf>) -> Result<Inspection, StoreError> {
+        let path = path.into();
+        blocking(move || {
+            let conn = open_read_only(&path)?;
+            check_integrity(&conn)?;
+            let schema: u32 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
+            Ok(Inspection {
+                schema: schema as usize,
+                latest: migrations::latest(),
+            })
+        })
+        .await
+    }
+
+    /// Backs up a database that is not open, read-only and without migrating it first.
+    pub async fn backup_file(
+        path: impl Into<PathBuf>,
+        backups: impl Into<PathBuf>,
+        kind: BackupKind,
+    ) -> Result<PathBuf, StoreError> {
+        let path = path.into();
+        let backups = backups.into();
+        blocking(move || {
+            let conn = open_read_only(&path)?;
+            backup::create(&conn, &backups, kind)
+        })
+        .await
     }
 
     /// The random id this installation got when its database was created.
@@ -89,6 +127,24 @@ impl Database {
             _ => StoreError::Closed,
         })
     }
+}
+
+async fn blocking<R, F>(function: F) -> Result<R, StoreError>
+where
+    R: Send + 'static,
+    F: FnOnce() -> Result<R, StoreError> + Send + 'static,
+{
+    tokio::task::spawn_blocking(function)
+        .await
+        .map_err(|_| StoreError::Closed)?
+}
+
+fn open_read_only(path: &Path) -> Result<Connection, StoreError> {
+    if !path.exists() {
+        return Err(StoreError::Missing(path.to_path_buf()));
+    }
+    let flags = OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX;
+    Ok(Connection::open_with_flags(path, flags)?)
 }
 
 fn open_blocking(path: &Path, backups: &Path) -> Result<Connection, StoreError> {
@@ -189,5 +245,61 @@ mod tests {
             .unwrap();
         assert_eq!(id, db.instance_id().await.unwrap());
         assert!(db.newest_backup(BackupKind::Daily).await.unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn inspect_reports_the_schema_without_migrating() {
+        let dir = tempfile::tempdir().unwrap();
+        let (path, backups) = paths(dir.path());
+        Database::open(&path, &backups)
+            .await
+            .unwrap()
+            .close()
+            .await
+            .unwrap();
+        Connection::open(&path)
+            .unwrap()
+            .pragma_update(None, "user_version", 0)
+            .unwrap();
+
+        let inspection = Database::inspect(&path).await.unwrap();
+
+        assert_eq!(inspection.schema, 0);
+        assert_eq!(inspection.latest, migrations::latest());
+        let schema: u32 = Connection::open(&path)
+            .unwrap()
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+        assert_eq!(schema, 0);
+    }
+
+    #[tokio::test]
+    async fn inspecting_a_missing_database_says_so_instead_of_creating_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let (path, _) = paths(dir.path());
+
+        let error = Database::inspect(&path).await.err().unwrap();
+
+        assert!(matches!(error, StoreError::Missing(_)));
+        assert!(!path.exists());
+    }
+
+    #[tokio::test]
+    async fn a_closed_database_can_be_backed_up_read_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let (path, backups) = paths(dir.path());
+        Database::open(&path, &backups)
+            .await
+            .unwrap()
+            .close()
+            .await
+            .unwrap();
+
+        let backup = Database::backup_file(&path, &backups, BackupKind::Manual)
+            .await
+            .unwrap();
+
+        assert!(backup.exists());
+        assert!(backup.to_string_lossy().ends_with("-manual.sqlite3"));
     }
 }

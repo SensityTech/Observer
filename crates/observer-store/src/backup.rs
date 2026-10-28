@@ -11,6 +11,7 @@ use crate::database::StoreError;
 pub enum BackupKind {
     Daily,
     PreMigration,
+    Manual,
 }
 
 impl BackupKind {
@@ -18,6 +19,7 @@ impl BackupKind {
         match self {
             Self::Daily => "daily",
             Self::PreMigration => "pre-migration",
+            Self::Manual => "manual",
         }
     }
 
@@ -25,6 +27,7 @@ impl BackupKind {
         match self {
             Self::Daily => 7,
             Self::PreMigration => 3,
+            Self::Manual => 10,
         }
     }
 }

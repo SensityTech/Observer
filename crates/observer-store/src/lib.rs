@@ -5,4 +5,4 @@ mod database;
 mod migrations;
 
 pub use backup::BackupKind;
-pub use database::{Database, StoreError};
+pub use database::{Database, Inspection, StoreError};
