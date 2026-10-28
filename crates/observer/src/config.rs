@@ -70,6 +70,7 @@ pub struct DataPaths {
     pub database: PathBuf,
     pub backups: PathBuf,
     pub logs: PathBuf,
+    pub artifacts: PathBuf,
 }
 
 impl DataPaths {
@@ -78,6 +79,7 @@ impl DataPaths {
             database: root.join("observer.sqlite3"),
             backups: root.join("backups"),
             logs: root.join("logs"),
+            artifacts: root.join("artifacts"),
             root,
         }
     }

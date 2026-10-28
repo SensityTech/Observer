@@ -94,6 +94,30 @@ observer user unlock <name>           # lift the login locks on an account
 observer setup-link                   # a new owner-creation link, while no account exists
 ```
 
+### FXServer builds
+
+Observer downloads FXServer from Cfx.re itself, and talks to no other host for it:
+`docs.fivem.net`, `changelogs-live.fivem.net` and `runtime.fivem.net`, over HTTPS only.
+
+```bash
+observer artifacts list                          # this platform's builds, newest first
+observer artifacts list --platform linux         # the other platform's
+observer artifacts list --branch <name>          # also a test branch, which no page lists
+observer artifacts install <build>               # download, verify and install a build
+```
+
+The list shows each build's channel, publication date, end of support and end of life, after which
+players can no longer join a server running it. Builds that only the support policy names, such as
+failed builds or builds of a branch nobody named, are marked as not downloadable.
+
+`install` puts the build in `data/artifacts/<build>/` and prints that folder. The archive is
+downloaded and extracted under `data/artifacts/.staging/` first, and the build only takes its final
+name once it is complete: on Windows `FXServer.exe` must carry a valid Rockstar Games signature, and
+every archive entry must stay inside the build. A build past its end of life needs
+`--allow-end-of-life`, and an installed build is never overwritten. Both commands work while
+Observer runs. Cfx.re's [Platform License Agreement](https://fivem.net/terms) covers the server
+artifacts you download.
+
 ## License
 
 No license has been chosen yet. Until one is, all rights are reserved.

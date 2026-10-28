@@ -1,3 +1,4 @@
+mod artifacts;
 mod config;
 mod db;
 mod fxserver;
@@ -12,6 +13,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
+use observer_artifacts::{Branch, Platform};
 
 use crate::config::Config;
 
@@ -38,6 +40,9 @@ enum Command {
     User(UserCommand),
     /// Print a new link that creates the owner account, while none exists.
     SetupLink,
+    /// List and install the FXServer builds Cfx.re publishes, even while Observer runs.
+    #[command(subcommand)]
+    Artifacts(ArtifactsCommand),
     /// Drive FXServer by hand, without the panel.
     #[command(subcommand)]
     Fxserver(FxserverCommand),
@@ -74,6 +79,33 @@ enum UserCommand {
     },
 }
 
+#[derive(Debug, Subcommand)]
+enum ArtifactsCommand {
+    /// List the builds of a platform with their channel, dates and support.
+    List {
+        /// `windows` or `linux`; the host's platform by default.
+        #[arg(long)]
+        platform: Option<Platform>,
+        /// Also list the builds of a test branch, such as feature/network-improvements-clean.
+        #[arg(long = "branch", value_name = "NAME")]
+        branches: Vec<Branch>,
+        /// Also list the old builds that only the support policy still names.
+        #[arg(long)]
+        all: bool,
+    },
+    /// Download a build, verify it and install it under the data directory, then print its folder.
+    Install {
+        /// The build number, such as 37872.
+        build: u32,
+        /// The test branch the build comes from, when it is not a master build.
+        #[arg(long = "branch", value_name = "NAME")]
+        branches: Vec<Branch>,
+        /// Install a build even past its end of life, which players can no longer join.
+        #[arg(long)]
+        allow_end_of_life: bool,
+    },
+}
+
 #[tokio::main]
 async fn main() -> ExitCode {
     let cli = Cli::parse();
@@ -87,6 +119,16 @@ async fn main() -> ExitCode {
             Command::User(UserCommand::ResetPassword { name }) => user::reset_password(&config, &name).await,
             Command::User(UserCommand::Unlock { name }) => user::unlock(&config, &name).await,
             Command::SetupLink => setup::link(&config).await,
+            Command::Artifacts(ArtifactsCommand::List {
+                platform,
+                branches,
+                all,
+            }) => artifacts::list(platform, &branches, all).await,
+            Command::Artifacts(ArtifactsCommand::Install {
+                build,
+                branches,
+                allow_end_of_life,
+            }) => artifacts::install(&config, build, &branches, allow_end_of_life).await,
             Command::Fxserver(FxserverCommand::Run(args)) => fxserver::run(config, args).await,
         },
         Err(error) => Err(error),
