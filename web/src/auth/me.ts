@@ -23,5 +23,8 @@ export const landing = (me: Me) => {
     if (allows(me, Permission.DashboardView)) {
         return '/';
     }
-    return allows(me, Permission.UsersManage) ? '/users' : '/account';
+    if (allows(me, Permission.UsersManage)) {
+        return '/users';
+    }
+    return allows(me, Permission.AuditView) ? '/audit' : '/account';
 };

@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { Link, Outlet } from '@tanstack/react-router';
-import { LayoutDashboard, Menu as MenuIcon, Users, X, type LucideIcon } from 'lucide-react';
+import { LayoutDashboard, Menu as MenuIcon, ScrollText, Users, X, type LucideIcon } from 'lucide-react';
 import { useEffect, useState } from 'react';
 
 import { meQuery } from '../api/auth';
@@ -15,7 +15,7 @@ import { StatusBar } from './StatusBar';
 import { ThemeSwitch } from './ThemeSwitch';
 import { UserMenu } from './UserMenu';
 
-type NavEntry = { to: '/' | '/users'; label: string; icon: LucideIcon; permission: bigint };
+type NavEntry = { to: '/' | '/users' | '/audit'; label: string; icon: LucideIcon; permission: bigint };
 
 export function AppShell() {
     const { t } = useI18n();
@@ -47,6 +47,7 @@ export function AppShell() {
     ];
     const administration: NavEntry[] = [
         { to: '/users', label: t.nav.users, icon: Users, permission: Permission.UsersManage },
+        { to: '/audit', label: t.nav.audit, icon: ScrollText, permission: Permission.AuditView },
     ];
 
     return (

@@ -13,6 +13,7 @@ import { allows, landing } from './auth/me';
 import { ReauthDialog } from './auth/ReauthDialog';
 import { RequirePermission } from './auth/RequirePermission';
 import { AccountPage } from './pages/AccountPage';
+import { AuditPage } from './pages/AuditPage';
 import { LoginPage } from './pages/LoginPage';
 import { NotFoundPage } from './pages/NotFoundPage';
 import { OverviewPage } from './pages/OverviewPage';
@@ -118,6 +119,16 @@ const usersRoute = createRoute({
     ),
 });
 
+const auditRoute = createRoute({
+    getParentRoute: () => panelRoute,
+    path: '/audit',
+    component: () => (
+        <RequirePermission name="AuditView">
+            <AuditPage />
+        </RequirePermission>
+    ),
+});
+
 const accountRoute = createRoute({
     getParentRoute: () => panelRoute,
     path: '/account',
@@ -128,7 +139,7 @@ const routeTree = rootRoute.addChildren([
     setupRoute,
     loginRoute,
     passwordRoute,
-    panelRoute.addChildren([overviewRoute, usersRoute, accountRoute]),
+    panelRoute.addChildren([overviewRoute, usersRoute, auditRoute, accountRoute]),
 ]);
 
 export const createPanelRouter = (queryClient: QueryClient) =>
