@@ -110,6 +110,7 @@ const CAUSE_FIELDS = {
     requested: { by: 'text' },
     restart: { by: 'text' },
     recovery: {},
+    scheduled: { by: 'text' },
     ready: {},
     recovered: {},
     unhealthy: { problems: 'problems' },

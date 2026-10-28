@@ -10,7 +10,9 @@ use std::sync::{Arc, LazyLock, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use observer_domain::launch::{ExtraArgument, LaunchSettings, OneSync};
+use observer_domain::schedule::RestartSource;
 use observer_domain::server::SpawnFailure;
+use observer_fxserver::bridge::BridgeEvent;
 use observer_fxserver::console::{ConsoleHub, LineKind, plain};
 use observer_fxserver::health::{HangCause, HealthLimits, Problem};
 use observer_fxserver::recovery::RecoveryPolicy;
@@ -474,6 +476,124 @@ async fn a_stop_during_a_restart_ends_it_as_a_stop_by_whoever_asked() {
         told[1]
     );
     lab.shut_down(false).await;
+}
+
+#[tokio::test]
+async fn a_scheduled_restart_quits_with_the_scheduled_reason_then_starts_a_new_generation() {
+    let mut lab = Lab::online(&[]).await;
+    let scheduled = Cause::Scheduled {
+        by: "observer".to_owned(),
+    };
+
+    lab.supervisor.restart_scheduled("observer").await.unwrap();
+
+    assert_eq!(lab.state(State::Stopping).await, scheduled);
+    let notice = lab.console_until("observer:shuttingDown").await;
+    let quit = lab.console_until("-> Quitting: scheduled").await;
+    assert_eq!(lab.state(State::Starting).await, scheduled);
+    lab.state(State::Online).await;
+    assert_eq!(lab.generation(), 2);
+    let console = lab.console();
+    assert!(notice < quit);
+    assert!(
+        console[notice].2.contains(r#""reason":"scheduled""#)
+            && console[notice].2.contains(r#""by":"observer""#),
+        "{}",
+        console[notice].2
+    );
+    lab.shut_down(false).await;
+}
+
+#[tokio::test]
+async fn a_scheduled_restart_never_starts_a_stopped_or_backing_off_server() {
+    let mut stopped = Lab::new(&[]).await;
+    let mut backing_off = Lab::new(&[("fake_bind_error", "1")]).await;
+    let mut stopping = Lab::online(&[]).await;
+
+    let of_a_stopped_server = stopped.supervisor.restart_scheduled("observer").await;
+    backing_off.supervisor.start("test").await.unwrap();
+    backing_off.state(State::Crashed).await;
+    let while_backing_off = backing_off.supervisor.restart_scheduled("observer").await;
+    stopping.supervisor.stop("ada").await.unwrap();
+    stopping.state(State::Stopping).await;
+    let while_stopping = stopping.supervisor.restart_scheduled("observer").await;
+
+    assert_eq!(of_a_stopped_server, Err(ControlError::NotRunning));
+    assert_eq!(while_backing_off, Err(ControlError::NotRunning));
+    assert_eq!(while_stopping, Err(ControlError::Stopping));
+    stopped.none_within(Duration::from_millis(500), starting).await;
+    assert_eq!(stopped.generation(), 0);
+    stopping.state(State::Stopped).await;
+    stopping.none_within(Duration::from_millis(500), starting).await;
+    backing_off.shut_down(false).await;
+    stopping.shut_down(false).await;
+    stopped.shut_down(false).await;
+}
+
+#[tokio::test]
+async fn an_announcement_reaches_only_a_running_server_whose_bridge_reported() {
+    let mut lab = Lab::new(&[]).await;
+    let event = BridgeEvent::RestartScheduled {
+        at: 1_793_160_000_000,
+        seconds_remaining: 60,
+        reason: RestartSource::OneOff,
+    };
+
+    let while_stopped = lab.supervisor.announce(event.clone()).await;
+    lab.supervisor.start("test").await.unwrap();
+    lab.state(State::Online).await;
+    let while_online = lab.supervisor.announce(event.clone()).await;
+    let raised = lab.console_until("observer:restartScheduled").await;
+    lab.supervisor.stop("ada").await.unwrap();
+    lab.state(State::Stopping).await;
+    let while_stopping = lab.supervisor.announce(event).await;
+
+    assert_eq!(while_stopped, Err(ControlError::NotRunning));
+    assert_eq!(while_online, Ok(()));
+    assert!(
+        lab.console()[raised]
+            .2
+            .contains(r#"{"at":1793160000000,"reason":"oneOff","secondsRemaining":60}"#),
+        "{:?}",
+        lab.console()[raised]
+    );
+    assert_eq!(while_stopping, Err(ControlError::NotRunning));
+    lab.state(State::Stopped).await;
+    assert_eq!(
+        lab.console()
+            .iter()
+            .filter(|(_, _, text)| text.contains("observer:restartScheduled"))
+            .count(),
+        1
+    );
+    lab.shut_down(false).await;
+}
+
+#[tokio::test]
+async fn a_shutdown_during_a_restart_notice_tells_resources_the_server_stays_down() {
+    let mut lab = Lab::online(&[]).await;
+    lab.supervisor.restart_scheduled("observer").await.unwrap();
+    lab.state(State::Stopping).await;
+
+    lab.shut_down(false).await;
+
+    let console = lab.console();
+    let quitting = lab.console_index("-> Quitting: shutdown").unwrap();
+    let told: Vec<&str> = console[..quitting]
+        .iter()
+        .filter_map(|(_, _, text)| Some(text.split_once("observer:shuttingDown ")?.1))
+        .collect();
+    assert_eq!(told.len(), 2, "{console:#?}");
+    assert!(told[0].contains(r#""reason":"scheduled""#), "{}", told[0]);
+    assert!(
+        told[1].contains(r#""reason":"shutdown""#) && told[1].contains(r#""by":"observer""#),
+        "{}",
+        told[1]
+    );
+    while let Ok(event) = lab.events.try_recv() {
+        assert!(!starting(&event.kind), "{:#?}", event.kind);
+    }
+    assert_eq!(lab.generation(), 1);
 }
 
 #[tokio::test]

@@ -39,6 +39,11 @@ pub enum StateCause {
     },
     /// An automatic restart after a failure.
     Recovery,
+    /// A restart the schedule made: its stop, then the start that follows. `by` is `observer` for
+    /// the schedule's own times, or whoever planned a single restart.
+    Scheduled {
+        by: String,
+    },
     Ready,
     Recovered,
     Unhealthy {

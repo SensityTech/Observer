@@ -6,6 +6,7 @@ use std::fs;
 use std::io;
 use std::path::Path;
 
+use observer_domain::schedule::RestartSource;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -100,19 +101,25 @@ impl StopReason {
     rename_all_fields = "camelCase"
 )]
 pub enum BridgeEvent {
+    /// A restart is coming: at each warning tier, or at once for the nearest one when a restart
+    /// is planned or moved inside the tiers.
     RestartScheduled {
         at: i64,
         seconds_remaining: u64,
-        reason: String,
+        reason: RestartSource,
     },
+    /// A restart announced in this run will not happen.
     RestartSkipped {
         at: i64,
         by: String,
+        reason: RestartSource,
     },
+    /// A restart announced in this run moved to `at`. `reason` is the new restart's source.
     RestartRescheduled {
         at: i64,
         previous_at: i64,
         by: String,
+        reason: RestartSource,
     },
     /// Raised again, with the time left, when a stop overtakes a restart before `quit`: the
     /// latest one says what follows.
@@ -248,16 +255,18 @@ mod tests {
             BridgeEvent::RestartScheduled {
                 at: 0,
                 seconds_remaining: 0,
-                reason: String::new(),
+                reason: RestartSource::Schedule,
             },
             BridgeEvent::RestartSkipped {
                 at: 0,
                 by: String::new(),
+                reason: RestartSource::Schedule,
             },
             BridgeEvent::RestartRescheduled {
                 at: 0,
                 previous_at: 0,
                 by: String::new(),
+                reason: RestartSource::OneOff,
             },
             BridgeEvent::ShuttingDown {
                 delay_ms: 0,

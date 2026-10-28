@@ -195,6 +195,11 @@ pub enum Cause {
     },
     /// An automatic restart after a failure.
     Recovery,
+    /// A restart the schedule made: its stop, then the start that follows. `by` is `observer`, or
+    /// whoever planned a single restart.
+    Scheduled {
+        by: String,
+    },
     Ready,
     Recovered,
     Unhealthy {
@@ -299,6 +304,14 @@ enum Request {
         by: String,
         reply: Reply<()>,
     },
+    RestartScheduled {
+        by: String,
+        reply: Reply<()>,
+    },
+    Announce {
+        event: BridgeEvent,
+        reply: Reply<()>,
+    },
     Command {
         command: UserCommand,
         actor: String,
@@ -400,6 +413,23 @@ impl Supervisor {
         .await
     }
 
+    /// The schedule's restart: like [`Supervisor::restart`], with `scheduled` as the reason
+    /// resources hear, but only of a server that runs. A stopped server, or one waiting to restart
+    /// after a failure, is never started by it.
+    pub async fn restart_scheduled(&self, by: &str) -> Result<(), ControlError> {
+        self.ask(|reply| Request::RestartScheduled {
+            by: by.to_owned(),
+            reply,
+        })
+        .await
+    }
+
+    /// Raises an event of the integration contract, only on a running server whose bridge has
+    /// reported: nothing is queued for a server still starting or already stopping.
+    pub async fn announce(&self, event: BridgeEvent) -> Result<(), ControlError> {
+        self.ask(|reply| Request::Announce { event, reply }).await
+    }
+
     /// Writes an operator's command to FXServer and echoes it into the console once written.
     pub async fn command(&self, command: UserCommand, actor: &str) -> Result<(), ControlError> {
         let written = self
@@ -446,8 +476,9 @@ impl Supervisor {
 #[derive(Debug, Clone)]
 enum After {
     Stop,
+    /// The cause the start that follows goes by.
     Restart {
-        by: String,
+        cause: Cause,
     },
     /// Observer itself is stopping.
     Exit,
@@ -676,6 +707,12 @@ impl Actor {
                 let result = self.restart(by).await;
                 let _ = reply.send(result);
             }
+            Request::RestartScheduled { by, reply } => {
+                let _ = reply.send(self.restart_scheduled(by));
+            }
+            Request::Announce { event, reply } => {
+                let _ = reply.send(self.announce(event));
+            }
             Request::Command {
                 command,
                 actor,
@@ -790,15 +827,52 @@ impl Actor {
             Phase::Notice { .. } | Phase::Quitting { .. } => Err(ControlError::Stopping),
             Phase::Ending { .. } => {
                 if let Some(run) = &mut self.run {
-                    run.after = Some(After::Restart { by });
+                    run.after = Some(After::Restart {
+                        cause: Cause::Restart { by },
+                    });
                 }
                 Ok(())
             }
             Phase::Running => {
-                let cause = Cause::Restart { by: by.clone() };
-                self.begin_stop(StopReason::Restart, cause, After::Restart { by }, false);
+                let cause = Cause::Restart { by };
+                self.begin_stop(
+                    StopReason::Restart,
+                    cause.clone(),
+                    After::Restart { cause },
+                    false,
+                );
                 Ok(())
             }
+        }
+    }
+
+    fn restart_scheduled(&mut self, by: String) -> Result<(), ControlError> {
+        if self.shutdown.is_some() {
+            return Err(ControlError::ShuttingDown);
+        }
+        match self.phase {
+            Phase::Running => {
+                let cause = Cause::Scheduled { by };
+                self.begin_stop(
+                    StopReason::Scheduled,
+                    cause.clone(),
+                    After::Restart { cause },
+                    false,
+                );
+                Ok(())
+            }
+            Phase::Notice { .. } | Phase::Quitting { .. } => Err(ControlError::Stopping),
+            Phase::Idle | Phase::Backoff { .. } | Phase::Ending { .. } => Err(ControlError::NotRunning),
+        }
+    }
+
+    fn announce(&self, event: BridgeEvent) -> Result<(), ControlError> {
+        match &self.run {
+            Some(run) if matches!(self.phase, Phase::Running) && run.bridge_ready => {
+                run.system(SystemLine::Bridge(event));
+                Ok(())
+            }
+            _ => Err(ControlError::NotRunning),
         }
     }
 
@@ -840,10 +914,34 @@ impl Actor {
                 self.done = true;
             }
             Phase::Running => self.begin_stop(StopReason::Shutdown, Cause::Shutdown, After::Exit, shortened),
-            Phase::Notice { reason, .. } => {
-                if let Some(run) = &mut self.run {
-                    run.after = Some(After::Exit);
-                }
+            Phase::Notice { quit_at, reason } => {
+                let Some(run) = &mut self.run else {
+                    return;
+                };
+                let restarting = matches!(run.after, Some(After::Restart { .. }));
+                run.after = Some(After::Exit);
+                // Resources were told of a restart: they hear that the server stays down, with
+                // the time they have left, as for a stop that overtakes a restart.
+                let reason = if restarting {
+                    let left = if shortened {
+                        Duration::ZERO
+                    } else {
+                        quit_at.saturating_duration_since(now)
+                    };
+                    run.system(SystemLine::Bridge(BridgeEvent::ShuttingDown {
+                        delay_ms: u64::try_from(left.as_millis()).unwrap_or(u64::MAX),
+                        reason: StopReason::Shutdown,
+                        by: "observer".to_owned(),
+                    }));
+                    self.phase = Phase::Notice {
+                        quit_at,
+                        reason: StopReason::Shutdown,
+                    };
+                    self.set_state(State::Stopping, Cause::Shutdown);
+                    StopReason::Shutdown
+                } else {
+                    reason
+                };
                 if shortened {
                     self.quit(reason, self.settings.stop.shortened);
                 }
@@ -870,7 +968,7 @@ impl Actor {
             return;
         };
         let by = match &cause {
-            Cause::Requested { by } | Cause::Restart { by } => by.clone(),
+            Cause::Requested { by } | Cause::Restart { by } | Cause::Scheduled { by } => by.clone(),
             _ => "observer".to_owned(),
         };
         run.after = Some(after);
@@ -1278,8 +1376,8 @@ impl Actor {
                     self.phase = Phase::Idle;
                     self.set_state(State::Stopped, Cause::Exited { description });
                 }
-                After::Restart { by } => {
-                    let _ = self.spawn(Cause::Restart { by }).await;
+                After::Restart { cause } => {
+                    let _ = self.spawn(cause).await;
                 }
                 After::Exit => {
                     self.phase = Phase::Idle;

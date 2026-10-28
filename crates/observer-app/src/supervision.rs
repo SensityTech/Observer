@@ -609,6 +609,7 @@ fn state_cause(cause: &Cause) -> StateCause {
         Cause::Requested { by } => StateCause::Requested { by },
         Cause::Restart { by } => StateCause::Restart { by },
         Cause::Recovery => StateCause::Recovery,
+        Cause::Scheduled { by } => StateCause::Scheduled { by },
         Cause::Ready => StateCause::Ready,
         Cause::Recovered => StateCause::Recovered,
         Cause::Unhealthy { problems } => StateCause::Unhealthy {

@@ -198,6 +198,12 @@ export const en = {
         restarting: (by: string) =>
             `Restarting, as ${by} asked: resources are told first, then FXServer quits and starts again.`,
         restarted: (by: string) => `Restarted by ${by}.`,
+        restartingOnSchedule:
+            'Restarting on schedule: resources are told first, then FXServer quits and starts again.',
+        restartedOnSchedule: 'Restarted on schedule.',
+        restartingAsPlanned: (by: string) =>
+            `Restarting, as ${by} planned: resources are told first, then FXServer quits and starts again.`,
+        restartedAsPlanned: (by: string) => `Restarted as ${by} planned.`,
         observer: 'Observer',
         recovery: 'Started again after a failure.',
         ready: 'Ready: its HTTP endpoint answers and the observer bridge reports in.',
