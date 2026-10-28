@@ -62,8 +62,8 @@ pub struct ScheduleSettings {
     pub time_zone: Option<String>,
     /// Minutes before a restart at which resources hear of it.
     pub warnings: Vec<u32>,
-    /// A fixed time this many minutes or less after a start the schedule did not make is skipped;
-    /// 0 turns the rule off.
+    /// A fixed time less than this many minutes after a start the schedule did not make is
+    /// skipped; 0 turns the rule off.
     pub skip_after_start: u32,
 }
 

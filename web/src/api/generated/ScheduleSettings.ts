@@ -15,7 +15,7 @@ timeZone: string | null,
  */
 warnings: Array<number>, 
 /**
- * A fixed time this many minutes or less after a start the schedule did not make is skipped;
- * 0 turns the rule off.
+ * A fixed time less than this many minutes after a start the schedule did not make is
+ * skipped; 0 turns the rule off.
  */
 skipAfterStart: number, };
