@@ -1,5 +1,6 @@
 pub mod authenticode;
 pub mod console;
+pub(crate) mod processes;
 pub(crate) mod usage;
 
 use std::ffi::OsStr;
@@ -10,6 +11,7 @@ use std::mem::{offset_of, size_of, size_of_val};
 use std::os::windows::ffi::OsStrExt;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle, RawHandle};
 use std::path::Path;
+use std::sync::Arc;
 use std::{ptr, thread};
 
 use windows_sys::Win32::Foundation::{
@@ -31,6 +33,8 @@ use windows_sys::Win32::System::Threading::{
     UpdateProcThreadAttribute, WaitForSingleObject,
 };
 
+use self::processes::Port;
+use crate::processes::TreeChanges;
 use crate::stream::{Output, Stdin};
 use crate::{Exit, ExitWatch, Launch, SpawnError, Spawned};
 
@@ -46,7 +50,8 @@ pub(crate) fn spawn(launch: &Launch) -> Result<Spawned, SpawnError> {
     let (stdout, child_stdout) = pipe().map_err(SpawnError::Pipes)?;
     let (stderr, child_stderr) = pipe().map_err(SpawnError::Pipes)?;
     let (traces, child_traces) = pipe().map_err(SpawnError::Pipes)?;
-    let job = Job::new().map_err(SpawnError::Tree)?;
+    let job = Arc::new(Job::new().map_err(SpawnError::Tree)?);
+    let port = Arc::new(Port::for_job(&job).map_err(SpawnError::Tree)?);
 
     let inherited =
         [&child_stdin, &child_stdout, &child_stderr, &child_traces].map(AsRawHandle::as_raw_handle);
@@ -66,7 +71,9 @@ pub(crate) fn spawn(launch: &Launch) -> Result<Spawned, SpawnError> {
     }
     // The original goes to the thread that waits for the exit; the tree measures through a copy.
     let main = process.try_clone().map_err(SpawnError::Tree)?;
-    let tree = ProcessTree { job, main, pid };
+    let (sender, changes) = TreeChanges::channel();
+    processes::watch(Arc::clone(&port), Arc::downgrade(&job), pid, sender).map_err(SpawnError::Threads)?;
+    let tree = ProcessTree { job, port, main, pid };
     // SAFETY: `main_thread` is the open handle of the process's suspended main thread.
     if unsafe { ResumeThread(main_thread.as_raw_handle()) } == u32::MAX {
         return Err(SpawnError::Tree(io::Error::last_os_error()));
@@ -92,6 +99,7 @@ pub(crate) fn spawn(launch: &Launch) -> Result<Spawned, SpawnError> {
         traces,
         exit,
         tree,
+        changes,
     })
 }
 
@@ -99,9 +107,16 @@ pub(crate) fn spawn(launch: &Launch) -> Result<Spawned, SpawnError> {
 /// processes of resources): a Job Object that kills them all when its last handle closes, so even
 /// a crash of Observer leaves nothing behind.
 pub struct ProcessTree {
-    job: Job,
+    job: Arc<Job>,
+    port: Arc<Port>,
     main: OwnedHandle,
     pid: u32,
+}
+
+impl Drop for ProcessTree {
+    fn drop(&mut self) {
+        self.port.stop();
+    }
 }
 
 impl ProcessTree {
@@ -170,7 +185,7 @@ impl ProcessTree {
     }
 }
 
-struct Job(OwnedHandle);
+pub(crate) struct Job(OwnedHandle);
 
 impl Job {
     fn new() -> io::Result<Self> {

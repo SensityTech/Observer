@@ -1,10 +1,12 @@
 //! What Observer needs from the operating system to run FXServer: spawning it with stdin, stdout,
 //! stderr and file descriptor 3, owning its whole process tree, and the console and signal plumbing
 //! around it; and for installing builds, the free space of a volume and the signature check of
-//! FXServer.exe; for the statistics, what the tree, Observer and the host use. The only crate
-//! allowed to use `unsafe` outside test tools.
+//! FXServer.exe; for the statistics, what the tree, Observer and the host use; for the diagnostics,
+//! the processes the tree starts and a picture of a hung server. The only
+//! crate allowed to use `unsafe` outside test tools.
 #![allow(unsafe_code)]
 
+mod processes;
 mod stream;
 #[cfg(unix)]
 mod unix;
@@ -19,11 +21,14 @@ use std::time::{Duration, Instant};
 
 use tokio::sync::watch;
 
+pub use processes::{ProcessInfo, TreeChange, TreeChanges};
 pub use stream::{Output, Stdin};
 #[cfg(unix)]
 pub use unix::ProcessTree;
 #[cfg(unix)]
 pub use unix::leftovers::{PidFile, Sweep};
+#[cfg(unix)]
+pub use unix::threads::{RunState, ThreadState, ThreadStates};
 pub use usage::{CpuTimes, HostUsage, Interface, Member, Memory, Space, TreeUsage, Usage};
 #[cfg(windows)]
 pub use windows::ProcessTree;
@@ -51,6 +56,8 @@ pub struct Spawned {
     pub traces: Output,
     pub exit: ExitWatch,
     pub tree: ProcessTree,
+    /// The processes the tree starts and ends, the main one left out.
+    pub changes: TreeChanges,
 }
 
 #[derive(Debug, thiserror::Error)]

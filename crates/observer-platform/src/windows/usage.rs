@@ -21,7 +21,7 @@ use windows_sys::Win32::System::ProcessStatus::{
 use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
 use windows_sys::Win32::System::Threading::{
     ALL_PROCESSOR_GROUPS, GetActiveProcessorCount, GetCurrentProcess, GetProcessHandleCount,
-    GetProcessIoCounters, GetProcessTimes, GetSystemTimes, IO_COUNTERS, OpenProcess,
+    GetProcessIoCounters, GetProcessTimes, GetSystemTimes, IO_COUNTERS, OpenProcess, PROCESS_ACCESS_RIGHTS,
     PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_VM_READ, WaitForSingleObject,
 };
 
@@ -50,7 +50,11 @@ impl ProcessTree {
         };
         let mut children = Vec::new();
         for pid in members.into_iter().filter(|&pid| pid != self.pid) {
-            let Some(process) = open_member(pid, self.job.raw()) else {
+            let Some(process) = open_member(
+                pid,
+                self.job.raw(),
+                PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ,
+            ) else {
                 continue;
             };
             let entry = listed.get(&pid);
@@ -92,11 +96,11 @@ pub(crate) fn volume_space(dir: &Path) -> io::Result<Space> {
     Ok(Space { available, total })
 }
 
-/// Opens a member of the job to read its counters, unless it exited since the job listed it or its
+/// Opens a member of the job with `access`, unless it exited since the job listed it or its
 /// pid now belongs to a process outside the job.
-fn open_member(pid: u32, job: RawHandle) -> Option<OwnedHandle> {
+pub(crate) fn open_member(pid: u32, job: RawHandle, access: PROCESS_ACCESS_RIGHTS) -> Option<OwnedHandle> {
     // SAFETY: OpenProcess takes any pid and returns null when it cannot open it.
-    let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ, FALSE, pid) };
+    let handle = unsafe { OpenProcess(access, FALSE, pid) };
     if handle.is_null() {
         return None;
     }
@@ -256,7 +260,7 @@ fn interfaces() -> Option<Vec<Interface>> {
     Some(interfaces)
 }
 
-fn filetime(time: FILETIME) -> u64 {
+pub(crate) fn filetime(time: FILETIME) -> u64 {
     u64::from(time.dwHighDateTime) << 32 | u64::from(time.dwLowDateTime)
 }
 
