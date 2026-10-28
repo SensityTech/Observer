@@ -13,6 +13,19 @@ import { ServerControls } from './ServerControls';
 
 const settle = () => act(() => new Promise((resolve) => setTimeout(resolve, 0)));
 
+const status = (state: ServerState) => ({
+    state,
+    cause: null,
+    since: '2026-10-28T14:00:00Z',
+    startedAt: null,
+    generation: 1,
+    problems: [],
+    build: null,
+    players: null,
+    restartAt: null,
+    launch: 'ready',
+});
+
 /** The controls of an operator who may start and stop FXServer, in `state`. */
 const controls = async (state: ServerState) => {
     let socket: SocketEvents | undefined;
@@ -47,23 +60,15 @@ const controls = async (state: ServerState) => {
     );
     live.start();
     await settle();
-    const status = {
-        state,
-        cause: null,
-        since: '2026-10-28T14:00:00Z',
-        startedAt: null,
-        generation: 1,
-        problems: [],
-        build: null,
-        players: null,
-        restartAt: null,
-        launch: 'ready',
-    };
     act(() => {
         socket?.message(JSON.stringify({ type: 'hello', connectionId: 1, contract: 1 }));
-        socket?.message(JSON.stringify({ type: 'snapshot', topic: 'server.status', data: status }));
+        socket?.message(JSON.stringify({ type: 'snapshot', topic: 'server.status', data: status(state) }));
     });
-    return { ...view, live };
+    const changeTo = (next: ServerState) =>
+        act(() =>
+            socket?.message(JSON.stringify({ type: 'event', topic: 'server.status', data: status(next) })),
+        );
+    return { ...view, live, state: changeTo };
 };
 
 describe('ServerControls', () => {
@@ -85,6 +90,16 @@ describe('ServerControls', () => {
         fireEvent.click(getByRole('button', { name: en.controls.start }));
 
         expect(getByText(en.controls.unavailable(en.controls.start, en.controls.running))).not.toBeNull();
+        live.stop();
+    });
+
+    it('should drop why a control did nothing once the state it was pressed in is gone', async () => {
+        const { getByRole, queryByText, live, state } = await controls('online');
+        fireEvent.click(getByRole('button', { name: en.controls.start }));
+
+        state('stopped');
+
+        expect(queryByText(en.controls.unavailable(en.controls.start, en.controls.running))).toBeNull();
         live.stop();
     });
 

@@ -3,6 +3,7 @@ import { Play, RotateCw, Square, X } from 'lucide-react';
 import { useState } from 'react';
 
 import { restartServer, startServer, stopServer } from '../api/server';
+import type { ServerState } from '../api/generated/ServerState';
 import { Permission } from '../api/generated/Permission';
 import { allows, useMe } from '../auth/me';
 import { Button } from '../components/Button';
@@ -29,7 +30,12 @@ export function ServerControls() {
     const me = useMe();
     const { status } = useServerStatus();
     const [confirming, setConfirming] = useState<Action | null>(null);
-    const [failure, setFailure] = useState<{ tone: 'warning' | 'danger'; text: string } | null>(null);
+    // Why a press did nothing holds for the state it was pressed in only.
+    const [failure, setFailure] = useState<{
+        tone: 'warning' | 'danger';
+        text: string;
+        during?: ServerState | null;
+    } | null>(null);
     const permitted = allows(me, Permission.ServerControl);
 
     const label = { start: t.controls.start, stop: t.controls.stop, restart: t.controls.restart };
@@ -45,7 +51,11 @@ export function ServerControls() {
     const act = (action: Action) => {
         const reason = blocked(t, action, status, permitted);
         if (reason !== null) {
-            setFailure({ tone: 'warning', text: t.controls.unavailable(label[action], reason) });
+            setFailure({
+                tone: 'warning',
+                text: t.controls.unavailable(label[action], reason),
+                during: status?.state ?? null,
+            });
             return;
         }
         setFailure(null);
@@ -86,7 +96,7 @@ export function ServerControls() {
                 {button('restart', RotateCw, running ? 'ink' : 'secondary')}
                 {button('stop', Square, 'secondary')}
             </fieldset>
-            {failure && (
+            {failure && (failure.during === undefined || failure.during === (status?.state ?? null)) && (
                 <Notice tone={failure.tone} className="controls-failure">
                     <div className="flex items-start gap-3">
                         <p className="flex-1">{failure.text}</p>
