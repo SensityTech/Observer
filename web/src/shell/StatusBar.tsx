@@ -53,7 +53,7 @@ export function StatusBar() {
                                     className={cn(
                                         'font-normal text-ink-3 xl:max-[1261px]:hidden md:max-[941px]:hidden',
                                         // Where the next restart's cell only just fits, it takes the uptime's room.
-                                        !refused && 'min-[1320px]:max-[1400px]:hidden',
+                                        !refused && 'min-[1440px]:max-4xl:hidden',
                                     )}
                                 >
                                     · {uptime}
@@ -94,8 +94,10 @@ export function StatusBar() {
 
 /**
  * When FXServer restarts next, in the schedule's zone: the time alone today there, with its day
- * otherwise, and the time left on the widest screens. Below 1320 px the bar and the server's
+ * otherwise, and the time left on the widest screens. Below 1440 px the bar and the server's
  * controls would no longer share a row with it: the Overview and the Schedule page say it there.
+ * These widths, and the uptime's, leave room for the widest values short of a reload notice:
+ * Not responding for hours, 2,048 / 2,048 players, a day before the time, and Connecting.
  */
 function NextRestartCell({
     schedule,
@@ -128,12 +130,12 @@ function NextRestartCell({
                               clock,
                           )}
                 </span>
-                <span className="font-normal text-ink-3 max-4xl:hidden">· {t.status.inTime(left)}</span>
+                <span className="font-normal text-ink-3 max-[1620px]:hidden">· {t.status.inTime(left)}</span>
             </>
         );
     }
     return (
-        <div className="status-cell status-next max-[1320px]:hidden">
+        <div className="status-cell status-next max-[1440px]:hidden">
             <dt>{t.status.nextRestart}</dt>
             <dd className="tabular-nums">{value}</dd>
         </div>
