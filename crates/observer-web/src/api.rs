@@ -47,6 +47,11 @@ pub(crate) fn routes() -> Vec<Route> {
     // change them.
     let read_launch = Owner;
     let edit_launch = ReauthenticatedOwner;
+    let control = Permission(P::SERVER_CONTROL);
+    // A command that stops the server or runs what Observer cannot read also takes SERVER_CONTROL,
+    // which the handler checks once it has read the line.
+    let command = Permission(P::CONSOLE_WRITE);
+    let logs = Permission(P::LOGS_DOWNLOAD);
     vec![
         route(M::GET,    "/health",                     Public,       health),
         route(M::GET,    "/setup",                      Public,       setup::status),
@@ -71,6 +76,12 @@ pub(crate) fn routes() -> Vec<Route> {
         route(M::GET,    "/audit/export.csv",           read_audit,   audit::export),
         route(M::GET,    "/servers/default/launch",     read_launch,  servers::launch_settings),
         route(M::PUT,    "/servers/default/launch",     edit_launch,  servers::change_launch_settings),
+        route(M::POST,   "/servers/default/start",      control,      servers::start),
+        route(M::POST,   "/servers/default/stop",       control,      servers::stop),
+        route(M::POST,   "/servers/default/restart",    control,      servers::restart),
+        route(M::POST,   "/servers/default/console",    command,      servers::command),
+        route(M::GET,    "/servers/default/console/logs",        logs, servers::log_files),
+        route(M::GET,    "/servers/default/console/logs/{name}", logs, servers::download_log),
     ]
 }
 
