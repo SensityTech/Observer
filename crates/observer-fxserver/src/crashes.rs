@@ -55,8 +55,9 @@ pub fn being_written(crashes: &Path, within: Duration) -> bool {
     };
     let now = SystemTime::now();
     entries.filter_map(Result::ok).any(|entry| {
-        entry
-            .metadata()
+        // Not the directory entry's own metadata: on Windows the listing keeps the size and time
+        // a file had when it was opened, for as long as the dump server holds it open.
+        fs::metadata(entry.path())
             .and_then(|metadata| metadata.modified())
             .is_ok_and(|modified| now.duration_since(modified).unwrap_or_default() <= within)
     })
@@ -111,6 +112,9 @@ fn trim(dir: &Path, limits: DumpLimits) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use std::fs::File;
+    use std::io::Write as _;
+    use std::thread;
+    use std::time::Instant;
 
     use super::*;
 
@@ -237,5 +241,24 @@ mod tests {
 
         assert!(being_written(dir.path(), Duration::from_secs(10)));
         assert!(!being_written(&dir.path().join("none"), Duration::from_secs(10)));
+    }
+
+    #[test]
+    fn a_dump_still_growing_past_the_window_counts_as_in_progress() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut dump = File::create(dir.path().join("0a1b-full.dmp")).unwrap();
+        let within = Duration::from_millis(500);
+        let started = Instant::now();
+
+        while started.elapsed() < Duration::from_secs(2) {
+            dump.write_all(&[0; 64 * 1024]).unwrap();
+            thread::sleep(Duration::from_millis(100));
+
+            assert!(
+                being_written(dir.path(), within),
+                "{:?} into the dump",
+                started.elapsed()
+            );
+        }
     }
 }
