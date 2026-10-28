@@ -104,7 +104,9 @@ impl ConsoleLog {
             let Some((date, index)) = entry.file_name().to_str().and_then(parse_name) else {
                 continue;
             };
-            let metadata = entry.metadata()?;
+            // Read from the file rather than the folder: on Windows the folder's copy of the size
+            // and the time lags behind a file still open for writing, as today's is.
+            let metadata = fs::metadata(entry.path())?;
             if !metadata.is_file() {
                 continue;
             }
@@ -428,6 +430,39 @@ mod tests {
                  {day}T04:00:02.000+01:00 #13 OBS supervisor | FXServer started\n"
             )
         );
+    }
+
+    #[test]
+    fn the_listing_holds_only_log_files_with_the_size_of_one_still_being_written() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("console-2026-10-27.log"),
+            "older
+",
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("notes.txt"),
+            "not a log
+",
+        )
+        .unwrap();
+        fs::create_dir(dir.path().join("console-2026-10-29.log")).unwrap();
+        let mut today = File::create(dir.path().join("console-2026-10-28.log")).unwrap();
+        today.write_all(&[b'x'; 300]).unwrap();
+        today.flush().unwrap();
+
+        let files = ConsoleLog::files(dir.path()).unwrap();
+
+        let listed: Vec<_> = files
+            .iter()
+            .map(|file| (file.path.file_name().unwrap().to_str().unwrap(), file.size))
+            .collect();
+        assert_eq!(
+            listed,
+            [("console-2026-10-27.log", 6), ("console-2026-10-28.log", 300)]
+        );
+        drop(today);
     }
 
     #[tokio::test]
