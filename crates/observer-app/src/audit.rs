@@ -21,6 +21,9 @@ const MAX_PAGE: u32 = 200;
 const EXPORT_BATCH: u32 = 500;
 /// How many new entries a follower may fall behind by before it misses some.
 const FOLLOWERS_BACKLOG: usize = 256;
+/// The purge cutoff stays this far behind Observer's clock. SQLite refuses a cutoff past its own
+/// present, which it reads from a coarser clock on Windows, a few milliseconds behind.
+const CUTOFF_MARGIN: SignedDuration = SignedDuration::from_secs(1);
 
 /// One audit entry in the making. It is written in the transaction of the change it records, so
 /// the change and its trace commit or fail together.
@@ -339,11 +342,11 @@ impl AuditLog {
 
     /// Deletes the entries whose retention has ended. Observer runs it daily.
     pub async fn purge(&self) -> Result<usize, Error> {
-        let now = self.clock.now();
+        let cutoff = self.clock.now() - CUTOFF_MARGIN;
         Ok(self
             .db
             .write(move |tx| {
-                audit::advance_cutoff(tx, now)?;
+                audit::advance_cutoff(tx, cutoff)?;
                 audit::purge(tx)
             })
             .await?)
