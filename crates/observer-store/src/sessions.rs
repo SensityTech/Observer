@@ -55,6 +55,11 @@ pub fn insert(conn: &Connection, session: &NewSession<'_>) -> Result<i64, StoreE
     Ok(conn.last_insert_rowid())
 }
 
+pub fn get(conn: &Connection, id: i64) -> Result<Option<SessionRow>, StoreError> {
+    let sql = format!("SELECT {COLUMNS} FROM sessions WHERE id = ?1");
+    Ok(conn.query_row(&sql, [id], read).optional()?)
+}
+
 pub fn find_by_token(conn: &Connection, token_hash: &[u8]) -> Result<Option<SessionRow>, StoreError> {
     let sql = format!("SELECT {COLUMNS} FROM sessions WHERE token_hash = ?1");
     Ok(conn.query_row(&sql, [token_hash], read).optional()?)
