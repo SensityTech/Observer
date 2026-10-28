@@ -112,6 +112,18 @@ describe('ConsoleStore', () => {
         expect(store.since()).toBe(1000);
     });
 
+    it('should mark two restarts in a row with nothing printed between them once', () => {
+        const { store, frame } = setup();
+        store.snapshot(snapshot([line(1), line(2)]));
+
+        store.snapshot(restarted([], 999));
+        store.snapshot(restarted([], 1999));
+        frame();
+
+        expect(seqs(store.getRows())).toEqual([1, 2, 'restarted']);
+        expect(store.since()).toBe(1999);
+    });
+
     it('should resume from the last number Observer gave, even without a line', () => {
         const { store } = setup();
 

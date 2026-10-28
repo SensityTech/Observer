@@ -89,7 +89,8 @@ export class ConsoleStore {
             this.#rows = [];
             this.#last = null;
         }
-        if ((gap || restarted) && this.#rows.length > 0) {
+        // Two restarts with nothing printed between them leave one mark: no line is missing in between.
+        if ((gap || restarted) && this.#rows.length > 0 && this.#rows.at(-1)?.type !== 'gap') {
             const reason = restarted ? 'restarted' : 'missed';
             this.#rows = [...this.#rows, { type: 'gap', seq: (this.#last ?? 0) + 0.5, reason }];
         }
