@@ -11,7 +11,7 @@ use std::time::Duration;
 use jiff::{SignedDuration, Timestamp};
 use observer_domain::audit::{ActorKind, AuditAction, Outcome};
 use observer_domain::error::{ApiError, ErrorCode};
-use observer_domain::launch::{LaunchSettings, Platform};
+use observer_domain::launch::{Platform, StoredLaunch};
 use observer_domain::permissions::Permissions;
 use observer_domain::server::{
     CommandRefusal, ConsoleLine, ConsoleSnapshot, Delivery, HangCause, HealthProblem, LINE_MASKED,
@@ -27,7 +27,7 @@ use observer_fxserver::supervisor::{
 use observer_store::Database;
 use serde_json::json;
 use tokio::sync::broadcast::error::{RecvError, TryRecvError};
-use tokio::sync::{broadcast, watch};
+use tokio::sync::{Mutex as AsyncMutex, broadcast, watch};
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
@@ -72,6 +72,7 @@ struct Inner {
     accounts: Accounts,
     servers: Servers,
     supervisor: Supervisor,
+    launches: Launches,
     console: Arc<ConsoleHub>,
     console_logs: PathBuf,
     status: watch::Receiver<ServerStatus>,
@@ -103,6 +104,26 @@ impl Running {
         self.stopped().await;
         self.stop.cancel();
         let _ = self.follower.await;
+    }
+}
+
+/// Hands the supervisor the stored launch settings each time they change, so that every spawn, a
+/// restart after a crash included, launches the newest. Whoever read them before a newer save
+/// cannot hand them over after it: versions only go up.
+#[derive(Clone)]
+struct Launches {
+    supervisor: Supervisor,
+    given: Arc<AsyncMutex<Option<i64>>>,
+}
+
+impl Launches {
+    async fn give(&self, stored: &StoredLaunch) {
+        let mut given = self.given.lock().await;
+        if given.is_some_and(|version| version >= stored.version) {
+            return;
+        }
+        self.supervisor.configure(stored.settings.clone()).await;
+        *given = Some(stored.version);
     }
 }
 
@@ -149,13 +170,21 @@ impl Supervision {
         let mut settings = Settings::new(None, &setup.data_dir);
         tune(&mut settings);
         let (supervisor, supervisor_task) = Supervisor::spawn(settings, Arc::clone(&console));
+        let launches = Launches {
+            supervisor: supervisor.clone(),
+            given: Arc::default(),
+        };
 
-        let readiness = readiness(&setup.servers).await?;
+        let stored = setup.servers.launch_settings(Servers::DEFAULT).await?;
+        if let Some(stored) = &stored {
+            launches.give(stored).await;
+        }
+        let readiness = readiness(stored.as_ref());
         let first = server_status(&supervisor.status().borrow(), None, None, readiness);
         let (status_tx, status) = watch::channel(first);
         let stop = CancellationToken::new();
         let follower = tokio::spawn(follow(
-            supervisor.clone(),
+            launches.clone(),
             setup.servers.clone(),
             status_tx,
             readiness,
@@ -169,6 +198,7 @@ impl Supervision {
                 accounts: setup.accounts,
                 servers: setup.servers,
                 supervisor,
+                launches,
                 console,
                 console_logs: setup.console_logs,
                 status,
@@ -198,9 +228,8 @@ impl Supervision {
             self.note("FXServer was not started: this host refuses its launch settings");
             return Ok(());
         }
-        let supervisor = &self.inner.supervisor;
-        supervisor.configure(stored.settings).await;
-        let started = supervisor.start(OBSERVER).await;
+        self.inner.launches.give(&stored).await;
+        let started = self.inner.supervisor.start(OBSERVER).await;
         let record = Record::operator(ActorKind::System, AuditAction::ServerStarted)
             .details(json!({ "automatic": true }));
         self.record_control(record, &started).await?;
@@ -218,10 +247,8 @@ impl Supervision {
 
     /// Starts FXServer with the stored launch settings, as they are now.
     pub async fn start_server(&self, caller: &Caller) -> Result<(), Error> {
-        let launch = self.launch().await?;
-        let supervisor = &self.inner.supervisor;
-        supervisor.configure(launch).await;
-        let started = supervisor.start(&caller.username).await;
+        self.hand_over_launch().await?;
+        let started = self.inner.supervisor.start(&caller.username).await;
         self.record_control(Record::by(caller, AuditAction::ServerStarted), &started)
             .await?;
         started.map_err(control_error)
@@ -237,10 +264,8 @@ impl Supervision {
     /// Stops FXServer gracefully and starts it again with the stored settings, which must be fit
     /// to start before anything stops.
     pub async fn restart_server(&self, caller: &Caller) -> Result<(), Error> {
-        let launch = self.launch().await?;
-        let supervisor = &self.inner.supervisor;
-        supervisor.configure(launch).await;
-        let restarted = supervisor.restart(&caller.username).await;
+        self.hand_over_launch().await?;
+        let restarted = self.inner.supervisor.restart(&caller.username).await;
         self.record_control(Record::by(caller, AuditAction::ServerRestarted), &restarted)
             .await?;
         restarted.map_err(control_error)
@@ -372,7 +397,9 @@ impl Supervision {
             .collect())
     }
 
-    async fn launch(&self) -> Result<LaunchSettings, Error> {
+    /// Refuses a start the stored settings cannot make, then makes sure the supervisor has them:
+    /// a save a moment before may not have reached it yet.
+    async fn hand_over_launch(&self) -> Result<(), Error> {
         let stored = self
             .inner
             .servers
@@ -385,7 +412,8 @@ impl Supervision {
                 .with("issues", serde_json::to_value(issues).unwrap_or_default())
                 .into());
         }
-        Ok(stored.settings)
+        self.inner.launches.give(&stored).await;
+        Ok(())
     }
 
     /// Ten commands per user in any ten seconds.
@@ -443,16 +471,16 @@ impl Supervision {
 }
 
 /// Keeps the panel's status in step with the supervisor's, the cause of its last change of state
-/// and the stored launch settings.
+/// and the stored launch settings, which it hands to the supervisor as they change.
 async fn follow(
-    supervisor: Supervisor,
+    launches: Launches,
     servers: Servers,
     status: watch::Sender<ServerStatus>,
     mut launch: LaunchReadiness,
     stop: CancellationToken,
 ) {
-    let mut supervised = supervisor.status();
-    let mut events = supervisor.events();
+    let mut supervised = launches.supervisor.status();
+    let mut events = launches.supervisor.events();
     let mut launch_changes = servers.launch_changes();
     let mut cause: Option<Cause> = None;
     let mut restart_at: Option<Timestamp> = None;
@@ -489,8 +517,13 @@ async fn follow(
                 Err(RecvError::Lagged(_)) => {}
                 Err(RecvError::Closed) => return,
             },
-            Ok(()) = launch_changes.changed() => match readiness(&servers).await {
-                Ok(readiness) => launch = readiness,
+            Ok(()) = launch_changes.changed() => match servers.launch_settings(Servers::DEFAULT).await {
+                Ok(stored) => {
+                    if let Some(stored) = &stored {
+                        launches.give(stored).await;
+                    }
+                    launch = readiness(stored.as_ref());
+                }
                 Err(error) => warn!(%error, "cannot read the launch settings"),
             },
         }
@@ -508,12 +541,12 @@ async fn follow(
     }
 }
 
-async fn readiness(servers: &Servers) -> Result<LaunchReadiness, Error> {
-    Ok(match servers.launch_settings(Servers::DEFAULT).await? {
+fn readiness(stored: Option<&StoredLaunch>) -> LaunchReadiness {
+    match stored {
         None => LaunchReadiness::NotConfigured,
         Some(stored) if stored.settings.issues(Platform::host()).is_empty() => LaunchReadiness::Ready,
         Some(_) => LaunchReadiness::Invalid,
-    })
+    }
 }
 
 fn server_status(

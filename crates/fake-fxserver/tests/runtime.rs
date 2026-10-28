@@ -10,13 +10,15 @@ use std::sync::{LazyLock, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use observer_app::{
-    Accounts, AuditLog, Caller, Client, Clock, PasswordCost, Running, Servers, Setup, Supervision,
+    Accounts, AuditLog, Caller, Client, Clock, Error, PasswordCost, Running, Servers, Setup, Supervision,
 };
 use observer_domain::audit::{ActorKind, AuditAction, AuditEntry, AuditFilter, Outcome};
+use observer_domain::error::ErrorCode;
 use observer_domain::launch::{ExtraArgument, LaunchSettings, OneSync};
 use observer_domain::server::{ConsoleLine, Delivery, LineKind, ServerState, ServerStatus, StateCause};
 use observer_fxserver::console::plain;
 use observer_fxserver::health::HealthLimits;
+use observer_fxserver::recovery::RecoveryPolicy;
 use observer_fxserver::supervisor::StopTimings;
 use observer_store::Database;
 use serde_json::json;
@@ -49,10 +51,11 @@ impl Drop for Port {
 }
 
 struct Observer {
-    _dir: TempDir,
+    dir: TempDir,
     _port: Port,
     db: Database,
     audit: AuditLog,
+    servers: Servers,
     supervision: Supervision,
     running: Option<Running>,
     owner: Caller,
@@ -122,7 +125,7 @@ impl Observer {
             db: db.clone(),
             clock,
             accounts,
-            servers,
+            servers: servers.clone(),
             data_dir: dir.path().join("observer-data"),
             console_logs: dir.path().join("observer-data/logs/console"),
             log: None,
@@ -141,14 +144,20 @@ impl Observer {
                 shortened: Duration::from_secs(1),
                 fatal_exit: Duration::from_secs(1),
             };
+            settings.recovery = RecoveryPolicy {
+                backoff: vec![Duration::from_millis(100)],
+                backoff_cap: Duration::from_millis(100),
+                ..RecoveryPolicy::default()
+            };
         })
         .await
         .unwrap();
         Self {
-            _dir: dir,
+            dir,
             _port: port,
             db,
             audit,
+            servers,
             supervision,
             running: Some(running),
             owner,
@@ -196,6 +205,66 @@ impl Observer {
             ..AuditFilter::default()
         };
         self.audit.page(filter).await.unwrap().entries
+    }
+
+    /// Has the owner save the settings again with `cfg_file`, a cfg of the data folder that runs
+    /// the usual one, then prints its own name.
+    async fn save_cfg(&self, cfg_file: &str) {
+        let data = self.dir.path().join("server-data");
+        fs::write(
+            data.join(cfg_file),
+            format!(
+                "exec server.cfg
+fake_print running {cfg_file}
+"
+            ),
+        )
+        .unwrap();
+        let stored = self
+            .servers
+            .launch_settings(Servers::DEFAULT)
+            .await
+            .unwrap()
+            .unwrap();
+        let settings = LaunchSettings {
+            cfg_file: cfg_file.to_owned(),
+            ..stored.settings
+        };
+        self.servers
+            .change_launch_settings(&self.owner, Servers::DEFAULT, settings, Some(stored.version))
+            .await
+            .unwrap();
+    }
+
+    /// Crashes the server, then waits for its restart of `generation` to be online and returns
+    /// the cfg it ran.
+    async fn crash_and_restart(&self, generation: u32) -> String {
+        self.supervision
+            .command(&self.owner, "fake_crash 3", CONSOLE_ROUTE.0, CONSOLE_ROUTE.1)
+            .await
+            .unwrap();
+        self.until(|status| status.generation == generation && status.state == ServerState::Online)
+            .await;
+        self.cfg_run_by(generation).await
+    }
+
+    async fn cfg_run_by(&self, generation: u32) -> String {
+        let deadline = Instant::now() + WAIT;
+        loop {
+            let ran = self.console().into_iter().find_map(|line| {
+                let text = plain(&line.5);
+                let cfg = text.split_once("] running ")?.1.to_owned();
+                (line.2 == generation).then_some(cfg)
+            });
+            if let Some(cfg) = ran {
+                return cfg;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "generation {generation} ran no cfg of its own"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
     }
 
     async fn stop_observer(&mut self) {
@@ -324,6 +393,32 @@ async fn a_command_whose_audit_entry_cannot_be_written_never_reaches_fxserver() 
             .any(|line| line.5.contains("never audited")),
         "{:#?}",
         observer.console()
+    );
+    observer.stop_observer().await;
+}
+
+#[tokio::test]
+async fn a_restart_after_a_crash_launches_the_settings_saved_while_the_server_ran() {
+    let mut observer = Observer::new(false).await;
+    observer.save_cfg("a.cfg").await;
+    observer.supervision.start_server(&observer.owner).await.unwrap();
+    observer.state(ServerState::Online).await;
+    assert_eq!(observer.cfg_run_by(1).await, "a.cfg");
+
+    observer.save_cfg("b.cfg").await;
+    let after_a_save = observer.crash_and_restart(2).await;
+    observer.save_cfg("c.cfg").await;
+    let refused = observer.supervision.start_server(&observer.owner).await;
+    let after_a_refused_start = observer.crash_and_restart(3).await;
+
+    assert_eq!(after_a_save, "b.cfg", "saved settings apply from the next spawn");
+    assert!(
+        matches!(&refused, Err(Error::Refused(error)) if error.code == ErrorCode::ServerRunning),
+        "{refused:?}"
+    );
+    assert_eq!(
+        after_a_refused_start, "c.cfg",
+        "the stored settings, whatever was asked in between"
     );
     observer.stop_observer().await;
 }

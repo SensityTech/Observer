@@ -452,7 +452,7 @@ export const en = {
         discard: 'Discard',
         discarded: 'Changes discarded: the form shows the settings as stored.',
         save: 'Save',
-        saved: 'Saved. FXServer uses these settings from its next start.',
+        saved: 'Saved. FXServer uses these settings from its next start, a restart after a crash included.',
         problems: {
             required: 'Fill this in.',
             tooLong: 'Too long: 1,024 characters at most.',
