@@ -186,6 +186,52 @@ describe('SchedulePage', () => {
         live.stop();
     });
 
+    it('should move the keyboard to the next chip, then to the field, as chips are removed', async () => {
+        const { getByRole, getByLabelText, live } = await page('11');
+
+        const sixteen = getByRole('button', { name: en.schedule.removeTime('16:00') });
+        getByRole('button', { name: en.schedule.removeTime('04:00') }).focus();
+        fireEvent.click(getByRole('button', { name: en.schedule.removeTime('04:00') }));
+        const afterFirst = document.activeElement;
+        fireEvent.click(sixteen);
+
+        expect(afterFirst).toBe(sixteen);
+        expect(document.activeElement).toBe(getByLabelText(en.schedule.addTime));
+        live.stop();
+    });
+
+    it('should hand the keyboard to the outcome once the action it pressed is done', async () => {
+        const answer = {
+            ...SCHEDULE,
+            upcoming: SCHEDULE.upcoming
+                .slice(0, 1)
+                .map((occurrence) => ({ ...occurrence, skipped: { kind: 'manual' as const, by: 'kenji' } })),
+        };
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(
+                async () =>
+                    new Response(JSON.stringify(answer), {
+                        status: 200,
+                        headers: { 'content-type': 'application/json' },
+                    }),
+            ),
+        );
+        const { getByRole, findByText, live } = await page('11', {
+            ...SCHEDULE,
+            upcoming: SCHEDULE.upcoming.slice(0, 1),
+        });
+
+        getByRole('button', { name: en.schedule.skip }).focus();
+        fireEvent.click(getByRole('button', { name: en.schedule.skip }));
+        // A browser drops the focus of a button it disables; jsdom keeps it.
+        act(() => getByRole('button', { name: en.schedule.skip }).blur());
+        const outcome = await findByText(en.schedule.skipped('04:00'));
+
+        expect(outcome.closest('[tabindex="-1"]')).toBe(document.activeElement);
+        live.stop();
+    });
+
     it('should count the changes typed in the save bar', async () => {
         const { getByRole, getByText, queryByText, live } = await page('11');
         expect(queryByText(en.schedule.changes(1))).toBeNull();

@@ -19,6 +19,7 @@ import {
     type ComponentProps,
     type FormEvent,
     type ReactNode,
+    type Ref,
 } from 'react';
 
 import { ApiError } from '../api/client';
@@ -212,6 +213,10 @@ function NextRestart({
     const zoned = useZoned(schedule.zone);
     const [outcome, setOutcome] = useState<Outcome | null>(null);
     const [planning, setPlanning] = useState(false);
+    const notice = useRef<HTMLDivElement>(null);
+    // An action pressed from the keyboard loses it: its button is disabled while it runs, and Restore
+    // or Cancel goes once done. The outcome gets it then.
+    const refocus = useRef(false);
     const canPlan = allows(me, Permission.ScheduleManage);
     const canRestart = allows(me, Permission.ServerControl);
     const running = server !== null && server.state !== 'stopped' && server.state !== 'crashLoop';
@@ -226,7 +231,10 @@ function NextRestart({
             call: () => Promise<ScheduleStatus>;
             done: (status: ScheduleStatus) => string;
         }) => call(),
-        onMutate: () => setOutcome(null),
+        onMutate: () => {
+            refocus.current = document.activeElement !== document.body;
+            setOutcome(null);
+        },
         onSuccess: (status, { done }) => setOutcome({ tone: 'success', message: done(status) }),
         onError: (error, { label }) =>
             setOutcome({ tone: 'danger', message: t.schedule.failed(label, errorMessage(t, error)) }),
@@ -263,6 +271,14 @@ function NextRestart({
             call: () => delayNext(minutes),
             done: (status) => t.schedule.delayed(status.next === null ? '' : zoned.clock(status.next.at)),
         });
+
+    // After every render: the button may go with the status that follows the answer.
+    useEffect(() => {
+        if (refocus.current && outcome !== null && document.activeElement === document.body) {
+            refocus.current = false;
+            notice.current?.focus();
+        }
+    });
 
     let summary;
     if (next === null) {
@@ -306,7 +322,7 @@ function NextRestart({
                     <Notice>{t.schedule.stopped}</Notice>
                 )}
                 {outcome && (
-                    <Notice tone={outcome.tone}>
+                    <Notice ref={notice} tabIndex={-1} tone={outcome.tone}>
                         <div className="flex items-start gap-3">
                             <p className="flex-1">{outcome.message}</p>
                             <button
@@ -725,11 +741,13 @@ function ListChip({
     label,
     remove,
     invalid,
+    removeRef,
     onRemove,
 }: {
     label: string;
     remove: string;
     invalid: boolean;
+    removeRef: Ref<HTMLButtonElement>;
     onRemove: () => void;
 }) {
     return (
@@ -741,6 +759,7 @@ function ListChip({
         >
             {label}
             <button
+                ref={removeRef}
                 type="button"
                 className="grid size-5 place-items-center rounded-pill text-ink-3 hover:bg-hover hover:text-ink focus-visible:outline-2 focus-visible:outline-accent max-md:size-9"
                 aria-label={remove}
@@ -786,6 +805,18 @@ function SettingsForm({ schedule }: { schedule: ScheduleStatus }) {
     const notice = useRef<HTMLDivElement>(null);
     const form = useRef<HTMLFormElement>(null);
     const showFirstIssue = useRef(false);
+    const removers = useRef(new Map<string, HTMLButtonElement>());
+    const addTimeField = useRef<HTMLInputElement>(null);
+    const addWarningField = useRef<HTMLInputElement>(null);
+    /** Where the keyboard goes once a removed chip is gone: the next chip, or its list's field. */
+    const focusAfterRemoval = useRef<{ chip: string | undefined; field: 'time' | 'warning' } | null>(null);
+    const remover = (key: string) => (button: HTMLButtonElement | null) => {
+        if (button === null) {
+            removers.current.delete(key);
+        } else {
+            removers.current.set(key, button);
+        }
+    };
 
     const changes = countChanges(shown.settings, draft);
     const stale = schedule.version !== shown.version;
@@ -859,6 +890,16 @@ function SettingsForm({ schedule }: { schedule: ScheduleStatus }) {
             notice.current?.focus();
         }
     }, [outcome]);
+
+    useEffect(() => {
+        const target = focusAfterRemoval.current;
+        if (target === null) {
+            return;
+        }
+        focusAfterRemoval.current = null;
+        const chip = target.chip === undefined ? undefined : removers.current.get(target.chip);
+        (chip ?? (target.field === 'time' ? addTimeField : addWarningField).current)?.focus();
+    });
 
     useEffect(() => {
         if (!showFirstIssue.current) {
@@ -938,13 +979,23 @@ function SettingsForm({ schedule }: { schedule: ScheduleStatus }) {
                                                     label={time}
                                                     remove={t.schedule.removeTime(time)}
                                                     invalid={issue('time', index) !== undefined}
-                                                    onRemove={() =>
+                                                    removeRef={remover(`time ${time}`)}
+                                                    onRemove={() => {
+                                                        const next =
+                                                            draft.times[index + 1] ?? draft.times[index - 1];
+                                                        focusAfterRemoval.current = {
+                                                            chip:
+                                                                next === undefined
+                                                                    ? undefined
+                                                                    : `time ${next}`,
+                                                            field: 'time',
+                                                        };
                                                         edit({
                                                             times: draft.times.filter(
                                                                 (other) => other !== time,
                                                             ),
-                                                        })
-                                                    }
+                                                        });
+                                                    }}
                                                 />
                                             </li>
                                         ))}
@@ -957,6 +1008,7 @@ function SettingsForm({ schedule }: { schedule: ScheduleStatus }) {
                             </div>
                             <div className="flex flex-wrap items-end gap-2">
                                 <TextField
+                                    ref={addTimeField}
                                     label={t.schedule.addTime}
                                     type="time"
                                     className="w-40 max-md:flex-1"
@@ -1086,11 +1138,18 @@ function SettingsForm({ schedule }: { schedule: ScheduleStatus }) {
                                         label={t.schedule.warningMinutes(minutes)}
                                         remove={t.schedule.removeWarning(minutes)}
                                         invalid={issue('warning', index) !== undefined}
-                                        onRemove={() =>
+                                        removeRef={remover(`warning ${minutes}`)}
+                                        onRemove={() => {
+                                            const next =
+                                                draft.warnings[index + 1] ?? draft.warnings[index - 1];
+                                            focusAfterRemoval.current = {
+                                                chip: next === undefined ? undefined : `warning ${next}`,
+                                                field: 'warning',
+                                            };
                                             edit({
                                                 warnings: draft.warnings.filter((other) => other !== minutes),
-                                            })
-                                        }
+                                            });
+                                        }}
                                     />
                                 </li>
                             ))}
@@ -1103,6 +1162,7 @@ function SettingsForm({ schedule }: { schedule: ScheduleStatus }) {
                         ))}
                         <div className="flex flex-wrap items-end gap-2">
                             <TextField
+                                ref={addWarningField}
                                 label={t.schedule.addWarning}
                                 type="number"
                                 inputMode="numeric"
