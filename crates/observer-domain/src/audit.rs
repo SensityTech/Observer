@@ -29,10 +29,13 @@ pub enum AuditAction {
     /// A signed-in user entered their password again, which unlocks sensitive actions for a while.
     /// A wrong one is a failure, as a wrong current password is for `PasswordChanged`.
     Reauthenticated,
+    /// The owner changed how FXServer is launched. `details` holds each changed setting with its
+    /// value before and after.
+    LaunchSettingsChanged,
 }
 
 impl AuditAction {
-    pub const ALL: [Self; 15] = [
+    pub const ALL: [Self; 16] = [
         Self::SetupCompleted,
         Self::SetupLinkCreated,
         Self::LoginSucceeded,
@@ -48,6 +51,7 @@ impl AuditAction {
         Self::PermissionDenied,
         Self::AuditExported,
         Self::Reauthenticated,
+        Self::LaunchSettingsChanged,
     ];
 
     pub const fn as_str(self) -> &'static str {
@@ -67,6 +71,7 @@ impl AuditAction {
             Self::PermissionDenied => "permission_denied",
             Self::AuditExported => "audit_exported",
             Self::Reauthenticated => "reauthenticated",
+            Self::LaunchSettingsChanged => "launch_settings_changed",
         }
     }
 

@@ -378,6 +378,7 @@ export const en = {
             permission_denied: 'Permission denied',
             audit_exported: 'Audit log exported',
             reauthenticated: 'Password confirmed',
+            launch_settings_changed: 'Launch settings changed',
         } satisfies Record<AuditAction, string>,
         outcomes: {
             success: 'Success',
@@ -462,6 +463,7 @@ export const en = {
                 ? `Your account does not hold the permission this needs: ${permissions[key].name}.`
                 : 'Your account does not hold the permission this needs.';
         },
+        owner_only: 'Only the owner can do this.',
         self_edit: 'Your own account changes from My account, not from here.',
         owner_protected: 'Nobody else can change the owner account.',
         escalation: (params) =>
@@ -477,6 +479,7 @@ export const en = {
             `This password is too long: ${formatNumber('en', numberParam(params, 'max'))} bytes at most.`,
         password_unchanged: 'Choose a password different from the current one.',
         unknown_permissions: 'This Observer does not know some of these permissions. Reload the page.',
+        invalid_launch_settings: 'Some settings need fixing. Each one says why below its field.',
         already_set_up: 'Observer is already set up. Sign in instead.',
         invalid_setup_token:
             'This setup link has expired or was already used. Run observer setup-link on the host for a new one.',

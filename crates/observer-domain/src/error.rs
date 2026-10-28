@@ -23,6 +23,8 @@ pub enum ErrorCode {
     WrongPassword,
     /// Params: `permission`, the key of the missing permission.
     Forbidden,
+    /// Only the owner may do this, whatever permissions anyone else holds.
+    OwnerOnly,
     SelfEdit,
     OwnerProtected,
     /// Params: `permissions`, the bits the editor would grant or revoke without holding them.
@@ -40,6 +42,8 @@ pub enum ErrorCode {
     PasswordUnchanged,
     /// Params: `permissions`, the bits the catalog does not know.
     UnknownPermissions,
+    /// Params: `issues`, the `LaunchIssue`s found, one per field at most.
+    InvalidLaunchSettings,
     AlreadySetUp,
     InvalidSetupToken,
     OriginMismatch,

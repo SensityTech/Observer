@@ -280,6 +280,23 @@ impl Accounts {
         Err(ApiError::new(ErrorCode::Forbidden).with("permission", key).into())
     }
 
+    /// Refuses anyone but the owner. What only the owner may change amounts to running code on the
+    /// host, so a refused change is audited as a critical permission's would be.
+    pub async fn authorize_owner(&self, caller: &Caller, method: &str, path: &str) -> Result<(), Error> {
+        if caller.is_owner {
+            return Ok(());
+        }
+        if !matches!(method, "GET" | "HEAD") {
+            let route = format!("{method} {path}");
+            let record = Record::by(caller, AuditAction::PermissionDenied)
+                .target(&route)
+                .outcome(Outcome::Denied)
+                .details(json!({ "ownerOnly": true }));
+            self.record_denial(caller, route, record).await?;
+        }
+        Err(ErrorCode::OwnerOnly.into())
+    }
+
     /// Refuses a caller who has not entered their password in the last ten minutes.
     pub fn require_reauthentication(&self, caller: &Caller) -> Result<(), Error> {
         let now = self.clock.now();

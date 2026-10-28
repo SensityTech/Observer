@@ -3,13 +3,14 @@
 use jiff::SignedDuration;
 use observer_domain::audit::{ActorKind, AuditAction, AuditEntry, AuditFilter, Outcome};
 use observer_domain::error::ErrorCode;
+use observer_domain::launch::{ExtraArgument, LaunchSettings, OneSync};
 use observer_domain::permissions::Permissions as P;
 use observer_store::{Database, StoreError, users};
 use serde_json::json;
 use tempfile::TempDir;
 use tokio::task::JoinHandle;
 
-use crate::{Accounts, AuditLog, Caller, Client, Clock, PasswordCost, SignedIn};
+use crate::{Accounts, AuditLog, Caller, Client, Clock, PasswordCost, Servers, SignedIn};
 
 const OWNER_PASSWORD: &str = "correct horse battery staple";
 
@@ -21,6 +22,7 @@ struct Lab {
     clock: Clock,
     accounts: Accounts,
     audit: AuditLog,
+    servers: Servers,
 }
 
 /// A signed-in browser: the session's two secrets and where it connects from.
@@ -41,12 +43,14 @@ impl Lab {
             .await
             .unwrap();
         let audit = AuditLog::new(db.clone(), clock.clone());
+        let servers = Servers::new(db.clone(), clock.clone());
         Self {
             _dir: dir,
             db,
             clock,
             accounts,
             audit,
+            servers,
         }
     }
 
@@ -1126,4 +1130,145 @@ async fn strangers_filling_the_hash_queue_keep_neither_a_known_network_nor_a_sig
         let refused = code(stranger.await.unwrap());
         assert!(matches!(refused, ErrorCode::InvalidCredentials | ErrorCode::Busy));
     }
+}
+
+/// A folder of the lab's host, as its platform writes paths.
+fn folder(name: &str) -> String {
+    if cfg!(windows) {
+        format!(r"C:\FXServer\{name}")
+    } else {
+        format!("/srv/fxserver/{name}")
+    }
+}
+
+fn launch_settings() -> LaunchSettings {
+    LaunchSettings {
+        build_path: folder("build"),
+        data_path: folder("server-data"),
+        cfg_file: "server.cfg".to_owned(),
+        onesync: OneSync::On,
+        auto_start: false,
+        txadmin_events: false,
+        extra_arguments: Vec::new(),
+    }
+}
+
+#[tokio::test]
+async fn launch_settings_are_stored_once_checked_with_what_changed_in_the_audit_log() {
+    let lab = Lab::new().await;
+    let owner = lab.caller(&lab.owner().await).await;
+    assert_eq!(lab.servers.launch_settings(Servers::DEFAULT).await.unwrap(), None);
+
+    lab.servers
+        .change_launch_settings(&owner, Servers::DEFAULT, launch_settings())
+        .await
+        .unwrap();
+    let edited = LaunchSettings {
+        onesync: OneSync::Legacy,
+        extra_arguments: vec![ExtraArgument {
+            name: "sv_enforceGameBuild".to_owned(),
+            value: "3258".to_owned(),
+        }],
+        ..launch_settings()
+    };
+    lab.servers
+        .change_launch_settings(&owner, Servers::DEFAULT, edited.clone())
+        .await
+        .unwrap();
+    lab.servers
+        .change_launch_settings(&owner, Servers::DEFAULT, edited.clone())
+        .await
+        .unwrap();
+
+    assert_eq!(
+        lab.servers.launch_settings(Servers::DEFAULT).await.unwrap(),
+        Some(edited)
+    );
+    let changes = lab.entries(AuditAction::LaunchSettingsChanged).await;
+    assert_eq!(changes.len(), 2, "saving the same settings again records nothing");
+    assert_eq!(changes[0].target.as_deref(), Some("default"));
+    assert_eq!(changes[0].actor_name.as_deref(), Some("ada"));
+    assert_eq!(
+        changes[0].details,
+        json!({
+            "onesync": { "before": "on", "after": "legacy" },
+            "extraArguments": {
+                "before": [],
+                "after": [{ "name": "sv_enforceGameBuild", "value": "3258" }],
+            },
+        })
+    );
+    assert_eq!(
+        changes[1].details["buildPath"],
+        json!({ "before": null, "after": folder("build") })
+    );
+    assert_eq!(
+        changes[1].details["autoStart"],
+        json!({ "before": null, "after": false })
+    );
+}
+
+#[tokio::test]
+async fn launch_settings_with_an_issue_are_refused_with_every_issue_and_change_nothing() {
+    let lab = Lab::new().await;
+    let owner = lab.caller(&lab.owner().await).await;
+    let broken = LaunchSettings {
+        data_path: "server-data".to_owned(),
+        extra_arguments: vec![ExtraArgument {
+            name: "rcon_password".to_owned(),
+            value: "hunter2".to_owned(),
+        }],
+        ..launch_settings()
+    };
+
+    let refused = lab
+        .servers
+        .change_launch_settings(&owner, Servers::DEFAULT, broken)
+        .await;
+
+    let crate::Error::Refused(refusal) = refused.err().unwrap() else {
+        unreachable!()
+    };
+    assert_eq!(refusal.code, ErrorCode::InvalidLaunchSettings);
+    assert_eq!(
+        refusal.params["issues"],
+        json!([
+            { "field": "dataPath", "index": null, "problem": "notAbsolute" },
+            { "field": "argumentName", "index": 0, "problem": "secret" },
+        ])
+    );
+    assert_eq!(lab.servers.launch_settings(Servers::DEFAULT).await.unwrap(), None);
+    assert_eq!(lab.entries(AuditAction::LaunchSettingsChanged).await, []);
+}
+
+#[tokio::test]
+async fn only_the_owner_passes_the_owner_check_and_a_refused_change_is_audited() {
+    let lab = Lab::new().await;
+    let owner = lab.owner().await;
+    let grace = lab.user(&owner, "grace", P::all()).await;
+    let (owner, grace) = (lab.caller(&owner).await, lab.caller(&grace).await);
+
+    lab.accounts
+        .authorize_owner(&owner, "PUT", "/api/servers/default/launch")
+        .await
+        .unwrap();
+    let read = lab
+        .accounts
+        .authorize_owner(&grace, "GET", "/api/servers/default/launch")
+        .await;
+    let change = lab
+        .accounts
+        .authorize_owner(&grace, "PUT", "/api/servers/default/launch")
+        .await;
+
+    assert_eq!(code(read), ErrorCode::OwnerOnly);
+    assert_eq!(code(change), ErrorCode::OwnerOnly);
+    let denied = lab.entries(AuditAction::PermissionDenied).await;
+    assert_eq!(denied.len(), 1, "a refused read is not audited");
+    assert_eq!(denied[0].actor_name.as_deref(), Some("grace"));
+    assert_eq!(
+        denied[0].target.as_deref(),
+        Some("PUT /api/servers/default/launch")
+    );
+    assert_eq!(denied[0].details, json!({ "ownerOnly": true }));
 }
