@@ -14,7 +14,9 @@ use observer_fxserver::health::{HangCause, HealthLimits, Problem};
 use observer_fxserver::launch::LaunchSettings;
 use observer_fxserver::recovery::RecoveryPolicy;
 use observer_fxserver::stdin::UserCommand;
-use observer_fxserver::supervisor::{Cause, Event, EventKind, Settings, State, StopTimings, Supervisor};
+use observer_fxserver::supervisor::{
+    Cause, ControlError, Event, EventKind, Settings, State, StopTimings, Supervisor,
+};
 use tempfile::TempDir;
 use tokio::sync::broadcast;
 use tokio::task::JoinHandle;
@@ -531,6 +533,27 @@ async fn a_fatal_error_that_leaves_the_process_up_ends_with_the_tree_killed() {
     lab.supervisor.stop("test").await.unwrap();
     lab.state(State::Stopped).await;
     lab.shut_down(false).await;
+}
+
+#[tokio::test]
+async fn a_restart_asked_while_observer_shuts_down_is_refused() {
+    let mut lab = Lab::new(&[("fake_bind_error", "1"), ("fake_fatal_dialog", "1")]).await;
+    lab.supervisor.start("test").await.unwrap();
+    lab.console_until("Fatal Error: Could not bind").await;
+    // Into the fatal error's grace, where the run is already ending.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    lab.supervisor.shutdown(false).await;
+
+    assert_eq!(
+        lab.supervisor.restart("panel").await,
+        Err(ControlError::ShuttingDown)
+    );
+    timeout(WAIT, lab.task.take().unwrap())
+        .await
+        .expect("the supervisor did not stop")
+        .unwrap();
+    assert_eq!(lab.generation(), 1);
 }
 
 #[tokio::test]

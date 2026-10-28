@@ -684,6 +684,9 @@ impl Actor {
     }
 
     async fn restart(&mut self, by: String) -> Result<(), ControlError> {
+        if self.shutdown.is_some() {
+            return Err(ControlError::ShuttingDown);
+        }
         match self.phase {
             Phase::Idle | Phase::Backoff { .. } => self.start(by).await,
             Phase::Notice { .. } | Phase::Quitting { .. } => Err(ControlError::Stopping),
