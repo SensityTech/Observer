@@ -1,5 +1,6 @@
-//! Turns launch settings into the exact process to start, refusing anything that would hand
-//! FXServer a command Observer did not mean to give it.
+//! Turns launch settings into the exact process to start. The settings follow the rules of
+//! `observer_domain::launch`, which refuse anything that would hand FXServer a command Observer
+//! did not mean to give it; what is left here is the file system and the command line itself.
 
 use std::collections::HashSet;
 use std::fs;
@@ -7,33 +8,16 @@ use std::io;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 
+use observer_domain::launch::{LaunchIssue, LaunchSettings, Platform};
 use observer_platform::Launch;
 use serde::Serialize;
 
 use crate::command;
-use crate::console::SECRET_CONVARS;
 use crate::layout::{Flavour, Layout};
 
-/// Names an extra argument may not set: they switch FXServer into txAdmin's modes, run other
-/// files, move the citizen folder, or are set by Observer itself (some through stdin, as secrets).
-const DENIED: [&str; 13] = [
-    "exec",
-    "citizen_dir",
-    "txAdminServerMode",
-    "monitorMode",
-    "serverProfile",
-    "txAdminPort",
-    "txDataPath",
-    "txAdminInterface",
-    "onesync",
-    "observer_txadmin_events",
-    "sv_prometheusBasicAuthUser",
-    "sv_prometheusBasicAuthPassword",
-    "sv_playersToken",
-];
-
 /// The convars Observer sets on every launch, through argv or stdin.
-const OBSERVER_CONVARS: [&str; 4] = [
+const OBSERVER_CONVARS: [&str; 5] = [
+    "onesync",
     "observer_txadmin_events",
     "sv_prometheusBasicAuthUser",
     "sv_prometheusBasicAuthPassword",
@@ -42,38 +26,6 @@ const OBSERVER_CONVARS: [&str; 4] = [
 
 /// How deep `exec` lines are followed when the cfg is scanned for warnings.
 const EXEC_DEPTH: usize = 5;
-
-#[derive(Debug, Clone)]
-pub struct LaunchSettings {
-    pub build: PathBuf,
-    /// The server data folder: FXServer's working directory, where the cfg and resources live.
-    pub data: PathBuf,
-    /// Relative to `data` unless absolute.
-    pub cfg: PathBuf,
-    pub onesync: Option<OneSync>,
-    /// Lets the bridge also raise txAdmin's events, for resources written against txAdmin.
-    pub txadmin_events: bool,
-    /// Rendered as `+set <name> <value>`.
-    pub extra: Vec<(String, String)>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum OneSync {
-    On,
-    Legacy,
-    Off,
-}
-
-impl OneSync {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::On => "on",
-            Self::Legacy => "legacy",
-            Self::Off => "off",
-        }
-    }
-}
 
 /// What the cfg does that works against Observer. The cfg is the user's file: Observer reads it
 /// and says so, it never rewrites it.
@@ -105,10 +57,8 @@ pub struct Prepared {
 
 #[derive(Debug, thiserror::Error)]
 pub enum LaunchError {
-    #[error("{} is a network, device or verbatim path, which FXServer cannot be run from", .0.display())]
-    RefusedPath(PathBuf),
-    #[error("{} would read to FXServer as a command: it starts with `+` or `-`, or holds a quote, a semicolon or a line break", .0.display())]
-    UnsafePath(PathBuf),
+    #[error("the launch settings are refused: {}", describe(.0))]
+    Invalid(Vec<LaunchIssue>),
     #[error("cannot resolve {}: {source}", path.display())]
     Resolve {
         path: PathBuf,
@@ -125,35 +75,45 @@ pub enum LaunchError {
         #[source]
         source: io::Error,
     },
-    #[error("`{0}` is not a convar name: use 1 to 64 letters, digits or underscores")]
-    BadName(String),
-    #[error("the value given for `{0}` contains a quote, a semicolon, a backslash or a control character")]
-    BadValue(String),
-    #[error(
-        "the value given for `{0}` starts with `+` or `-`, which FXServer reads as a command or an option"
-    )]
-    CommandValue(String),
-    #[error("`{0}` cannot be set as an extra argument: Observer manages it or it changes how FXServer runs")]
-    DeniedName(String),
-    #[error(
-        "`{0}` holds a secret, which other programs could read in FXServer's command line: set it in the cfg"
-    )]
-    SecretName(String),
-    #[error("`-fxdk` is not allowed: it starts FXServer as a development kit")]
-    Fxdk,
+}
+
+/// `buildPath notAbsolute, argumentName 2 reserved`: the issues as the API names them.
+fn describe(issues: &[LaunchIssue]) -> String {
+    let name = |value: serde_json::Result<serde_json::Value>| match value {
+        Ok(serde_json::Value::String(name)) => name,
+        _ => String::new(),
+    };
+    issues
+        .iter()
+        .map(|issue| {
+            let field = name(serde_json::to_value(issue.field));
+            let problem = name(serde_json::to_value(issue.problem));
+            match issue.index {
+                Some(index) => format!("{field} {} {problem}", index + 1),
+                None => format!("{field} {problem}"),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// Builds the launch: the flavour's program, then `+ensure observer`, `+exec <cfg>`, the extra
 /// arguments and Observer's convars last, so that they win over the cfg.
 pub fn prepare(settings: &LaunchSettings, flavour: Flavour) -> Result<Prepared, LaunchError> {
-    let build = resolve(&settings.build)?;
-    let data = resolve(&settings.data)?;
+    let platform = match flavour {
+        Flavour::Windows => Platform::Windows,
+        Flavour::Linux => Platform::Unix,
+    };
+    let issues = settings.issues(platform);
+    if !issues.is_empty() {
+        return Err(LaunchError::Invalid(issues));
+    }
+    let build = resolve(Path::new(&settings.build_path))?;
+    let data = resolve(Path::new(&settings.data_path))?;
     if !data.is_dir() {
         return Err(LaunchError::MissingData(data));
     }
-    refuse_special(&settings.cfg)?;
-    refuse_commands(&settings.cfg)?;
-    let cfg_file = data.join(&settings.cfg);
+    let cfg_file = data.join(&settings.cfg_file);
 
     let layout = Layout::new(build, flavour);
     let (program, mut args) = layout.program();
@@ -163,25 +123,24 @@ pub fn prepare(settings: &LaunchSettings, flavour: Flavour) -> Result<Prepared, 
             program,
         });
     }
-    refuse_commands(layout.citizen_root().as_path())?;
 
     args.extend(["+ensure".into(), "observer".into(), "+exec".into()]);
-    args.push(settings.cfg.clone().into_os_string());
-    for (name, value) in &settings.extra {
-        check_extra(name, value)?;
-        args.extend(["+set".into(), name.into(), value.into()]);
-    }
-    if let Some(onesync) = settings.onesync {
-        args.extend(["+set".into(), "onesync".into(), onesync.as_str().into()]);
+    args.push(settings.cfg_file.clone().into());
+    for argument in &settings.extra_arguments {
+        args.extend([
+            "+set".into(),
+            argument.name.clone().into(),
+            argument.value.clone().into(),
+        ]);
     }
     args.extend([
+        "+set".into(),
+        "onesync".into(),
+        settings.onesync.as_str().into(),
         "+set".into(),
         "observer_txadmin_events".into(),
         if settings.txadmin_events { "1" } else { "0" }.into(),
     ]);
-    if args.iter().any(|arg| has_fxdk(arg)) {
-        return Err(LaunchError::Fxdk);
-    }
 
     let text = fs::read_to_string(&cfg_file).map_err(|source| LaunchError::Cfg {
         path: cfg_file.clone(),
@@ -189,10 +148,6 @@ pub fn prepare(settings: &LaunchSettings, flavour: Flavour) -> Result<Prepared, 
     })?;
     let mut scan = Scan {
         data: &data,
-        observer_convars: OBSERVER_CONVARS
-            .into_iter()
-            .chain(settings.onesync.map(|_| "onesync"))
-            .collect(),
         warnings: Vec::new(),
         endpoint: None,
         seen: HashSet::new(),
@@ -213,74 +168,14 @@ pub fn prepare(settings: &LaunchSettings, flavour: Flavour) -> Result<Prepared, 
 }
 
 fn resolve(path: &Path) -> Result<PathBuf, LaunchError> {
-    refuse_special(path)?;
-    let absolute = std::path::absolute(path).map_err(|source| LaunchError::Resolve {
+    std::path::absolute(path).map_err(|source| LaunchError::Resolve {
         path: path.to_path_buf(),
         source,
-    })?;
-    refuse_special(&absolute)?;
-    Ok(absolute)
-}
-
-/// UNC (`\\server\share`), verbatim (`\\?\`) and device (`\\.\`) paths all start with two
-/// separators, in either direction.
-fn refuse_special(path: &Path) -> Result<(), LaunchError> {
-    let text = path.as_os_str().to_string_lossy();
-    let mut chars = text.chars();
-    let separator = |c: Option<char>| matches!(c, Some('\\' | '/'));
-    if separator(chars.next()) && separator(chars.next()) {
-        return Err(LaunchError::RefusedPath(path.to_path_buf()));
-    }
-    Ok(())
-}
-
-/// A path that ends up inside an FXServer command (`+exec`, `+set citizen_dir`).
-fn refuse_commands(path: &Path) -> Result<(), LaunchError> {
-    let text = path.as_os_str().to_string_lossy();
-    if text.starts_with(['+', '-']) || text.contains(['"', ';', '\r', '\n']) {
-        return Err(LaunchError::UnsafePath(path.to_path_buf()));
-    }
-    Ok(())
-}
-
-fn check_extra(name: &str, value: &str) -> Result<(), LaunchError> {
-    let valid_name = (1..=64).contains(&name.len())
-        && name
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_');
-    if !valid_name {
-        return Err(LaunchError::BadName(name.to_owned()));
-    }
-    if DENIED.iter().any(|denied| denied.eq_ignore_ascii_case(name)) {
-        return Err(LaunchError::DeniedName(name.to_owned()));
-    }
-    if SECRET_CONVARS
-        .iter()
-        .any(|secret| secret.eq_ignore_ascii_case(name))
-    {
-        return Err(LaunchError::SecretName(name.to_owned()));
-    }
-    if value.contains(['"', ';', '\\']) || value.chars().any(char::is_control) {
-        return Err(LaunchError::BadValue(name.to_owned()));
-    }
-    // An argument starting with `+` begins a command, one starting with `-` may be an option of
-    // FXServer's own; a negative number is neither.
-    let number = value
-        .strip_prefix('-')
-        .is_some_and(|rest| rest.starts_with(|c: char| c.is_ascii_digit() || c == '.'));
-    if value.starts_with('+') || (value.starts_with('-') && !number) {
-        return Err(LaunchError::CommandValue(name.to_owned()));
-    }
-    Ok(())
-}
-
-fn has_fxdk(arg: &std::ffi::OsStr) -> bool {
-    arg.to_string_lossy().to_ascii_lowercase().contains("-fxdk")
+    })
 }
 
 struct Scan<'a> {
     data: &'a Path,
-    observer_convars: Vec<&'static str>,
     warnings: Vec<CfgWarning>,
     endpoint: Option<SocketAddr>,
     seen: HashSet<PathBuf>,
@@ -337,8 +232,7 @@ impl Scan<'_> {
                 file: file.to_path_buf(),
                 line,
             });
-        } else if let Some(name) = self
-            .observer_convars
+        } else if let Some(name) = OBSERVER_CONVARS
             .iter()
             .find(|name| name.eq_ignore_ascii_case(convar))
         {
@@ -364,6 +258,7 @@ fn reachable(address: &str) -> Option<SocketAddr> {
 
 #[cfg(test)]
 mod tests {
+    use observer_domain::launch::{ExtraArgument, LaunchField, LaunchProblem, OneSync};
     use tempfile::TempDir;
 
     use super::*;
@@ -383,21 +278,19 @@ mod tests {
             Self { dir }
         }
 
-        fn settings(&self) -> LaunchSettings {
-            LaunchSettings {
-                build: self.dir.path().join("build"),
-                data: self.dir.path().join("data"),
-                cfg: PathBuf::from("server.cfg"),
-                onesync: None,
-                txadmin_events: false,
-                extra: Vec::new(),
-            }
+        fn path(&self, name: &str) -> String {
+            self.dir.path().join(name).to_str().unwrap().to_owned()
         }
 
-        fn with_extra(&self, name: &str, value: &str) -> LaunchSettings {
+        fn settings(&self) -> LaunchSettings {
             LaunchSettings {
-                extra: vec![(name.to_owned(), value.to_owned())],
-                ..self.settings()
+                build_path: self.path("build"),
+                data_path: self.path("data"),
+                cfg_file: "server.cfg".to_owned(),
+                onesync: OneSync::Off,
+                auto_start: false,
+                txadmin_events: false,
+                extra_arguments: Vec::new(),
             }
         }
 
@@ -427,9 +320,12 @@ mod tests {
     fn the_bridge_and_the_cfg_come_first_and_observer_convars_last() {
         let fixture = Fixture::new("sv_hostname \"Observer lab\"\n");
         let settings = LaunchSettings {
-            onesync: Some(OneSync::Legacy),
+            onesync: OneSync::Legacy,
             txadmin_events: true,
-            extra: vec![("sv_enforceGameBuild".to_owned(), "3258".to_owned())],
+            extra_arguments: vec![ExtraArgument {
+                name: "sv_enforceGameBuild".to_owned(),
+                value: "3258".to_owned(),
+            }],
             ..fixture.settings()
         };
 
@@ -458,173 +354,56 @@ mod tests {
         assert_eq!(prepared.warnings, []);
     }
 
+    /// Each rule has its tests in `observer_domain::launch`; here, that the builder applies them
+    /// before it touches anything.
     #[test]
-    fn onesync_is_left_to_the_cfg_unless_configured() {
+    fn settings_the_rules_refuse_never_reach_the_command_line() {
         let fixture = Fixture::new("");
-
-        let args = server_args(&prepare(&fixture.settings(), Flavour::HOST).unwrap());
-
-        assert!(!args.iter().any(|arg| arg == "onesync"));
-        assert_eq!(args[args.len() - 3..], ["+set", "observer_txadmin_events", "0"]);
-    }
-
-    #[test]
-    fn an_extra_name_must_be_a_plain_convar_name() {
-        let fixture = Fixture::new("");
-        let long = "x".repeat(65);
-        for name in ["", "sv host", "sv;quit", "+exec", "sv_\u{e9}", long.as_str()] {
-            assert!(
-                matches!(
-                    refused(&fixture.with_extra(name, "1")),
-                    Some(LaunchError::BadName(_))
-                ),
-                "{name:?} was accepted"
-            );
-        }
-        assert!(refused(&fixture.with_extra(&"x".repeat(64), "1")).is_none());
-    }
-
-    #[test]
-    fn an_extra_value_cannot_carry_a_command() {
-        let fixture = Fixture::new("");
-        for value in ["a\"b", "a;quit", "C:\\x", "a\rb", "a\nb", "a\tb", "a\u{0}b"] {
-            assert!(
-                matches!(
-                    refused(&fixture.with_extra("sv_x", value)),
-                    Some(LaunchError::BadValue(_))
-                ),
-                "{value:?} was accepted"
-            );
-        }
-        assert!(refused(&fixture.with_extra("sv_hostname", "Observer lab 2")).is_none());
-    }
-
-    #[test]
-    fn an_extra_value_read_as_a_command_or_an_option_is_refused() {
-        let fixture = Fixture::new("");
-        for value in ["+quit", "+_crash", "-dumpserver:1", "-fxdk", "-"] {
-            assert!(
-                matches!(
-                    refused(&fixture.with_extra("sv_projectDesc", value)),
-                    Some(LaunchError::CommandValue(_))
-                ),
-                "{value:?} was accepted"
-            );
-        }
-        for value in ["-1", "-0.5", "-.5", "a+b", "Observer +1"] {
-            assert!(
-                refused(&fixture.with_extra("sv_x", value)).is_none(),
-                "{value:?} was refused"
-            );
-        }
-    }
-
-    #[test]
-    fn a_secret_is_refused_as_an_extra_argument() {
-        let fixture = Fixture::new("");
-        for name in [
-            "sv_licenseKey",
-            "RCON_PASSWORD",
-            "mysql_connection_string",
-            "sv_tebexSecret",
-            "steam_webApiKey",
-        ] {
-            assert!(
-                matches!(
-                    refused(&fixture.with_extra(name, "hunter2")),
-                    Some(LaunchError::SecretName(_))
-                ),
-                "{name} was accepted"
-            );
-        }
-    }
-
-    #[test]
-    fn names_that_change_how_fxserver_runs_or_that_observer_sets_are_denied() {
-        let fixture = Fixture::new("");
-        for name in DENIED.iter().copied().chain(["TXADMINSERVERMODE", "Exec"]) {
-            assert!(
-                matches!(
-                    refused(&fixture.with_extra(name, "1")),
-                    Some(LaunchError::DeniedName(_))
-                ),
-                "{name} was accepted"
-            );
-        }
-    }
-
-    #[test]
-    fn fxdk_is_refused_wherever_it_appears() {
-        let fixture = Fixture::new("");
-        fixture.file("-fxdk.cfg", "");
-        let in_cfg = LaunchSettings {
-            cfg: PathBuf::from("./-fxdk.cfg"),
+        let settings = LaunchSettings {
+            build_path: "build".to_owned(),
+            cfg_file: "server.cfg;quit".to_owned(),
+            extra_arguments: vec![
+                ExtraArgument {
+                    name: "sv_projectDesc".to_owned(),
+                    value: "+quit".to_owned(),
+                },
+                ExtraArgument {
+                    name: "rcon_password".to_owned(),
+                    value: "hunter2".to_owned(),
+                },
+            ],
             ..fixture.settings()
         };
 
-        assert!(matches!(
-            refused(&fixture.with_extra("sv_x", "x -fxdk")),
-            Some(LaunchError::Fxdk)
-        ));
-        assert!(matches!(
-            refused(&fixture.with_extra("sv_x", "a-FXDK")),
-            Some(LaunchError::Fxdk)
-        ));
-        assert!(matches!(refused(&in_cfg), Some(LaunchError::Fxdk)));
-    }
+        let Some(LaunchError::Invalid(issues)) = refused(&settings) else {
+            panic!("the settings were not refused as invalid");
+        };
 
-    #[test]
-    fn network_verbatim_and_device_paths_are_refused() {
-        let fixture = Fixture::new("");
-        for path in [
-            r"\\server\share\fx",
-            r"\\?\C:\fx",
-            r"\\.\PhysicalDrive0",
-            "//server/share/fx",
-        ] {
-            let build = LaunchSettings {
-                build: path.into(),
-                ..fixture.settings()
-            };
-            let data = LaunchSettings {
-                data: path.into(),
-                ..fixture.settings()
-            };
-            let cfg = LaunchSettings {
-                cfg: path.into(),
-                ..fixture.settings()
-            };
-            for settings in [build, data, cfg] {
-                assert!(
-                    matches!(refused(&settings), Some(LaunchError::RefusedPath(_))),
-                    "{path} was accepted in {settings:?}"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn a_cfg_path_that_reads_as_commands_is_refused() {
-        let fixture = Fixture::new("");
-        fixture.file("+quit", "");
-        for cfg in ["server.cfg;quit", "+quit", "-dumpserver"] {
-            let settings = LaunchSettings {
-                cfg: PathBuf::from(cfg),
-                ..fixture.settings()
-            };
-
-            assert!(
-                matches!(refused(&settings), Some(LaunchError::UnsafePath(_))),
-                "{cfg:?} was accepted"
-            );
-        }
+        let found: Vec<_> = issues
+            .iter()
+            .map(|issue| (issue.field, issue.index, issue.problem))
+            .collect();
+        assert_eq!(
+            found,
+            [
+                (LaunchField::BuildPath, None, LaunchProblem::NotAbsolute),
+                (LaunchField::CfgFile, None, LaunchProblem::InvalidCfgFile),
+                (LaunchField::ArgumentValue, Some(0), LaunchProblem::OptionLike),
+                (LaunchField::ArgumentName, Some(1), LaunchProblem::Secret),
+            ]
+        );
+        assert_eq!(
+            LaunchError::Invalid(issues).to_string(),
+            "the launch settings are refused: buildPath notAbsolute, cfgFile invalidCfgFile, \
+             argumentValue 1 optionLike, argumentName 2 secret"
+        );
     }
 
     #[test]
     fn a_folder_without_fxserver_is_not_a_build() {
         let fixture = Fixture::new("");
         let settings = LaunchSettings {
-            build: fixture.dir.path().join("data"),
+            build_path: fixture.path("data"),
             ..fixture.settings()
         };
 
@@ -635,11 +414,11 @@ mod tests {
     fn the_data_folder_and_the_cfg_must_exist() {
         let fixture = Fixture::new("");
         let missing_data = LaunchSettings {
-            data: fixture.dir.path().join("nowhere"),
+            data_path: fixture.path("nowhere"),
             ..fixture.settings()
         };
         let missing_cfg = LaunchSettings {
-            cfg: PathBuf::from("other.cfg"),
+            cfg_file: "other.cfg".to_owned(),
             ..fixture.settings()
         };
 
@@ -661,12 +440,8 @@ mod tests {
              exec @chat/extra.cfg\n",
         );
         fixture.file("license.cfg", "sv_playersToken abc\n# start monitor\n");
-        let settings = LaunchSettings {
-            onesync: Some(OneSync::On),
-            ..fixture.settings()
-        };
 
-        let prepared = prepare(&settings, Flavour::HOST).unwrap();
+        let prepared = prepare(&fixture.settings(), Flavour::HOST).unwrap();
 
         let cfg = fixture.data().join("server.cfg");
         assert_eq!(

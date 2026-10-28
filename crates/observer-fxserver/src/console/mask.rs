@@ -2,7 +2,7 @@
 
 /// Convars whose value is a secret: the user's, the ones FXServer derives from the licence key,
 /// and the credentials Observer gives FXServer on each launch.
-pub(crate) const SECRET_CONVARS: [&str; 10] = [
+const SECRET_CONVARS: [&str; 10] = [
     "sv_licenseKey",
     "sv_tebexSecret",
     "steam_webApiKey",

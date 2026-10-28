@@ -9,9 +9,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
+use observer_domain::launch::{ExtraArgument, LaunchSettings, OneSync};
 use observer_fxserver::console::{ConsoleHub, LineKind, plain};
 use observer_fxserver::health::{HangCause, HealthLimits, Problem};
-use observer_fxserver::launch::LaunchSettings;
 use observer_fxserver::recovery::RecoveryPolicy;
 use observer_fxserver::stdin::{StdinError, UserCommand};
 use observer_fxserver::supervisor::{
@@ -30,8 +30,9 @@ const KILLED: Option<u32> = Some(1);
 #[cfg(unix)]
 const KILLED: Option<u32> = None;
 
-/// The ports tests may use, lent to one test at a time.
-static PORTS: LazyLock<Mutex<Vec<u16>>> = LazyLock::new(|| Mutex::new((41920..=41929).collect()));
+/// The ports tests may use, lent to one test at a time. 41929 and up belong to other Observers
+/// of the development host.
+static PORTS: LazyLock<Mutex<Vec<u16>>> = LazyLock::new(|| Mutex::new((41920..=41928).collect()));
 
 struct Port(u16);
 
@@ -80,19 +81,23 @@ impl Lab {
         )
         .unwrap();
 
-        let mut extra: Vec<(String, String)> = extra
+        let extra_arguments = extra
             .iter()
-            .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
+            .chain(&[("fake_heartbeat_ms", HEARTBEAT_MS)])
+            .map(|(name, value)| ExtraArgument {
+                name: (*name).to_owned(),
+                value: (*value).to_owned(),
+            })
             .collect();
-        extra.push(("fake_heartbeat_ms".to_owned(), HEARTBEAT_MS.to_owned()));
         let mut settings = Settings::new(
             LaunchSettings {
-                build: dir.path().join("build"),
-                data,
-                cfg: PathBuf::from("server.cfg"),
-                onesync: None,
+                build_path: dir.path().join("build").to_str().unwrap().to_owned(),
+                data_path: data.to_str().unwrap().to_owned(),
+                cfg_file: "server.cfg".to_owned(),
+                onesync: OneSync::Off,
+                auto_start: false,
                 txadmin_events: false,
-                extra,
+                extra_arguments,
             },
             dir.path().join("observer-data"),
         );

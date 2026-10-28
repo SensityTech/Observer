@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use observer_domain::launch::LaunchSettings;
 use observer_platform::{Exit, ExitWatch, Output, ProcessTree};
 use serde::Serialize;
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
@@ -18,7 +19,7 @@ use crate::console::{ConsoleHub, LineAssembler, LineFlags, LineKind, plain, sani
 use crate::crashes::{self, DumpLimits};
 use crate::exit;
 use crate::health::{self, HangCause, Health, HealthLimits, Probe, Problem, Verdict};
-use crate::launch::{self, CfgWarning, LaunchSettings};
+use crate::launch::{self, CfgWarning};
 use crate::layout::{Flavour, Layout};
 use crate::recovery::{Next, Recovery, RecoveryPolicy};
 use crate::stdin::{CommandRefusal, Credentials, StdinError, StdinWriter, SystemLine, UserCommand, Write};

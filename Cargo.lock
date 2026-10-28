@@ -580,6 +580,7 @@ dependencies = [
 name = "fake-fxserver"
 version = "0.1.0"
 dependencies = [
+ "observer-domain",
  "observer-fxserver",
  "observer-platform",
  "rustix",
@@ -1381,6 +1382,7 @@ dependencies = [
  "hyper-util",
  "jiff",
  "memchr",
+ "observer-domain",
  "observer-platform",
  "serde",
  "serde_json",

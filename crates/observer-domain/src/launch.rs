@@ -32,14 +32,17 @@ const RESERVED_NAMES: &[&str] = &[
     "sv_playersToken",
 ];
 
-/// Convars that hold secrets. The command line of a process is readable by anyone on the host, so
-/// these belong in the cfg.
+/// Convars that hold secrets: the user's, and those FXServer derives from the licence key. The
+/// command line of a process is readable by anyone on the host, so these belong in the cfg.
 const SECRET_NAMES: &[&str] = &[
     "sv_licenseKey",
     "sv_tebexSecret",
     "steam_webApiKey",
     "rcon_password",
     "mysql_connection_string",
+    "mumble_adminPass",
+    "sv_licenseKeyToken",
+    "adhesive_cdnKey",
 ];
 
 /// Windows opens these names as devices in any folder, with any extension.
@@ -478,6 +481,45 @@ mod tests {
         assert_eq!(build_path("D:/FXServer/build", Platform::Windows), []);
         assert_eq!(build_path(r"C:\FXServer\console\build", Platform::Windows), []);
         assert_eq!(build_path(r"C:\FXServer\nullable.d\build", Platform::Windows), []);
+        assert_eq!(build_path(r"C:\Users\ADMINI~1\.fx\build", Platform::Windows), []);
+    }
+
+    #[test]
+    fn the_data_folder_and_the_cfg_refuse_network_and_device_paths_too() {
+        for path in [
+            r"\\server\share\fx",
+            r"\\?\C:\fx",
+            r"\\.\PhysicalDrive0",
+            "//server/share/fx",
+        ] {
+            let data = LaunchSettings {
+                data_path: path.to_owned(),
+                ..settings()
+            }
+            .issues(Platform::Windows);
+            let cfg = LaunchSettings {
+                cfg_file: path.to_owned(),
+                ..settings()
+            }
+            .issues(Platform::Windows);
+
+            assert!(
+                matches!(
+                    data[..],
+                    [LaunchIssue {
+                        field: LaunchField::DataPath,
+                        problem: LaunchProblem::NetworkPath | LaunchProblem::DevicePath,
+                        ..
+                    }]
+                ),
+                "{path:?}: {data:?}"
+            );
+            assert_eq!(
+                cfg,
+                [issue(LaunchField::CfgFile, None, LaunchProblem::InvalidCfgFile)],
+                "{path:?}"
+            );
+        }
     }
 
     #[test]
@@ -536,6 +578,8 @@ mod tests {
             "my server.cfg",
             "configs//server.cfg",
             "server.cfg +exec other.cfg",
+            "+quit",
+            "server.cfg\"",
         ] {
             assert_eq!(
                 cfg(invalid, Platform::Unix),
@@ -552,7 +596,11 @@ mod tests {
             cfg("server-fxdk.cfg", Platform::Unix),
             [issue(LaunchField::CfgFile, None, LaunchProblem::Fxdk)]
         );
-        for option in ["--inspect", "-V", "--version"] {
+        assert_eq!(
+            cfg("./-fxdk.cfg", Platform::Windows),
+            [issue(LaunchField::CfgFile, None, LaunchProblem::Fxdk)]
+        );
+        for option in ["--inspect", "-V", "--version", "-dumpserver"] {
             assert_eq!(
                 cfg(option, Platform::Unix),
                 [issue(LaunchField::CfgFile, None, LaunchProblem::OptionLike)],
@@ -584,9 +632,12 @@ mod tests {
             ("-fxdk", LaunchProblem::InvalidName),
             ("convar;quit", LaunchProblem::InvalidName),
             ("é", LaunchProblem::InvalidName),
+            ("sv_\u{e9}", LaunchProblem::InvalidName),
             ("exec", LaunchProblem::Reserved),
+            ("Exec", LaunchProblem::Reserved),
             ("citizen_dir", LaunchProblem::Reserved),
             ("txadminservermode", LaunchProblem::Reserved),
+            ("TXADMINSERVERMODE", LaunchProblem::Reserved),
             ("monitorMode", LaunchProblem::Reserved),
             ("serverProfile", LaunchProblem::Reserved),
             ("txAdminPort", LaunchProblem::Reserved),
@@ -602,6 +653,9 @@ mod tests {
             ("steam_webApiKey", LaunchProblem::Secret),
             ("RCON_PASSWORD", LaunchProblem::Secret),
             ("mysql_connection_string", LaunchProblem::Secret),
+            ("mumble_adminPass", LaunchProblem::Secret),
+            ("SV_LICENSEKEYTOKEN", LaunchProblem::Secret),
+            ("adhesive_cdnKey", LaunchProblem::Secret),
         ] {
             assert_eq!(name(invalid), [problem], "{invalid:?}");
         }
@@ -625,12 +679,22 @@ mod tests {
             ("Lab\"; quit \"", LaunchProblem::ForbiddenCharacter),
             ("Lab; quit", LaunchProblem::ForbiddenCharacter),
             (r"Lab\", LaunchProblem::ForbiddenCharacter),
+            (r"C:\x", LaunchProblem::ForbiddenCharacter),
             ("Lab\rquit", LaunchProblem::ControlCharacter),
             ("Lab\nquit", LaunchProblem::ControlCharacter),
+            ("Lab\tquit", LaunchProblem::ControlCharacter),
+            ("Lab\u{0}quit", LaunchProblem::ControlCharacter),
             ("-fxdk", LaunchProblem::Fxdk),
+            ("x -fxdk", LaunchProblem::Fxdk),
+            ("a-FXDK", LaunchProblem::Fxdk),
             ("--inspect=0.0.0.0:9229", LaunchProblem::OptionLike),
             ("-V", LaunchProblem::OptionLike),
+            ("-dumpserver:1", LaunchProblem::OptionLike),
+            ("-", LaunchProblem::OptionLike),
+            // A negative number too: FXServer hands Node.js every argument starting with `-`.
+            ("-1", LaunchProblem::OptionLike),
             ("+quit", LaunchProblem::OptionLike),
+            ("+_crash", LaunchProblem::OptionLike),
         ] {
             assert_eq!(
                 value(invalid),
@@ -640,6 +704,7 @@ mod tests {
         }
         assert_eq!(value("Observer lab ^2 #1"), []);
         assert_eq!(value("Lab -1 +2"), []);
+        assert_eq!(value("a+b"), []);
     }
 
     #[test]
