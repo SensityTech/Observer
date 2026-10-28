@@ -123,7 +123,9 @@ impl Health {
                 self.ticks = Some(*ticks);
                 self.unauthorized = false;
             }
-            Probe::Perf(Err(ProbeError::Unauthorized)) => self.unauthorized = true,
+            // FXServer reads its credentials from stdin once it is up, so the first probes can be
+            // refused; a refusal only means something after it has accepted them.
+            Probe::Perf(Err(ProbeError::Unauthorized)) => self.unauthorized = self.ticks.is_some(),
             // Silence is measured from the last answer, so a failure has nothing to add.
             Probe::Dynamic(Err(_)) | Probe::Perf(Err(_)) => {}
         }
@@ -469,6 +471,21 @@ mod tests {
         health.probed(&Probe::Perf(Ok(400)), start + secs(9));
         health.heartbeat(start + secs(9));
         assert_eq!(health.verdict(start + secs(9), &LIMITS), Verdict::Healthy);
+    }
+
+    #[test]
+    fn a_refused_probe_before_fxserver_read_its_credentials_is_not_a_problem() {
+        let start = Instant::now();
+        let mut health = ready(start);
+        health.probed(&Probe::Perf(Err(ProbeError::Unauthorized)), start + secs(1));
+        assert_eq!(health.verdict(start + secs(1), &LIMITS), Verdict::Healthy);
+
+        health.probed(&Probe::Perf(Ok(12)), start + secs(5));
+        health.probed(&Probe::Perf(Err(ProbeError::Unauthorized)), start + secs(10));
+        assert_eq!(
+            health.verdict(start + secs(10), &LIMITS),
+            Verdict::Degraded(vec![Problem::ProbeUnauthorized])
+        );
     }
 
     #[test]
