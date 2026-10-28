@@ -422,3 +422,22 @@ async fn a_restart_after_a_crash_launches_the_settings_saved_while_the_server_ra
     );
     observer.stop_observer().await;
 }
+
+#[tokio::test]
+async fn a_stop_while_the_server_already_stops_is_refused_and_not_audited() {
+    let mut observer = Observer::new(false).await;
+    observer.supervision.start_server(&observer.owner).await.unwrap();
+    observer.state(ServerState::Online).await;
+
+    observer.supervision.stop_server(&observer.owner).await.unwrap();
+    observer.state(ServerState::Stopping).await;
+    let again = observer.supervision.stop_server(&observer.owner).await;
+    observer.state(ServerState::Stopped).await;
+
+    assert!(
+        matches!(&again, Err(Error::Refused(error)) if error.code == ErrorCode::ServerStopping),
+        "{again:?}"
+    );
+    assert_eq!(observer.audited(AuditAction::ServerStopped).await.len(), 1);
+    observer.stop_observer().await;
+}

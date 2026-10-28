@@ -441,6 +441,50 @@ async fn a_restart_stops_the_server_then_starts_a_new_generation() {
 }
 
 #[tokio::test]
+async fn a_stop_during_a_restart_ends_it_as_a_stop_by_whoever_asked() {
+    let mut lab = Lab::online(&[]).await;
+    lab.supervisor.restart("grace").await.unwrap();
+    lab.state(State::Stopping).await;
+
+    lab.supervisor.stop("ada").await.unwrap();
+
+    assert_eq!(
+        lab.state(State::Stopping).await,
+        Cause::Requested { by: "ada".to_owned() }
+    );
+    lab.state(State::Stopped).await;
+    lab.none_within(Duration::from_secs(1), starting).await;
+    assert_eq!(lab.generation(), 1);
+    lab.shut_down(false).await;
+}
+
+#[tokio::test]
+async fn a_stop_while_one_is_under_way_changes_nothing_and_says_so() {
+    let mut lab = Lab::online(&[]).await;
+    lab.supervisor.stop("ada").await.unwrap();
+    lab.state(State::Stopping).await;
+
+    let again = lab.supervisor.stop("grace").await;
+    lab.state(State::Stopped).await;
+    let mut quitting = Lab::online(&[]).await;
+    quitting.type_command("quit", "kenji").await;
+    let after_a_quit = quitting.supervisor.stop("grace").await;
+    quitting.shut_down(false).await;
+    let mut stopping = Lab::online(&[]).await;
+    stopping.supervisor.shutdown(false).await;
+    let while_observer_stops = stopping.supervisor.stop("ada").await;
+
+    assert_eq!(again, Err(ControlError::Stopping));
+    assert_eq!(after_a_quit, Err(ControlError::Stopping));
+    assert_eq!(while_observer_stops, Err(ControlError::ShuttingDown));
+    timeout(WAIT, stopping.task.take().unwrap())
+        .await
+        .expect("the supervisor did not stop")
+        .unwrap();
+    lab.shut_down(false).await;
+}
+
+#[tokio::test]
 async fn a_crash_is_followed_by_a_restart_after_the_backoff() {
     let mut lab = Lab::online(&[]).await;
 

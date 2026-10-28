@@ -725,7 +725,12 @@ impl Actor {
         }
     }
 
+    /// Stops the server, unless a stop is already under way: then nothing changes and it says so,
+    /// rather than have someone named for a stop they did not make.
     fn stop(&mut self, by: String) -> Result<(), ControlError> {
+        if self.shutdown.is_some() {
+            return Err(ControlError::ShuttingDown);
+        }
         match self.phase {
             Phase::Idle if self.state == State::CrashLoop => {
                 self.set_state(State::Stopped, Cause::Requested { by });
@@ -738,10 +743,26 @@ impl Actor {
                 Ok(())
             }
             Phase::Notice { .. } | Phase::Quitting { .. } | Phase::Ending { .. } => {
-                if let Some(run) = &mut self.run
-                    && !matches!(run.after, Some(After::Exit))
-                {
-                    run.after = Some(After::Stop);
+                let Some(run) = &mut self.run else {
+                    return Err(ControlError::NotRunning);
+                };
+                let restarting = match run.after {
+                    // A stop, or a console `quit`, already ends the run as a stop.
+                    Some(After::Stop | After::Exit) => return Err(ControlError::Stopping),
+                    Some(After::Restart { .. }) => true,
+                    // A run ending after a fatal error or a hang: it is not restarted now.
+                    None => false,
+                };
+                run.after = Some(After::Stop);
+                // The restart's stop goes on as a stop, made by whoever asked for it.
+                if restarting && self.state == State::Stopping {
+                    if let Phase::Notice { quit_at, .. } = self.phase {
+                        self.phase = Phase::Notice {
+                            quit_at,
+                            reason: StopReason::Stop,
+                        };
+                    }
+                    self.set_state(State::Stopping, Cause::Requested { by });
                 }
                 Ok(())
             }
