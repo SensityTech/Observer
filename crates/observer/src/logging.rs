@@ -17,6 +17,9 @@ pub fn init(level: &str, logs: &Path) -> anyhow::Result<WorkerGuard> {
         Err(_) => EnvFilter::try_new(level).with_context(|| format!("invalid log level `{level}`"))?,
     };
 
+    // The appender prunes old files before it creates its first one, and complains on stderr when
+    // the directory does not exist yet.
+    std::fs::create_dir_all(logs).with_context(|| format!("cannot create {}", logs.display()))?;
     let appender = RollingFileAppender::builder()
         .rotation(Rotation::DAILY)
         .filename_prefix("observer")
