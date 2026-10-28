@@ -1,4 +1,4 @@
-import type { AreaData, LineData, UTCTimestamp, WhitespaceData } from 'lightweight-charts';
+import type { AreaData, LineData, Time, UTCTimestamp, WhitespaceData } from 'lightweight-charts';
 
 import type { MetricsSeries } from '../api/generated/MetricsSeries';
 
@@ -16,28 +16,31 @@ export const buckets = (page: MetricsSeries): Bucket[] => {
 };
 
 /**
- * An unmeasured bucket is whitespace, and the point before it is drawn transparent: the library
- * would otherwise join both sides of a stop, which must read as a gap, never as zero players.
+ * An unmeasured bucket is whitespace, and the point before it takes `hidden`, the colours that make
+ * it transparent: the library would otherwise join both sides of a stop, which must read as a gap,
+ * never as zero.
  */
-export const playerPoints = (rows: Bucket[], transparent: string): (AreaData | WhitespaceData)[] => {
+export const gapPoints = <Point extends { time: Time; value: number }>(
+    rows: readonly { time: number; value: number | null }[],
+    hidden: Omit<Point, 'time' | 'value'>,
+): (Point | WhitespaceData)[] => {
     // The buckets after the newest measured one are still to come, not a gap.
-    const newest = rows.findLastIndex((row) => row.players !== null);
+    const newest = rows.findLastIndex((row) => row.value !== null);
     return rows.map((row, index) => {
         const time = row.time as UTCTimestamp;
-        if (row.players === null) {
+        if (row.value === null) {
             return { time };
         }
-        return index < newest && rows[index + 1]?.players === null
-            ? {
-                  time,
-                  value: row.players,
-                  lineColor: transparent,
-                  topColor: transparent,
-                  bottomColor: transparent,
-              }
-            : { time, value: row.players };
+        const beforeGap = index < newest && rows[index + 1]?.value === null;
+        return (beforeGap ? { time, value: row.value, ...hidden } : { time, value: row.value }) as Point;
     });
 };
+
+export const playerPoints = (rows: Bucket[], transparent: string): (AreaData | WhitespaceData)[] =>
+    gapPoints<AreaData>(
+        rows.map((row) => ({ time: row.time, value: row.players })),
+        { lineColor: transparent, topColor: transparent, bottomColor: transparent },
+    );
 
 export const slotPoints = (rows: Bucket[]): (LineData | WhitespaceData)[] =>
     rows.map((row) =>

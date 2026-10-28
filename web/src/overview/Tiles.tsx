@@ -1,12 +1,24 @@
 import { useQuery } from '@tanstack/react-query';
-import { Cpu, Gauge, MemoryStick, Server, Users, Activity, type LucideIcon } from 'lucide-react';
+import {
+    Activity,
+    Cpu,
+    Gauge,
+    MemoryStick,
+    Server,
+    TriangleAlert,
+    Users,
+    type LucideIcon,
+} from 'lucide-react';
 import { useMemo, type ReactNode } from 'react';
 
 import { healthQuery } from '../api/health';
 import type { LiveSample } from '../api/generated/LiveSample';
 import type { MetricsSeries } from '../api/generated/MetricsSeries';
+import type { RunGrowth } from '../api/generated/RunGrowth';
 import type { Series } from '../api/generated/Series';
-import { seriesQuery } from '../api/metrics';
+import { growthQuery, seriesQuery } from '../api/metrics';
+import { Chip } from '../components/Chip';
+import { Distribution } from '../components/Distribution';
 import { Sparkline } from '../components/Sparkline';
 import { useI18n } from '../i18n/I18nProvider';
 import { useSnapshot } from '../live/context';
@@ -32,13 +44,16 @@ export const TILE_SERIES = [
 
 type HourSeries = (typeof TILE_SERIES)[number];
 
+/** Under this share of its maximum the processors' clock reads as held back. */
+const LIMITED_BELOW = 95;
+
 /** A figure split into its number and its unit, as the tile shows them: `9.4` and `GB`. */
-const split = (formatted: string): [string, string] => {
+export const split = (formatted: string): [string, string] => {
     const space = formatted.lastIndexOf(' ');
     return space < 0 ? [formatted, ''] : [formatted.slice(0, space), formatted.slice(space + 1)];
 };
 
-const total = (values: readonly (number | null)[]) =>
+export const total = (values: readonly (number | null)[]) =>
     values.some((value) => value !== null)
         ? values.reduce<number>((sum, value) => sum + (value ?? 0), 0)
         : null;
@@ -47,6 +62,7 @@ const total = (values: readonly (number | null)[]) =>
 export function Tiles() {
     const { recent, latest } = useLiveMetrics();
     const hour = useQuery(seriesQuery('1h', TILE_SERIES));
+    const growth = useQuery(growthQuery);
     const merged = useMemo(() => (hour.data ? mergeLive(hour.data, recent) : null), [hour.data, recent]);
     const trend = (series: HourSeries) => merged?.series.find((data) => data.series === series)?.values ?? [];
 
@@ -54,8 +70,8 @@ export function Tiles() {
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
             <PlayersTile latest={latest} trend={trend} />
             <TickTile latest={latest} trend={trend} hour={merged} />
-            <CpuTile latest={latest} trend={trend} />
-            <MemoryTile latest={latest} trend={trend} />
+            <CpuTile latest={latest} />
+            <MemoryTile latest={latest} trend={trend} growth={growth.data ?? null} />
             <HostTile latest={latest} trend={trend} />
             <ObserverTile latest={latest} trend={trend} />
         </div>
@@ -67,24 +83,43 @@ type TileProps = {
     trend: (series: HourSeries) => readonly (number | null)[];
 };
 
+/** A fact of a tile: its term, its value, and whether it is the one that warns. */
+export type Fact = { term: string; detail: ReactNode; warning?: boolean };
+
+export function Facts({ facts }: { facts: readonly Fact[] }) {
+    return (
+        <dl className="flex flex-col border-t border-line">
+            {facts.map(({ term, detail, warning }) => (
+                <div
+                    key={term}
+                    className="flex items-baseline justify-between gap-3 border-b border-line pt-1.5 pb-1.25 text-small last:border-b-0"
+                >
+                    <dt className="text-ink-3">{term}</dt>
+                    <dd className={cn('text-right', warning ? 'text-warning' : 'text-ink-2')}>{detail}</dd>
+                </div>
+            ))}
+        </dl>
+    );
+}
+
 function Tile({
     icon: Icon,
     label,
     aside,
     value,
     unit,
+    warning = false,
     facts,
     trend,
-    trendLabel,
 }: {
     icon: LucideIcon;
     label: string;
     aside?: ReactNode;
     value: string;
     unit?: string;
-    facts: [string, ReactNode][];
-    trend: readonly (number | null)[];
-    trendLabel: string;
+    warning?: boolean;
+    facts: Fact[];
+    trend: ReactNode;
 }) {
     // A percentage keeps its sign against the number: `182%` then ` of one core`.
     const glued = value.endsWith('%');
@@ -98,7 +133,7 @@ function Tile({
                 {label}
                 {aside}
             </h2>
-            <p className="text-tile whitespace-nowrap text-ink">
+            <p className={cn('text-tile whitespace-nowrap', warning ? 'text-warning' : 'text-ink')}>
                 {value}
                 {unit && (
                     <span
@@ -111,18 +146,8 @@ function Tile({
                     </span>
                 )}
             </p>
-            <dl className="flex flex-col border-t border-line">
-                {facts.map(([term, detail]) => (
-                    <div
-                        key={term}
-                        className="flex items-baseline justify-between gap-3 border-b border-line pt-1.5 pb-1.25 text-small last:border-b-0"
-                    >
-                        <dt className="text-ink-3">{term}</dt>
-                        <dd className="text-right text-ink-2">{detail}</dd>
-                    </div>
-                ))}
-            </dl>
-            <Sparkline className="self-end" values={trend} label={trendLabel} />
+            <Facts facts={facts} />
+            {trend}
         </section>
     );
 }
@@ -151,21 +176,22 @@ function PlayersTile({ latest, trend }: TileProps) {
             value={shown('players', format.number)}
             unit={slots === null ? undefined : t.tiles.players.of(format.number(slots))}
             facts={[
-                [
-                    t.tiles.players.ping,
-                    average === null || p95 === null
-                        ? t.tiles.unknown
-                        : t.tiles.players.pings(format.milliseconds(average), format.milliseconds(p95)),
-                ],
-                [
-                    t.tiles.players.lastHour,
-                    joined === null || left === null
-                        ? t.tiles.unknown
-                        : t.tiles.players.joinedLeft(format.number(joined), format.number(left)),
-                ],
+                {
+                    term: t.tiles.players.ping,
+                    detail:
+                        average === null || p95 === null
+                            ? t.tiles.unknown
+                            : t.tiles.players.pings(format.milliseconds(average), format.milliseconds(p95)),
+                },
+                {
+                    term: t.tiles.players.lastHour,
+                    detail:
+                        joined === null || left === null
+                            ? t.tiles.unknown
+                            : t.tiles.players.joinedLeft(format.number(joined), format.number(left)),
+                },
             ]}
-            trend={trend('players')}
-            trendLabel={t.tiles.players.trend}
+            trend={<Sparkline className="self-end" values={trend('players')} label={t.tiles.players.trend} />}
         />
     );
 }
@@ -196,98 +222,158 @@ function TickTile({ latest, trend, hour }: TileProps & { hour: MetricsSeries | n
             value={shown('mainTick', (ms) => split(format.milliseconds(ms))[0])}
             unit={value('mainTick') === null ? undefined : t.tiles.tick.unit}
             facts={[
-                [t.tiles.tick.overBudget, shown('mainOverBudget', format.percent)],
-                [
-                    t.tiles.tick.others,
-                    network === null && sync === null
-                        ? t.tiles.unknown
-                        : t.tiles.tick.pair(
-                              network === null ? t.tiles.unknown : format.milliseconds(network),
-                              sync === null ? t.tiles.unknown : format.milliseconds(sync),
-                          ),
-                ],
-                [t.tiles.tick.lastHitch, hitch],
+                { term: t.tiles.tick.overBudget, detail: shown('mainOverBudget', format.percent) },
+                {
+                    term: t.tiles.tick.others,
+                    detail:
+                        network === null && sync === null
+                            ? t.tiles.unknown
+                            : t.tiles.pair(
+                                  network === null ? t.tiles.unknown : format.milliseconds(network),
+                                  sync === null ? t.tiles.unknown : format.milliseconds(sync),
+                              ),
+                },
+                { term: t.tiles.tick.lastHitch, detail: hitch },
             ]}
-            trend={trend('mainTick')}
-            trendLabel={t.tiles.tick.trend}
+            trend={<Sparkline className="self-end" values={trend('mainTick')} label={t.tiles.tick.trend} />}
         />
     );
 }
 
-function CpuTile({ latest, trend }: TileProps) {
+function CpuTile({ latest }: Pick<TileProps, 'latest'>) {
     const { t, format, value, shown } = useValues(latest);
-    const threads = value('fxsThreads');
-    const handles = value('fxsHandles');
-    const children = value('children');
-    const childrenCpu = value('childrenCpu');
     const cores = latest?.cores ?? null;
+    const cpu = value('fxsCpu');
+    const kernel = value('fxsKernel');
+    const share = (series: Series) => shown(series, format.percent);
+    // The split of the latest sample; nothing to split at 0.
+    const kernelShare = cpu === null || kernel === null || cpu <= 0 ? null : Math.min(1, kernel / cpu);
     return (
         <Tile
             icon={Cpu}
             label={t.tiles.cpu.label}
             value={shown('fxsCpu', format.percent)}
-            unit={value('fxsCpu') === null ? undefined : t.tiles.cpu.unit}
+            unit={cpu === null ? undefined : t.tiles.cpu.unit}
             facts={[
-                [
-                    t.tiles.cpu.machine,
-                    cores === null ? t.tiles.unknown : shown('fxsCpu', (cpu) => format.percent(cpu / cores)),
-                ],
-                [
-                    t.tiles.cpu.threadsHandles,
-                    t.tiles.tick.pair(
-                        threads === null ? t.tiles.unknown : format.number(threads),
-                        handles === null ? t.tiles.unknown : format.number(handles),
+                {
+                    term: t.tiles.cpu.machine,
+                    detail:
+                        cores === null
+                            ? t.tiles.unknown
+                            : shown('fxsCpu', (used) => format.percent(used / cores)),
+                },
+                { term: t.tiles.cpu.main, detail: share('mainThreadCpu') },
+                {
+                    term: t.tiles.cpu.networkSync,
+                    detail: t.tiles.pair(share('networkThreadCpu'), share('syncThreadCpu')),
+                },
+                {
+                    term: t.tiles.cpu.runtimes,
+                    detail: t.tiles.triple(
+                        share('jsThreadsCpu'),
+                        share('monoThreadsCpu'),
+                        share('otherThreadsCpu'),
                     ),
-                ],
-                [
-                    t.tiles.cpu.children,
-                    children === null
-                        ? t.tiles.unknown
-                        : t.tiles.cpu.childrenValue(
-                              children,
-                              childrenCpu === null ? t.tiles.unknown : format.percent(childrenCpu),
-                          ),
-                ],
+                },
             ]}
-            trend={trend('fxsCpu')}
-            trendLabel={t.tiles.cpu.trend}
+            trend={
+                <Distribution
+                    className="self-end"
+                    parts={[
+                        {
+                            name: t.tiles.cpu.user,
+                            share: kernelShare === null ? null : 1 - kernelShare,
+                            fill: 'bg-ink-2',
+                        },
+                        { name: t.tiles.cpu.kernel, share: kernelShare, fill: 'bg-chart-muted' },
+                    ]}
+                />
+            }
         />
     );
 }
 
-function MemoryTile({ latest, trend }: TileProps) {
-    const { t, format, value, shown } = useValues(latest);
+/** `+180 MB/h`: a signed growth per hour. */
+const signed = (formatted: string, perHour: number) => (perHour > 0 ? `+${formatted}` : formatted);
+
+function MemoryTile({ latest, trend, growth }: TileProps & { growth: RunGrowth | null }) {
+    const { t, format, value } = useValues(latest);
     const privateBytes = value('fxsPrivate');
     const [number, unit] = privateBytes === null ? [t.tiles.unknown, ''] : split(format.bytes(privateBytes));
+    const workingSet = value('fxsWorkingSet');
+    const peak = value('fxsWorkingSetPeak');
     const used = value('jsHeapUsed');
     const heap = value('jsHeapTotal');
     const read = value('fxsRead');
     const written = value('fxsWrite');
     const rate = (bytes: number | null) =>
         bytes === null ? t.tiles.unknown : t.tiles.memory.perSecond(format.bytes(bytes));
+    const memory = growth?.private ?? null;
+    const handles = growth?.handles ?? null;
+    const leaking = memory?.leak === true;
+    const facts: Fact[] = [
+        {
+            term: t.tiles.memory.sinceStart,
+            detail:
+                memory === null
+                    ? t.tiles.unknown
+                    : t.tiles.memory.perHour(signed(format.bytes(memory.perHour), memory.perHour)),
+            warning: leaking,
+        },
+        {
+            term: t.tiles.memory.workingSet,
+            detail:
+                workingSet === null
+                    ? t.tiles.unknown
+                    : peak === null
+                      ? format.bytes(workingSet)
+                      : t.tiles.memory.withPeak(format.bytes(workingSet), format.bytes(peak)),
+        },
+        {
+            term: t.tiles.memory.heap,
+            detail:
+                used === null || heap === null
+                    ? t.tiles.unknown
+                    : t.tiles.ratio(format.bytes(used), format.bytes(heap)),
+        },
+        {
+            term: t.tiles.memory.io,
+            detail:
+                read === null && written === null ? t.tiles.unknown : t.tiles.pair(rate(read), rate(written)),
+        },
+    ];
+    if (handles?.leak === true) {
+        facts.push({
+            term: t.tiles.memory.handles,
+            detail: t.tiles.memory.handlesSinceStart(
+                signed(format.number(Math.round(handles.perHour)), handles.perHour),
+            ),
+            warning: true,
+        });
+    }
     return (
         <Tile
             icon={MemoryStick}
             label={t.tiles.memory.label}
+            aside={
+                (leaking || handles?.leak === true) && (
+                    <Chip tone="warning" icon={TriangleAlert} className="ml-auto">
+                        {t.tiles.memory.possibleLeak}
+                    </Chip>
+                )
+            }
             value={number}
             unit={unit === '' ? undefined : t.tiles.memory.unit(unit)}
-            facts={[
-                [t.tiles.memory.workingSet, shown('fxsWorkingSet', format.bytes)],
-                [
-                    t.tiles.memory.heap,
-                    used === null || heap === null
-                        ? t.tiles.unknown
-                        : t.tiles.ratio(format.bytes(used), format.bytes(heap)),
-                ],
-                [
-                    t.tiles.memory.io,
-                    read === null && written === null
-                        ? t.tiles.unknown
-                        : t.tiles.tick.pair(rate(read), rate(written)),
-                ],
-            ]}
-            trend={trend('fxsPrivate')}
-            trendLabel={t.tiles.memory.trend}
+            warning={leaking}
+            facts={facts}
+            trend={
+                <Sparkline
+                    className="self-end"
+                    values={trend('fxsPrivate')}
+                    label={t.tiles.memory.trend}
+                    warning={leaking}
+                />
+            }
         />
     );
 }
@@ -297,37 +383,81 @@ function HostTile({ latest, trend }: TileProps) {
     const used = value('hostMemoryUsed');
     const memory = value('hostMemoryTotal');
     const free = value('hostDiskFree');
-    const disk = value('hostDiskTotal');
+    const latency = value('hostDiskLatency');
+    const transfers = value('hostDiskTransfers');
     const received = value('hostReceive');
     const sent = value('hostSend');
+    const clock = value('hostClock');
+    const clockMax = value('hostClockMax');
+    const limit = value('hostClockLimit');
+    const steal = value('hostSteal');
+    const pressure = (['hostPressureCpu', 'hostPressureMemory', 'hostPressureIo'] as const).map(value);
+    const ghz = (mhz: number) =>
+        format.number(mhz / 1000, { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+
+    let diskLatency: string = t.tiles.unknown;
+    if (transfers === 0) {
+        diskLatency = t.tiles.host.idle;
+    } else if (latency !== null) {
+        diskLatency = format.milliseconds(latency);
+    }
+    const facts: Fact[] = [
+        {
+            term: t.tiles.host.memory,
+            detail:
+                used === null || memory === null
+                    ? t.tiles.unknown
+                    : t.tiles.ratio(format.bytes(used), format.bytes(memory)),
+        },
+        {
+            term: t.tiles.host.disk,
+            detail: t.tiles.pair(free === null ? t.tiles.unknown : format.bytes(free), diskLatency),
+        },
+        {
+            term: t.tiles.host.network,
+            detail:
+                received === null || sent === null
+                    ? t.tiles.unknown
+                    : t.tiles.pair(format.bitRate(received), format.bitRate(sent)),
+        },
+        {
+            term: t.tiles.host.clock,
+            detail:
+                clock === null || clockMax === null ? (
+                    t.tiles.unknown
+                ) : (
+                    <>
+                        {t.tiles.host.clockValue(ghz(clock), ghz(clockMax))}
+                        {limit !== null && limit < LIMITED_BELOW && (
+                            <span className="text-warning">
+                                {t.tiles.host.limited(format.percent(limit))}
+                            </span>
+                        )}
+                    </>
+                ),
+        },
+    ];
+    // Only Linux says these; Windows never shows the rows.
+    if (steal !== null) {
+        facts.push({ term: t.tiles.host.steal, detail: format.percent(steal) });
+    }
+    if (pressure.some((share) => share !== null)) {
+        const [cpu, ram, io] = pressure.map((share) =>
+            share === null ? t.tiles.unknown : format.percent(share),
+        );
+        facts.push({
+            term: t.tiles.host.pressure,
+            detail: t.tiles.host.pressureValue(cpu ?? '', ram ?? '', io ?? ''),
+        });
+    }
     return (
         <Tile
             icon={Server}
             label={t.tiles.host.label}
             value={shown('hostCpu', format.percent)}
             unit={value('hostCpu') === null ? undefined : t.tiles.host.unit}
-            facts={[
-                [
-                    t.tiles.host.memory,
-                    used === null || memory === null
-                        ? t.tiles.unknown
-                        : t.tiles.ratio(format.bytes(used), format.bytes(memory)),
-                ],
-                [
-                    t.tiles.host.disk,
-                    free === null || disk === null
-                        ? t.tiles.unknown
-                        : t.tiles.ratio(format.bytes(free), format.bytes(disk)),
-                ],
-                [
-                    t.tiles.host.network,
-                    received === null || sent === null
-                        ? t.tiles.unknown
-                        : t.tiles.tick.pair(format.bitRate(received), format.bitRate(sent)),
-                ],
-            ]}
-            trend={trend('hostCpu')}
-            trendLabel={t.tiles.host.trend}
+            facts={facts}
+            trend={<Sparkline className="self-end" values={trend('hostCpu')} label={t.tiles.host.trend} />}
         />
     );
 }
@@ -358,28 +488,35 @@ function ObserverTile({ latest, trend }: TileProps) {
             value={number}
             unit={unit === '' ? undefined : t.tiles.observer.unit(unit)}
             facts={[
-                [t.tiles.observer.cpu, shown('observerCpu', format.percent)],
-                [t.tiles.observer.clients, shown('dashboardClients', format.number)],
-                [
-                    t.tiles.observer.databases,
-                    state === null || metrics === null
-                        ? t.tiles.unknown
-                        : t.tiles.observer.databasesValue(format.bytes(state), format.bytes(metrics)),
-                ],
-                [
-                    t.tiles.observer.version,
-                    version === null
-                        ? t.tiles.unknown
-                        : status === null
-                          ? version
-                          : t.tiles.observer.versionValue(
-                                version,
-                                format.duration(secondsSince(status.startedAt, now)),
-                            ),
-                ],
+                { term: t.tiles.observer.cpu, detail: shown('observerCpu', format.percent) },
+                { term: t.tiles.observer.clients, detail: shown('dashboardClients', format.number) },
+                {
+                    term: t.tiles.observer.databases,
+                    detail:
+                        state === null || metrics === null
+                            ? t.tiles.unknown
+                            : t.tiles.observer.databasesValue(format.bytes(state), format.bytes(metrics)),
+                },
+                {
+                    term: t.tiles.observer.version,
+                    detail:
+                        version === null
+                            ? t.tiles.unknown
+                            : status === null
+                              ? version
+                              : t.tiles.observer.versionValue(
+                                    version,
+                                    format.duration(secondsSince(status.startedAt, now)),
+                                ),
+                },
             ]}
-            trend={trend('observerWorkingSet')}
-            trendLabel={t.tiles.observer.trend}
+            trend={
+                <Sparkline
+                    className="self-end"
+                    values={trend('observerWorkingSet')}
+                    label={t.tiles.observer.trend}
+                />
+            }
         />
     );
 }

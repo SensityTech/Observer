@@ -28,6 +28,7 @@ const library = vi.hoisted(() => {
                     added.drawn.push({ kind: 'update', points: [point] }),
                 applyOptions: () => {},
                 priceToCoordinate: () => null,
+                attachPrimitive: () => {},
             };
         },
         applyOptions: () => {},
