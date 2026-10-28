@@ -5,11 +5,14 @@
 //! bridge: `ready` once, then a heartbeat.
 //!
 //! Failures on demand, through convars (`+set fake_x y`, or in the cfg) or console commands:
-//! - `fake_quit_delay_ms` (500): time between `quit` and the exit, with code 1 as FXServer;
+//! - `fake_quit_delay_ms` (500): time between `quit` and the end, which is what FXServer 35245 does:
+//!   exit code 1 on Windows, SIGSEGV on Linux;
 //! - `fake_ignore_quit 1`: `quit` does nothing;
 //! - `fake_heartbeat_ms` (3000): the bridge heartbeat period;
 //! - `fake_crash_after_ms`, `fake_hang_after_ms`: crash or hang the main loop on a timer;
 //! - `fake_bind_error 1`: report the port as taken, as when it really is;
+//! - `fake_fatal_dialog 1`: stay up after a fatal error instead of exiting with code 1, as FXServer
+//!   on Windows does when it shows its `Fatal Error` dialog;
 //! - `fake_spawn_child 1`: start a child that inherits the pipes and outlives a crash, like the
 //!   crash dump server;
 //! - on stdin: `fake_crash [code]`, `fake_hang`, `fake_print <text>`, `fake_trace <type>`.
@@ -150,7 +153,8 @@ impl Fake {
         loop {
             let now = Instant::now();
             if self.quit_at.is_some_and(|at| now >= at) {
-                self.exit(1);
+                self.traces.flush();
+                end_after_quit();
             }
             if crash_at.is_some_and(|at| now >= at) {
                 self.crash(None);
@@ -295,23 +299,21 @@ impl Fake {
         console::line(NET, "Listening on socket failed - libuv error EADDRINUSE.");
         console::line(SERVER, &format!("Error: {message}"));
         console::fatal(&message);
-        self.exit(1)
+        self.traces.flush();
+        if self.server.flag("fake_fatal_dialog") {
+            hang();
+        }
+        process::exit(1)
     }
 
-    /// Without a code, crashes the way the platform does: an access violation on Windows, an
-    /// abort (SIGABRT) elsewhere.
+    /// Without a code, crashes the way the platform does: an access violation on Windows,
+    /// SIGSEGV elsewhere.
     fn crash(&self, code: Option<u32>) -> ! {
         self.traces.flush();
         match code {
             Some(code) => process::exit(code.cast_signed()),
-            None if cfg!(windows) => process::exit(0xC000_0005_u32.cast_signed()),
-            None => process::abort(),
+            None => crash_natively(),
         }
-    }
-
-    fn exit(&self, code: i32) -> ! {
-        self.traces.flush();
-        process::exit(code)
     }
 
     fn deadline(&self, convar: &str) -> Option<Instant> {
@@ -335,6 +337,33 @@ fn spawn_child() {
 
 fn stop(resource: &str) {
     console::line(RESOURCES, &format!("Stopping resource {resource}"));
+}
+
+/// FXServer 35245 exits with code 1 after `quit` on Windows, and dies of SIGSEGV on Linux.
+#[cfg(windows)]
+fn end_after_quit() -> ! {
+    process::exit(1)
+}
+
+#[cfg(unix)]
+fn end_after_quit() -> ! {
+    crash_natively()
+}
+
+#[cfg(windows)]
+fn crash_natively() -> ! {
+    process::exit(0xC000_0005_u32.cast_signed())
+}
+
+#[cfg(unix)]
+fn crash_natively() -> ! {
+    // Rust's runtime catches the first SIGSEGV to look for a stack overflow, then puts the default
+    // action back; the second one ends the process.
+    for _ in 0..2 {
+        let _ = rustix::process::kill_process(rustix::process::getpid(), rustix::process::Signal::SEGV);
+        thread::sleep(Duration::from_millis(20));
+    }
+    process::abort()
 }
 
 fn hang() -> ! {

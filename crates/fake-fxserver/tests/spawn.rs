@@ -22,6 +22,11 @@ const WAIT: Duration = Duration::from_secs(10);
 const KILLED: Exit = Exit::Code(1);
 #[cfg(unix)]
 const KILLED: Exit = Exit::Signal(9);
+/// How FXServer 35245 ends after `quit`.
+#[cfg(windows)]
+const QUIT: Exit = Exit::Code(1);
+#[cfg(unix)]
+const QUIT: Exit = Exit::Signal(11);
 
 struct Fake {
     spawned: Spawned,
@@ -150,7 +155,7 @@ fn main_ticks(port: u16, authorization: Option<&str>) -> u64 {
 }
 
 #[tokio::test]
-async fn a_started_server_speaks_on_every_channel_and_quits_with_code_1() {
+async fn a_started_server_speaks_on_every_channel_then_quits() {
     let mut fake = Fake::start(Some(41920), &["+set", "fake_heartbeat_ms", "100"]);
 
     fake.stdout_until("Started resource observer").await;
@@ -172,7 +177,7 @@ async fn a_started_server_speaks_on_every_channel_and_quits_with_code_1() {
     fake.send("quit").await;
 
     fake.stdout_until("-> Quitting: Quit command executed.").await;
-    assert_eq!(fake.exit().await, Exit::Code(1));
+    assert_eq!(fake.exit().await, QUIT);
     assert!(fake.spawned.tree.wait_empty(WAIT).await.unwrap());
 }
 
@@ -251,6 +256,22 @@ async fn a_taken_port_is_a_bind_error_then_a_fatal_exit() {
 }
 
 #[tokio::test]
+async fn a_fatal_error_can_leave_the_process_up_until_the_tree_is_killed() {
+    let mut fake = Fake::start(
+        Some(41924),
+        &["+set", "fake_bind_error", "1", "+set", "fake_fatal_dialog", "1"],
+    );
+
+    fake.trace(|kind| matches!(kind, TraceKind::BindError { .. }))
+        .await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    assert_eq!(fake.spawned.exit.get(), None);
+    fake.kill().await;
+    assert_eq!(fake.exit().await, KILLED);
+}
+
+#[tokio::test]
 async fn an_ignored_quit_leaves_the_tree_kill() {
     let mut fake = Fake::start(
         None,
@@ -283,7 +304,7 @@ async fn a_crash_is_reported_with_the_platform_code() {
     #[cfg(windows)]
     assert_eq!(fake.exit().await, Exit::Code(0xC000_0005));
     #[cfg(unix)]
-    assert_eq!(fake.exit().await, Exit::Signal(6));
+    assert_eq!(fake.exit().await, Exit::Signal(11));
 }
 
 #[tokio::test]

@@ -380,6 +380,7 @@ version = "0.1.0"
 dependencies = [
  "observer-fxserver",
  "observer-platform",
+ "rustix",
  "serde_json",
  "tempfile",
  "tokio",
