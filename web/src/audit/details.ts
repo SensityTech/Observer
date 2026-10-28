@@ -23,13 +23,20 @@ const isChange = (value: unknown): value is { before: unknown; after: unknown } 
     'before' in value &&
     'after' in value;
 
-const isArgument = (value: unknown): value is { name: string; value: string } =>
+const isNames = (value: unknown): value is string[] =>
+    Array.isArray(value) && value.every((name) => typeof name === 'string');
+
+/** The extra arguments a launch change set or removed, by name only: their values stay out of the log. */
+const isArgumentChange = (value: unknown): value is { set: string[]; removed: string[] } =>
     typeof value === 'object' &&
     value !== null &&
-    'name' in value &&
-    typeof value.name === 'string' &&
-    'value' in value &&
-    typeof value.value === 'string';
+    'set' in value &&
+    isNames(value.set) &&
+    'removed' in value &&
+    isNames(value.removed);
+
+/** Launch settings the log only says changed. */
+const HIDDEN = new Set<string>(['buildPath', 'dataPath', 'cfgFile']);
 
 /**
  * An entry's details as one line of `label: value` pairs, in the reader's words: permission names
@@ -51,13 +58,18 @@ const word = (t: Messages, format: Format, key: string, value: unknown): string 
     if (value === null) {
         return t.audit.unset;
     }
+    if (HIDDEN.has(key) && value === true) {
+        return t.audit.changed;
+    }
     if (typeof value === 'boolean') {
         return value ? t.audit.yes : t.audit.no;
     }
-    if (Array.isArray(value) && value.every(isArgument)) {
-        return value.length > 0
-            ? value.map((argument) => `${argument.name} ${argument.value}`).join(', ')
-            : t.audit.noArgument;
+    if (isArgumentChange(value)) {
+        const parts = [
+            value.set.length > 0 && t.audit.argumentsSet(value.set.join(', ')),
+            value.removed.length > 0 && t.audit.argumentsRemoved(value.removed.join(', ')),
+        ].filter((part) => part !== false);
+        return parts.length > 0 ? parts.join('; ') : t.audit.argumentsReordered;
     }
     if (typeof value === 'number') {
         return IDS.has(key) ? String(value) : format.number(value);

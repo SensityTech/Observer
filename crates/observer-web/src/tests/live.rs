@@ -409,3 +409,89 @@ async fn stopping_observer_closes_every_socket_as_going_away() {
     assert_eq!(closed(&mut first).await, 1001);
     assert_eq!(closed(&mut second).await, 1001);
 }
+
+#[tokio::test]
+async fn the_audit_log_names_changed_launch_settings_without_showing_what_only_the_owner_reads() {
+    let server = Server::new().await;
+    let owner = server.owner().await;
+    let auditor = server.member(&owner, "grace", "100").await;
+    server.audit.publish_new().await.unwrap();
+    let mut socket = server.socket(&auditor).await;
+    send(&mut socket, json!({ "type": "sub", "topic": "audit" })).await;
+    assert_eq!(receive(&mut socket).await["type"], "snapshot");
+
+    let build = if cfg!(windows) {
+        r"C:\Hidden\FXServer\build"
+    } else {
+        "/srv/hidden/fxserver/build"
+    };
+    let data = if cfg!(windows) {
+        r"C:\Hidden\FXServer\server-data"
+    } else {
+        "/srv/hidden/fxserver/server-data"
+    };
+    let settings = json!({
+        "buildPath": build,
+        "dataPath": data,
+        "cfgFile": "configs/hidden.cfg",
+        "onesync": "legacy",
+        "autoStart": true,
+        "txadminEvents": false,
+        "extraArguments": [
+            { "name": "sv_hostname", "value": "Hidden lab" },
+            { "name": "discord_webhook", "value": "https://discord.com/api/webhooks/1/hidden-token" },
+        ],
+    });
+    let saved = server
+        .call(
+            Method::PUT,
+            "/api/servers/default/launch",
+            Some(&owner),
+            Some(settings),
+        )
+        .await;
+    assert_eq!(saved.status, StatusCode::OK, "{}", saved.text);
+    server.audit.publish_new().await.unwrap();
+
+    let read = server
+        .call(Method::GET, "/api/servers/default/launch", Some(&auditor), None)
+        .await;
+    assert_eq!(read.code(), "owner_only");
+    let event = receive(&mut socket).await;
+    let listed = server
+        .call(
+            Method::GET,
+            "/api/audit?action=launch_settings_changed",
+            Some(&auditor),
+            None,
+        )
+        .await;
+    let exported = server
+        .call(
+            Method::GET,
+            "/api/audit/export.csv?action=launch_settings_changed",
+            Some(&auditor),
+            None,
+        )
+        .await;
+
+    assert_eq!(event["data"]["action"], "launch_settings_changed");
+    let details = &listed.json()["entries"][0]["details"];
+    assert_eq!(event["data"]["details"], *details);
+    assert_eq!(
+        *details,
+        json!({
+            "buildPath": true,
+            "dataPath": true,
+            "cfgFile": true,
+            "onesync": { "before": null, "after": "legacy" },
+            "autoStart": { "before": null, "after": true },
+            "txadminEvents": { "before": null, "after": false },
+            "extraArguments": { "set": ["sv_hostname", "discord_webhook"], "removed": [] },
+        })
+    );
+    for shown in [event.to_string(), listed.text, exported.text] {
+        assert!(!shown.contains("Hidden"), "{shown}");
+        assert!(!shown.contains("hidden"), "{shown}");
+    }
+}

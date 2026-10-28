@@ -466,8 +466,12 @@ export const en = {
         // A failed sign-in whose username names no account: it may have been a password.
         unknownUsername: 'Unknown username',
         noPermission: 'none',
-        noArgument: 'none',
         unset: 'not set',
+        // A launch setting only the owner may read: the log says it changed, never what it holds.
+        changed: 'changed',
+        argumentsSet: (names: string) => `set ${names}`,
+        argumentsRemoved: (names: string) => `removed ${names}`,
+        argumentsReordered: 'reordered',
         yes: 'yes',
         no: 'no',
         detail: {

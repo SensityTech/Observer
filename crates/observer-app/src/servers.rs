@@ -1,6 +1,6 @@
 use observer_domain::audit::AuditAction;
 use observer_domain::error::{ApiError, ErrorCode};
-use observer_domain::launch::{LaunchSettings, Platform};
+use observer_domain::launch::{ExtraArgument, LaunchSettings, Platform};
 use observer_store::{Database, launch};
 use serde_json::{Map, Value, json};
 
@@ -64,20 +64,55 @@ impl Servers {
     }
 }
 
-/// Each setting that differs, with its value before and after. Before the first save, every
-/// setting was null.
+/// The settings whose values anyone reading the log may see. Only the owner reads the others,
+/// and an argument may well hold a token: the log only says they changed.
+const SHOWN: [&str; 3] = ["onesync", "autoStart", "txadminEvents"];
+
+/// Each setting that differs: its value before and after for the shown ones, `true` for a hidden
+/// one, and the names of the arguments set or removed. Before the first save, every setting was
+/// null.
 fn changes(before: Option<&LaunchSettings>, after: &LaunchSettings) -> Value {
     let fields = |settings: Option<&LaunchSettings>| match settings.map(serde_json::to_value) {
         Some(Ok(Value::Object(fields))) => fields,
         _ => Map::new(),
     };
-    let before = fields(before);
+    let old_fields = fields(before);
     let changed = fields(Some(after))
         .into_iter()
         .filter_map(|(name, value)| {
-            let old = before.get(&name).cloned().unwrap_or(Value::Null);
-            (old != value).then(|| (name, json!({ "before": old, "after": value })))
+            let old = old_fields.get(&name).cloned().unwrap_or(Value::Null);
+            if old == value {
+                return None;
+            }
+            let change = match name.as_str() {
+                "extraArguments" => arguments(
+                    before.map_or(&[], |before| &before.extra_arguments),
+                    &after.extra_arguments,
+                )?,
+                shown if SHOWN.contains(&shown) => json!({ "before": old, "after": value }),
+                _ => Value::Bool(true),
+            };
+            Some((name, change))
         })
         .collect();
     Value::Object(changed)
+}
+
+/// The names of the arguments added or given another value, and of those gone. `None` when the
+/// list is the same.
+fn arguments(before: &[ExtraArgument], after: &[ExtraArgument]) -> Option<Value> {
+    if before == after {
+        return None;
+    }
+    let set: Vec<&str> = after
+        .iter()
+        .filter(|argument| !before.contains(argument))
+        .map(|argument| argument.name.as_str())
+        .collect();
+    let removed: Vec<&str> = before
+        .iter()
+        .filter(|old| !after.iter().any(|new| new.name == old.name))
+        .map(|old| old.name.as_str())
+        .collect();
+    Some(json!({ "set": set, "removed": removed }))
 }

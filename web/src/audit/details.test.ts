@@ -41,16 +41,30 @@ describe('auditDetails', () => {
     it('should show a changed setting as its value before and after', () => {
         expect(
             auditDetails(en, format, {
-                buildPath: { before: null, after: 'C:\\FXServer\\build' },
                 onesync: { before: 'on', after: 'legacy' },
-                autoStart: { before: false, after: true },
-                extraArguments: { before: [], after: [{ name: 'sv_enforceGameBuild', value: '3258' }] },
+                autoStart: { before: null, after: true },
+            }),
+        ).toBe('OneSync: on → legacy · Start with Observer: not set → yes');
+        expect(auditDetails(en, format, { ownerOnly: true })).toBe('Owner only: yes');
+    });
+
+    it('should say a hidden launch setting changed, and name the arguments set or removed', () => {
+        expect(
+            auditDetails(en, format, {
+                buildPath: true,
+                cfgFile: true,
+                extraArguments: { set: ['sv_hostname', 'sv_enforceGameBuild'], removed: ['sv_projectName'] },
             }),
         ).toBe(
-            'Build folder: not set → C:\\FXServer\\build · OneSync: on → legacy · Start with Observer: no → yes · ' +
-                'Extra arguments: none → sv_enforceGameBuild 3258',
+            'Build folder: changed · Config file: changed · ' +
+                'Extra arguments: set sv_hostname, sv_enforceGameBuild; removed sv_projectName',
         );
-        expect(auditDetails(en, format, { ownerOnly: true })).toBe('Owner only: yes');
+        expect(auditDetails(en, format, { extraArguments: { set: [], removed: ['sv_hostname'] } })).toBe(
+            'Extra arguments: removed sv_hostname',
+        );
+        expect(auditDetails(en, format, { extraArguments: { set: [], removed: [] } })).toBe(
+            'Extra arguments: reordered',
+        );
     });
 
     it('should show what it does not know as the log stores it', () => {

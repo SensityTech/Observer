@@ -1192,19 +1192,64 @@ async fn launch_settings_are_stored_once_checked_with_what_changed_in_the_audit_
         changes[0].details,
         json!({
             "onesync": { "before": "on", "after": "legacy" },
-            "extraArguments": {
-                "before": [],
-                "after": [{ "name": "sv_enforceGameBuild", "value": "3258" }],
-            },
+            "extraArguments": { "set": ["sv_enforceGameBuild"], "removed": [] },
         })
     );
     assert_eq!(
-        changes[1].details["buildPath"],
-        json!({ "before": null, "after": folder("build") })
+        changes[1].details,
+        json!({
+            "buildPath": true,
+            "dataPath": true,
+            "cfgFile": true,
+            "onesync": { "before": null, "after": "on" },
+            "autoStart": { "before": null, "after": false },
+            "txadminEvents": { "before": null, "after": false },
+        })
     );
+}
+
+#[tokio::test]
+async fn a_launch_change_names_the_arguments_set_and_removed_never_their_values() {
+    let lab = Lab::new().await;
+    let owner = lab.caller(&lab.owner().await).await;
+    let argument = |name: &str, value: &str| ExtraArgument {
+        name: name.to_owned(),
+        value: value.to_owned(),
+    };
+    let first = LaunchSettings {
+        extra_arguments: vec![
+            argument("sv_hostname", "Lab"),
+            argument("sv_maxclients", "48"),
+            argument("sv_projectName", "Observer"),
+        ],
+        ..launch_settings()
+    };
+    let second = LaunchSettings {
+        data_path: folder("other-data"),
+        extra_arguments: vec![
+            argument("sv_maxclients", "48"),
+            argument("sv_hostname", "Lab 2"),
+            argument("sv_enforceGameBuild", "3258"),
+        ],
+        ..launch_settings()
+    };
+    for settings in [first, second] {
+        lab.servers
+            .change_launch_settings(&owner, Servers::DEFAULT, settings)
+            .await
+            .unwrap();
+    }
+
+    let changes = lab.entries(AuditAction::LaunchSettingsChanged).await;
     assert_eq!(
-        changes[1].details["autoStart"],
-        json!({ "before": null, "after": false })
+        changes[0].details,
+        json!({
+            "dataPath": true,
+            "extraArguments": {
+                "set": ["sv_hostname", "sv_enforceGameBuild"],
+                "removed": ["sv_projectName"],
+            },
+        })
     );
 }
 
