@@ -9,8 +9,9 @@ use jiff::tz::{AmbiguousOffset, TimeZone};
 use jiff::{SignedDuration, Timestamp, Unit};
 use observer_domain::error::{ApiError, ErrorCode};
 use observer_domain::schedule::{
-    Delayed, NextRestart, Occurrence, OneOffRequest, OneOffRestart, PlannedDelay, PlannedRestart,
-    RestartSource, ScheduleMode, SchedulePlan, ScheduleSettings, ScheduleStatus, Skipped, parse_time,
+    Delayed, MIN_GAP_MINUTES, NextRestart, Occurrence, OneOffRequest, OneOffRestart, PlannedDelay,
+    PlannedRestart, RestartSource, ScheduleMode, SchedulePlan, ScheduleSettings, ScheduleStatus, Skipped,
+    parse_time,
 };
 use observer_domain::server::ServerState;
 use observer_fxserver::bridge::BridgeEvent;
@@ -862,7 +863,8 @@ impl State {
 
 /// The first `count` instants after `after` at which one of `times` falls in `zone`, with the
 /// time each comes from. A time a clock change skips happens as much later as the change lasts; a
-/// time it repeats happens on its first pass. Two times on one instant are one occurrence.
+/// time it repeats happens on its first pass. A time the change moves onto another, or to less than
+/// [`MIN_GAP_MINUTES`] from it, is dropped that day: the other one restarts the server then.
 fn fixed_occurrences(
     times: &[String],
     zone: &TimeZone,
@@ -876,13 +878,15 @@ fn fixed_occurrences(
     if minutes.is_empty() || count == 0 {
         return Vec::new();
     }
-    let days = count.div_ceil(minutes.len()) + 2;
+    // From the day before, so that a time just before `after` can still drop one the clock
+    // change moved next to it; one day more for the one that may be dropped.
+    let days = count.div_ceil(minutes.len()) + 3;
     let start = after.to_zoned(zone.clone()).date();
     let mut date = start.yesterday().unwrap_or(start);
     let mut found: Vec<(Timestamp, bool, &String)> = Vec::new();
     for _ in 0..days {
         for &(minute, time) in &minutes {
-            if let Some(at) = wall_time(date, minute, zone).filter(|at| *at > after) {
+            if let Some(at) = wall_time(date, minute, zone) {
                 let moved = local_time(at, zone) != *time;
                 found.push((at, moved, time));
             }
@@ -892,11 +896,22 @@ fn fixed_occurrences(
             Err(_) => break,
         };
     }
-    // Of two times on one instant, the one the clock change did not move names it.
     found.sort_unstable();
-    found.dedup_by_key(|(at, _, _)| *at);
-    found
-        .into_iter()
+    let gap = SignedDuration::from_mins(i64::from(MIN_GAP_MINUTES));
+    let mut kept: Vec<(Timestamp, bool, &String)> = Vec::with_capacity(found.len());
+    for occurrence in found {
+        match kept.last_mut() {
+            Some(last) if occurrence.0.duration_since(last.0) < gap => {
+                // The one the clock change did not move stays.
+                if last.1 && !occurrence.1 {
+                    *last = occurrence;
+                }
+            }
+            _ => kept.push(occurrence),
+        }
+    }
+    kept.into_iter()
+        .filter(|(at, _, _)| *at > after)
         .take(count)
         .map(|(at, _, time)| (at, Some(time.clone())))
         .collect()

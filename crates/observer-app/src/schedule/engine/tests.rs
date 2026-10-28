@@ -209,6 +209,48 @@ fn two_times_the_clock_change_puts_on_one_instant_fire_once() {
 }
 
 #[test]
+fn a_time_the_clock_change_moves_next_to_another_is_dropped_that_day() {
+    for (times, kept) in [
+        (["02:10", "03:00"], "2026-03-29T01:00:00Z"),
+        (["02:01", "03:00"], "2026-03-29T01:00:00Z"),
+        (["02:30", "03:45"], "2026-03-29T01:45:00Z"),
+    ] {
+        let settings = paris(&times);
+        assert_eq!(settings.stored.issues(), [], "{times:?} are valid");
+        let mut sim = Sim::running(settings, "2026-03-28T20:00:00Z", "2026-03-28T22:00:00Z");
+        let listed: Vec<Timestamp> = sim.status().upcoming.iter().map(|each| each.at).collect();
+
+        let first = sim.run_until("2026-03-29T01:00:30Z");
+        sim.server(
+            "2026-03-29T01:00:35Z",
+            ServerState::Starting,
+            2,
+            Some("2026-03-29T01:00:35Z"),
+        );
+        sim.server(
+            "2026-03-29T01:01:00Z",
+            ServerState::Online,
+            2,
+            Some("2026-03-29T01:00:35Z"),
+        );
+        let rest = sim.run_until("2026-03-29T12:00:00Z");
+
+        assert_eq!(
+            [restarts(&first), restarts(&rest)].concat(),
+            [ts(kept)],
+            "{times:?}"
+        );
+        assert_eq!(listed[0], ts(kept), "{times:?}");
+        assert!(listed[1] > ts("2026-03-29T12:00:00Z"), "{times:?}: {listed:?}");
+    }
+    assert_eq!(
+        occurrences(&paris(&["02:10", "03:00"]), "2026-03-29T12:00:00Z", 2),
+        [ts("2026-03-30T00:10:00Z"), ts("2026-03-30T01:00:00Z")],
+        "both are back the next day"
+    );
+}
+
+#[test]
 fn the_day_the_clock_goes_forward_is_23_hours_long() {
     let at_four = occurrences(&paris(&["04:00"]), "2026-03-28T00:00:00Z", 2);
 
