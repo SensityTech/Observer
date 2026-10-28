@@ -1,6 +1,6 @@
 import { useInfiniteQuery, useMutation } from '@tanstack/react-query';
 import { ChevronDown, Clock, Download, Filter } from 'lucide-react';
-import { useId, useRef, useState, type FormEvent, type ReactNode } from 'react';
+import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from 'react';
 
 import { auditQuery, auditSearch, downloadAuditExport, matchesFilter, withLive } from '../api/audit';
 import { auditDetails } from '../audit/details';
@@ -44,7 +44,23 @@ export function AuditPage() {
     const [live, setLive] = useState<{ filter: AuditFilter; entries: AuditEntry[] }>({ filter, entries: [] });
     const liveEntries = live.filter === filter ? live.entries : [];
     const entries = withLive(liveEntries, loaded);
-    const snapshots = useRef(0);
+    // The newest entry when the topic last started. Events only bring later ones, and the pages
+    // were read at another moment: whatever was written in between comes as neither, so the log
+    // is read again whenever the pages, once settled, stop short of it.
+    const unchecked = useRef<number | null>(null);
+    const catchUp = () => {
+        const latest = unchecked.current;
+        if (latest === null || !audit.isSuccess || audit.isFetching) {
+            return;
+        }
+        unchecked.current = null;
+        if (latest > (loaded[0]?.id ?? 0)) {
+            void audit.refetch();
+        }
+    };
+    useEffect(() => {
+        catchUp();
+    });
 
     useTopic('audit', {
         event: (entry) => {
@@ -55,13 +71,9 @@ export function AuditPage() {
                 }));
             }
         },
-        // The first snapshot comes with the page's own first read. A later one follows a lost
-        // event or a lost link: the log is read again when it holds more than the page shows.
         snapshot: ({ latestId }) => {
-            snapshots.current += 1;
-            if (snapshots.current > 1 && latestId !== null && latestId > (entries[0]?.id ?? 0)) {
-                void audit.refetch();
-            }
+            unchecked.current = latestId;
+            catchUp();
         },
     });
 

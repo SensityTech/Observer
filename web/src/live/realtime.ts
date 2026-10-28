@@ -75,8 +75,11 @@ export class Realtime {
     /** Bumped for each socket, so that whatever a socket given up on still says is ignored. */
     #generation = 0;
     #failures = 0;
-    /** Set once a socket said hello: the next hello is a reconnect, after which pages read again. */
-    #wasLive = false;
+    /**
+     * Set when a socket failed or dropped, the first one included: the next hello ends a time the
+     * pages may have missed updates in, so they read again.
+     */
+    #missed = false;
     #heardAt = 0;
     #hiddenAt: number | null = null;
     #retry: Timer | undefined;
@@ -102,7 +105,7 @@ export class Realtime {
             return;
         }
         this.#running = true;
-        this.#wasLive = false;
+        this.#missed = false;
         document.addEventListener('visibilitychange', this.#visibilityChanged);
         this.#setState('connecting');
         void this.#connect();
@@ -222,9 +225,9 @@ export class Realtime {
             this.#refuse();
             return;
         }
-        const reconnected = this.#wasLive;
+        const missed = this.#missed;
         this.#live = true;
-        this.#wasLive = true;
+        this.#missed = false;
         this.#failures = 0;
         this.#clearTimers();
         this.#heartbeat = setInterval(() => this.#beat(), PING_EVERY);
@@ -232,7 +235,7 @@ export class Realtime {
         for (const topic of this.#watchers.keys()) {
             this.#send({ type: 'sub', topic });
         }
-        if (reconnected) {
+        if (missed) {
             this.#options.refetch();
         }
     }
@@ -260,6 +263,7 @@ export class Realtime {
     /** No socket: try again soon, and poll instead if it stays down. */
     #down() {
         this.#live = false;
+        this.#missed = true;
         this.#snapshots.clear();
         clearInterval(this.#heartbeat);
         this.#heartbeat = undefined;

@@ -69,6 +69,33 @@ describe('AuditPage', () => {
         vi.unstubAllGlobals();
     });
 
+    it('should read the log again when the topic starts past the newest entry shown', async () => {
+        const fetch = vi.fn(async () =>
+            Response.json({ entries: [entry(5), entry(4), entry(3), entry(2), entry(1)], next: null }),
+        );
+        vi.stubGlobal('fetch', fetch);
+        const { say, getAllByRole, live } = await page(4);
+
+        // Entry 5 was written after the page read the log and before the topic started: no event
+        // brings it, since the snapshot already counts it.
+        await say({ type: 'snapshot', topic: 'audit', data: { latestId: 5 } });
+
+        expect(fetch).toHaveBeenCalledOnce();
+        expect(getAllByRole('row')).toHaveLength(1 + 5);
+        live.stop();
+    });
+
+    it('should not read the log again when the topic starts where the page stands', async () => {
+        const fetch = vi.fn();
+        vi.stubGlobal('fetch', fetch);
+        const { say, live } = await page(4);
+
+        await say({ type: 'snapshot', topic: 'audit', data: { latestId: 4 } });
+
+        expect(fetch).not.toHaveBeenCalled();
+        live.stop();
+    });
+
     it('should keep the entries that came live when the same filter is applied again', async () => {
         vi.stubGlobal(
             'fetch',

@@ -184,6 +184,20 @@ describe('Realtime', () => {
         expect(refetch).toHaveBeenCalledOnce();
     });
 
+    it('should read the queries again once a socket opens after attempts that failed', async () => {
+        const { live, last, ticket, refetch } = setup();
+        ticket.mockRejectedValueOnce(new TypeError('Failed to fetch'));
+        live.start();
+        await after(0);
+        expect(live.getState()).toBe('connecting');
+
+        await after(1_000);
+        last().hello();
+
+        expect(live.getState()).toBe('live');
+        expect(refetch).toHaveBeenCalledOnce();
+    });
+
     it('should start a topic over when Observer says it fell behind', async () => {
         const { live, last } = setup();
         live.watch('audit', {});
