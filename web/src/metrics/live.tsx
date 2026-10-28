@@ -21,14 +21,19 @@ export function LiveMetricsProvider({ children }: { children: ReactNode }) {
     const [refused, setRefused] = useState(false);
     const [cleared, setCleared] = useState(false);
     useTopic('metrics.live', {
+        // A snapshot without a sample comes from an Observer that has just started: the samples
+        // kept from before the drop are history, not how things stand.
         snapshot: ({ latest }) => {
             setRefused(false);
-            setCleared(false);
+            setCleared(latest === null);
             if (latest !== null) {
                 setRecent((kept) => keepLive(kept, latest));
             }
         },
-        event: (sample) => setRecent((kept) => keepLive(kept, sample)),
+        event: (sample) => {
+            setCleared(false);
+            setRecent((kept) => keepLive(kept, sample));
+        },
         refused: () => {
             setRefused(true);
             setRecent([]);

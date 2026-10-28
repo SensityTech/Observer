@@ -251,6 +251,29 @@ describe('OverviewPage', () => {
         live.stop();
     });
 
+    it('should show no sample from before a drop as current when Observer comes back without one yet', async () => {
+        const { say, drop, live } = await page();
+        say({ type: 'snapshot', topic: 'metrics.live', data: { latest: SAMPLE } });
+        drop();
+
+        // The first retry comes a second after the drop, to an Observer that has just restarted.
+        await act(() => new Promise((resolve) => setTimeout(resolve, 1200)));
+        say({ type: 'hello', connectionId: 2, contract: 1 });
+        say({ type: 'snapshot', topic: 'metrics.live', data: { latest: null } });
+
+        expect(figure(en.tiles.players.label)).toBe(en.tiles.unknown);
+        expect(figure(en.tiles.host.label)).toBe(en.tiles.unknown);
+
+        say({
+            type: 'event',
+            topic: 'metrics.live',
+            data: { ...SAMPLE, ts: SAMPLE.ts + 5, values: { ...SAMPLE.values, players: 12 } },
+        });
+
+        expect(figure(en.tiles.players.label)).toBe('12/ 256');
+        live.stop();
+    });
+
     it('should stop showing when Observer started once the link to it is gone', async () => {
         const { drop, live } = await page();
         expect(tile(en.tiles.observer.label).queryByText(/^0\.1\.0 · up \d min$/)).not.toBeNull();
