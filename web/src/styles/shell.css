@@ -8,7 +8,7 @@
         position: absolute;
         left: 12px;
         top: -60px;
-        z-index: 100;
+        z-index: var(--z-skip);
         padding: 10px 14px;
         border-radius: var(--r);
         background: var(--btn-bg);
@@ -17,17 +17,6 @@
     }
     .skip:focus-visible {
         top: 12px;
-    }
-
-    .eyebrow {
-        font-family: var(--mono);
-        font-size: 11px;
-        line-height: 1.4;
-        font-weight: 500;
-        letter-spacing: 0.06em;
-        text-transform: uppercase;
-        color: var(--ink-3);
-        font-variant-ligatures: none;
     }
 
     /* Buttons */
@@ -58,7 +47,7 @@
     .btn-primary {
         background: var(--btn-bg);
         color: var(--btn-ink);
-        box-shadow: var(--shadow-btn);
+        box-shadow: var(--elev-btn);
     }
     .btn-primary:hover {
         background: color-mix(in srgb, var(--btn-bg) 86%, var(--btn-ink));
@@ -67,7 +56,7 @@
         background: var(--surface);
         color: var(--ink);
         border-color: var(--line-strong);
-        box-shadow: var(--shadow-sm);
+        box-shadow: var(--elev-sm);
     }
     .btn-secondary:hover {
         background: var(--surface-2);
@@ -82,45 +71,6 @@
     .btn-icon {
         width: 38px;
         padding: 0;
-    }
-
-    /* LEDs. The live one is the only thing on a page that moves on its own. */
-    .dot {
-        position: relative;
-        display: inline-block;
-        width: 8px;
-        height: 8px;
-        flex: none;
-        border-radius: 50%;
-        background: var(--ink-3);
-    }
-    .dot.is-live {
-        background: var(--accent);
-    }
-    .dot.is-ok {
-        background: var(--success);
-    }
-    .dot.is-down {
-        background: var(--danger);
-    }
-    .dot.is-live::after {
-        content: '';
-        position: absolute;
-        inset: 0;
-        border-radius: 50%;
-        background: inherit;
-        animation: ping 1.8s cubic-bezier(0, 0, 0.2, 1) infinite;
-    }
-    @keyframes ping {
-        0% {
-            transform: scale(1);
-            opacity: 0.55;
-        }
-        80%,
-        100% {
-            transform: scale(2.8);
-            opacity: 0;
-        }
     }
 
     /* Cards */
@@ -163,7 +113,7 @@
         background: var(--rail-bg);
         border: 1px solid var(--line);
         border-radius: var(--r-rail);
-        box-shadow: var(--shadow-rail);
+        box-shadow: var(--elev-rail);
     }
     .rail-head {
         display: flex;
@@ -279,11 +229,15 @@
     .theme-switch > button:hover {
         color: var(--ink);
     }
+    /* At the default offset, the outline would cover the group's border. */
+    .theme-switch > button:focus-visible {
+        outline-offset: 0;
+    }
     .theme-switch > button[aria-pressed='true'] {
         background: var(--raise);
         color: var(--ink);
         box-shadow:
-            var(--shadow-sm),
+            var(--elev-sm),
             0 0 0 1px var(--line);
     }
     .theme-switch > button[aria-pressed='true'] > svg {
@@ -314,7 +268,7 @@
         border: 1px solid var(--line);
         border-radius: 12px;
         background: var(--surface);
-        box-shadow: var(--shadow-sm);
+        box-shadow: var(--elev-sm);
     }
     .status-cell {
         display: flex;
@@ -391,7 +345,7 @@
         .rail-wrap {
             position: sticky;
             top: 0;
-            z-index: 30;
+            z-index: var(--z-rail);
             height: 100vh;
             height: 100dvh;
             padding: var(--rail-gap) 0 var(--rail-gap) var(--rail-gap);
@@ -406,7 +360,7 @@
         .rail-wrap {
             position: fixed;
             inset: 0 auto 0 0;
-            z-index: 60;
+            z-index: var(--z-drawer);
             width: min(320px, calc(100vw - 40px));
             height: 100vh;
             height: 100dvh;
@@ -426,7 +380,7 @@
             display: block;
             position: fixed;
             inset: 0;
-            z-index: 55;
+            z-index: var(--z-scrim);
             background: var(--overlay);
         }
         .nav-item {
@@ -438,7 +392,7 @@
         .mobilebar {
             position: sticky;
             top: 0;
-            z-index: 40;
+            z-index: var(--z-mobilebar);
             display: flex;
             align-items: center;
             gap: 8px;

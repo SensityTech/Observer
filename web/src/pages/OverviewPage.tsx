@@ -25,8 +25,8 @@ export function OverviewPage() {
                     {health.isPending && <p className="text-ink-3">{t.overview.loading}</p>}
                     {health.isError && (
                         <>
-                            <p className="flex items-center gap-2.5 text-xl font-semibold tracking-tight">
-                                <span className="dot is-down" />
+                            <p className="flex items-center gap-2.5 text-state text-ink">
+                                <span className="led led-down" aria-hidden="true" />
                                 {t.overview.unreachable}
                             </p>
                             <p className="text-ink-3">{t.overview.unreachableHint}</p>
@@ -34,8 +34,8 @@ export function OverviewPage() {
                     )}
                     {health.data && (
                         <>
-                            <p className="flex items-center gap-2.5 text-xl font-semibold tracking-tight">
-                                <span className="dot is-live" />
+                            <p className="flex items-center gap-2.5 text-state text-ink">
+                                <span className="led led-live" aria-hidden="true" />
                                 {t.overview.running}
                             </p>
                             <p className="font-mono text-[13px] text-ink-3">

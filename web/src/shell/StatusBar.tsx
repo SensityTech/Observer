@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 
 import { healthQuery } from '../api/health';
 import { useI18n } from '../i18n/I18nProvider';
+import { cn } from '../lib/cn';
 
 /** Observer's own state for now; FXServer's joins it once Observer supervises a server. */
 export function StatusBar() {
@@ -16,7 +17,8 @@ export function StatusBar() {
                 <dt>{t.status.observer}</dt>
                 <dd>
                     <span
-                        className={`dot ${state === 'ok' ? 'is-live' : state === 'down' ? 'is-down' : ''}`}
+                        className={cn('led', state === 'ok' && 'led-live', state === 'down' && 'led-down')}
+                        aria-hidden="true"
                     />
                     {t.status[state]}
                 </dd>
