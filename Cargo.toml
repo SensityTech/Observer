@@ -10,6 +10,7 @@ publish = false
 
 [workspace.dependencies]
 observer-app = { path = "crates/observer-app" }
+observer-artifacts = { path = "crates/observer-artifacts" }
 observer-domain = { path = "crates/observer-domain" }
 observer-store = { path = "crates/observer-store" }
 observer-web = { path = "crates/observer-web" }
@@ -21,6 +22,7 @@ clap = { version = "4.6.7", features = ["derive"] }
 futures-util = { version = "0.3.34", default-features = false }
 getrandom = "0.4.3"
 jiff = { version = "0.2.38", features = ["serde"] }
+reqwest = { version = "0.13.5", default-features = false, features = ["rustls"] }
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 rusqlite_migration = "2.6.0"
 rust-embed = { version = "8.13.0", features = ["mime-guess"] }
