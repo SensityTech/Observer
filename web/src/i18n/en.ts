@@ -257,7 +257,12 @@ export const en = {
         } satisfies Record<LineKind, string>,
         observerTag: 'observer',
         stderrTag: 'stderr',
-        streaming: 'streaming',
+        link: {
+            connecting: 'connecting',
+            live: 'streaming',
+            offline: 'offline',
+            refused: 'reload needed',
+        } satisfies Record<LinkState, string>,
         paused: 'paused',
         pause: 'Pause',
         resume: 'Resume',

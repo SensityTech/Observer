@@ -6,7 +6,7 @@ import { secondsSince, useNow } from '../lib/useNow';
 import { useServerStatus } from '../server/context';
 import { STATE_INK, STATE_LED, isRunning } from '../server/state';
 
-const LINK_LED = {
+export const LINK_LED = {
     connecting: 'led-pending',
     live: 'led-live',
     offline: 'led-down',

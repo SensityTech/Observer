@@ -26,10 +26,11 @@ import type { Tone } from '../console/sgr';
 import { ConsoleStore, type LineRow, type Row } from '../console/store';
 import { errorMessage } from '../i18n/errors';
 import { useI18n } from '../i18n/I18nProvider';
-import { useTopic } from '../live/context';
+import { useLinkState, useTopic } from '../live/context';
 import { cn } from '../lib/cn';
 import { useServerStatus } from '../server/context';
 import { commandLine } from '../server/state';
+import { LINK_LED } from '../shell/StatusBar';
 
 const KINDS: LineKind[] = ['stdout', 'stderr', 'command', 'observer'];
 const EVERY_KIND = { stdout: true, stderr: true, command: true, observer: true } satisfies Record<
@@ -64,6 +65,7 @@ type Frozen = { rows: readonly Row[]; received: number };
 export function ConsolePage() {
     const { t } = useI18n();
     const me = useMe();
+    const link = useLinkState();
     const [store] = useState(() => new ConsoleStore());
     const rows = useSyncExternalStore(store.subscribe, store.getRows);
     const [refused, setRefused] = useState(false);
@@ -216,9 +218,16 @@ export function ConsolePage() {
                         ))}
                     </fieldset>
                     <div className="console-tools">
+                        {/* No line comes while the link is down, paused or not: the pill says so first. */}
                         <span className="live">
-                            <span className={cn('led', !paused && 'led-live')} aria-hidden="true" />
-                            {paused ? t.console.paused : t.console.streaming}
+                            <span
+                                className={cn(
+                                    'led',
+                                    link === 'live' ? !paused && 'led-live' : LINK_LED[link],
+                                )}
+                                aria-hidden="true"
+                            />
+                            {link === 'live' && paused ? t.console.paused : t.console.link[link]}
                         </span>
                         <Button
                             size="sm"
