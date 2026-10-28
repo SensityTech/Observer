@@ -37,6 +37,66 @@ const SAMPLE = {
     cores: 16,
 };
 
+export const ARTIFACTS = {
+    platform: 'windows',
+    installed: [
+        {
+            build: 37900,
+            origin: 'download',
+            commit: '0cfcdb5ead57a4a26fcb6ebad98adbcd0273e607',
+            branch: 'master',
+            installedAt: '2026-10-28T02:00:00Z',
+            installedBy: 'ada',
+            bytes: 196620014,
+            files: 563,
+            health: { kind: 'valid' },
+        },
+        {
+            build: 35245,
+            origin: null,
+            commit: null,
+            branch: null,
+            installedAt: null,
+            installedBy: null,
+            bytes: 0,
+            files: null,
+            health: { kind: 'broken', reason: 'noManifest' },
+        },
+    ],
+    selected: 37900,
+    pending: { build: 37950, by: 'ada', at: '2026-10-28T02:10:00Z' },
+    running: 37900,
+    lastHealthy: { build: 35245, since: '2026-10-27T02:28:00Z' },
+    probation: {
+        build: 37900,
+        from: 35245,
+        readyAt: '2026-10-28T02:28:00Z',
+        passesAt: '2026-10-28T02:38:00Z',
+    },
+    highestRun: 37900,
+    notice: null,
+    job: {
+        id: 2,
+        kind: 'install',
+        build: 37950,
+        step: 'download',
+        state: 'running',
+        startedBy: 'ada',
+        startedAt: '2026-10-28T02:30:00Z',
+        finishedAt: null,
+        download: { received: 41200000, total: 63500000, rate: 4200000 },
+        entries: null,
+        cancelRequested: false,
+        failure: null,
+        warnings: ['longPath'],
+    },
+    settings: { keepBuilds: 3, autoRollback: true, branches: [] },
+    version: null,
+    legacyFolder: false,
+    longPath: 151,
+    disk: { free: 126701535232, total: 511101108224 },
+} as const;
+
 const SCHEDULE = {
     settings: {
         enabled: true,
@@ -99,6 +159,22 @@ describe('parseServerMessage', () => {
                 type: 'event',
                 topic: 'server.schedule',
                 data: { ...SCHEDULE, oneOff: { at: '2026-10-28T15:07:00Z', by: 'grace' }, version: null },
+            },
+            { type: 'snapshot', topic: 'server.artifacts', data: ARTIFACTS },
+            {
+                type: 'event',
+                topic: 'server.artifacts',
+                data: {
+                    ...ARTIFACTS,
+                    job: { ...ARTIFACTS.job, state: 'failed', failure: { code: 'httpStatus', status: 503 } },
+                    notice: {
+                        kind: 'rolledBack',
+                        build: 37900,
+                        other: 35245,
+                        reason: 'crashed',
+                        at: '2026-10-28T02:31:00Z',
+                    },
+                },
             },
             { type: 'resync', topic: 'audit' },
             { type: 'snapshot', topic: 'metrics.live', data: { latest: null } },
@@ -167,6 +243,17 @@ describe('parseServerMessage', () => {
                 topic: 'server.schedule',
                 data: { ...SCHEDULE, upcoming: [{ ...SCHEDULE.upcoming[0], skipped: { kind: 'manual' } }] },
             },
+            {
+                type: 'snapshot',
+                topic: 'server.artifacts',
+                data: { ...ARTIFACTS, job: { ...ARTIFACTS.job, step: 'unpacking' } },
+            },
+            {
+                type: 'event',
+                topic: 'server.artifacts',
+                data: { ...ARTIFACTS, installed: [{ ...ARTIFACTS.installed[0], build: 12 }] },
+            },
+            { type: 'snapshot', topic: 'server.artifacts', data: { ...ARTIFACTS, disk: { free: '1 GB' } } },
             { type: 'shutdown' },
         ]) {
             expect(parse(message)).toBeNull();

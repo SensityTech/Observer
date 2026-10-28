@@ -1440,6 +1440,7 @@ dependencies = [
  "hyper-util",
  "jiff",
  "observer-app",
+ "observer-artifacts",
  "observer-domain",
  "observer-store",
  "rust-embed",

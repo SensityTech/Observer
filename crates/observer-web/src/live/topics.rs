@@ -50,6 +50,7 @@ pub(super) fn allows(topic: Topic, held: Permissions) -> bool {
             Permissions::SCHEDULE_MANAGE,
             Permissions::SERVER_CONTROL,
         ]),
+        Topic::ServerArtifacts => any(&[Permissions::DASHBOARD_VIEW, Permissions::ARTIFACTS_VIEW]),
     }
 }
 
@@ -86,6 +87,16 @@ pub(super) async fn open(topic: Topic, since: Option<u64>, state: &AppState) -> 
             Ok(Feed {
                 snapshot: TopicSnapshot::ServerSchedule(snapshot),
                 events: Some(status_events(status, TopicEvent::ServerSchedule)),
+            })
+        }
+        Topic::ServerArtifacts => {
+            let mut status = state.artifacts.status();
+            let snapshot = status.borrow_and_update().clone();
+            Ok(Feed {
+                snapshot: TopicSnapshot::ServerArtifacts(Box::new(snapshot)),
+                events: Some(status_events(status, |status| {
+                    TopicEvent::ServerArtifacts(Box::new(status))
+                })),
             })
         }
         Topic::Console => {

@@ -1,6 +1,7 @@
 //! The API over HTTP: requests go through the router, its gates and the services, down to a real
 //! database in a temporary directory.
 
+mod artifacts;
 mod live;
 mod metrics;
 mod schedule;
@@ -15,9 +16,11 @@ use axum::http::{HeaderMap, Method, Request, StatusCode, header};
 use http_body_util::BodyExt;
 use jiff::SignedDuration;
 use observer_app::{
-    Accounts, AuditLog, Clock, Metrics, MetricsSetup, PasswordCost, Running, Schedule, ScheduleSetup,
-    ScheduleTask, Servers, Setup, Supervision,
+    Accounts, Artifacts, ArtifactsSetup, ArtifactsTask, AuditLog, Clock, Metrics, MetricsSetup, PasswordCost,
+    Running, Schedule, ScheduleSetup, ScheduleTask, Servers, Setup, Supervision,
 };
+use observer_artifacts::Http;
+use observer_artifacts::catalog::{Catalog, Listing};
 use observer_domain::audit::ActorKind;
 use observer_store::Database;
 use serde_json::{Value, json};
@@ -45,6 +48,7 @@ struct Server {
     metrics_clock: Clock,
     _supervised: Running,
     _scheduling: ScheduleTask,
+    _building: ArtifactsTask,
     cookie_name: String,
 }
 
@@ -117,6 +121,28 @@ impl Server {
         )
         .await
         .unwrap();
+        // A catalog that lists nothing: no test here reaches Cfx.re.
+        let listing = Listing {
+            platform: observer_artifacts::Platform::host(),
+            builds: Vec::new(),
+            warnings: Vec::new(),
+        };
+        let (artifacts, building) = Artifacts::start(
+            ArtifactsSetup {
+                db: db.clone(),
+                clock: clock.clone(),
+                root: dir.path().join("data/artifacts"),
+                accounts: accounts.clone(),
+                servers: servers.clone(),
+                supervision: supervision.clone(),
+                schedule: schedule.status(),
+                catalog: Catalog::fixed(Ok(listing)),
+                http: Http::new().unwrap(),
+            },
+            |_| {},
+        )
+        .await
+        .unwrap();
         // A millisecond before a slot ends: once moved past it, the sampler wakes at once.
         let metrics_clock = Clock::manual("2025-01-06T08:59:59.999Z".parse().unwrap());
         let metrics = Metrics::open(MetricsSetup {
@@ -133,6 +159,7 @@ impl Server {
             supervision: supervision.clone(),
             metrics: metrics.clone(),
             schedule,
+            artifacts,
         };
         let state = AppState::new(
             "0.0.0-test",
@@ -155,6 +182,7 @@ impl Server {
             metrics_clock,
             _supervised: supervised,
             _scheduling: scheduling,
+            _building: building,
             cookie_name: format!("observer_session_{instance_id}"),
         }
     }
@@ -282,6 +310,7 @@ async fn every_gated_route_refuses_a_request_without_a_session() {
             route
                 .path
                 .replace("{id}", "1")
+                .replace("{build}", "37872")
                 .replace("{name}", "console-2026-10-28.log")
         );
         let reply = server
@@ -315,6 +344,7 @@ async fn no_method_on_an_api_path_skips_the_gate() {
             route
                 .path
                 .replace("{id}", "1")
+                .replace("{build}", "37872")
                 .replace("{name}", "console-2026-10-28.log")
         );
         for method in methods.clone() {

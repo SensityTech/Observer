@@ -1,12 +1,20 @@
 import type { ActorKind } from '../api/generated/ActorKind';
+import type { ArtifactsStatus } from '../api/generated/ArtifactsStatus';
 import type { AuditAction } from '../api/generated/AuditAction';
 import type { AuditEntry } from '../api/generated/AuditEntry';
+import type { BrokenReason } from '../api/generated/BrokenReason';
 import type { ConsoleLine } from '../api/generated/ConsoleLine';
 import type { HangCause } from '../api/generated/HangCause';
 import type { HealthProblem } from '../api/generated/HealthProblem';
+import type { JobKind } from '../api/generated/JobKind';
+import type { JobState } from '../api/generated/JobState';
+import type { JobStep } from '../api/generated/JobStep';
+import type { JobWarning } from '../api/generated/JobWarning';
 import type { LaunchReadiness } from '../api/generated/LaunchReadiness';
 import type { LineKind } from '../api/generated/LineKind';
 import type { LiveSample } from '../api/generated/LiveSample';
+import type { NoticeKind } from '../api/generated/NoticeKind';
+import type { NoticeReason } from '../api/generated/NoticeReason';
 import type { Outcome } from '../api/generated/Outcome';
 import type { RestartSource } from '../api/generated/RestartSource';
 import type { ScheduleMode } from '../api/generated/ScheduleMode';
@@ -30,6 +38,7 @@ const TOPICS = {
     console: true,
     'metrics.live': true,
     'server.schedule': true,
+    'server.artifacts': true,
 } satisfies Record<Topic, true>;
 
 export const SERIES = {
@@ -182,6 +191,45 @@ const LINE_KINDS = { stdout: true, stderr: true, command: true, observer: true }
 const SCHEDULE_MODES = { fixedTimes: true, interval: true } satisfies Record<ScheduleMode, true>;
 
 const RESTART_SOURCES = { schedule: true, oneOff: true } satisfies Record<RestartSource, true>;
+
+const BROKEN_REASONS = { noManifest: true, badManifest: true, link: true, layout: true } satisfies Record<
+    BrokenReason,
+    true
+>;
+
+const NOTICE_KINDS = { rolledBack: true, probationFailed: true, pendingDropped: true } satisfies Record<
+    NoticeKind,
+    true
+>;
+
+const NOTICE_REASONS = {
+    crashed: true,
+    hung: true,
+    disabled: true,
+    noHealthyBuild: true,
+    broken: true,
+    kvp: true,
+    notInstalled: true,
+} satisfies Record<NoticeReason, true>;
+
+const JOB_KINDS = { install: true, import: true } satisfies Record<JobKind, true>;
+
+const JOB_STEPS = {
+    preCheck: true,
+    download: true,
+    verify: true,
+    extract: true,
+    copy: true,
+    validate: true,
+    commit: true,
+} satisfies Record<JobStep, true>;
+
+const JOB_STATES = { running: true, installed: true, failed: true, cancelled: true } satisfies Record<
+    JobState,
+    true
+>;
+
+const JOB_WARNINGS = { longPath: true, freeSpaceUnknown: true } satisfies Record<JobWarning, true>;
 
 type Shape = 'text' | 'count' | 'problems' | 'hang' | 'spawnFailure';
 
@@ -373,6 +421,85 @@ export const isLiveSample = (value: unknown): value is LiveSample =>
     value.children.every(isChildProcess) &&
     (value.cores === null || (isCount(value.cores) && value.cores > 0));
 
+const isBuild = (value: unknown): value is number => isCount(value) && value >= 1000;
+
+const isInstalledBuild = (value: unknown) =>
+    isRecord(value) &&
+    isBuild(value.build) &&
+    (value.origin === null || value.origin === 'download' || value.origin === 'import') &&
+    orNull(isText)(value.commit) &&
+    orNull(isText)(value.branch) &&
+    orNull(isTimestamp)(value.installedAt) &&
+    orNull(isText)(value.installedBy) &&
+    isCount(value.bytes) &&
+    orNull(isCount)(value.files) &&
+    isRecord(value.health) &&
+    (value.health.kind === 'valid' ||
+        (value.health.kind === 'broken' && oneOf<BrokenReason>(BROKEN_REASONS)(value.health.reason)));
+
+const isJob = (value: unknown): value is Record<string, unknown> =>
+    isRecord(value) &&
+    isCount(value.id) &&
+    oneOf<JobKind>(JOB_KINDS)(value.kind) &&
+    isBuild(value.build) &&
+    oneOf<JobStep>(JOB_STEPS)(value.step) &&
+    oneOf<JobState>(JOB_STATES)(value.state) &&
+    isText(value.startedBy) &&
+    isTimestamp(value.startedAt) &&
+    orNull(isTimestamp)(value.finishedAt) &&
+    (value.download === null ||
+        (isRecord(value.download) &&
+            isCount(value.download.received) &&
+            isCount(value.download.total) &&
+            isCount(value.download.rate))) &&
+    (value.entries === null ||
+        (isRecord(value.entries) && isCount(value.entries.done) && orNull(isCount)(value.entries.total))) &&
+    typeof value.cancelRequested === 'boolean' &&
+    (value.failure === null || (isRecord(value.failure) && isText(value.failure.code))) &&
+    Array.isArray(value.warnings) &&
+    value.warnings.every(oneOf<JobWarning>(JOB_WARNINGS));
+
+export const isArtifactsStatus = (value: unknown): value is ArtifactsStatus =>
+    isRecord(value) &&
+    (value.platform === 'windows' || value.platform === 'linux') &&
+    Array.isArray(value.installed) &&
+    value.installed.every(isInstalledBuild) &&
+    orNull(isBuild)(value.selected) &&
+    (value.pending === null ||
+        (isRecord(value.pending) &&
+            isBuild(value.pending.build) &&
+            isText(value.pending.by) &&
+            isTimestamp(value.pending.at))) &&
+    orNull(isBuild)(value.running) &&
+    (value.lastHealthy === null ||
+        (isRecord(value.lastHealthy) &&
+            isBuild(value.lastHealthy.build) &&
+            isTimestamp(value.lastHealthy.since))) &&
+    (value.probation === null ||
+        (isRecord(value.probation) &&
+            isBuild(value.probation.build) &&
+            orNull(isBuild)(value.probation.from) &&
+            orNull(isTimestamp)(value.probation.readyAt) &&
+            orNull(isTimestamp)(value.probation.passesAt))) &&
+    orNull(isBuild)(value.highestRun) &&
+    (value.notice === null ||
+        (isRecord(value.notice) &&
+            oneOf<NoticeKind>(NOTICE_KINDS)(value.notice.kind) &&
+            isBuild(value.notice.build) &&
+            orNull(isBuild)(value.notice.other) &&
+            oneOf<NoticeReason>(NOTICE_REASONS)(value.notice.reason) &&
+            isTimestamp(value.notice.at))) &&
+    orNull(isJob)(value.job) &&
+    isRecord(value.settings) &&
+    isCount(value.settings.keepBuilds) &&
+    typeof value.settings.autoRollback === 'boolean' &&
+    Array.isArray(value.settings.branches) &&
+    value.settings.branches.every(isText) &&
+    orNull(isCount)(value.version) &&
+    typeof value.legacyFolder === 'boolean' &&
+    orNull(isCount)(value.longPath) &&
+    (value.disk === null || (isRecord(value.disk) && isCount(value.disk.free) && isCount(value.disk.total)));
+
 const isSnapshotData = (topic: Topic, data: unknown) => {
     if (!isRecord(data)) {
         return false;
@@ -395,6 +522,8 @@ const isSnapshotData = (topic: Topic, data: unknown) => {
             return orNull(isLiveSample)(data.latest);
         case 'server.schedule':
             return isScheduleStatus(data);
+        case 'server.artifacts':
+            return isArtifactsStatus(data);
     }
 };
 
@@ -412,6 +541,8 @@ const isEventData = (topic: Topic, data: unknown) => {
             return isLiveSample(data);
         case 'server.schedule':
             return isScheduleStatus(data);
+        case 'server.artifacts':
+            return isArtifactsStatus(data);
     }
 };
 
