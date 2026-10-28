@@ -26,7 +26,7 @@ import { useLiveMetrics } from '../metrics/live';
 import { mergeLive } from '../metrics/merge';
 import { bucketOf, sides, type Side } from './markers';
 import { buckets, playerPoints, resumes, slotPoints, type Bucket } from './points';
-import { ceiling } from './scale';
+import { scaleTop } from './scale';
 import { chartOptions, tokenColor, withAlpha } from './theme';
 
 const RANGES: Range[] = ['1h', '6h', '24h', '7d', '30d'];
@@ -65,8 +65,7 @@ export default function PlayersChart() {
         (best, row) => (best === null || (row.players ?? 0) > (best.players ?? 0) ? row : best),
         null,
     );
-    const latestSlots = rows.findLast((row) => row.slots !== null)?.slots ?? null;
-    const top = ceiling(peak?.players ?? 0, latestSlots);
+    const top = scaleTop(rows);
 
     let summary: string | null = null;
     if (page !== null && peak !== null && peak.players !== null) {
