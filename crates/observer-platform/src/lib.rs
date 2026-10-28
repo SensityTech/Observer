@@ -31,6 +31,8 @@ pub use windows::ProcessTree;
 pub use windows::authenticode::verify_signature;
 #[cfg(windows)]
 pub use windows::console::{ConsoleEvent, ConsoleEvents};
+#[cfg(windows)]
+pub use windows::message_loop::{MessageLoop, Waker};
 
 /// What to start: the program, its arguments and the directory it runs in. The environment is
 /// inherited; on Linux it also gets the variable that marks the tree.

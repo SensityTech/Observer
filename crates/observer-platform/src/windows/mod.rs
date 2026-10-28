@@ -1,5 +1,7 @@
 pub mod authenticode;
 pub mod console;
+pub mod message_loop;
+mod session;
 pub(crate) mod usage;
 
 use std::ffi::OsStr;
