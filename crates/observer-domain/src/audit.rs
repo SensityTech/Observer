@@ -42,10 +42,13 @@ pub enum AuditAction {
     ConsoleCommandSent,
     /// A console log file was downloaded; the target is its name.
     ConsoleLogDownloaded,
+    /// FXServer failed too often in a row: Observer stopped restarting it until someone starts it.
+    /// `details` holds the `failures` counted.
+    ServerCrashLoop,
 }
 
 impl AuditAction {
-    pub const ALL: [Self; 21] = [
+    pub const ALL: [Self; 22] = [
         Self::SetupCompleted,
         Self::SetupLinkCreated,
         Self::LoginSucceeded,
@@ -67,6 +70,7 @@ impl AuditAction {
         Self::ServerRestarted,
         Self::ConsoleCommandSent,
         Self::ConsoleLogDownloaded,
+        Self::ServerCrashLoop,
     ];
 
     pub const fn as_str(self) -> &'static str {
@@ -92,6 +96,7 @@ impl AuditAction {
             Self::ServerRestarted => "server_restarted",
             Self::ConsoleCommandSent => "console_command_sent",
             Self::ConsoleLogDownloaded => "console_log_downloaded",
+            Self::ServerCrashLoop => "server_crash_loop",
         }
     }
 

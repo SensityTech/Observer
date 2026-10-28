@@ -622,6 +622,7 @@ export const en = {
             server_restarted: 'Server restarted',
             console_command_sent: 'Console command',
             console_log_downloaded: 'Console log downloaded',
+            server_crash_loop: 'Crash loop: restarts stopped',
         } satisfies Record<AuditAction, string>,
         outcomes: {
             success: 'Success',

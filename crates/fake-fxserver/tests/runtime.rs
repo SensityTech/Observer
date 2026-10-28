@@ -441,3 +441,31 @@ async fn a_stop_while_the_server_already_stops_is_refused_and_not_audited() {
     assert_eq!(observer.audited(AuditAction::ServerStopped).await.len(), 1);
     observer.stop_observer().await;
 }
+
+#[tokio::test]
+async fn a_tripped_crash_loop_breaker_is_audited() {
+    let mut observer = Observer::new(false).await;
+    observer.supervision.start_server(&observer.owner).await.unwrap();
+
+    for generation in 1..=5 {
+        observer
+            .until(|status| status.generation == generation && status.started_at.is_some())
+            .await;
+        observer
+            .supervision
+            .command(&observer.owner, "fake_crash 3", CONSOLE_ROUTE.0, CONSOLE_ROUTE.1)
+            .await
+            .unwrap();
+    }
+    observer.state(ServerState::CrashLoop).await;
+
+    let tripped = observer.audited(AuditAction::ServerCrashLoop).await;
+    assert_eq!(tripped.len(), 1);
+    assert_eq!(
+        (tripped[0].actor_kind, tripped[0].outcome),
+        (ActorKind::System, Outcome::Failure)
+    );
+    assert_eq!(tripped[0].target.as_deref(), Some("default"));
+    assert_eq!(tripped[0].details, json!({ "failures": 5 }));
+    observer.stop_observer().await;
+}

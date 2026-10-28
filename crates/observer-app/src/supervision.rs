@@ -186,6 +186,8 @@ impl Supervision {
         let follower = tokio::spawn(follow(
             launches.clone(),
             setup.servers.clone(),
+            setup.db.clone(),
+            setup.clock.clone(),
             status_tx,
             readiness,
             stop.clone(),
@@ -471,10 +473,13 @@ impl Supervision {
 }
 
 /// Keeps the panel's status in step with the supervisor's, the cause of its last change of state
-/// and the stored launch settings, which it hands to the supervisor as they change.
+/// and the stored launch settings, which it hands to the supervisor as they change. A tripped
+/// crash loop breaker goes to the audit log: the server stays down until someone acts.
 async fn follow(
     launches: Launches,
     servers: Servers,
+    db: Database,
+    clock: Clock,
     status: watch::Sender<ServerStatus>,
     mut launch: LaunchReadiness,
     stop: CancellationToken,
@@ -495,6 +500,16 @@ async fn follow(
             event = events.recv() => match event {
                 Ok(event) => match event.kind {
                     EventKind::State { from, to, cause: new } => {
+                        if let Cause::CrashLoop { failures } = new {
+                            let record = Record::operator(ActorKind::System, AuditAction::ServerCrashLoop)
+                                .target(Servers::DEFAULT)
+                                .outcome(Outcome::Failure)
+                                .details(json!({ "failures": failures }));
+                            let now = clock.now();
+                            if let Err(error) = db.write(move |tx| record.write(tx, now)).await {
+                                warn!(%error, "cannot audit the crash loop");
+                            }
+                        }
                         // A server stopped on request ends with its exit; who asked says more.
                         let asked = matches!(cause, Some(Cause::Requested { .. } | Cause::ConsoleQuit { .. }));
                         let exit_of_a_stop = from == State::Stopping && matches!(new, Cause::Exited { .. });
