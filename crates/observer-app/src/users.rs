@@ -1,11 +1,11 @@
 use observer_domain::accounts::{CreatedUser, User};
-use observer_domain::audit::{ActorKind, AuditAction};
+use observer_domain::audit::{ActorKind, AuditAction, Outcome};
 use observer_domain::delegation;
 use observer_domain::error::ErrorCode;
 use observer_domain::permissions::Permissions;
 use observer_store::users::{self, NewUser, UserRow};
 use observer_store::{Connection, login_failures, sessions};
-use serde_json::json;
+use serde_json::{Value, json};
 
 use crate::accounts::{
     Accounts, TEMPORARY_PASSWORD_LIFETIME, account, check_known, check_username, existing, user_view,
@@ -30,7 +30,10 @@ impl Accounts {
     ) -> Result<CreatedUser, Error> {
         check_username(username)?;
         check_known(permissions)?;
-        let granted = delegation::grant(&caller.account(), permissions)?;
+        let granted = delegation::grant(&caller.account(), permissions).map_err(Error::from);
+        let granted = self
+            .audit_refusal(caller, AuditAction::UserCreated, Target::Name(username), granted)
+            .await?;
         let temporary_password = secrets::temporary_password()?;
         let hash = self.passwords.hash(temporary_password.clone()).await?;
 
@@ -106,6 +109,9 @@ impl Accounts {
                     .write(tx, now)?;
                 Ok(user)
             })
+            .await;
+        let user = self
+            .audit_refusal(caller, AuditAction::UserPermissionsChanged, Target::Id(id), user)
             .await?;
         Ok(user_view(&user))
     }
@@ -114,7 +120,8 @@ impl Accounts {
         let editor = caller.account();
         let record = Record::by(caller, AuditAction::UserDeleted);
         let now = self.clock.now();
-        self.db
+        let deleted = self
+            .db
             .write(move |tx| {
                 let user = existing(tx, id)?;
                 delegation::manage(&editor, &account(&user))?;
@@ -125,6 +132,8 @@ impl Accounts {
                     .write(tx, now)?;
                 Ok(())
             })
+            .await;
+        self.audit_refusal(caller, AuditAction::UserDeleted, Target::Id(id), deleted)
             .await
     }
 
@@ -133,12 +142,15 @@ impl Accounts {
     pub async fn reset_password(&self, caller: &Caller, id: i64) -> Result<String, Error> {
         let editor = caller.account();
         let record = Record::by(caller, AuditAction::UserPasswordReset);
-        self.reset(record, move |tx| {
-            let user = existing(tx, id)?;
-            delegation::manage(&editor, &account(&user))?;
-            Ok(user)
-        })
-        .await
+        let reset = self
+            .reset(record, move |tx| {
+                let user = existing(tx, id)?;
+                delegation::manage(&editor, &account(&user))?;
+                Ok(user)
+            })
+            .await;
+        self.audit_refusal(caller, AuditAction::UserPasswordReset, Target::Id(id), reset)
+            .await
     }
 
     /// Ends every session of an account.
@@ -146,7 +158,8 @@ impl Accounts {
         let editor = caller.account();
         let record = Record::by(caller, AuditAction::SessionRevoked);
         let now = self.clock.now();
-        self.db
+        let revoked = self
+            .db
             .write(move |tx| {
                 let mut user = existing(tx, id)?;
                 delegation::manage(&editor, &account(&user))?;
@@ -159,6 +172,8 @@ impl Accounts {
                     .write(tx, now)?;
                 Ok(())
             })
+            .await;
+        self.audit_refusal(caller, AuditAction::SessionRevoked, Target::Id(id), revoked)
             .await
     }
 
@@ -198,6 +213,47 @@ impl Accounts {
             .await
     }
 
+    /// Passes `result` through, after auditing it when the delegation rules refused it: an attempt
+    /// on an account its author may not touch is what the audit log is for. The change itself
+    /// rolled back, so the entry is written on its own.
+    async fn audit_refusal<T>(
+        &self,
+        caller: &Caller,
+        attempted: AuditAction,
+        target: Target<'_>,
+        result: Result<T, Error>,
+    ) -> Result<T, Error> {
+        let Err(Error::Refused(refusal)) = &result else {
+            return result;
+        };
+        if !matches!(
+            refusal.code,
+            ErrorCode::SelfEdit | ErrorCode::OwnerProtected | ErrorCode::Escalation | ErrorCode::Hierarchy
+        ) {
+            return result;
+        }
+        let mut details = refusal.params.clone();
+        details.insert("attempted".to_owned(), json!(attempted));
+        details.insert("refusal".to_owned(), json!(refusal.code));
+        let (name, key) = match target {
+            Target::Name(name) => (Some(name.to_owned()), name.to_owned()),
+            Target::Id(id) => {
+                details.insert("userId".to_owned(), json!(id));
+                let user = self.db.read(move |conn| users::get(conn, id)).await?;
+                (user.map(|user| user.username), id.to_string())
+            }
+        };
+        let mut record = Record::by(caller, AuditAction::PermissionDenied)
+            .outcome(Outcome::Denied)
+            .details(Value::Object(details));
+        if let Some(name) = name {
+            record = record.target(name);
+        }
+        self.record_denial(caller, format!("{} {key}", attempted.as_str()), record)
+            .await?;
+        result
+    }
+
     /// Hashes a new temporary password, then gives it to the account `target` finds and allows.
     async fn reset<F>(&self, record: Record, target: F) -> Result<String, Error>
     where
@@ -225,4 +281,11 @@ impl Accounts {
             .await?;
         Ok(temporary_password)
     }
+}
+
+/// The account a refused change was aimed at.
+enum Target<'a> {
+    /// One about to be created.
+    Name(&'a str),
+    Id(i64),
 }

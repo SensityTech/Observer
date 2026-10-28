@@ -907,3 +907,55 @@ async fn repeated_refusals_of_one_action_are_written_once_a_window_with_their_co
     lab.accounts.sweep().await.unwrap();
     assert_eq!(lab.entries(AuditAction::PermissionDenied).await.len(), 3);
 }
+
+#[tokio::test]
+async fn a_change_the_delegation_rules_refuse_is_audited_with_its_reason() {
+    let lab = Lab::new().await;
+    let owner = lab.owner().await;
+    let manager = lab.user(&owner, "grace", P::USERS_MANAGE | P::CONSOLE_VIEW).await;
+    let operator = lab
+        .user(&owner, "linus", P::CONSOLE_VIEW | P::SERVER_CONTROL)
+        .await;
+    let operator_id = lab.caller(&operator).await.user_id;
+    let manager = lab.caller(&manager).await;
+    let owner_id = lab.caller(&owner).await.user_id;
+
+    assert!(
+        lab.accounts
+            .create_user(&manager, "eve", P::SETTINGS_MANAGE)
+            .await
+            .is_err()
+    );
+    lab.accounts.delete_user(&manager, operator_id).await.unwrap_err();
+    lab.accounts.reset_password(&manager, owner_id).await.unwrap_err();
+    lab.accounts
+        .update_user(&manager, manager.user_id, P::AUDIT_VIEW, 1)
+        .await
+        .unwrap_err();
+
+    let denied = lab.entries(AuditAction::PermissionDenied).await;
+    let seen: Vec<_> = denied
+        .iter()
+        .rev()
+        .map(|entry| {
+            (
+                entry.target.as_deref(),
+                entry.details["attempted"].as_str(),
+                entry.details["refusal"].as_str(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        seen,
+        [
+            (Some("eve"), Some("user_created"), Some("escalation")),
+            (Some("linus"), Some("user_deleted"), Some("hierarchy")),
+            (Some("ada"), Some("user_password_reset"), Some("owner_protected")),
+            (Some("grace"), Some("user_permissions_changed"), Some("self_edit")),
+        ]
+    );
+    assert!(denied.iter().all(|entry| entry.outcome == Outcome::Denied));
+    assert_eq!(denied[3].details["permissions"], json!("600"));
+    assert_eq!(denied[2].details["userId"], json!(operator_id));
+    assert_eq!(denied[0].actor_name.as_deref(), Some("grace"));
+}
