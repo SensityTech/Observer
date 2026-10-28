@@ -347,6 +347,16 @@ async fn an_install_reports_each_step_then_installs() {
 }
 
 #[tokio::test]
+async fn the_free_space_is_known_before_the_first_install() {
+    let lab = Lab::new(host_build(), |_| Vec::new()).await;
+
+    let status = lab.until(|status| status.disk.is_some()).await;
+
+    assert!(lab.root().is_dir());
+    assert!(status.disk.is_some_and(|disk| disk.free <= disk.total));
+}
+
+#[tokio::test]
 async fn a_cancelled_install_leaves_nothing_in_staging() {
     let lab = Lab::new(host_build(), |server| vec![listed(server, 37872, "/slow")]).await;
     lab.artifacts.install(&lab.owner, 37872, false).await.unwrap();

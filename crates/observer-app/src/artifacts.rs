@@ -190,6 +190,8 @@ impl Artifacts {
                 root.display()
             ))));
         }
+        // Made now, so that the space of its volume is known before the first install.
+        tokio::fs::create_dir_all(&root).await?;
         let installer = Arc::new(Installer::new(setup.http, root.clone()));
         installer.sweep().await;
         let (state, settings) = setup
