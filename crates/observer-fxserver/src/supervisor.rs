@@ -842,7 +842,7 @@ impl Actor {
                 self.kill();
             }
             Phase::Backoff { respawn_at } if now >= respawn_at => {
-                // A failed respawn leaves the server stopped, which the event already says.
+                // A failed respawn backs off again, which the events already say.
                 let _ = self.spawn(Cause::Recovery).await;
             }
             Phase::Running => self.weigh_health(now).await,
@@ -1008,8 +1008,15 @@ impl Actor {
             Err(error) => {
                 error!(%error, "cannot start FXServer");
                 self.note(&format!("cannot start FXServer: {error}"));
-                self.phase = Phase::Idle;
-                self.set_state(State::Stopped, Cause::SpawnFailed { error: error.clone() });
+                let failed = Cause::SpawnFailed { error: error.clone() };
+                if cause == Cause::Recovery {
+                    // What stops a respawn is often brief (a cfg being saved, a scan holding the
+                    // executable), so it is one more failure for the breaker to count.
+                    self.failed(failed);
+                } else {
+                    self.phase = Phase::Idle;
+                    self.set_state(State::Stopped, failed);
+                }
                 Err(error)
             }
         }

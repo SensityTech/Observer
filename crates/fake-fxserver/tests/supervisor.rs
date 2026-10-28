@@ -395,6 +395,27 @@ async fn a_crash_is_followed_by_a_restart_after_the_backoff() {
 }
 
 #[tokio::test]
+async fn a_respawn_that_fails_backs_off_and_tries_again() {
+    let mut lab = Lab::online(&[]).await;
+    let cfg = lab.dir.path().join("server-data/server.cfg");
+    let aside = lab.dir.path().join("server-data/server.cfg.saving");
+    fs::rename(&cfg, &aside).unwrap();
+
+    lab.type_command("fake_crash", "test").await;
+
+    lab.state(State::Crashed).await;
+    let cause = lab.state(State::Crashed).await;
+    assert!(
+        matches!(&cause, Cause::SpawnFailed { error } if error.contains("server.cfg")),
+        "{cause:?}"
+    );
+    fs::rename(&aside, &cfg).unwrap();
+    assert_eq!(lab.state(State::Starting).await, Cause::Recovery);
+    lab.state(State::Online).await;
+    lab.shut_down(false).await;
+}
+
+#[tokio::test]
 async fn five_failures_in_a_row_trip_the_breaker_until_a_start_by_hand() {
     let mut lab = Lab::new(&[("fake_crash_after_ms", "300")]).await;
     lab.supervisor.start("test").await.unwrap();
