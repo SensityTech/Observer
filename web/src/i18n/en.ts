@@ -223,6 +223,7 @@ export const en = {
         notPermittedOnce: 'Your account cannot restart FXServer.',
         notRunning: 'FXServer is not running.',
         stoppingOnce: 'FXServer is stopping: plan the restart once it runs again.',
+        hungOnce: 'FXServer is not responding and is being stopped: plan the restart once it runs again.',
         oneSkip: (time: string) => `Restore ${time} first: one restart can be skipped at a time.`,
         unavailable: (action: string, reason: string) => `${action} does nothing now. ${reason}`,
         failed: (action: string, error: string) => `${action} did not go through. ${error}`,

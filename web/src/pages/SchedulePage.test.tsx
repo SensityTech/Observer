@@ -184,6 +184,18 @@ describe('SchedulePage', () => {
         live.stop();
     });
 
+    it('should say a single restart waits while FXServer hangs and is being stopped', async () => {
+        const { getByRole, getByText, say, live } = await page('9');
+
+        say({ type: 'event', topic: 'server.status', data: { ...ONLINE, state: 'hung' } });
+        fireEvent.click(getByRole('button', { name: en.schedule.restartOnce }));
+
+        expect(
+            getByText(en.schedule.unavailable(en.schedule.restartOnce, en.schedule.hungOnce)),
+        ).not.toBeNull();
+        live.stop();
+    });
+
     it('should name each warning in its remove button, one minute in the singular', async () => {
         const { getByRole, live } = await page('11');
 

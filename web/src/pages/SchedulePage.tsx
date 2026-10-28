@@ -274,7 +274,9 @@ function NextRestart({
           ? t.schedule.notRunning
           : server.state === 'stopping'
             ? t.schedule.stoppingOnce
-            : null;
+            : server.state === 'hung'
+              ? t.schedule.hungOnce
+              : null;
 
     const skip = () =>
         action.mutate({
