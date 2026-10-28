@@ -73,11 +73,14 @@ impl fmt::Display for Refusal {
     }
 }
 
+/// The error naming a refused entry. A name refused for its length keeps only its start.
 pub(crate) fn refuse(entry: &str, refusal: Refusal) -> Error {
-    Error::Unsafe {
-        entry: entry.to_owned(),
-        refusal,
-    }
+    let entry = if entry.len() > MAX_NAME {
+        format!("{}...", &entry[..entry.floor_char_boundary(MAX_NAME)])
+    } else {
+        entry.to_owned()
+    };
+    Error::Unsafe { entry, refusal }
 }
 
 /// Checks an entry name and splits it into components. `.` and empty components are dropped, so
@@ -200,6 +203,31 @@ mod tests {
         ] {
             assert_eq!(components(name), Err(refusal), "{name:?}");
         }
+    }
+
+    #[test]
+    fn a_refused_name_is_printed_with_its_control_characters_escaped() {
+        let error = refuse(
+            "citizen/\u{1b}]0;owned\u{7}\u{1b}[2K\rinstalled.lua",
+            Refusal::Control,
+        );
+
+        assert_eq!(
+            error.to_string(),
+            r"the archive entry `citizen/\u{1b}]0;owned\u{7}\u{1b}[2K\rinstalled.lua` has a control character in its name"
+        );
+    }
+
+    #[test]
+    fn a_name_refused_for_its_length_keeps_only_its_start() {
+        let name = "é".repeat(1 << 20);
+
+        let Error::Unsafe { entry, .. } = refuse(&name, Refusal::TooLong) else {
+            panic!("a refusal is an unsafe entry");
+        };
+
+        assert!(entry.len() <= MAX_NAME + 3, "{}", entry.len());
+        assert!(name.starts_with(entry.trim_end_matches("...")));
     }
 
     #[test]

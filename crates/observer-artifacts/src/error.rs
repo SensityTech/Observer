@@ -1,3 +1,4 @@
+use std::fmt::{self, Write};
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -45,9 +46,9 @@ pub enum Error {
         needed_mib: u64,
         available_mib: u64,
     },
-    #[error("the archive entry `{entry}` {refusal}")]
+    #[error("the archive entry `{}` {refusal}", Untrusted(.entry))]
     Unsafe { entry: String, refusal: Refusal },
-    #[error("the archive is damaged, download it again: {0}")]
+    #[error("the archive is damaged, download it again: {}", Untrusted(.0))]
     Damaged(String),
     #[error("the extracted build is incomplete: {0}")]
     Layout(String),
@@ -80,10 +81,42 @@ impl Error {
     }
 }
 
+/// Text an archive chose, such as an entry name, with its control characters escaped: printed as
+/// it is, an escape sequence in it would drive the operator's terminal.
+struct Untrusted<'a>(&'a str);
+
+impl fmt::Display for Untrusted<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for character in self.0.chars() {
+            if character.is_control() {
+                write!(f, "{}", character.escape_default())?;
+            } else {
+                f.write_char(character)?;
+            }
+        }
+        Ok(())
+    }
+}
+
 /// Attaches the path an I/O error happened on, for `map_err`.
 pub(crate) fn io(path: &Path) -> impl FnOnce(io::Error) -> Error + '_ {
     move |source| Error::Io {
         path: path.to_path_buf(),
         source,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_damaged_archive_is_reported_with_the_control_characters_it_wrote_escaped() {
+        // `tar` quotes a header's name when one of its numbers does not parse.
+        let error =
+            Error::Damaged("numeric field was not a number:  when getting size for \u{1b}[2Kx".to_owned());
+
+        assert!(!error.to_string().chars().any(char::is_control), "{error:?}");
+        assert!(error.to_string().ends_with(r"for \u{1b}[2Kx"), "{error}");
     }
 }

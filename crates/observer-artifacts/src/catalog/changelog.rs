@@ -50,7 +50,7 @@ pub(crate) fn parse(json: &str, platform: Platform) -> Result<Changelog, Error> 
                 ))
             })?;
         if build_number(build) != Some(location.build) {
-            return Err(changed(format!("{field}_download is not build {build}")));
+            return Err(changed(format!("{field}_download is not build {build:?}")));
         }
         Ok(location)
     };
@@ -151,6 +151,23 @@ mod tests {
                 .to_string()
                 .starts_with("the linux changelogs API changed format"),
             "{error}"
+        );
+    }
+
+    #[test]
+    fn a_build_number_carrying_escape_sequences_is_quoted_in_the_error() {
+        let changed = WINDOWS.replace(
+            r#""recommended":"35245""#,
+            r#""recommended":"\u001b]0;owned\u0007\u001b[2K\r35245""#,
+        );
+
+        let error = parse(&changed, Platform::Windows).unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .ends_with(r#"recommended_download is not build "\u{1b}]0;owned\u{7}\u{1b}[2K\r35245""#),
+            "{error:?}"
         );
     }
 
