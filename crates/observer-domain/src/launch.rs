@@ -11,8 +11,9 @@ pub const MAX_TEXT_CHARS: usize = 1024;
 pub const MAX_EXTRA_ARGUMENTS: usize = 64;
 
 /// Names an extra argument may not set. Some would make FXServer escape Observer's supervision
-/// (`exec`, `citizen_dir`) or behave as if txAdmin ran it; the last two are Observer's own
-/// settings, chosen in the form rather than as arguments.
+/// (`exec`, `citizen_dir`) or behave as if txAdmin ran it; the rest are Observer's own: two
+/// settings chosen in the form rather than as arguments, and the credentials it hands FXServer on
+/// stdin at each launch, which an argument would both override and expose.
 const RESERVED_NAMES: &[&str] = &[
     "exec",
     "citizen_dir",
@@ -24,6 +25,9 @@ const RESERVED_NAMES: &[&str] = &[
     "txAdminInterface",
     "onesync",
     "observer_txadmin_events",
+    "sv_prometheusBasicAuthUser",
+    "sv_prometheusBasicAuthPassword",
+    "sv_playersToken",
 ];
 
 /// Convars that hold secrets. The command line of a process is readable by anyone on the host, so
@@ -531,6 +535,9 @@ mod tests {
             ("txAdminInterface", LaunchProblem::Reserved),
             ("OneSync", LaunchProblem::Reserved),
             ("observer_txadmin_events", LaunchProblem::Reserved),
+            ("sv_prometheusBasicAuthUser", LaunchProblem::Reserved),
+            ("sv_prometheusBasicAuthPassword", LaunchProblem::Reserved),
+            ("SV_PLAYERSTOKEN", LaunchProblem::Reserved),
             ("sv_licenseKey", LaunchProblem::Secret),
             ("sv_tebexSecret", LaunchProblem::Secret),
             ("steam_webApiKey", LaunchProblem::Secret),
