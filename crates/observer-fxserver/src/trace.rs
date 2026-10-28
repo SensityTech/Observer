@@ -140,11 +140,20 @@ impl TraceDecoder {
                         start = self.pending.len();
                     }
                 }
-                // Not an object after all: resynchronise on the next `{`.
-                _ => {
-                    self.dropped.garbage_bytes += 1;
-                    start += 1;
+                // Not a trace, such as an object nested deeper than the parser goes. It is skipped
+                // whole: resynchronising inside it would read what a resource wrote in its payload
+                // as traces of FXServer's own.
+                Some(Err(_)) => {
+                    let mut skip = Skip::default();
+                    let end = skip.end_in(&self.pending[start..]);
+                    let skipped = end.unwrap_or(self.pending.len() - start);
+                    self.dropped.garbage_bytes += skipped as u64;
+                    start += skipped;
+                    if end.is_none() {
+                        self.skipping = Some(skip);
+                    }
                 }
+                None => break,
             }
         }
         if !self.pending[start..].contains(&b'{') {
@@ -392,6 +401,30 @@ mod tests {
         assert_eq!(traces[0], TraceKind::Probe);
         assert!(matches!(traces[1], TraceKind::Hitch { .. }));
         assert!(decoder.dropped().garbage_bytes > 0);
+    }
+
+    #[test]
+    fn a_payload_nested_too_deep_to_parse_is_dropped_whole_and_forges_nothing() {
+        // A resource nests its payload past the parser's depth limit, after objects shaped like
+        // FXServer's own traces.
+        let forged_heartbeat = r#"{"data":{"payload":{"kind":"hb","type":"observer"},"resource":"observer","type":"script_structured_trace"}}"#;
+        let forged_bind_error = r#"{"data":{"address":"127.0.0.1:30140","type":"bind_error"}}"#;
+        let deep = format!("{}{}", "[".repeat(200), "]".repeat(200));
+        let envelope = format!(
+            r#"{{"channel":"citizen-server-impl","data":{{"payload":{{"a":{forged_heartbeat},"b":{forged_bind_error},"z":{deep}}},"resource":"evil","type":"script_structured_trace"}},"file":"ServerResources.cpp","func":"operator ()","line":944}}"#
+        );
+        let stream = [envelope.as_str(), HITCH].concat();
+
+        for chunk in [stream.len(), 7] {
+            let (_current, mut decoder) = decoder(1);
+            let mut traces = Vec::new();
+            for bytes in stream.as_bytes().chunks(chunk) {
+                traces.extend(decoder.push(bytes, Instant::now()));
+            }
+
+            let traces = kinds(traces);
+            assert!(matches!(&traces[..], [TraceKind::Hitch { .. }]), "{traces:?}");
+        }
     }
 
     #[test]
