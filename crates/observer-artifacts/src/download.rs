@@ -8,6 +8,7 @@ use sha2::{Digest, Sha256};
 use tokio::fs::File;
 use tokio::io::{AsyncSeekExt, AsyncWriteExt};
 
+use crate::disk;
 use crate::error::{Error, io};
 use crate::http::{self, ARCHIVE_LIMIT, Http};
 
@@ -46,7 +47,9 @@ pub(crate) async fn download(
     let result = partial.run(http, &mut file, retry_delays, progress).await;
     drop(file);
     if result.is_err() {
-        let _ = tokio::fs::remove_file(path).await;
+        let path = path.to_path_buf();
+        // What cannot be removed now is left to the caller's staging folder.
+        let _ = tokio::task::spawn_blocking(move || disk::remove_file(&path)).await;
     }
     result
 }

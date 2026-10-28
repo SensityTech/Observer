@@ -15,6 +15,8 @@ use crate::layout::{self, MANIFEST_FORMAT, Manifest};
 use crate::{Branch, CommitSha, Platform, disk, extract};
 
 const STAGING: &str = ".staging";
+/// Far longer than an install takes: three download attempts of two hours at most, then seconds.
+const STALE_STAGING: Duration = Duration::from_hours(24);
 const HEAD_TIMEOUT: Duration = Duration::from_secs(30);
 /// Room for the download and its extraction, checked before anything is fetched.
 const WINDOWS_SPACE: u64 = 350 * MIB;
@@ -102,6 +104,12 @@ impl Installer {
         if !metadata.is_dir() {
             return Err(Error::StagingLink(staging));
         }
+        let swept = staging.clone();
+        blocking(move || {
+            sweep(&swept);
+            Ok(())
+        })
+        .await?;
 
         // A `HEAD` first: the docs page only links `server.7z`, so this proves `server.zip` is there.
         let head = self.head(&request.url).await?;
@@ -125,7 +133,9 @@ impl Installer {
         let archive = staging.join(format!("{name}.part"));
         let tree = staging.join(&name);
         let staged = self.stage(request, length, &archive, &tree, &mut progress).await;
-        let _ = tokio::fs::remove_file(&archive).await;
+        if let Err(error) = blocking(move || disk::remove_file(&archive).map_err(io(&archive))).await {
+            tracing::warn!(%error, "a downloaded archive is left in the staging folder");
+        }
         let result = match staged {
             Ok(manifest) => commit(tree.clone(), target, request.build)
                 .await
@@ -134,9 +144,8 @@ impl Installer {
         };
         if let Ok(installed) = &result {
             self.remember(request, &installed.manifest.archive_sha256);
-        } else {
-            let leftover = tree.clone();
-            let _ = blocking(move || remove_tree(&leftover).map_err(io(&leftover))).await;
+        } else if let Err(error) = blocking(move || remove_tree(&tree).map_err(io(&tree))).await {
+            tracing::warn!(%error, "a staged build is left in the staging folder");
         }
         result
     }
@@ -269,7 +278,8 @@ async fn commit(tree: PathBuf, target: PathBuf, build: u32) -> Result<PathBuf, E
         if fs::symlink_metadata(&target).is_ok() {
             return Err(Error::AlreadyInstalled(build));
         }
-        disk::retry(|| fs::rename(&tree, &target)).map_err(io(&target))?;
+        // The staged tree is what a scanner holds open, not the target that does not exist yet.
+        disk::retry(|| fs::rename(&tree, &target)).map_err(io(&tree))?;
         Ok(target)
     })
     .await
@@ -279,6 +289,33 @@ fn remove_tree(tree: &Path) -> io::Result<()> {
     match disk::retry(|| fs::remove_dir_all(tree)) {
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
         result => result,
+    }
+}
+
+/// Removes what earlier installs left in the staging folder, a tree a scanner held while it was
+/// being removed or the download of an install that crashed, once it is too old for any install
+/// still to be writing it.
+fn sweep(staging: &Path) {
+    let Ok(entries) = fs::read_dir(staging) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let stale = entry
+            .metadata()
+            .and_then(|metadata| metadata.modified())
+            .is_ok_and(|modified| modified.elapsed().is_ok_and(|age| age > STALE_STAGING));
+        if !stale {
+            continue;
+        }
+        let path = entry.path();
+        let removed = if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+            remove_tree(&path)
+        } else {
+            disk::remove_file(&path)
+        };
+        if let Err(error) = removed {
+            tracing::warn!(path = %path.display(), %error, "cannot remove what an earlier install left");
+        }
     }
 }
 
@@ -525,6 +562,40 @@ mod tests {
             .map(|request| request.method)
             .collect();
         assert_eq!(methods, ["HEAD", "HEAD", "GET"]);
+    }
+
+    #[tokio::test]
+    async fn what_an_earlier_install_left_is_removed_once_it_is_a_day_old() {
+        let lab = Lab::new(vec![host_build()]).await;
+        let staging = lab.installer.root().join(STAGING);
+        let old_tree = staging.join("37000-0badf00d");
+        let old_part = staging.join("37000-0badf00d.part");
+        let recent = staging.join("37001-cafebabe.part");
+        fs::create_dir_all(old_tree.join("citizen")).unwrap();
+        fs::write(&old_part, b"PK").unwrap();
+        fs::write(&recent, b"PK").unwrap();
+        let two_days_ago = std::time::SystemTime::now() - Duration::from_hours(48);
+        for old in [&old_part, &old_tree] {
+            set_modified(old, two_days_ago);
+        }
+
+        let _ = lab.installer.install(&lab.request("/archive"), |_| {}).await;
+
+        assert!(!old_tree.exists());
+        assert!(!old_part.exists());
+        assert!(recent.exists());
+    }
+
+    fn set_modified(path: &Path, at: std::time::SystemTime) {
+        let mut options = fs::File::options();
+        options.read(true);
+        // Windows needs the right to write attributes, and opens a folder only with backup semantics.
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            options.access_mode(0x100).custom_flags(0x0200_0000);
+        }
+        options.open(path).unwrap().set_modified(at).unwrap();
     }
 
     #[tokio::test]

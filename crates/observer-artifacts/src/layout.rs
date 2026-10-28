@@ -6,7 +6,7 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, io};
-use crate::{Branch, CommitSha, Platform};
+use crate::{Branch, CommitSha, Platform, disk};
 
 const MANIFEST: &str = ".observer-build.json";
 pub(crate) const MANIFEST_FORMAT: u32 = 1;
@@ -64,7 +64,7 @@ impl Manifest {
         file.write_all(text.as_bytes()).map_err(io(&partial))?;
         file.sync_all().map_err(io(&partial))?;
         drop(file);
-        fs::rename(&partial, &path).map_err(io(&path))
+        disk::retry(|| fs::rename(&partial, &path)).map_err(io(&path))
     }
 }
 

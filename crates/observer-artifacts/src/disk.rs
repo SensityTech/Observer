@@ -1,3 +1,4 @@
+use std::fs;
 use std::io;
 use std::path::Path;
 use std::thread;
@@ -48,6 +49,14 @@ pub(crate) fn retry<T>(mut operation: impl FnMut() -> io::Result<T>) -> io::Resu
         }
     }
     operation()
+}
+
+/// Removes a file, waiting out a scanner that holds it. A file already gone is no error.
+pub(crate) fn remove_file(path: &Path) -> io::Result<()> {
+    match retry(|| fs::remove_file(path)) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        result => result,
+    }
 }
 
 fn busy(error: &io::Error) -> bool {
