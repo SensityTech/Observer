@@ -517,6 +517,10 @@ impl State {
             .as_ref()
             .filter(|view| !matches!(view.state, ServerState::Stopped | ServerState::CrashLoop))
             .ok_or(ErrorCode::ServerNotRunning)?;
+        // The run that stops is the one the one-off would belong to: the stop would drop it.
+        if view.state == ServerState::Stopping {
+            return Err(ErrorCode::ServerStopping.into());
+        }
         self.one_off_run = view.started_at.map(|_| view.generation);
         let previous = self.plan.one_off.replace(PlannedRestart {
             at,

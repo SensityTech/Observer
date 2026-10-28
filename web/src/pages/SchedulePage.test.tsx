@@ -134,6 +134,18 @@ describe('SchedulePage', () => {
         live.stop();
     });
 
+    it('should say a single restart waits while FXServer stops', async () => {
+        const { getByRole, getByText, say, live } = await page('9');
+
+        say({ type: 'event', topic: 'server.status', data: { ...ONLINE, state: 'stopping' } });
+        fireEvent.click(getByRole('button', { name: en.schedule.restartOnce }));
+
+        expect(
+            getByText(en.schedule.unavailable(en.schedule.restartOnce, en.schedule.stoppingOnce)),
+        ).not.toBeNull();
+        live.stop();
+    });
+
     it('should count the changes typed in the save bar', async () => {
         const { getByRole, getByText, queryByText, live } = await page('11');
         expect(queryByText(en.schedule.changes(1))).toBeNull();

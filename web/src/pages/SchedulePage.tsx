@@ -226,7 +226,13 @@ function NextRestart({
         setOutcome({ tone: 'warning', message: t.schedule.unavailable(label, reason) });
     const pending = (label: string) => action.isPending && action.variables?.label === label;
     const planReason = canPlan ? null : t.schedule.notPermittedPlan;
-    const onceReason = !canRestart ? t.schedule.notPermittedOnce : running ? null : t.schedule.notRunning;
+    const onceReason = !canRestart
+        ? t.schedule.notPermittedOnce
+        : !running
+          ? t.schedule.notRunning
+          : server.state === 'stopping'
+            ? t.schedule.stoppingOnce
+            : null;
 
     const skip = () =>
         action.mutate({

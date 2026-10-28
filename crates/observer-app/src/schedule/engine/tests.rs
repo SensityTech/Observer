@@ -945,6 +945,25 @@ fn actions_that_do_not_apply_are_refused_and_change_nothing() {
     );
 }
 
+#[test]
+fn a_one_off_is_refused_while_the_server_stops_rather_than_dropped_by_the_stop() {
+    let mut sim = Sim::running(paris(&[]), "2026-10-27T20:00:00Z", "2026-10-28T01:00:00Z");
+    sim.server(
+        "2026-10-28T01:00:00Z",
+        ServerState::Stopping,
+        1,
+        Some("2026-10-27T20:00:00Z"),
+    );
+
+    let planned = sim.send(Input::OneOff {
+        at: ts("2026-10-28T03:00:00Z"),
+        by: "ada".to_owned(),
+    });
+
+    assert_eq!(refusal(&planned), Some(ErrorCode::ServerStopping));
+    assert_eq!(sim.state.plan.one_off, None);
+}
+
 /// A server online since the day before with 04:00 announced down to the 5-minute tier.
 fn announced() -> Sim {
     let mut sim = Sim::running(

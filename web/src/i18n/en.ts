@@ -219,6 +219,7 @@ export const en = {
         notPermittedPlan: 'Your account cannot change the schedule.',
         notPermittedOnce: 'Your account cannot restart FXServer.',
         notRunning: 'FXServer is not running.',
+        stoppingOnce: 'FXServer is stopping: plan the restart once it runs again.',
         unavailable: (action: string, reason: string) => `${action} does nothing now. ${reason}`,
         failed: (action: string, error: string) => `${action} did not go through. ${error}`,
         dismiss: 'Dismiss',
