@@ -126,3 +126,53 @@ fn read(row: &Row<'_>) -> rusqlite::Result<SessionRow> {
         user_agent: row.get(9)?,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use observer_domain::permissions::Permissions;
+
+    use super::*;
+    use crate::database::memory;
+    use crate::users::{self, NewUser};
+
+    fn open(conn: &Connection, user_id: i64, secret: u8) -> i64 {
+        insert(
+            conn,
+            &NewSession {
+                user_id,
+                token_hash: &[secret; 32],
+                key_hash: &[secret; 32],
+                auth_epoch: 0,
+                created_at: "2026-01-10T08:00:00Z".parse().unwrap(),
+                expires_at: "2026-01-17T08:00:00Z".parse().unwrap(),
+                ip: None,
+                user_agent: None,
+            },
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn an_ended_session_id_is_never_given_to_another_session() {
+        let conn = memory();
+        let user = users::insert(
+            &conn,
+            &NewUser {
+                username: "ada",
+                password_hash: "$argon2id$v=19$m=8,t=1,p=1$c2FsdHNhbHQ$aGFzaGhhc2hoYXNo",
+                is_owner: true,
+                permissions: Permissions::NONE,
+                must_change_password: false,
+                password_expires_at: None,
+                created_at: "2026-01-10T08:00:00Z".parse().unwrap(),
+            },
+        )
+        .unwrap()
+        .unwrap();
+        open(&conn, user, 1);
+        let ended = open(&conn, user, 2);
+        delete(&conn, ended).unwrap();
+
+        assert!(open(&conn, user, 3) > ended);
+    }
+}

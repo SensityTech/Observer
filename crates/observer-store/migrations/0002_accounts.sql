@@ -1,8 +1,10 @@
 -- Accounts, sessions, login throttling and the audit log. Every timestamp is RFC 3339 UTC with
 -- exactly three fractional digits, so timestamps compare correctly as text.
 
+-- AUTOINCREMENT on users and sessions: an id names one account or one session forever, so an
+-- audit entry or a stale edit never points at whoever came after a deletion.
 CREATE TABLE users (
-    id                   INTEGER PRIMARY KEY,
+    id                   INTEGER PRIMARY KEY AUTOINCREMENT,
     username             TEXT    NOT NULL COLLATE NOCASE UNIQUE,
     password_hash        TEXT    NOT NULL,
     is_owner             INTEGER NOT NULL DEFAULT 0 CHECK (is_owner IN (0, 1)),
@@ -23,7 +25,7 @@ CREATE UNIQUE INDEX users_single_owner ON users (is_owner) WHERE is_owner = 1;
 
 -- The cookie token and the session key are only stored as SHA-256 hashes.
 CREATE TABLE sessions (
-    id                 INTEGER PRIMARY KEY,
+    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id            INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
     token_hash         BLOB    NOT NULL UNIQUE,
     key_hash           BLOB    NOT NULL,

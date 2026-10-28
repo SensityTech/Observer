@@ -188,6 +188,25 @@ mod tests {
     }
 
     #[test]
+    fn a_deleted_account_id_is_never_given_to_another_account() {
+        let conn = memory();
+        insert(&conn, &new_user("ada", Permissions::NONE))
+            .unwrap()
+            .unwrap();
+        let grace = insert(&conn, &new_user("grace", Permissions::NONE))
+            .unwrap()
+            .unwrap();
+        delete(&conn, grace).unwrap();
+
+        let linus = insert(&conn, &new_user("linus", Permissions::NONE))
+            .unwrap()
+            .unwrap();
+
+        assert!(linus > grace);
+        assert_eq!(get(&conn, grace).unwrap(), None);
+    }
+
+    #[test]
     fn there_is_never_a_second_owner() {
         let conn = memory();
         let owner = NewUser {

@@ -637,3 +637,38 @@ async fn the_audit_log_pages_by_filter_and_exports_as_csv() {
     assert!(lines[2].contains(",setup_completed,"));
     assert_eq!(lines.len(), 4, "two entries, the header and the final line break");
 }
+
+#[tokio::test]
+async fn a_stale_edit_never_reaches_an_account_created_after_a_deletion() {
+    let server = Server::new().await;
+    let owner = server.owner().await;
+    let create = |name: &str, permissions: &str| json!({ "username": name, "permissions": permissions });
+    let alice = server
+        .call(
+            Method::POST,
+            "/api/users",
+            Some(&owner),
+            Some(create("alice", "100")),
+        )
+        .await
+        .json()["user"]
+        .clone();
+    let alice_path = format!("/api/users/{}", alice["id"]);
+    server.call(Method::DELETE, &alice_path, Some(&owner), None).await;
+    let bob = server
+        .call(Method::POST, "/api/users", Some(&owner), Some(create("bob", "0")))
+        .await
+        .json()["user"]
+        .clone();
+
+    let edit = json!({ "permissions": "180", "version": alice["version"] });
+    let stale = server
+        .call(Method::PATCH, &alice_path, Some(&owner), Some(edit))
+        .await;
+
+    assert_ne!(bob["id"], alice["id"]);
+    assert_eq!(stale.status, StatusCode::NOT_FOUND);
+    let listed = server.call(Method::GET, "/api/users", Some(&owner), None).await;
+    assert_eq!(listed.json()[1]["username"], "bob");
+    assert_eq!(listed.json()[1]["permissions"], "0");
+}
