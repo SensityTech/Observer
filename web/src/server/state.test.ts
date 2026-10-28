@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { ServerStatus } from '../api/generated/ServerStatus';
 import { en } from '../i18n/en';
-import { blocked, causeText } from './state';
+import { blocked, causeText, commandLine } from './state';
 
 const status = (overrides: Partial<ServerStatus>): ServerStatus => ({
     state: 'stopped',
@@ -48,6 +48,28 @@ describe('blocked', () => {
             en.controls.invalid,
         );
         expect(blocked(en, 'stop', status({ state: 'online', launch: 'invalid' }), true)).toBeNull();
+    });
+});
+
+describe('commandLine', () => {
+    it('should stay open while FXServer runs, stops, or its state is not known', () => {
+        expect(commandLine(en, status({ state: 'online' }))).toEqual({ open: true, note: null });
+        expect(commandLine(en, status({ state: 'hung' }))).toEqual({ open: true, note: null });
+        expect(commandLine(en, status({ state: 'stopping' }))).toEqual({
+            open: true,
+            note: en.console.stopping,
+        });
+        expect(commandLine(en, null)).toEqual({ open: true, note: en.console.stateUnknown });
+    });
+
+    it('should close with the reason once no process is left', () => {
+        expect(commandLine(en, status({ state: 'stopped' }))).toEqual({
+            open: false,
+            note: en.console.stopped,
+        });
+        for (const state of ['crashed', 'crashLoop'] as const) {
+            expect(commandLine(en, status({ state }))).toEqual({ open: false, note: en.console.notRunning });
+        }
     });
 });
 

@@ -29,7 +29,7 @@ import { useI18n } from '../i18n/I18nProvider';
 import { useTopic } from '../live/context';
 import { cn } from '../lib/cn';
 import { useServerStatus } from '../server/context';
-import { isRunning } from '../server/state';
+import { commandLine } from '../server/state';
 
 const KINDS: LineKind[] = ['stdout', 'stderr', 'command', 'observer'];
 const EVERY_KIND = { stdout: true, stderr: true, command: true, observer: true } satisfies Record<
@@ -367,7 +367,7 @@ function CommandLine({ onSent }: { onSent: (command: string) => void }) {
     if (!allows(me, Permission.ConsoleWrite)) {
         return <p className="cmd-note">{t.console.readOnly}</p>;
     }
-    const running = status !== null && isRunning(status.state);
+    const { open, note } = commandLine(t, status);
 
     const submit = async (event: FormEvent) => {
         event.preventDefault();
@@ -421,8 +421,8 @@ function CommandLine({ onSent }: { onSent: (command: string) => void }) {
                         autoCapitalize="off"
                         autoCorrect="off"
                         spellCheck={false}
-                        disabled={!running}
-                        placeholder={running ? undefined : t.console.stopped}
+                        disabled={!open}
+                        placeholder={note ?? undefined}
                         aria-busy={sending || undefined}
                         value={command}
                         onChange={(event) => {

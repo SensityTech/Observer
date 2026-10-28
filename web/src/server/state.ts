@@ -76,6 +76,32 @@ export const causeText = (t: Messages, status: ServerStatus): string | null => {
     }
 };
 
+/**
+ * Whether the command line can send now, and what its field says otherwise. FXServer takes commands
+ * until its process ends, so a stop leaves the line open; while the state is not known, Observer
+ * answers for the server.
+ */
+export const commandLine = (
+    t: Messages,
+    status: ServerStatus | null,
+): { open: boolean; note: string | null } => {
+    const words = t.console;
+    if (status === null) {
+        return { open: true, note: words.stateUnknown };
+    }
+    if (isRunning(status.state)) {
+        return { open: true, note: null };
+    }
+    switch (status.state) {
+        case 'stopping':
+            return { open: true, note: words.stopping };
+        case 'stopped':
+            return { open: false, note: words.stopped };
+        default:
+            return { open: false, note: words.notRunning };
+    }
+};
+
 export type Action = 'start' | 'stop' | 'restart';
 
 /** Why `action` cannot be taken now, or null when it can. */
