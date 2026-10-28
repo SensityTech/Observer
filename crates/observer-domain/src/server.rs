@@ -1,0 +1,302 @@
+//! FXServer as the panel sees it: its state under the supervisor, its console, and what the routes
+//! that control it take and answer.
+
+use jiff::Timestamp;
+use serde::{Deserialize, Serialize};
+use ts_rs::TS;
+
+/// The supervisor's states, PLAN.md §4.1.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum ServerState {
+    Stopped,
+    Starting,
+    Online,
+    /// Running, with a health problem.
+    Degraded,
+    /// Not responding; the supervisor is killing it.
+    Hung,
+    Stopping,
+    /// Ended without being asked to; a restart follows unless the crash loop breaker tripped.
+    Crashed,
+    /// Automatic restarts are off until someone starts the server.
+    CrashLoop,
+}
+
+/// What made the server enter its state.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+#[ts(export)]
+pub enum StateCause {
+    /// A start, stop or restart. `by` is a username, or `observer` for its own.
+    Requested {
+        by: String,
+    },
+    /// An automatic restart after a failure.
+    Recovery,
+    Ready,
+    Recovered,
+    Unhealthy {
+        problems: Vec<HealthProblem>,
+    },
+    Hang {
+        cause: HangCause,
+    },
+    /// The process ended; `description` reads the exit code, such as `0xC0000005 access violation`.
+    Exited {
+        description: String,
+    },
+    /// FXServer's own `Fatal Error:` line.
+    FatalError {
+        message: String,
+    },
+    BindError {
+        address: String,
+    },
+    LicenceRejected {
+        message: String,
+    },
+    /// An operator typed `quit`.
+    ConsoleQuit {
+        by: String,
+    },
+    /// Observer is stopping.
+    Shutdown,
+    CrashLoop {
+        failures: u32,
+    },
+    /// The process could not be started; `error` is the operating system's or the launch's reason.
+    SpawnFailed {
+        error: String,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum HealthProblem {
+    /// `/dynamic.json` has not answered for a while.
+    HttpLate,
+    /// The bridge's heartbeat is late: the main loop is slow or stuck.
+    HeartbeatLate,
+    /// The main thread's tick count stopped between two reads of `/perf/`.
+    MainThreadStalled,
+    /// `/perf/` refuses Observer's credentials.
+    ProbeUnauthorized,
+    /// FXServer's watchdog reported a stuck thread.
+    WatchdogBark,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum HangCause {
+    NoHeartbeat,
+    NoHttp,
+}
+
+/// Whether the stored launch settings can start FXServer on this host.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum LaunchReadiness {
+    Ready,
+    /// The owner has not saved any yet.
+    NotConfigured,
+    /// Saved, but refused by the rules in force on this host: the owner fixes them on the Server page.
+    Invalid,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[ts(export)]
+pub struct PlayerCount {
+    pub online: u64,
+    /// `sv_maxclients`, when FXServer reports it.
+    pub max: Option<u64>,
+}
+
+/// The `server.status` topic.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ServerStatus {
+    pub state: ServerState,
+    /// Null until the first change of state.
+    pub cause: Option<StateCause>,
+    pub since: Timestamp,
+    /// When the server that runs now started, which its uptime counts from.
+    pub started_at: Option<Timestamp>,
+    /// How many times Observer started FXServer since it started itself.
+    pub generation: u32,
+    pub problems: Vec<HealthProblem>,
+    /// The build the running server reports.
+    pub build: Option<u32>,
+    pub players: Option<PlayerCount>,
+    /// When the restart after a failure is due.
+    pub restart_at: Option<Timestamp>,
+    pub launch: LaunchReadiness,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum LineKind {
+    Stdout,
+    Stderr,
+    /// A command an operator sent, echoed once FXServer has it.
+    Command,
+    /// A note from Observer itself.
+    Observer,
+}
+
+/// The line was cut at 16 KiB.
+pub const LINE_TRUNCATED: u8 = 1;
+/// FXServer wrote no line end after it for a while: the rest may follow on the next line.
+pub const LINE_NO_EOL: u8 = 2;
+/// A secret was masked in it.
+pub const LINE_MASKED: u8 = 4;
+
+/// One console line, as a tuple to keep thousands of them light: `[seq, ts, generation, kind,
+/// actor, text, flags]`. `ts` is in milliseconds since the epoch; `actor` names who sent a command
+/// or which part of Observer wrote a note; `text` holds printable characters and SGR colour
+/// sequences only; `flags` is a set of the `LINE_*` bits.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[ts(export)]
+pub struct ConsoleLine(
+    pub u64,
+    pub i64,
+    pub u32,
+    pub LineKind,
+    pub Option<String>,
+    pub String,
+    pub u8,
+);
+
+/// The console's snapshot: the lines after the `since` of the subscription, or the latest ones.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[ts(export)]
+pub struct ConsoleSnapshot {
+    pub lines: Vec<ConsoleLine>,
+    /// Lines after `since` are missing: they left Observer's memory, or `since` came from an
+    /// earlier Observer.
+    pub gap: bool,
+}
+
+/// New console lines, in order.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[ts(export)]
+pub struct ConsoleBatch {
+    pub lines: Vec<ConsoleLine>,
+}
+
+/// `POST /api/servers/default/console`.
+#[derive(Debug, Clone, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+#[ts(export)]
+pub struct ConsoleCommand {
+    pub line: String,
+}
+
+/// What became of a command, once it was audited.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum Delivery {
+    /// FXServer has it; the console echoes it.
+    Written,
+    /// Handed to FXServer, which is not reading its console: it runs, and is echoed, when the
+    /// server reads again.
+    Pending,
+    /// Not written: FXServer has not read the command before this one yet.
+    Busy,
+}
+
+/// The answer to a console command.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[ts(export)]
+pub struct CommandAck {
+    pub delivery: Delivery,
+}
+
+/// Why a console command was refused before anything was written. `observer_cmd` is Observer's
+/// own channel to the bridge, refused to everyone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum CommandRefusal {
+    Empty,
+    /// Longer than 1,024 bytes.
+    TooLong,
+    ControlCharacter,
+    Reserved,
+}
+
+/// One console log file, as `GET /api/servers/default/console/logs` lists them, newest first.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct LogFile {
+    /// `console-2026-10-28.log`, which the download route takes back.
+    pub name: String,
+    pub bytes: u64,
+    pub modified_at: Timestamp,
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    #[test]
+    fn a_console_line_travels_as_a_tuple() {
+        let line = ConsoleLine(
+            1_761_642_000_000_001,
+            1_761_642_000_123,
+            3,
+            LineKind::Command,
+            Some("ada".to_owned()),
+            "ensure chat".to_owned(),
+            LINE_MASKED,
+        );
+
+        assert_eq!(
+            serde_json::to_value(line).unwrap(),
+            json!([
+                1_761_642_000_000_001_u64,
+                1_761_642_000_123_i64,
+                3,
+                "command",
+                "ada",
+                "ensure chat",
+                4
+            ])
+        );
+    }
+
+    #[test]
+    fn a_cause_names_its_kind_and_carries_its_detail() {
+        let causes = [
+            (
+                StateCause::Requested { by: "ada".to_owned() },
+                json!({ "kind": "requested", "by": "ada" }),
+            ),
+            (
+                StateCause::Hang {
+                    cause: HangCause::NoHeartbeat,
+                },
+                json!({ "kind": "hang", "cause": "noHeartbeat" }),
+            ),
+            (
+                StateCause::CrashLoop { failures: 5 },
+                json!({ "kind": "crashLoop", "failures": 5 }),
+            ),
+            (StateCause::Shutdown, json!({ "kind": "shutdown" })),
+        ];
+
+        for (cause, expected) in causes {
+            assert_eq!(serde_json::to_value(cause).unwrap(), expected);
+        }
+    }
+}

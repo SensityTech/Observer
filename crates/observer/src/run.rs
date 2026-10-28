@@ -2,14 +2,16 @@ use std::net::SocketAddr;
 use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::Context;
-use observer_app::{Accounts, AuditLog, Clock, PasswordCost, Servers};
+use jiff::tz::TimeZone;
+use observer_app::{Accounts, AuditLog, Clock, PasswordCost, Servers, Setup, Supervision};
+use observer_fxserver::console::{ConsoleLog, LogLimits};
 use observer_store::{BackupKind, Database};
 use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
 use crate::config::Config;
-use crate::shutdown::Signals;
+use crate::shutdown::{Shutdown, Signals};
 use crate::{lock, logging, setup};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -32,8 +34,24 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
     let clock = Clock::system();
     let accounts = Accounts::new(db.clone(), clock.clone(), PasswordCost::STANDARD).await?;
     let audit = AuditLog::new(db.clone(), clock.clone());
-    let servers = Servers::new(db.clone(), clock);
+    let servers = Servers::new(db.clone(), clock.clone());
     let instance_id = db.instance_id().await?;
+    let console_logs = paths.logs.join("console");
+    let console_log = ConsoleLog::start(&console_logs, LogLimits::default(), TimeZone::system())
+        .context("cannot open the console log")?;
+    let (supervision, mut supervised) = Supervision::start(
+        Setup {
+            db: db.clone(),
+            clock,
+            accounts: accounts.clone(),
+            servers: servers.clone(),
+            data_dir: paths.root.clone(),
+            console_logs,
+            log: Some(&console_log),
+        },
+        |_| {},
+    )
+    .await?;
 
     let listener = TcpListener::bind(config.http.listen)
         .await
@@ -47,6 +65,7 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
         accounts.clone(),
         audit.clone(),
         servers,
+        supervision.clone(),
         &instance_id,
         &config.http.hosts,
     );
@@ -63,9 +82,28 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
     let backups = tokio::spawn(daily_backups(db.clone(), stop.clone()));
     let upkeep = tokio::spawn(upkeep(accounts, audit.clone(), stop.clone()));
     let audit_feed = tokio::spawn(publish_audit(audit, stop.clone()));
+    if let Err(error) = supervision.boot().await {
+        error!(%error, "cannot start FXServer with Observer");
+    }
 
-    signals.next().await;
-    info!("stopping Observer");
+    // The panel keeps serving while FXServer stops, so that it shows the stop as it happens.
+    let mut shortened = signals.next().await == Shutdown::Shortened;
+    info!(shortened, "stopping Observer");
+    supervision.shutdown(shortened).await;
+    loop {
+        tokio::select! {
+            () = supervised.stopped() => break,
+            // A console closed during a graceful stop leaves Windows' few seconds only.
+            shutdown = signals.next(), if !shortened => {
+                if shutdown == Shutdown::Shortened {
+                    shortened = true;
+                    info!("the console is closing; shortening the stop");
+                    supervision.shutdown(true).await;
+                }
+            }
+        }
+    }
+    supervised.close().await;
     stop.cancel();
     live.shutdown().await;
 
@@ -75,6 +113,7 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
     backups.await.context("the backup task failed")?;
     upkeep.await.context("the upkeep task failed")?;
     audit_feed.await.context("the audit feed task failed")?;
+    console_log.close().await;
     db.close().await.context("cannot close the database")?;
 
     info!("Observer stopped");

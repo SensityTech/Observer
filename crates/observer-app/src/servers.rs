@@ -1,8 +1,11 @@
 use observer_domain::audit::AuditAction;
 use observer_domain::error::{ApiError, ErrorCode};
 use observer_domain::launch::{ExtraArgument, LaunchSettings, Platform, StoredLaunch};
+use std::sync::Arc;
+
 use observer_store::{Database, launch};
 use serde_json::{Map, Value, json};
+use tokio::sync::watch;
 
 use crate::audit::Record;
 use crate::{Caller, Clock, Error};
@@ -13,6 +16,7 @@ use crate::{Caller, Clock, Error};
 pub struct Servers {
     db: Database,
     clock: Clock,
+    changes: Arc<watch::Sender<()>>,
 }
 
 impl Servers {
@@ -21,7 +25,16 @@ impl Servers {
     pub const DEFAULT: &str = "default";
 
     pub fn new(db: Database, clock: Clock) -> Self {
-        Self { db, clock }
+        Self {
+            db,
+            clock,
+            changes: Arc::new(watch::Sender::new(())),
+        }
+    }
+
+    /// Changes after each save that changed the launch settings.
+    pub fn launch_changes(&self) -> watch::Receiver<()> {
+        self.changes.subscribe()
     }
 
     /// `None` until the owner first saves them.
@@ -50,7 +63,8 @@ impl Servers {
         let record = Record::by(caller, AuditAction::LaunchSettingsChanged).target(server);
         let server = server.to_owned();
         let now = self.clock.now();
-        self.db
+        let saved = self
+            .db
             .write(move |tx| -> Result<_, Error> {
                 let before = launch::get(tx, &server)?;
                 if before.as_ref().map(|before| before.version) != version {
@@ -68,7 +82,9 @@ impl Servers {
                 record.details(changes(old, &stored.settings)).write(tx, now)?;
                 Ok(stored)
             })
-            .await
+            .await?;
+        self.changes.send_replace(());
+        Ok(saved)
     }
 }
 

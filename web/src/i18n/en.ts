@@ -3,6 +3,7 @@
 
 import type { ActorKind } from '../api/generated/ActorKind';
 import type { AuditAction } from '../api/generated/AuditAction';
+import type { CommandRefusal } from '../api/generated/CommandRefusal';
 import type { ErrorCode } from '../api/generated/ErrorCode';
 import type { LaunchProblem } from '../api/generated/LaunchProblem';
 import type { OneSync } from '../api/generated/OneSync';
@@ -58,6 +59,15 @@ const permissionNames = (hex: string) =>
     list(permissionKeys(parsePermissions(hex)).map((key) => permissions[key].name));
 
 const isPermissionKey = (key: string): key is PermissionKey => Object.hasOwn(permissions, key);
+
+const commandRefusals = {
+    empty: 'Type a command first.',
+    tooLong: 'This command is too long: 1,024 bytes at most.',
+    controlCharacter: 'Remove the control characters from the command.',
+    reserved: 'observer_cmd is reserved to Observer: no account can send it.',
+} satisfies Record<CommandRefusal, string>;
+
+const isCommandRefusal = (key: string): key is CommandRefusal => Object.hasOwn(commandRefusals, key);
 
 export const en = {
     app: {
@@ -454,6 +464,11 @@ export const en = {
             audit_exported: 'Audit log exported',
             reauthenticated: 'Password confirmed',
             launch_settings_changed: 'Launch settings changed',
+            server_started: 'Server started',
+            server_stopped: 'Server stopped',
+            server_restarted: 'Server restarted',
+            console_command_sent: 'Console command',
+            console_log_downloaded: 'Console log downloaded',
         } satisfies Record<AuditAction, string>,
         outcomes: {
             success: 'Success',
@@ -508,8 +523,11 @@ export const en = {
             autoStart: 'Start with Observer',
             txadminEvents: 'txAdmin events',
             extraArguments: 'Extra arguments',
+            command: 'Command',
+            automatic: 'With Observer',
         },
         refusals: {
+            reserved: 'Reserved to Observer',
             escalation: 'Permissions they do not hold',
             owner_protected: 'The owner account',
             hierarchy: 'An account holding more than they do',
@@ -573,6 +591,18 @@ export const en = {
         password_unchanged: 'Choose a password different from the current one.',
         unknown_permissions: 'This Observer does not know some of these permissions. Reload the page.',
         invalid_launch_settings: 'Some settings need fixing. Each one says why below its field.',
+        launch_not_configured: 'FXServer has no launch settings yet. The owner saves them on the Server page.',
+        launch_failed: (params) => `FXServer could not start: ${stringParam(params, 'error')}`,
+        server_running: 'FXServer is already running.',
+        server_not_running: 'FXServer is not running.',
+        server_stopping: 'FXServer is stopping. Start it again once it has stopped.',
+        shutting_down: 'Observer is stopping, and FXServer with it.',
+        command_refused: (params) => {
+            const reason = stringParam(params, 'reason');
+            return isCommandRefusal(reason) ? commandRefusals[reason] : 'FXServer was not sent this command.';
+        },
+        too_many_commands: (params) =>
+            `Too many commands. Send the next one in ${formatDuration('en', numberParam(params, 'retryAfter'))}.`,
         already_set_up: 'Observer is already set up. Sign in instead.',
         invalid_setup_token:
             'This setup link has expired or was already used. Run observer setup-link on the host for a new one.',

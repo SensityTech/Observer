@@ -3,4 +3,4 @@
 /**
  * Every action the audit log records. Stored by name, so a variant is never renamed.
  */
-export type AuditAction = "setup_completed" | "setup_link_created" | "login_succeeded" | "login_failed" | "logout" | "session_revoked" | "password_changed" | "user_created" | "user_deleted" | "user_permissions_changed" | "user_password_reset" | "user_unlocked" | "permission_denied" | "audit_exported" | "reauthenticated" | "launch_settings_changed";
+export type AuditAction = "setup_completed" | "setup_link_created" | "login_succeeded" | "login_failed" | "logout" | "session_revoked" | "password_changed" | "user_created" | "user_deleted" | "user_permissions_changed" | "user_password_reset" | "user_unlocked" | "permission_denied" | "audit_exported" | "reauthenticated" | "launch_settings_changed" | "server_started" | "server_stopped" | "server_restarted" | "console_command_sent" | "console_log_downloaded";

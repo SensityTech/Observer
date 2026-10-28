@@ -1,6 +1,6 @@
 //! The services that own Observer's rules: accounts and sessions, first-run setup, login
-//! throttling, the audit log and how servers are launched. They know nothing of HTTP; the web
-//! layer and the command line both call them.
+//! throttling, the audit log, how servers are launched and their supervision. They know nothing
+//! of HTTP; the web layer and the command line both call them.
 
 mod accounts;
 mod audit;
@@ -11,6 +11,7 @@ mod secrets;
 mod servers;
 mod sessions;
 mod setup;
+mod supervision;
 #[cfg(test)]
 mod tests;
 mod throttle;
@@ -24,3 +25,4 @@ pub use error::Error;
 pub use passwords::PasswordCost;
 pub use servers::Servers;
 pub use sessions::{Caller, Client, SignedIn};
+pub use supervision::{ConsoleLines, LinesMissed, Running, Setup, Supervision};

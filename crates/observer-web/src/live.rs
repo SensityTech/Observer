@@ -229,7 +229,7 @@ impl Connection {
             Message::Ping(_) | Message::Pong(_) => return Ok(()),
         };
         match serde_json::from_str::<ClientMessage>(text.as_str()) {
-            Ok(ClientMessage::Sub { topic, .. }) => self.follow(topic).await,
+            Ok(ClientMessage::Sub { topic, since }) => self.follow(topic, since).await,
             Ok(ClientMessage::Unsub { topic }) => {
                 self.unfollow(topic);
                 Ok(())
@@ -243,7 +243,7 @@ impl Connection {
 
     /// Starts a topic over: its permission against the session as it is now, then its snapshot,
     /// then its events.
-    async fn follow(&mut self, topic: Topic) -> Result<(), End> {
+    async fn follow(&mut self, topic: Topic, since: Option<u64>) -> Result<(), End> {
         self.recheck().await?;
         self.unfollow(topic);
         if !self.caller.permissions.contains(topics::permission(topic)) {
@@ -252,7 +252,7 @@ impl Connection {
                 reason: UnsubscribeReason::Forbidden,
             });
         }
-        let feed = match topics::open(topic, &self.state).await {
+        let feed = match topics::open(topic, since, &self.state).await {
             Ok(feed) => feed,
             Err(failure) => {
                 error!(error = %failure, ?topic, "a live topic could not start");

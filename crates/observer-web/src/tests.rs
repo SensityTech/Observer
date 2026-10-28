@@ -11,7 +11,7 @@ use axum::extract::connect_info::MockConnectInfo;
 use axum::http::{HeaderMap, Method, Request, StatusCode, header};
 use http_body_util::BodyExt;
 use jiff::SignedDuration;
-use observer_app::{Accounts, AuditLog, Clock, PasswordCost, Servers};
+use observer_app::{Accounts, AuditLog, Clock, PasswordCost, Running, Servers, Setup, Supervision};
 use observer_domain::audit::ActorKind;
 use observer_store::Database;
 use serde_json::{Value, json};
@@ -34,6 +34,7 @@ struct Server {
     audit: AuditLog,
     db: Database,
     live: Live,
+    _supervised: Running,
     cookie_name: String,
 }
 
@@ -81,12 +82,27 @@ impl Server {
             .unwrap();
         let audit = AuditLog::new(db.clone(), clock.clone());
         let servers = Servers::new(db.clone(), clock.clone());
+        let (supervision, supervised) = Supervision::start(
+            Setup {
+                db: db.clone(),
+                clock: clock.clone(),
+                accounts: accounts.clone(),
+                servers: servers.clone(),
+                data_dir: dir.path().join("data"),
+                console_logs: dir.path().join("data/logs/console"),
+                log: None,
+            },
+            |_| {},
+        )
+        .await
+        .unwrap();
         let instance_id = db.instance_id().await.unwrap();
         let state = AppState::new(
             "0.0.0-test",
             accounts.clone(),
             audit.clone(),
             servers,
+            supervision.clone(),
             &instance_id,
             &["observer.test".to_owned()],
         );
@@ -100,6 +116,7 @@ impl Server {
             audit,
             db,
             live,
+            _supervised: supervised,
             cookie_name: format!("observer_session_{instance_id}"),
         }
     }

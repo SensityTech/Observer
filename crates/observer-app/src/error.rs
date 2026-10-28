@@ -13,6 +13,8 @@ pub enum Error {
     Hashing(String),
     #[error("the operating system gave no random bytes: {0}")]
     Random(getrandom::Error),
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
 }
 
 impl From<ErrorCode> for Error {
