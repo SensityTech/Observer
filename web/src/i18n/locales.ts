@@ -4,8 +4,8 @@ import { en, type Messages } from './en';
 export const DEFAULT_LOCALE = 'en';
 
 export const LOCALES = {
-    en: { label: 'English', messages: en },
-} satisfies Record<string, { label: string; messages: Messages }>;
+    en: { label: 'English', short: 'EN', messages: en },
+} satisfies Record<string, { label: string; short: string; messages: Messages }>;
 
 export type Locale = keyof typeof LOCALES;
 

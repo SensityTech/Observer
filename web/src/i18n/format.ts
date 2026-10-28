@@ -36,6 +36,38 @@ export const formatBytes = (locale: string, bytes: number) => {
     }).format(value);
 };
 
+/**
+ * A span of time as the panel words it: `12 s`, `15 min`, `2h 14m`, `3h`, `3d 4h`. Intl's own
+ * relative formats read `3 hr.`, so the units are written out here and only the numbers localised.
+ */
+export const formatDuration = (locale: string, totalSeconds: number) => {
+    const n = (value: number) => formatNumber(locale, value);
+    const seconds = Math.max(0, Math.ceil(totalSeconds));
+    if (seconds < 60) {
+        return `${n(seconds)} s`;
+    }
+    if (seconds < 3600) {
+        return `${n(Math.ceil(seconds / 60))} min`;
+    }
+    const minutes = Math.floor(seconds / 60);
+    if (minutes < 24 * 60) {
+        const hours = Math.floor(minutes / 60);
+        return minutes % 60 === 0 ? `${n(hours)}h` : `${n(hours)}h ${n(minutes % 60)}m`;
+    }
+    const hours = Math.floor(minutes / 60);
+    const days = Math.floor(hours / 24);
+    return hours % 24 === 0 ? `${n(days)}d` : `${n(days)}d ${n(hours % 24)}h`;
+};
+
+const pad = (value: number) => String(value).padStart(2, '0');
+
+/** Tables and logs read dates in ISO order in every language: `2026-10-28 14:02:07`, local time. */
+export const formatTimestamp = (date: Date, { seconds = true } = {}) => {
+    const day = `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+    const time = `${pad(date.getHours())}:${pad(date.getMinutes())}`;
+    return seconds ? `${day} ${time}:${pad(date.getSeconds())}` : `${day} ${time}`;
+};
+
 export const formatDateTime = (locale: string, date: Date, options?: Intl.DateTimeFormatOptions) =>
     new Intl.DateTimeFormat(locale, {
         dateStyle: 'medium',
