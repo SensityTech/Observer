@@ -52,11 +52,14 @@ pub(crate) fn remove_file(path: &Path) -> io::Result<()> {
 }
 
 pub(crate) fn busy(error: &io::Error) -> bool {
-    // 32 and 33 are Windows' sharing and lock violations, which have no portable kind.
+    // A file a scanner holds is denied on Windows, where 32 and 33, its sharing and lock
+    // violations, have no portable kind either. Elsewhere a denial means Observer may not write
+    // there, which no wait changes.
     matches!(
         error.kind(),
-        io::ErrorKind::PermissionDenied | io::ErrorKind::ResourceBusy | io::ErrorKind::DirectoryNotEmpty
-    ) || (cfg!(windows) && matches!(error.raw_os_error(), Some(32 | 33)))
+        io::ErrorKind::ResourceBusy | io::ErrorKind::DirectoryNotEmpty
+    ) || (cfg!(windows)
+        && (error.kind() == io::ErrorKind::PermissionDenied || matches!(error.raw_os_error(), Some(32 | 33))))
 }
 
 /// The length of the artifacts folder when, on Windows, it leaves FXServer too little room.

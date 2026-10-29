@@ -378,6 +378,32 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn a_build_observer_may_not_remove_fails_at_once_rather_than_as_busy() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("artifacts");
+        place(&root, 37872);
+        fs::create_dir_all(root.join(TRASH)).unwrap();
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o555)).unwrap();
+        if fs::write(root.join("probe"), b"").is_ok() {
+            // Root writes anywhere: there is nothing to refuse.
+            fs::set_permissions(&root, fs::Permissions::from_mode(0o755)).unwrap();
+            return;
+        }
+
+        let started = std::time::Instant::now();
+        let error = delete(&root, 37872).unwrap_err();
+        let took = started.elapsed();
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o755)).unwrap();
+
+        assert!(matches!(error, Error::Io { .. }), "{error}");
+        assert!(took < Duration::from_secs(1), "{took:?}");
+        assert!(root.join("37872").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn a_link_in_place_of_a_build_is_broken_and_its_deletion_leaves_the_target() {
         let dir = tempfile::tempdir().unwrap();
         let elsewhere = tempfile::tempdir().unwrap();
