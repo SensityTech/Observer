@@ -38,13 +38,21 @@ const NAMED_FILES: [(&str, &[&str]); 1] = [(
     ],
 )];
 
-/// Writes `web/dist/about/licences.json` and `target/licences/<target>.txt`, and says where the
+/// Where the list the API serves goes: beside the panel, never in `web/dist`, whose every file
+/// is public.
+pub const PRIVATE: &str = "web/private";
+
+/// Writes `web/private/licences.json` and `target/licences/<target>.txt`, and says where the
 /// text went.
 pub fn write(root: &Path, target: &str) -> anyhow::Result<PathBuf> {
     let licences = collect(root, target)?;
-    let about = root.join("web/dist/about");
-    fs::create_dir_all(&about).with_context(|| format!("cannot create {}", about.display()))?;
-    let json = about.join("licences.json");
+    let private = root.join(PRIVATE);
+    // The compressed copies of an older list must not outlive it.
+    if private.exists() {
+        fs::remove_dir_all(&private).with_context(|| format!("cannot empty {}", private.display()))?;
+    }
+    fs::create_dir_all(&private).with_context(|| format!("cannot create {}", private.display()))?;
+    let json = private.join("licences.json");
     fs::write(&json, serde_json::to_vec(&licences)?)
         .with_context(|| format!("cannot write {}", json.display()))?;
     let folder = root.join("target/licences");

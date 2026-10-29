@@ -1,4 +1,5 @@
 dist
+private
 e2e/results
 node_modules
 src/api/generated

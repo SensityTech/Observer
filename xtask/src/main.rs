@@ -16,7 +16,7 @@ use observer_domain::permissions::CATALOG;
 const USAGE: &str = "usage: cargo xtask <task>
 
 tasks:
-  web       build the panel into web/dist and precompress it
+  web       build the panel into web/dist, the licence list into web/private, and precompress them
   bindings  regenerate the TypeScript types and permission constants in web/src/api/generated
   check     run every check CI runs: formatting, lints, tests, types, panel build
   dist      the release archive of a target, its checksum and its checks (--target, --max-glibc)
@@ -63,6 +63,7 @@ fn build_panel(target: &str) -> anyhow::Result<PathBuf> {
     run(npm().args(["run", "build"]).current_dir(&web))?;
     let licences = licences::write(&root(), target)?;
     compress::dist(&web.join("dist"))?;
+    compress::dist(&root().join(licences::PRIVATE))?;
     Ok(licences)
 }
 

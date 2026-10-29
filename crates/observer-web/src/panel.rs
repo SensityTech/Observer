@@ -12,10 +12,15 @@ use rust_embed::RustEmbed;
 #[allow_missing = true]
 struct Assets;
 
+/// What only a signed-in user reads, through the API. `cargo xtask web` writes it beside the
+/// panel rather than in it: no spelling of a panel path can reach a file the panel does not hold.
+#[derive(RustEmbed)]
+#[folder = "../../web/private"]
+#[allow_missing = true]
+struct Private;
+
 const INDEX: &str = "index.html";
-/// What only a signed-in user reads: `GET /api/about/licences` serves it.
-const PRIVATE: &str = "about/";
-const LICENCES: &str = "about/licences.json";
+const LICENCES: &str = "licences.json";
 
 /// Vite fingerprints everything under `assets/`, so those files never change under a given name.
 const IMMUTABLE: &str = "public, max-age=31536000, immutable";
@@ -25,27 +30,23 @@ pub(crate) async fn serve(uri: Uri, headers: HeaderMap) -> Response {
         "" => INDEX,
         path => path,
     };
-    if path.starts_with(PRIVATE) {
-        return StatusCode::NOT_FOUND.into_response();
-    }
-
-    if let Some(response) = asset(path, &headers) {
+    if let Some(response) = asset::<Assets>(path, &headers) {
         return response;
     }
     // Panel routes have no extension and get the index; a missing file with one is a real 404.
     if Path::new(path).extension().is_some() {
         return StatusCode::NOT_FOUND.into_response();
     }
-    asset(INDEX, &headers).unwrap_or_else(not_built)
+    asset::<Assets>(INDEX, &headers).unwrap_or_else(not_built)
 }
 
 /// The third-party licence list, when this build carries one.
 pub(crate) fn licences(request: &HeaderMap) -> Option<Response> {
-    asset(LICENCES, request)
+    asset::<Private>(LICENCES, request)
 }
 
-fn asset(path: &str, request: &HeaderMap) -> Option<Response> {
-    let file = Assets::get(path)?;
+fn asset<Files: RustEmbed>(path: &str, request: &HeaderMap) -> Option<Response> {
+    let file = Files::get(path)?;
     let etag = etag(&file.metadata.sha256_hash());
     let cache_control = if path.starts_with("assets/") {
         IMMUTABLE
@@ -59,7 +60,7 @@ fn asset(path: &str, request: &HeaderMap) -> Option<Response> {
     {
         StatusCode::NOT_MODIFIED.into_response()
     } else {
-        let (data, encoding) = precompressed(path, request).unwrap_or((file.data, None));
+        let (data, encoding) = precompressed::<Files>(path, request).unwrap_or((file.data, None));
         let mut response = Body::from(data).into_response();
         let headers = response.headers_mut();
         if let Ok(mime) = HeaderValue::from_str(file.metadata.mimetype()) {
@@ -81,7 +82,7 @@ fn asset(path: &str, request: &HeaderMap) -> Option<Response> {
 }
 
 /// The Brotli or gzip sibling the build wrote next to a file, when the client takes it.
-fn precompressed(
+fn precompressed<Files: RustEmbed>(
     path: &str,
     request: &HeaderMap,
 ) -> Option<(std::borrow::Cow<'static, [u8]>, Option<&'static str>)> {
@@ -89,7 +90,7 @@ fn precompressed(
         .into_iter()
         .filter(|(encoding, _)| accepts(request, encoding))
         .find_map(|(encoding, extension)| {
-            Assets::get(&format!("{path}.{extension}")).map(|file| (file.data, Some(encoding)))
+            Files::get(&format!("{path}.{extension}")).map(|file| (file.data, Some(encoding)))
         })
 }
 

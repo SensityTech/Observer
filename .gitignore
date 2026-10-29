@@ -4,6 +4,7 @@
 # Web
 node_modules/
 /web/dist/
+/web/private/
 /web/e2e/results/
 *.tsbuildinfo
 

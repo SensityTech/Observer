@@ -367,17 +367,33 @@ async fn about_reports_this_build() {
 }
 
 /// The list names every crate and version Observer runs: only a signed-in user reads it, through
-/// the API, whether or not this build carries one.
+/// the API, whether or not this build carries one. The panel's file lookup turns `\` into `/`,
+/// and on disk resolves `.` and `..`, so every spelling is tried.
 #[tokio::test]
 async fn the_licence_list_is_never_a_public_panel_file() {
     let server = Server::new().await;
     let owner = server.owner().await;
 
-    for session in [None, Some(&owner)] {
-        let reply = server
-            .call(Method::GET, "/about/licences.json", session, None)
-            .await;
-        assert_eq!(reply.status, StatusCode::NOT_FOUND);
+    for path in [
+        "/about/licences.json",
+        r"/about\licences.json",
+        r"/about\licences.json.gz",
+        "/./about/licences.json",
+        "/ABOUT/licences.json",
+        "/licences.json",
+        "/licences.json.br",
+        "/../private/licences.json",
+        r"/..\private\licences.json",
+    ] {
+        for session in [None, Some(&owner)] {
+            let reply = server.call(Method::GET, path, session, None).await;
+            assert_eq!(
+                reply.status,
+                StatusCode::NOT_FOUND,
+                "{path} served {} bytes",
+                reply.text.len()
+            );
+        }
     }
     let listed = server
         .call(Method::GET, "/api/about/licences", Some(&owner), None)
