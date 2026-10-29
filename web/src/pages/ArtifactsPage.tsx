@@ -54,7 +54,7 @@ import type { InstallFailure } from '../api/generated/InstallFailure';
 import type { Job } from '../api/generated/Job';
 import { Permission } from '../api/generated/Permission';
 import type { PolicyDay } from '../api/generated/PolicyDay';
-import { launchQuery } from '../api/launch';
+import { launchProblem, launchQuery } from '../api/launch';
 import { useArtifacts } from '../artifacts/context';
 import { allows, useMe } from '../auth/me';
 import { Button } from '../components/Button';
@@ -1693,6 +1693,10 @@ export function ImportDialog({
         mutationFn: () => importBuild(folder.trim(), Number(build.trim())),
         onSuccess: () => onDone(words.started(build.trim())),
     });
+    const refused =
+        start.error instanceof ApiError && start.error.code === 'invalid_import_folder'
+            ? launchProblem(start.error.params.problem)
+            : null;
     return (
         <Dialog
             title={words.title}
@@ -1724,8 +1728,17 @@ export function ImportDialog({
                 autoCapitalize="none"
                 autoComplete="off"
                 inputClassName="font-mono text-ui"
-                error={touched && folder.trim() === '' ? t.validation.required : undefined}
-                onChange={(event) => setFolder(event.target.value)}
+                error={
+                    touched && folder.trim() === ''
+                        ? t.validation.required
+                        : refused === null
+                          ? undefined
+                          : t.server.problems[refused]
+                }
+                onChange={(event) => {
+                    setFolder(event.target.value);
+                    start.reset();
+                }}
             />
             <TextField
                 label={words.build}
@@ -1737,7 +1750,9 @@ export function ImportDialog({
                 error={touched && !valid ? words.invalidBuild : undefined}
                 onChange={(event) => setBuild(event.target.value)}
             />
-            {start.isError && <Notice tone="danger">{errorMessage(t, start.error)}</Notice>}
+            {start.isError && refused === null && (
+                <Notice tone="danger">{errorMessage(t, start.error)}</Notice>
+            )}
         </Dialog>
     );
 }

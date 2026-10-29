@@ -30,7 +30,7 @@ use observer_domain::artifacts::{
 };
 use observer_domain::audit::{ActorKind, AuditAction, Outcome};
 use observer_domain::error::{ApiError, ErrorCode};
-use observer_domain::launch::{Platform as PathRules, folder_problem};
+use observer_domain::launch::{LaunchProblem, Platform as PathRules, folder_problem};
 use observer_domain::permissions::Permissions;
 use observer_domain::schedule::ScheduleStatus;
 use observer_domain::server::ServerState;
@@ -333,13 +333,19 @@ impl Artifacts {
         .await
     }
 
-    /// Starts the copy of a build folder of the owner's. The owner names the build number.
+    /// Starts the copy of a build folder of the owner's. The owner names the build number. A
+    /// folder that is missing, not a folder or inside the artifacts folder fails the job at its
+    /// check, as what the copy finds does.
     pub async fn import(&self, caller: &Caller, folder: &str, build: u32) -> Result<ArtifactsStatus, Error> {
-        let usable = BUILDS.contains(&build)
-            && Path::new(folder).is_absolute()
-            && folder_problem(folder, PathRules::host()).is_none();
-        if !usable {
+        if !BUILDS.contains(&build) {
             return Err(ErrorCode::InvalidRequest.into());
+        }
+        let problem = folder_problem(folder, PathRules::host())
+            .or_else(|| (!Path::new(folder).is_absolute()).then_some(LaunchProblem::NotAbsolute));
+        if let Some(problem) = problem {
+            return Err(ApiError::new(ErrorCode::InvalidImportFolder)
+                .with("problem", serde_json::to_value(problem).unwrap_or_default())
+                .into());
         }
         self.ask(|reply| Command::Import {
             caller: caller.clone(),

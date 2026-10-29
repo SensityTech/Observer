@@ -1537,6 +1537,7 @@ export const en = {
         build_protected: 'This build is in use: it cannot be deleted.',
         build_in_use: 'A process still runs from this build. Stop it, then delete the build.',
         invalid_artifact_settings: 'Some settings need fixing. Each one says why next to its field.',
+        invalid_import_folder: 'This folder cannot hold a build FXServer runs: the field says why.',
         no_build_selected: 'No build is selected yet. Install or import one on the Artifacts page.',
     } satisfies Record<ErrorCode, ErrorMessage>,
     failure: {

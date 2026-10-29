@@ -68,6 +68,10 @@ const isIssue = (value: unknown): value is LaunchIssue =>
     'index' in value &&
     (value.index === null || Number.isSafeInteger(value.index));
 
+/** The problem a refusal names, when it is one the panel knows. */
+export const launchProblem = (value: unknown): LaunchProblem | null =>
+    typeof value === 'string' && Object.hasOwn(PROBLEMS, value) ? (value as LaunchProblem) : null;
+
 /** The issues an `invalid_launch_settings` refusal lists, leaving out any the panel cannot place. */
 export const launchIssues = (params: Record<string, unknown>): LaunchIssue[] =>
     Array.isArray(params.issues) ? params.issues.filter(isIssue) : [];

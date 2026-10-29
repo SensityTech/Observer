@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { act, cleanup, fireEvent, render, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { catalogQuery, cleanupQuery } from '../api/artifacts';
@@ -297,6 +297,28 @@ describe('ArtifactsPage', () => {
         expect(items).toEqual([`37500412 MB · ${en.artifacts.cleanup.gone}`, '37400412 MB']);
         expect(dialog.textContent).toContain(en.artifacts.cleanup.freed('824 MB'));
         expect(within(dialog).getByRole('button', { name: en.artifacts.cleanup.confirm(2) })).toBeTruthy();
+    });
+
+    it('should say under the folder field why Observer cannot import from it', async () => {
+        const refusal = { code: 'invalid_import_folder', params: { problem: 'notAbsolute' } };
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(async () => Response.json(refusal, { status: 400 })),
+        );
+        const { getByRole } = await page({ ...STATUS, job: null });
+        fireEvent.click(getByRole('button', { name: en.artifacts.installed.importBuild }));
+        const dialog = getByRole('dialog', { name: en.artifacts.import.title });
+
+        fireEvent.change(within(dialog).getByLabelText(en.artifacts.import.folder), {
+            target: { value: 'builds/35245' },
+        });
+        fireEvent.change(within(dialog).getByLabelText(en.artifacts.import.build), {
+            target: { value: '35245' },
+        });
+        fireEvent.click(within(dialog).getByRole('button', { name: en.artifacts.import.confirm }));
+
+        await waitFor(() => within(dialog).getByText(en.server.problems.notAbsolute));
+        expect(within(dialog).queryByText(en.errors.invalid_request)).toBeNull();
     });
 
     it('should add the probation to the build in the status bar', async () => {

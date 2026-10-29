@@ -417,6 +417,29 @@ async fn a_job_cut_short_by_observer_stopping_ends_in_the_audit_log() {
 }
 
 #[tokio::test]
+async fn an_import_folder_fxserver_cannot_run_from_is_refused_with_what_is_wrong() {
+    let lab = Lab::new(host_build(), |_| Vec::new()).await;
+    let quoted = lab.dir.path().join("fx\"server").to_str().unwrap().to_owned();
+
+    let relative = lab.artifacts.import(&lab.owner, "builds/35245", 35245).await;
+    let forbidden = lab.artifacts.import(&lab.owner, &quoted, 35245).await;
+
+    let quote = if cfg!(windows) {
+        "quoteOrSemicolon"
+    } else {
+        "forbiddenCharacter"
+    };
+    for (refused, problem) in [(relative, "notAbsolute"), (forbidden, quote)] {
+        let Err(Error::Refused(refusal)) = refused else {
+            panic!("an import folder FXServer cannot use started a job");
+        };
+        assert_eq!(refusal.code, ErrorCode::InvalidImportFolder);
+        assert_eq!(refusal.params["problem"], json!(problem));
+    }
+    assert!(lab.artifacts.status().borrow().job.is_none());
+}
+
+#[tokio::test]
 async fn a_second_job_is_refused_while_one_runs() {
     let lab = Lab::new(host_build(), |server| {
         vec![listed(server, 37872, "/slow"), listed(server, 37900, "/archive")]

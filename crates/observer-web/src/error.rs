@@ -100,7 +100,8 @@ fn status(code: ErrorCode) -> StatusCode {
         | ErrorCode::CommandRefused
         | ErrorCode::InvalidRequest
         | ErrorCode::InvalidSchedule
-        | ErrorCode::InvalidArtifactSettings => StatusCode::BAD_REQUEST,
+        | ErrorCode::InvalidArtifactSettings
+        | ErrorCode::InvalidImportFolder => StatusCode::BAD_REQUEST,
         ErrorCode::TooManyAttempts | ErrorCode::TooManySockets | ErrorCode::TooManyCommands => {
             StatusCode::TOO_MANY_REQUESTS
         }

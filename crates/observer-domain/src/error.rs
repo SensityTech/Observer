@@ -120,6 +120,9 @@ pub enum ErrorCode {
     InvalidArtifactSettings,
     /// FXServer cannot start before a build is installed or imported and selected.
     NoBuildSelected,
+    /// The folder of an import is not a path FXServer can run a build from. Params: `problem`, a
+    /// `LaunchProblem`.
+    InvalidImportFolder,
 }
 
 /// The body of every error response.

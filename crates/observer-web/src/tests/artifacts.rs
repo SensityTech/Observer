@@ -205,7 +205,7 @@ async fn importing_a_folder_is_the_owners_alone() {
         .await;
 
     assert_eq!(by_another.code(), "owner_only");
-    assert_eq!(relative.code(), "invalid_request");
+    assert_eq!(relative.code(), "invalid_import_folder");
     assert_eq!(not_a_build.code(), "invalid_request");
 }
 
