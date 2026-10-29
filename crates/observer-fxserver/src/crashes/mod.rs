@@ -13,6 +13,7 @@ use std::time::{Duration, SystemTime};
 
 use observer_platform::ProcessTree;
 use serde::Serialize;
+use tracing::warn;
 
 /// A partial file this old was left by an Observer that stopped while writing it.
 const STALE_PARTIAL: Duration = Duration::from_mins(1);
@@ -61,7 +62,7 @@ pub fn collect(from: &Path, to: &Path, limits: DumpLimits) -> io::Result<Collect
     }
     let mut removed = Vec::new();
     if !moved.is_empty() {
-        removed = trim(to, limits)?;
+        removed = trim(to, limits);
         moved.retain(|path| !removed.contains(path));
     }
     Ok(Collected { moved, removed })
@@ -199,14 +200,26 @@ fn move_file(from: &Path, to: &Path) -> io::Result<()> {
     fs::remove_file(from)
 }
 
-/// Removes the oldest files of `dir` beyond the limits, and returns them.
-pub fn trim(dir: &Path, limits: DumpLimits) -> io::Result<Vec<PathBuf>> {
+/// Removes the oldest files of `dir` beyond the limits, and returns them. A file that cannot be
+/// read or removed, such as an older dump a debugger holds open, is left in place and no longer
+/// counted: the newer ones are not removed in its stead, and what was done is still reported.
+pub fn trim(dir: &Path, limits: DumpLimits) -> Vec<PathBuf> {
+    let entries = match fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(error) => {
+            warn!(%error, dir = %dir.display(), "cannot list the crash dumps to trim");
+            return Vec::new();
+        }
+    };
     let mut dumps = Vec::new();
-    for entry in fs::read_dir(dir)? {
-        let entry = entry?;
-        let metadata = entry.metadata()?;
-        if metadata.is_file() {
-            dumps.push((metadata.modified()?, metadata.len(), entry.path()));
+    for entry in entries.filter_map(Result::ok) {
+        match entry
+            .metadata()
+            .and_then(|metadata| Ok((metadata.is_file(), metadata.modified()?, metadata.len())))
+        {
+            Ok((true, modified, size)) => dumps.push((modified, size, entry.path())),
+            Ok(_) => {}
+            Err(error) => warn!(%error, path = %entry.path().display(), "cannot read a crash dump to trim"),
         }
     }
     dumps.sort();
@@ -217,12 +230,14 @@ pub fn trim(dir: &Path, limits: DumpLimits) -> io::Result<Vec<PathBuf>> {
         if count <= limits.files && total <= limits.bytes {
             break;
         }
-        fs::remove_file(&path)?;
-        removed.push(path);
+        match fs::remove_file(&path) {
+            Ok(()) => removed.push(path),
+            Err(error) => warn!(%error, path = %path.display(), "cannot remove an old crash dump; it stays"),
+        }
         count -= 1;
         total -= size;
     }
-    Ok(removed)
+    removed
 }
 
 #[cfg(test)]
@@ -339,6 +354,34 @@ mod tests {
         assert_eq!(names(&data), Vec::<String>::new());
         assert_eq!(moved.moved, Vec::<PathBuf>::new());
         assert_eq!(moved.removed.len(), 3);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn an_old_dump_held_open_elsewhere_stays_and_the_moved_dump_is_still_reported() {
+        use std::os::windows::fs::OpenOptionsExt as _;
+        const FILE_SHARE_READ: u32 = 1;
+
+        let dir = tempfile::tempdir().unwrap();
+        let (build, data) = (dir.path().join("build"), dir.path().join("data"));
+        dump(&data, "old.dmp", 1, Duration::from_hours(1));
+        dump(&build, "new.dmp", 1, Duration::ZERO);
+        // As a debugger reading it opens it: others may read it, not delete it.
+        let _held = File::options()
+            .read(true)
+            .share_mode(FILE_SHARE_READ)
+            .open(data.join("old.dmp"))
+            .unwrap();
+        let limits = DumpLimits {
+            files: 1,
+            ..DumpLimits::default()
+        };
+
+        let collected = collect(&build, &data, limits).unwrap();
+
+        assert_eq!(collected.moved, [data.join("new.dmp")]);
+        assert_eq!(collected.removed, Vec::<PathBuf>::new());
+        assert_eq!(names(&data), ["new.dmp", "old.dmp"]);
     }
 
     #[test]

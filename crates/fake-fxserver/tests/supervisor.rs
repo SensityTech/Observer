@@ -1404,3 +1404,56 @@ async fn the_connections_the_server_opens_are_listed_with_its_listener() {
     assert!(!held(&observer_platform::sockets(&[pid]).unwrap()));
     lab.shut_down(false).await;
 }
+
+/// An older dump in Observer's crash folder that another program holds open, as a debugger
+/// reading it does: it may be read, not deleted.
+#[cfg(windows)]
+fn held_old_dump(lab: &Lab) -> fs::File {
+    use std::os::windows::fs::OpenOptionsExt as _;
+    const FILE_SHARE_READ: u32 = 1;
+
+    let crashes = lab.dir.path().join("observer-data/crashes");
+    fs::create_dir_all(&crashes).unwrap();
+    let old = crashes.join("00000000-0000-4000-8000-000000000000.dmp");
+    fs::write(&old, b"MDMP").unwrap();
+    fs::File::options()
+        .write(true)
+        .open(&old)
+        .unwrap()
+        .set_modified(std::time::SystemTime::now() - Duration::from_hours(1))
+        .unwrap();
+    fs::File::options()
+        .read(true)
+        .share_mode(FILE_SHARE_READ)
+        .open(&old)
+        .unwrap()
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn a_hang_dump_is_reported_though_an_older_dump_could_not_be_removed() {
+    let mut lab = Lab::tuned(&[], |settings| {
+        settings.hang_snapshot = Some(HangSnapshotLimits::default());
+        settings.dumps = observer_fxserver::crashes::DumpLimits {
+            files: 1,
+            ..observer_fxserver::crashes::DumpLimits::default()
+        };
+    })
+    .await;
+    let _held = held_old_dump(&lab);
+
+    let snapshot = hang_and_snapshot(&mut lab, "fake_hang").await;
+
+    let EventKind::HangSnapshot {
+        path: Some(path),
+        failure: None,
+        removed,
+        ..
+    } = &snapshot
+    else {
+        panic!("{snapshot:?}")
+    };
+    assert!(path.exists(), "{path:?}");
+    assert_eq!(removed, &Vec::<PathBuf>::new());
+    lab.shut_down(false).await;
+}

@@ -1162,7 +1162,7 @@ impl Actor {
             let late = Arc::clone(&abandoned);
             let writing = tokio::task::spawn_blocking(move || {
                 let (path, bytes) = crashes::snapshot(&tree, pid, &dir, generation, &late)?;
-                let removed = crashes::trim(&dir, dumps)?;
+                let removed = crashes::trim(&dir, dumps);
                 Ok::<_, std::io::Error>((path, bytes, removed))
             });
             match tokio::time::timeout(limits.timeout, writing).await {
