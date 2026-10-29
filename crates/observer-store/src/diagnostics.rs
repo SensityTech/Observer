@@ -65,21 +65,16 @@ pub fn record_process(conn: &Connection, process: &NewProcess) -> Result<TreePro
     )?)
 }
 
-/// Marks the process with row `id` and pid `pid` ended, unless it already is or a later start of
-/// the same program took the row.
-pub fn process_ended(
-    conn: &Connection,
-    id: i64,
-    pid: u32,
-    at: Timestamp,
-) -> Result<Option<TreeProcess>, StoreError> {
+/// Marks the program of row `id` ended, unless it already is. The caller knows when the last of
+/// its instances ended: the row holds the latest one's pid only.
+pub fn process_ended(conn: &Connection, id: i64, at: Timestamp) -> Result<Option<TreeProcess>, StoreError> {
     Ok(conn
         .query_row(
             &format!(
-                "UPDATE tree_process SET ended_at = ?3 WHERE id = ?1 AND pid = ?2 AND ended_at IS NULL
+                "UPDATE tree_process SET ended_at = ?2 WHERE id = ?1 AND ended_at IS NULL
                  RETURNING {PROCESS_COLUMNS}"
             ),
-            params![id, pid, Utc(at)],
+            params![id, Utc(at)],
             read_process,
         )
         .optional()?)
@@ -511,7 +506,7 @@ mod tests {
         let (first, second, other_run) = db
             .write(|tx| {
                 let first = record_process(tx, &start(4120, 1))?;
-                process_ended(tx, first.id, 4120, at(2))?;
+                process_ended(tx, first.id, at(2))?;
                 let second = record_process(tx, &start(4188, 3))?;
                 let other_run = record_process(
                     tx,

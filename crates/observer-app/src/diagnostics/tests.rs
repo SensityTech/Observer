@@ -142,6 +142,16 @@ impl Lab {
             .await;
     }
 
+    async fn ended(&mut self, generation: u32, pid: u32) {
+        self.driver
+            .tree(TreeEvent {
+                generation,
+                at_ms: self.at_ms(),
+                change: ProcessChange::Ended { pid },
+            })
+            .await;
+    }
+
     async fn shell(&mut self, generation: u32, pid: u32) {
         self.start(
             generation,
@@ -585,4 +595,24 @@ async fn an_analysis_an_earlier_observer_did_not_finish_runs_at_the_next_start()
     driver.analysed(id, result).await;
 
     assert_eq!(lab.crashes().await[0].analysis_state, AnalysisState::Unreadable);
+}
+
+#[tokio::test]
+async fn a_program_s_row_runs_until_the_last_of_its_instances_ends() {
+    let mut lab = lab().await;
+    lab.spawn(1).await;
+    let node = r"C:\fx\node.exe";
+    lab.start(1, 4120, node, "node worker.js", ProcessKind::Other)
+        .await;
+    lab.start(1, 4121, node, "node worker.js", ProcessKind::Other)
+        .await;
+
+    lab.ended(1, 4121).await;
+    let row = lab.processes().await.remove(0);
+    assert_eq!(row.count, 2);
+    assert_eq!(row.ended_at, None, "4120 still runs");
+
+    lab.advance(1);
+    lab.ended(1, 4120).await;
+    assert_eq!(lab.processes().await[0].ended_at, Some(lab.clock.now()));
 }

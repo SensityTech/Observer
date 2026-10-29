@@ -542,18 +542,21 @@ impl Driver {
     }
 
     async fn ended(&mut self, generation: u32, pid: u32) {
-        let Some((Some(id), _)) = self
-            .runs
-            .get_mut(&generation)
-            .and_then(|run| run.running.remove(&pid))
-        else {
+        let Some(run) = self.runs.get_mut(&generation) else {
             return;
         };
+        let Some((Some(id), _)) = run.running.remove(&pid) else {
+            return;
+        };
+        // Instances of one program with one command line share a row, which runs while any does.
+        if run.running.values().any(|(row, _)| *row == Some(id)) {
+            return;
+        }
         let now = self.now();
         match self
             .inner
             .db
-            .write(move |tx| store::process_ended(tx, id, pid, now))
+            .write(move |tx| store::process_ended(tx, id, now))
             .await
         {
             Ok(Some(row)) => self.inner.publish(DiagnosticsEvent::Process {
