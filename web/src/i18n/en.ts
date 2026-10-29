@@ -1091,6 +1091,7 @@ export const en = {
             hang_snapshot_taken: 'Hung server pictured',
             crash_file_downloaded: 'Crash file downloaded',
             crash_files_deleted: 'Crash files deleted',
+            tree_records_full: 'Process records full',
         } satisfies Record<AuditAction, string>,
         outcomes: {
             success: 'Success',
@@ -1187,6 +1188,7 @@ export const en = {
             tookMs: 'Took',
             crash: 'Crash',
             names: 'Files',
+            unrecorded: 'Command lines not kept',
         },
         snapshotKinds: { dump: 'a stack dump', report: 'a thread report' },
         snapshotFailures: {

@@ -68,10 +68,14 @@ pub enum AuditAction {
     CrashFileDownloaded,
     /// The owner deleted a crash's files; the analysis stays.
     CrashFilesDeleted,
+    /// A run's tree started more programs and command lines than its rows and audit entries keep:
+    /// once when it happens, then at the run's end with the starts whose command line was not kept
+    /// in `unrecorded`.
+    TreeRecordsFull,
 }
 
 impl AuditAction {
-    pub const ALL: [Self; 33] = [
+    pub const ALL: [Self; 34] = [
         Self::SetupCompleted,
         Self::SetupLinkCreated,
         Self::LoginSucceeded,
@@ -105,6 +109,7 @@ impl AuditAction {
         Self::HangSnapshotTaken,
         Self::CrashFileDownloaded,
         Self::CrashFilesDeleted,
+        Self::TreeRecordsFull,
     ];
 
     pub const fn as_str(self) -> &'static str {
@@ -142,6 +147,7 @@ impl AuditAction {
             Self::HangSnapshotTaken => "hang_snapshot_taken",
             Self::CrashFileDownloaded => "crash_file_downloaded",
             Self::CrashFilesDeleted => "crash_files_deleted",
+            Self::TreeRecordsFull => "tree_records_full",
         }
     }
 

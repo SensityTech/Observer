@@ -55,6 +55,9 @@ pub(super) struct Run {
     audits: HashMap<String, Audited>,
     /// The programs and command lines past the cap that got an audit entry of their own.
     audited_past_rows: HashSet<(Option<String>, Option<String>)>,
+    past_rows_full: bool,
+    /// Starts past the rows and their audit entries whose command line no entry kept.
+    pub unrecorded: u64,
 }
 
 struct Audited {
@@ -63,6 +66,19 @@ struct Audited {
     unaudited: u32,
     /// The latest start's details, for the entry that sums the run up.
     latest: Value,
+}
+
+/// What a start the cap left without a row gets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PastRows {
+    /// The first of its program and command line: an audit entry of its own.
+    New,
+    /// One already audited.
+    Known,
+    /// The first past the run's entries for them: from now on only counted.
+    Full,
+    /// Past them.
+    Counted,
 }
 
 /// Whether a start goes to the audit log now.
@@ -86,6 +102,8 @@ impl Run {
             overflow: 0,
             audits: HashMap::new(),
             audited_past_rows: HashSet::new(),
+            past_rows_full: false,
+            unrecorded: 0,
         }
     }
 
@@ -103,14 +121,45 @@ impl Run {
         true
     }
 
-    /// Whether a start the cap left without a row is audited at once: the first of its program and
-    /// command line, so that a run flooded with harmless starts still names the one that mattered,
-    /// up to 1,000 a run.
-    pub(super) fn audits_past_rows(&mut self, image: Option<&str>, command_line: Option<&str>) -> bool {
-        self.audited_past_rows.len() < MAX_AUDITED_PAST_ROWS
-            && self
-                .audited_past_rows
-                .insert((image.map(str::to_owned), command_line.map(str::to_owned)))
+    /// What a start the cap left without a row gets: an audit entry at once for the first of its
+    /// program and command line, so that a run flooded with harmless starts still names the one
+    /// that mattered, up to 1,000 a run. Past them a flood can hide one, and the run says so.
+    fn past_rows(&mut self, image: Option<&str>, command_line: Option<&str>) -> PastRows {
+        let program = (image.map(str::to_owned), command_line.map(str::to_owned));
+        if self.audited_past_rows.contains(&program) {
+            PastRows::Known
+        } else if self.audited_past_rows.len() < MAX_AUDITED_PAST_ROWS {
+            self.audited_past_rows.insert(program);
+            PastRows::New
+        } else if std::mem::replace(&mut self.past_rows_full, true) {
+            PastRows::Counted
+        } else {
+            PastRows::Full
+        }
+    }
+
+    /// The audit entry a start of a program FXServer never starts by itself gets now, if any, and
+    /// whether it is the start that filled the run's entries for starts past the rows. Counts the
+    /// starts whose command line no entry keeps.
+    pub(super) fn unexpected_start(
+        &mut self,
+        admitted: bool,
+        (image, command_line): (Option<&str>, Option<&str>),
+        program: &str,
+        details: Value,
+        now: Timestamp,
+    ) -> (Option<Value>, bool) {
+        let past_rows = (!admitted).then(|| self.past_rows(image, command_line));
+        let entry = if past_rows == Some(PastRows::New) {
+            // No row holds it: the audit log does.
+            Some(details)
+        } else {
+            self.audit_entry(program, details, now)
+        };
+        if matches!(past_rows, Some(PastRows::Full | PastRows::Counted)) && entry.is_none() {
+            self.unrecorded += 1;
+        }
+        (entry, past_rows == Some(PastRows::Full))
     }
 
     /// The parent's file name: a process of the tree, or FXServer itself.
@@ -216,6 +265,14 @@ pub(super) fn audit_details(
     })
 }
 
+/// The console's word of a run whose starts are now only counted.
+pub(super) fn records_full_note() -> String {
+    format!(
+        "FXServer's tree started more than {} different programs and command lines in this run: the next ones are only counted",
+        MAX_PROGRAMS + MAX_AUDITED_PAST_ROWS
+    )
+}
+
 /// The console's word of a shell started in the tree.
 pub(super) fn alert_note(name: &str, pid: u32, parent: Option<&str>, parent_pid: Option<u32>) -> String {
     let parent = match (parent, parent_pid) {
@@ -278,16 +335,28 @@ mod tests {
     #[test]
     fn past_the_rows_each_new_program_and_command_line_is_audited_up_to_a_thousand() {
         let mut run = Run::new(at(0), None);
+        let cmd = |line: &str| (Some("cmd.exe"), Some(line.to_owned()));
 
-        assert!(run.audits_past_rows(Some("cmd.exe"), Some("cmd /c payload")));
-        assert!(
-            !run.audits_past_rows(Some("cmd.exe"), Some("cmd /c payload")),
-            "once"
-        );
+        let (image, line) = cmd("cmd /c payload");
+        assert_eq!(run.past_rows(image, line.as_deref()), PastRows::New);
+        assert_eq!(run.past_rows(image, line.as_deref()), PastRows::Known, "once");
         for index in 1..MAX_AUDITED_PAST_ROWS {
-            assert!(run.audits_past_rows(Some("cmd.exe"), Some(&format!("cmd /c {index}"))));
+            let (image, line) = cmd(&format!("cmd /c {index}"));
+            assert_eq!(run.past_rows(image, line.as_deref()), PastRows::New);
         }
-        assert!(!run.audits_past_rows(Some("cmd.exe"), Some("cmd /c one more")));
+        let (image, line) = cmd("cmd /c one more");
+        assert_eq!(run.past_rows(image, line.as_deref()), PastRows::Full);
+        assert_eq!(
+            run.past_rows(image, line.as_deref()),
+            PastRows::Counted,
+            "only once full"
+        );
+        let (image, line) = cmd("cmd /c payload");
+        assert_eq!(
+            run.past_rows(image, line.as_deref()),
+            PastRows::Known,
+            "still known"
+        );
     }
 
     #[test]

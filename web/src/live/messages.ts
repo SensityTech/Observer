@@ -144,6 +144,7 @@ const AUDIT_ACTIONS = {
     hang_snapshot_taken: true,
     crash_file_downloaded: true,
     crash_files_deleted: true,
+    tree_records_full: true,
 } satisfies Record<AuditAction, true>;
 
 const OUTCOMES = { success: true, failure: true, denied: true } satisfies Record<Outcome, true>;

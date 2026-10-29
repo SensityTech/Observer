@@ -36,7 +36,9 @@ use tracing::{info, warn};
 
 use self::connections::Destinations;
 use self::crashes::Tracker;
-use self::processes::{FXSERVER, Run, alert_note, audit_details, file_name, masked_command_line};
+use self::processes::{
+    FXSERVER, Run, alert_note, audit_details, file_name, masked_command_line, records_full_note,
+};
 use crate::audit::Record;
 use crate::{Caller, Clock, Error, Servers, Supervision};
 
@@ -486,13 +488,11 @@ impl Driver {
             generation,
         );
         let program = image.clone().unwrap_or_else(|| process.pid.to_string());
-        let entry = if !kind.is_unexpected() {
-            None
-        } else if !admitted && run.audits_past_rows(image.as_deref(), command_line.as_deref()) {
-            // No row holds it: the audit log does.
-            Some(details)
+        let (entry, full) = if kind.is_unexpected() {
+            let started = (image.as_deref(), command_line.as_deref());
+            run.unexpected_start(admitted, started, &program, details, now)
         } else {
-            run.audit_entry(&program, details, now)
+            (None, false)
         };
         let new = NewProcess {
             run_started: run.started,
@@ -515,6 +515,9 @@ impl Driver {
                 if let Some(details) = entry {
                     tree_audit(details).write(tx, now)?;
                 }
+                if full {
+                    records_full(json!({ "generation": generation })).write(tx, now)?;
+                }
                 Ok::<_, Error>(row)
             })
             .await;
@@ -533,6 +536,11 @@ impl Driver {
             self.inner.publish(DiagnosticsEvent::Process {
                 process: Box::new(row),
             });
+        }
+        if full {
+            let note = records_full_note();
+            warn!(generation, "{note}");
+            self.supervision.note(OBSERVER, &note);
         }
         if kind == ProcessKind::Shell {
             if audited {
@@ -634,12 +642,17 @@ impl Driver {
         let now = self.now();
         let leftovers = run.leftovers();
         let started = run.started;
+        let unrecorded = run.unrecorded;
         let ended = self
             .inner
             .db
             .write(move |tx| {
                 for details in leftovers {
                     tree_audit(details).write(tx, now)?;
+                }
+                if unrecorded > 0 {
+                    records_full(json!({ "generation": generation, "unrecorded": unrecorded }))
+                        .write(tx, now)?;
                 }
                 Ok::<_, Error>(store::end_run(tx, started, generation, now)?)
             })
@@ -970,6 +983,12 @@ impl Driver {
 
 fn tree_audit(details: Value) -> Record {
     Record::operator(ActorKind::System, AuditAction::TreeProcessStarted)
+        .target(Servers::DEFAULT)
+        .details(details)
+}
+
+fn records_full(details: Value) -> Record {
+    Record::operator(ActorKind::System, AuditAction::TreeRecordsFull)
         .target(Servers::DEFAULT)
         .details(details)
 }
