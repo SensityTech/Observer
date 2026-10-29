@@ -185,6 +185,7 @@ export function ArtifactsPage() {
                     {status.job !== null && (
                         <JobCard
                             job={status.job}
+                            startsNext={status.selected === status.job.build && status.pending === null}
                             onOutcome={setOutcome}
                             onUse={(build) => setOpen({ kind: 'use', build })}
                             onRetry={(build) => {
@@ -591,11 +592,14 @@ const failureText = (
 
 export function JobCard({
     job,
+    startsNext,
     onOutcome,
     onUse,
     onRetry,
 }: {
     job: Job;
+    /** The job's build is the one FXServer starts next already, as the first build installed is. */
+    startsNext: boolean;
     onOutcome: (outcome: Outcome) => void;
     onUse: (build: number) => void;
     onRetry: (build: number) => void;
@@ -711,7 +715,7 @@ export function JobCard({
                 {job.state === 'installed' && (
                     <div className="flex flex-wrap items-center gap-3">
                         <p className="text-body text-success">{words.installed}</p>
-                        {canManage && (
+                        {canManage && !startsNext && (
                             <Button size="sm" onClick={() => onUse(job.build)}>
                                 {words.use}
                             </Button>

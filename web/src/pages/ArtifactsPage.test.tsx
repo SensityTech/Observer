@@ -314,6 +314,24 @@ describe('ArtifactsPage', () => {
         expect(document.activeElement).toBe(getByText(en.artifacts.build.pendingCancelled).closest('[role]'));
     });
 
+    it('should offer the build just installed for use unless it starts next already', async () => {
+        const job = STATUS.job ?? FIXTURE.job!;
+        const installed = { ...job, build: 37950, state: 'installed' as const, step: 'commit' as const };
+        const builds = [{ ...BUILD, build: 37950 }, ...STATUS.installed];
+        const first = await page({
+            ...STATUS,
+            installed: builds,
+            selected: 37950,
+            pending: null,
+            job: installed,
+        });
+        expect(first.queryByRole('button', { name: en.artifacts.job.use })).toBeNull();
+        cleanup();
+
+        const other = await page({ ...STATUS, installed: builds, pending: null, job: installed });
+        expect(other.queryByRole('button', { name: en.artifacts.job.use })).not.toBeNull();
+    });
+
     it('should say beside a build in use why it cannot be deleted', async () => {
         await page({ ...STATUS, job: null });
 
