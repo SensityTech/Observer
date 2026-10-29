@@ -105,6 +105,7 @@ pub(crate) fn controls(status: &ServerStatus) -> Controls {
         LaunchReadiness::Ready => None,
         LaunchReadiness::NotConfigured => Some(text::NOT_CONFIGURED),
         LaunchReadiness::Invalid => Some(text::INVALID),
+        LaunchReadiness::NoBuild => Some(text::NO_BUILD),
     };
     Controls {
         start: if running { Some(text::RUNNING) } else { launch },
@@ -486,6 +487,27 @@ mod tests {
                 Some(text::RUNNING),
                 None,
                 Some(text::INVALID),
+            ),
+            (
+                S::Stopped,
+                L::NoBuild,
+                Some(text::NO_BUILD),
+                Some(text::NOT_RUNNING),
+                Some(text::NOT_RUNNING),
+            ),
+            (
+                S::Crashed,
+                L::NoBuild,
+                Some(text::NO_BUILD),
+                None,
+                Some(text::NOT_RUNNING),
+            ),
+            (
+                S::Online,
+                L::NoBuild,
+                Some(text::RUNNING),
+                None,
+                Some(text::NO_BUILD),
             ),
         ];
         for (state, launch, start, stop, restart) in cases {

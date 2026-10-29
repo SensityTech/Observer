@@ -60,6 +60,7 @@ pub const CONFIRM_QUIT: &str = "Quit Observer";
 
 pub const NOT_CONFIGURED: &str = "FXServer has no launch settings yet.";
 pub const INVALID: &str = "The launch settings need fixing on the Server page.";
+pub const NO_BUILD: &str = "No build is selected: install or import one on the Artifacts page.";
 pub const RUNNING: &str = "FXServer is already running.";
 pub const NOT_RUNNING: &str = "FXServer is not running.";
 pub const SERVER_STOPPING: &str = "FXServer is stopping.";
@@ -68,6 +69,7 @@ pub const OBSERVER_STOPPING: &str = "Observer is stopping.";
 pub const LAUNCH_NOT_CONFIGURED: &str =
     "FXServer has no launch settings yet. The owner saves them on the Server page.";
 pub const LAUNCH_FAILED: &str = "FXServer could not start. The console says why.";
+pub const NO_BUILD_SELECTED: &str = "No build is selected yet. Install or import one on the Artifacts page.";
 pub const STOPPING_REFUSAL: &str = "FXServer is stopping. Start it again once it has stopped.";
 pub const SHUTTING_DOWN: &str = "Observer is stopping, and FXServer with it.";
 pub const INTERNAL: &str = "Observer hit an internal error. Its log has the details.";
@@ -93,6 +95,7 @@ pub fn launch_note(launch: LaunchReadiness) -> Option<&'static str> {
         LaunchReadiness::Ready => None,
         LaunchReadiness::NotConfigured => Some(LAUNCH_NOT_CONFIGURED),
         LaunchReadiness::Invalid => Some(INVALID),
+        LaunchReadiness::NoBuild => Some(NO_BUILD_SELECTED),
     }
 }
 
@@ -198,6 +201,7 @@ pub fn refusal(code: Option<ErrorCode>) -> &'static str {
         Some(ErrorCode::LaunchNotConfigured) => LAUNCH_NOT_CONFIGURED,
         Some(ErrorCode::InvalidLaunchSettings) => INVALID,
         Some(ErrorCode::LaunchFailed) => LAUNCH_FAILED,
+        Some(ErrorCode::NoBuildSelected) => NO_BUILD_SELECTED,
         Some(ErrorCode::ServerRunning) => RUNNING,
         Some(ErrorCode::ServerNotRunning) => NOT_RUNNING,
         Some(ErrorCode::ServerStopping) => STOPPING_REFUSAL,
@@ -374,6 +378,10 @@ mod tests {
                 ErrorCode::LaunchFailed,
                 "FXServer could not start. The console says why.",
             ),
+            (
+                ErrorCode::NoBuildSelected,
+                "No build is selected yet. Install or import one on the Artifacts page.",
+            ),
             (ErrorCode::ServerRunning, "FXServer is already running."),
             (ErrorCode::ServerNotRunning, "FXServer is not running."),
             (
@@ -453,11 +461,13 @@ mod tests {
         let shared = [
             NOT_CONFIGURED,
             INVALID,
+            NO_BUILD,
             RUNNING,
             NOT_RUNNING,
             SERVER_STOPPING,
             LAUNCH_NOT_CONFIGURED,
             LAUNCH_FAILED,
+            NO_BUILD_SELECTED,
             STOPPING_REFUSAL,
             SHUTTING_DOWN,
             INTERNAL,
