@@ -122,10 +122,12 @@ struct Found {
     folder: PathBuf,
     /// Cargo's `license_file`: the package's licence under a name of its own.
     licence_file: Option<(String, PathBuf)>,
-    /// Other files that ship with it: the files of `NAMED_FILES`, the panel's own NOTICE copies.
-    /// They hold the licences `covered` names, not the package's whole expression.
-    extra: Vec<(String, PathBuf)>,
+    /// The files `NAMED_FILES` lists for it. They hold the licences `covered` names, not the
+    /// package's whole expression, and SPDX does not stand in for those: each must be there.
+    named: Vec<(String, PathBuf)>,
     covered: &'static [&'static str],
+    /// The panel's own NOTICE copy, when it keeps one.
+    notice: Option<PathBuf>,
 }
 
 impl Found {
@@ -139,10 +141,25 @@ impl Found {
         }
         // A file under a licence's name holds the package's licence; the others only theirs.
         let whole = !paths.is_empty();
-        for (shown, path) in self.extra {
-            if path.is_file() && !paths.iter().any(|(_, known)| *known == path) {
+        for (shown, path) in self.named {
+            if !path.is_file() {
+                bail!(
+                    "{} {} has no {shown}, one of the files NAMED_FILES lists for its {} licences; looked in {}. \
+                     Name the files this version ships in xtask/src/licences.rs",
+                    self.name,
+                    self.version,
+                    self.covered.join(" and "),
+                    self.folder.display()
+                );
+            }
+            if !paths.iter().any(|(_, known)| *known == path) {
                 paths.push((shown, path));
             }
+        }
+        if let Some(path) = self.notice
+            && path.is_file()
+        {
+            paths.push(("NOTICE".to_owned(), path));
         }
         let mut files = Vec::new();
         for (shown, path) in paths {
@@ -293,8 +310,9 @@ fn crates(root: &Path, target: &str) -> anyhow::Result<Vec<Found>> {
                 .map(str::to_owned)
                 .collect(),
             licence_file: package["license_file"].as_str().map(shown),
-            extra: named.iter().map(|file| shown(file)).collect(),
+            named: named.iter().map(|file| shown(file)).collect(),
             covered,
+            notice: None,
             folder,
             name,
         });
@@ -341,8 +359,9 @@ fn npm(root: &Path) -> anyhow::Result<Vec<Found>> {
             authors: author.into_iter().collect(),
             folder,
             licence_file: None,
-            extra: vec![("NOTICE".to_owned(), notice)],
+            named: Vec::new(),
             covered: &[],
+            notice: Some(notice),
             name,
         });
     }
@@ -579,8 +598,9 @@ mod tests {
             authors: Vec::new(),
             folder: folder.to_path_buf(),
             licence_file: None,
-            extra: Vec::new(),
+            named: Vec::new(),
             covered: &[],
+            notice: None,
         }
     }
 
@@ -629,7 +649,7 @@ mod tests {
         fs::write(spdx.path().join("MIT.txt"), "MIT text\n").unwrap();
         fs::write(spdx.path().join("Apache-2.0.txt"), "Apache text\n").unwrap();
         let mut fonts = package(folder.path(), "(MIT OR Apache-2.0) AND OFL-1.1");
-        fonts.extra = vec![("fonts/OFL.txt".to_owned(), folder.path().join("fonts/OFL.txt"))];
+        fonts.named = vec![("fonts/OFL.txt".to_owned(), folder.path().join("fonts/OFL.txt"))];
         fonts.covered = &["OFL-1.1"];
 
         let mut texts = Texts::default();
@@ -638,6 +658,33 @@ mod tests {
         let paths: Vec<&str> = found.files.iter().map(|file| file.path.as_str()).collect();
         assert_eq!(paths, ["fonts/OFL.txt", "MIT (SPDX)", "Apache-2.0 (SPDX)"]);
         assert!(!found.from_spdx);
+    }
+
+    #[test]
+    fn a_named_licence_file_a_new_version_dropped_stops_the_build() {
+        let folder = tempfile::tempdir().unwrap();
+        let spdx = tempfile::tempdir().unwrap();
+        fs::write(spdx.path().join("MIT.txt"), "MIT text\n").unwrap();
+        fs::write(spdx.path().join("Apache-2.0.txt"), "Apache text\n").unwrap();
+        let mut fonts = package(
+            folder.path(),
+            "(MIT OR Apache-2.0) AND OFL-1.1 AND Ubuntu-font-1.0",
+        );
+        fonts.name = "epaint_default_fonts".to_owned();
+        fonts.version = "0.38.0".to_owned();
+        fonts.named = vec![("fonts/OFL.txt".to_owned(), folder.path().join("fonts/OFL.txt"))];
+        fonts.covered = &["OFL-1.1", "Ubuntu-font-1.0"];
+
+        let error = fonts
+            .into_package(&mut Texts::default(), spdx.path())
+            .unwrap_err()
+            .to_string();
+
+        assert!(
+            error.starts_with("epaint_default_fonts 0.38.0 has no fonts/OFL.txt"),
+            "{error}"
+        );
+        assert!(error.contains("OFL-1.1 and Ubuntu-font-1.0"), "{error}");
     }
 
     #[test]
