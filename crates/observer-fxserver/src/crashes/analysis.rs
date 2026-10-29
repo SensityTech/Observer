@@ -13,6 +13,7 @@ use minidump::{
 use observer_domain::diagnostics::{
     AnalysedThread, CrashAnalysis, CrashException, Frame, ThreadRun, ThreadState,
 };
+use observer_domain::metrics::ThreadGroup;
 
 use super::report::HangReport;
 
@@ -21,8 +22,6 @@ const MAX_SCAN_BYTES: usize = 64 * 1024;
 const MAX_SIGNATURE: usize = 256;
 /// A hang report is about 10 KB: past this a file is not one of Observer's.
 const MAX_REPORT_BYTES: u64 = 1024 * 1024;
-/// FXServer's main thread, whose name holds this.
-const SV_MAIN: &str = "svMain";
 /// svMain at this share of a core or more was busy on the processor rather than waiting.
 const BUSY_PERCENT: f64 = 90.0;
 /// Where any thread waits or allocates on Windows: a hang in them says nothing of FXServer.
@@ -84,10 +83,9 @@ pub fn analyse(path: &Path) -> Result<Analysis, AnalysisError> {
 
     let thread: Option<&MinidumpThread<'_>> = match &exception {
         Some(exception) => threads.get_thread(exception.thread_id),
-        None => threads
-            .threads
-            .iter()
-            .find(|thread| name_of(thread.raw.thread_id).is_some_and(|name| name.contains(SV_MAIN))),
+        None => threads.threads.iter().find(|thread| {
+            name_of(thread.raw.thread_id).is_some_and(|name| ThreadGroup::of(&name) == ThreadGroup::Main)
+        }),
     };
     let crash = exception.as_ref().map(|exception| {
         let reason = exception.get_crash_reason(system.os, system.cpu);
@@ -166,7 +164,7 @@ pub fn analyse_report(path: &Path) -> Result<Analysis, AnalysisError> {
     let (main, mut others): (Vec<ThreadState>, Vec<ThreadState>) = report
         .threads
         .into_iter()
-        .partition(|thread| thread.name.contains(SV_MAIN));
+        .partition(|thread| ThreadGroup::of(&thread.name) == ThreadGroup::Main);
     others.sort_by(|a, b| b.cpu.unwrap_or(0.0).total_cmp(&a.cpu.unwrap_or(0.0)));
     let main = main.into_iter().next();
     let signature = match &main {
