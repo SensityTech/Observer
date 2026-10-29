@@ -17,7 +17,7 @@ use observer_domain::server::{ServerState, ServerStatus};
 use tracing::warn;
 
 use super::palette::{self, CARD_RADIUS, CONTROL_RADIUS, Led, Palette};
-use super::{Action, Confirm, Request, Shared, controls, is_running, restarting, text};
+use super::{Action, Confirm, Outcome, Request, Shared, controls, is_running, restarting, text};
 
 const WIDTH: f32 = 440.0;
 const PADDING: i8 = 20;
@@ -91,6 +91,7 @@ fn run(shared: &Arc<Shared>) -> Result<(), eframe::Error> {
                 focus_cancel: false,
                 height: 0.0,
                 copied: false,
+                unavailable: None,
             }))
         }),
     )
@@ -103,6 +104,8 @@ struct StatusWindow {
     focus_cancel: bool,
     height: f32,
     copied: bool,
+    /// Why the control last pressed while off could not act, until the server's state changes.
+    unavailable: Option<Outcome>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -194,6 +197,8 @@ impl StatusWindow {
                     (Some(commit), None) => commit.to_owned(),
                     _ => text::DEVELOPMENT_BUILD.to_owned(),
                 };
+                ui.ctx()
+                    .accesskit_node_builder(version.id, |node| node.set_description(commit.as_str()));
                 version.on_hover_text(commit);
             });
         });
@@ -214,9 +219,10 @@ impl StatusWindow {
         facts_row(ui, &shown.palette, &facts);
     }
 
-    fn panel(&self, ui: &mut Ui, shown: &Shown) {
+    fn panel(&mut self, ui: &mut Ui, shown: &Shown) {
         let off = shown.stopping.then_some(text::OBSERVER_STOPPING);
-        if panel_row(ui, &shown.palette, &self.shared.panel, off).clicked() {
+        let response = panel_row(ui, &shown.palette, &self.shared.panel, off);
+        if self.acts(&response, text::OPEN_PANEL, off, &shown.status) {
             self.shared.open_panel();
         }
     }
@@ -294,22 +300,55 @@ impl StatusWindow {
             // Restart stays in place, off, while the restart it made stops FXServer.
             if is_running(status.state) || restarting(status) {
                 let reason = busy.or(rules.restart);
-                if button(ui, palette, label(Action::Restart, text::RESTART), ink, reason).clicked() {
+                let response = button(ui, palette, label(Action::Restart, text::RESTART), ink, reason);
+                if self.acts(&response, text::RESTART, reason, status) {
                     self.ask(Some(Confirm::Restart));
                 }
             } else {
                 let reason = busy.or(rules.start);
-                if button(ui, palette, label(Action::Start, text::START), ink, reason).clicked() {
+                let response = button(ui, palette, label(Action::Start, text::START), ink, reason);
+                if self.acts(&response, text::START, reason, status) {
                     self.shared.act(Action::Start, false);
                 }
             }
             let reason = busy.or(rules.stop);
-            if button(ui, palette, label(Action::Stop, text::STOP), Kind::Plain, reason).clicked() {
+            let response = button(ui, palette, label(Action::Stop, text::STOP), Kind::Plain, reason);
+            if self.acts(&response, text::STOP, reason, status) {
                 self.ask(Some(stop_confirm(status.state)));
             }
         });
         if let Some(outcome) = self.shared.outcome(status) {
             ui.label(RichText::new(outcome).color(palette.danger));
+        }
+        self.unavailable = self
+            .unavailable
+            .take()
+            .filter(|unavailable| unavailable.since == status.since);
+        if let Some(unavailable) = &self.unavailable {
+            ui.label(RichText::new(&unavailable.text).color(palette.ink_2));
+        }
+    }
+
+    /// Whether a press of a control acts. One that is off says why instead, under the controls,
+    /// until the server's state changes: the panel's model.
+    fn acts(&mut self, response: &Response, control: &str, off: Option<&str>, status: &ServerStatus) -> bool {
+        if !response.clicked() {
+            return false;
+        }
+        match off {
+            None => {
+                self.unavailable = None;
+                true
+            }
+            Some(reason) => {
+                if !reason.is_empty() {
+                    self.unavailable = Some(Outcome {
+                        text: text::unavailable(control, reason),
+                        since: status.since,
+                    });
+                }
+                false
+            }
         }
     }
 
@@ -318,11 +357,13 @@ impl StatusWindow {
         ui.add(egui::Separator::default().spacing(4.0));
         let off = shown.stopping.then_some(text::OBSERVER_STOPPING);
         ui.horizontal(|ui| {
-            if button(ui, palette, text::OPEN_DATA_FOLDER, Kind::Plain, off).clicked() {
+            let response = button(ui, palette, text::OPEN_DATA_FOLDER, Kind::Plain, off);
+            if self.acts(&response, text::OPEN_DATA_FOLDER, off, &shown.status) {
                 self.shared.open_data_folder();
             }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if button(ui, palette, text::QUIT, Kind::Plain, off).clicked() {
+                let response = button(ui, palette, text::QUIT, Kind::Plain, off);
+                if self.acts(&response, text::QUIT, off, &shown.status) {
                     self.ask(Some(Confirm::Quit));
                 }
             });
@@ -535,21 +576,35 @@ pub(super) fn stop_confirm(state: ServerState) -> Confirm {
     }
 }
 
-/// A control in the panel's style. One that cannot act is off, its reason on hover; an empty
-/// reason only turns it off.
+/// A control in the panel's style. One that is off for a reason stays focusable, as the panel's
+/// `aria-disabled` buttons do: it looks off, gives its reason on hover and to screen readers, and
+/// its press only says why (`StatusWindow::acts`). An empty reason, a request on its way, turns it
+/// off entirely.
 fn button(ui: &mut Ui, palette: &Palette, label: &str, kind: Kind, off: Option<&str>) -> Response {
     let (fill, ink) = match kind {
         Kind::Ink => (palette.btn_bg, palette.btn_ink),
         Kind::Danger => (palette.danger, palette.on_danger),
         Kind::Plain => (palette.surface_2, palette.ink),
     };
+    let reason = off.filter(|reason| !reason.is_empty());
+    // The panel's `opacity-45`.
+    let (fill, ink) = match reason {
+        Some(_) => (fill.gamma_multiply(0.45), ink.gamma_multiply(0.45)),
+        None => (fill, ink),
+    };
     let widget = egui::Button::new(RichText::new(label).color(ink))
         .fill(fill)
         .corner_radius(CornerRadius::same(CONTROL_RADIUS))
         .min_size(Vec2::new(0.0, BUTTON_HEIGHT));
-    let mut response = ui.add_enabled(off.is_none(), widget);
-    if let Some(reason) = off.filter(|reason| !reason.is_empty()) {
-        response = response.on_disabled_hover_text(reason);
+    let mut response = ui.add_enabled(off.is_none() || reason.is_some(), widget);
+    if let Some(reason) = reason {
+        ui.ctx().accesskit_node_builder(response.id, |node| {
+            node.set_disabled();
+            node.set_description(reason);
+        });
+        response = response
+            .on_hover_text(reason)
+            .on_hover_cursor(egui::CursorIcon::NotAllowed);
     }
     if response.has_focus() {
         ui.painter().rect_stroke(
@@ -591,20 +646,34 @@ fn paint_led(ui: &mut Ui, palette: &Palette, led: Led) {
 #[cfg(test)]
 mod tests {
     use eframe::egui::accesskit::{Node, Role};
-    use eframe::egui::{Pos2, RawInput};
+    use eframe::egui::{Event, Key, Modifiers, Pos2, RawInput};
 
     use super::*;
     use crate::desktop::palette::DARK;
 
     /// `draw` inside the window's padding, and the accessibility tree it built. Two passes: an
     /// area such as a dialog only shows from its second.
-    fn drawn(mut draw: impl FnMut(&mut Ui)) -> Vec<Node> {
+    fn drawn(draw: impl FnMut(&mut Ui)) -> Vec<Node> {
+        pressing_tab(draw, 0).0
+    }
+
+    /// `draw` over a pass, a pass for each press of Tab, and a last pass: that pass's tree, and
+    /// the label of what holds the keyboard's focus.
+    fn pressing_tab(mut draw: impl FnMut(&mut Ui), presses: usize) -> (Vec<Node>, Option<String>) {
         let context = egui::Context::default();
         context.enable_accesskit();
-        let mut nodes = Vec::new();
-        for _ in 0..2 {
+        let mut drawn = (Vec::new(), None);
+        for pass in 0..presses + 2 {
+            let tab = Event::Key {
+                key: Key::Tab,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: Modifiers::NONE,
+            };
             let input = RawInput {
                 screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(WIDTH, 600.0))),
+                events: (1..=presses).contains(&pass).then_some(tab).into_iter().collect(),
                 ..RawInput::default()
             };
             let mut output = context.run_ui(input, |ui| {
@@ -615,13 +684,16 @@ mod tests {
             });
             // Nothing renders: the font atlas the pass made goes nowhere.
             output.textures_delta.clear();
-            nodes = output
-                .platform_output
-                .accesskit_update
-                .map(|update| update.nodes.into_iter().map(|(_, node)| node).collect())
-                .unwrap_or_default();
+            if let Some(update) = output.platform_output.accesskit_update {
+                let focus = update
+                    .nodes
+                    .iter()
+                    .find(|(id, _)| *id == update.focus)
+                    .and_then(|(_, node)| node.label().map(str::to_owned));
+                drawn = (update.nodes.into_iter().map(|(_, node)| node).collect(), focus);
+            }
         }
-        nodes
+        drawn
     }
 
     /// The node a screen reader reads as `text`.
@@ -677,6 +749,25 @@ mod tests {
             .find(|node| node.role() == Role::Dialog)
             .expect("the confirmation is a dialog");
         assert_eq!(dialog.label(), Some(text::STOP_TITLE));
+    }
+
+    #[test]
+    fn a_control_that_is_off_is_reached_by_tab_and_read_with_its_reason() {
+        let controls = |ui: &mut Ui| {
+            button(ui, &DARK, text::START, Kind::Ink, Some(text::NOT_CONFIGURED));
+            // A request on its way: nothing to say, nothing to reach.
+            button(ui, &DARK, text::STOP, Kind::Plain, Some(""));
+            button(ui, &DARK, text::QUIT, Kind::Plain, None);
+        };
+
+        let (nodes, first) = pressing_tab(controls, 1);
+        let (_, second) = pressing_tab(controls, 2);
+
+        assert_eq!(first.as_deref(), Some(text::START));
+        assert_eq!(second.as_deref(), Some(text::QUIT));
+        let start = read(&nodes, text::START);
+        assert!(start.is_disabled());
+        assert_eq!(start.description(), Some(text::NOT_CONFIGURED));
     }
 
     #[test]

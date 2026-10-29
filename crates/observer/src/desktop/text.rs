@@ -207,6 +207,12 @@ pub fn refusal(code: Option<ErrorCode>) -> &'static str {
     }
 }
 
+/// `Start is not available. FXServer has no launch settings yet.`, when a control that is off is
+/// pressed: the panel's `controls.unavailable`.
+pub fn unavailable(control: &str, reason: &str) -> String {
+    format!("{} is not available. {reason}", control.trim_end_matches('…'))
+}
+
 /// `Observer · Online · 12 / 64 players · port 40125`, cut to what a tooltip holds.
 pub fn tooltip(state: Option<ServerState>, players: Option<PlayerCount>, port: u16) -> String {
     let text = match state {
@@ -398,6 +404,18 @@ mod tests {
     }
 
     #[test]
+    fn a_control_that_is_off_says_why_when_pressed() {
+        assert_eq!(
+            unavailable(START, NOT_CONFIGURED),
+            "Start is not available. FXServer has no launch settings yet."
+        );
+        assert_eq!(
+            unavailable(QUIT, OBSERVER_STOPPING),
+            "Quit Observer is not available. Observer is stopping."
+        );
+    }
+
+    #[test]
     fn the_tooltip_fits_with_the_longest_values() {
         let most = Some(PlayerCount {
             online: 2048,
@@ -459,6 +477,7 @@ mod tests {
             "Not responding",
             "Crash loop",
             "someone at the host",
+            "is not available.",
         ];
         for sentence in shared {
             assert!(
