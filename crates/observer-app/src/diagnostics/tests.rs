@@ -525,3 +525,34 @@ async fn the_snapshot_holds_the_records_and_the_crash_folder() {
     assert_eq!(snapshot.crash_folder.max_files, 10);
     assert_eq!(snapshot.crash_folder.files, 0);
 }
+
+#[tokio::test]
+async fn the_processes_an_earlier_observer_left_running_end_when_the_next_one_starts() {
+    let mut lab = lab().await;
+    lab.spawn(1).await;
+    lab.shell(1, 4120).await;
+    lab.advance(5);
+
+    let (next, mut driver, _) = Diagnostics::prepare(DiagnosticsSetup {
+        db: lab.db.clone(),
+        clock: lab.clock.clone(),
+        supervision: lab.supervision.clone(),
+        data_dir: lab.data_dir.clone(),
+    })
+    .await
+    .unwrap();
+    driver
+        .event(Event {
+            at_ms: lab.at_ms(),
+            generation: 1,
+            kind: EventKind::Spawned {
+                pid: MAIN,
+                probe: "127.0.0.1:30120".parse().unwrap(),
+            },
+        })
+        .await;
+
+    let (snapshot, _) = next.follow().await.unwrap();
+    assert_eq!(snapshot.processes.len(), 1);
+    assert_eq!(snapshot.processes[0].ended_at, Some(lab.clock.now()));
+}

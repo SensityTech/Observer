@@ -115,6 +115,16 @@ impl Diagnostics {
             events: supervisor.events(),
         };
         let now = setup.clock.now();
+        let left = setup
+            .db
+            .write(move |tx| store::end_processes_left_running(tx, now))
+            .await?;
+        if left > 0 {
+            info!(
+                processes = left,
+                "processes an earlier Observer left running are recorded as ended"
+            );
+        }
         let seen = setup
             .db
             .read(move |conn| store::connections_since(conn, now - DESTINATIONS_KEPT.0, DESTINATIONS_KEPT.1))

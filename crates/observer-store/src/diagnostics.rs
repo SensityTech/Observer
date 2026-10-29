@@ -101,6 +101,16 @@ pub fn end_run(
     Ok(rows.collect::<Result<_, _>>()?)
 }
 
+/// Ends every process the records still have running, and says how many. At a start nothing
+/// follows them any more: the tree of the Observer before died with it, through its job on
+/// Windows, and on Linux through the sweep before the next start.
+pub fn end_processes_left_running(conn: &Connection, at: Timestamp) -> Result<usize, StoreError> {
+    Ok(conn.execute(
+        "UPDATE tree_process SET ended_at = ?1 WHERE ended_at IS NULL",
+        [Utc(at)],
+    )?)
+}
+
 /// The latest starts first.
 pub fn processes(conn: &Connection, limit: u32) -> Result<Vec<TreeProcess>, StoreError> {
     let mut statement = conn.prepare(&format!(
