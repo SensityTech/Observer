@@ -18,6 +18,8 @@ const AUDITED_COMMAND_LINE: usize = 1024;
 const AUDIT_EVERY: SignedDuration = SignedDuration::from_mins(10);
 /// Distinct programs and command lines recorded per run; past them starts are only counted.
 pub(super) const MAX_PROGRAMS: usize = 200;
+/// Past the rows, the distinct programs and command lines a run's audit entries still name.
+const MAX_AUDITED_PAST_ROWS: usize = 1000;
 
 /// The main process as its children name their parent.
 pub(super) const FXSERVER: &str = if cfg!(windows) { "FXServer.exe" } else { "FXServer" };
@@ -51,6 +53,8 @@ pub(super) struct Run {
     /// Starts not recorded past the cap.
     pub overflow: u64,
     audits: HashMap<String, Audited>,
+    /// The programs and command lines past the cap that got an audit entry of their own.
+    audited_past_rows: HashSet<(Option<String>, Option<String>)>,
 }
 
 struct Audited {
@@ -81,6 +85,7 @@ impl Run {
             programs: HashSet::new(),
             overflow: 0,
             audits: HashMap::new(),
+            audited_past_rows: HashSet::new(),
         }
     }
 
@@ -96,6 +101,16 @@ impl Run {
         }
         self.programs.insert(program);
         true
+    }
+
+    /// Whether a start the cap left without a row is audited at once: the first of its program and
+    /// command line, so that a run flooded with harmless starts still names the one that mattered,
+    /// up to 1,000 a run.
+    pub(super) fn audits_past_rows(&mut self, image: Option<&str>, command_line: Option<&str>) -> bool {
+        self.audited_past_rows.len() < MAX_AUDITED_PAST_ROWS
+            && self
+                .audited_past_rows
+                .insert((image.map(str::to_owned), command_line.map(str::to_owned)))
     }
 
     /// The parent's file name: a process of the tree, or FXServer itself.
@@ -258,6 +273,21 @@ mod tests {
         );
         assert!(!run.admits(Some("cmd.exe"), Some("cmd /c new")));
         assert_eq!(run.overflow, 1);
+    }
+
+    #[test]
+    fn past_the_rows_each_new_program_and_command_line_is_audited_up_to_a_thousand() {
+        let mut run = Run::new(at(0), None);
+
+        assert!(run.audits_past_rows(Some("cmd.exe"), Some("cmd /c payload")));
+        assert!(
+            !run.audits_past_rows(Some("cmd.exe"), Some("cmd /c payload")),
+            "once"
+        );
+        for index in 1..MAX_AUDITED_PAST_ROWS {
+            assert!(run.audits_past_rows(Some("cmd.exe"), Some(&format!("cmd /c {index}"))));
+        }
+        assert!(!run.audits_past_rows(Some("cmd.exe"), Some("cmd /c one more")));
     }
 
     #[test]

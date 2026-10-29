@@ -475,7 +475,7 @@ impl Driver {
         if !admitted && run.overflow == 1 {
             warn!(
                 generation,
-                "FXServer's tree started more than 200 programs; further ones are only counted"
+                "FXServer's tree started more than 200 programs; further ones are only counted and audited"
             );
         }
         let details = audit_details(
@@ -486,10 +486,14 @@ impl Driver {
             generation,
         );
         let program = image.clone().unwrap_or_else(|| process.pid.to_string());
-        let entry = kind
-            .is_unexpected()
-            .then(|| run.audit_entry(&program, details, now))
-            .flatten();
+        let entry = if !kind.is_unexpected() {
+            None
+        } else if !admitted && run.audits_past_rows(image.as_deref(), command_line.as_deref()) {
+            // No row holds it: the audit log does.
+            Some(details)
+        } else {
+            run.audit_entry(&program, details, now)
+        };
         let new = NewProcess {
             run_started: run.started,
             generation,
