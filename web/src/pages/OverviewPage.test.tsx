@@ -334,6 +334,20 @@ describe('OverviewPage', () => {
         live.stop();
     });
 
+    it('should give a fast disk its latency rather than read it as no time at all', async () => {
+        const { say, live } = await page();
+        const disk = {
+            ...SAMPLE.values,
+            hostDiskFree: 118 * 1024 ** 3,
+            hostDiskTransfers: 640,
+            hostDiskLatency: 0.022,
+        };
+        say({ type: 'snapshot', topic: 'metrics.live', data: { latest: { ...SAMPLE, values: disk } } });
+
+        expect(tile(en.tiles.host.label).getByText('118 GB · 0.022 ms')).not.toBeNull();
+        live.stop();
+    });
+
     it('should give the tree card the rows each system measures', async () => {
         const windows = await page(hour(), { started: 4 });
         windows.say({

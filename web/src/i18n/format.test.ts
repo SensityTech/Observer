@@ -101,6 +101,13 @@ describe('formatMilliseconds', () => {
         expect(formatMilliseconds('en', 412.3)).toBe('412 ms');
         expect(formatMilliseconds('en', 1250)).toBe('1,250 ms');
     });
+
+    it('should keep two significant digits under a millisecond rather than round to zero', () => {
+        expect(formatMilliseconds('en', 0.042)).toBe('0.042 ms');
+        expect(formatMilliseconds('en', 0.0349)).toBe('0.035 ms');
+        expect(formatMilliseconds('en', 0.826)).toBe('0.83 ms');
+        expect(formatMilliseconds('en', 0)).toBe('0 ms');
+    });
 });
 
 describe('formatNumber', () => {

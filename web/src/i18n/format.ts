@@ -68,7 +68,9 @@ export const formatBitRate = (locale: string, bytesPerSecond: number) => {
 export const formatPercent = (locale: string, percent: number) =>
     formatNumber(locale, percent / 100, { ...FIGURE, style: 'percent' });
 
-export const formatMilliseconds = (locale: string, ms: number) => `${figure(locale, ms)} ms`;
+/** Under a millisecond, two significant digits: a fast disk reads `0.04 ms`, not `0 ms`. */
+export const formatMilliseconds = (locale: string, ms: number) =>
+    `${Math.abs(ms) < 1 ? formatNumber(locale, ms, { maximumSignificantDigits: 2 }) : figure(locale, ms)} ms`;
 
 /**
  * A span of time as the panel words it: `12 s`, `15 min`, `2h 14m`, `3h`, `3d 4h`. Intl's own
