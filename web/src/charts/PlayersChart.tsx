@@ -24,7 +24,7 @@ import { useLiveMetrics } from '../metrics/live';
 import { mergeLive } from '../metrics/merge';
 import { downPeriods, downTime, type Period } from './coverage';
 import { MarkerBand, MarkerLines, markerWords, type PlacedMarker } from './MarkerOverlay';
-import { bucketOf, clock } from './markers';
+import { bucketOf, chartTime } from './markers';
 import { buckets, playerPoints, resumes, slotPoints, type Bucket } from './points';
 import { DownBands, RangeBand, type Extremes } from './primitives';
 import { RangeControl } from './RangeControl';
@@ -83,15 +83,11 @@ export default function PlayersChart() {
     if (page !== null && peak !== null && peak.players !== null) {
         const average = measured.reduce((sum, row) => sum + (row.players ?? 0), 0) / measured.length;
         const newest = latest?.values.players ?? null;
-        const at =
-            page.step >= 900
-                ? formatTimestamp(new Date(peak.time * 1000), { seconds: false })
-                : clock(peak.time);
         const figures = [
             format.number(Math.round(average)),
             t.charts.ranges[range],
             format.number(Math.round(peak.players)),
-            at,
+            chartTime(peak.time, page.step),
         ] as const;
         summary =
             newest === null
@@ -101,7 +97,7 @@ export default function PlayersChart() {
             summary = `${summary} ${t.charts.downFor(format.duration(downTime(periods)), t.charts.ranges[range])}`;
         }
     }
-    const words = page ? markerWords(t, page.markers) : null;
+    const words = page ? markerWords(t, page.markers, page.step) : null;
 
     return (
         <section className="card flex flex-col" aria-labelledby={titleId}>

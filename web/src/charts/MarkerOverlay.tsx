@@ -6,7 +6,7 @@ import type { RunMarker } from '../api/generated/RunMarker';
 import { useI18n } from '../i18n/I18nProvider';
 import type { Messages } from '../i18n/en';
 import { cn } from '../lib/cn';
-import { clock, clusters, sides, type Cluster, type Side } from './markers';
+import { chartTime, clock, clusters, sides, type Cluster, type Side } from './markers';
 
 const MARKER_ICONS = { start: Play, restart: RotateCw, crash: OctagonX } satisfies Record<
     MarkerKind,
@@ -145,9 +145,10 @@ export function MarkerLines({ markers }: { markers: readonly PlacedMarker[] }) {
 
 /**
  * The range's markers in words, newest first, for the chart's text alternative: `Crash 14:02, back
- * online 14:04 · Restart 12:31`. `null` without any.
+ * online 14:04 · Restart 12:31`, with their days over buckets of `step` seconds as long as a week's.
+ * `null` without any.
  */
-export const markerWords = (t: Messages, markers: readonly RunMarker[]) => {
+export const markerWords = (t: Messages, markers: readonly RunMarker[], step: number) => {
     if (markers.length === 0) {
         return null;
     }
@@ -157,8 +158,10 @@ export const markerWords = (t: Messages, markers: readonly RunMarker[]) => {
         .map((marker) =>
             t.charts.markers.inWords(
                 t.charts.markers[marker.kind],
-                clock(marker.at),
-                marker.kind === 'crash' && marker.backOnlineAt !== null ? clock(marker.backOnlineAt) : null,
+                chartTime(marker.at, step),
+                marker.kind === 'crash' && marker.backOnlineAt !== null
+                    ? chartTime(marker.backOnlineAt, step)
+                    : null,
             ),
         );
     return t.charts.markers.listed(words, newest.length - words.length);

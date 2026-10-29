@@ -1,4 +1,5 @@
 import type { RunMarker } from '../api/generated/RunMarker';
+import { formatTimestamp } from '../i18n/format';
 
 export type Side = 'left' | 'right' | 'hidden';
 
@@ -73,3 +74,10 @@ export const clock = (seconds: number) => {
     const date = new Date(seconds * 1000);
     return `${pad(date.getHours())}:${pad(date.getMinutes())}`;
 };
+
+/**
+ * A time a chart words: hours and minutes, and the day too over a week or a month (buckets of 15
+ * minutes or more), where two events days apart can share their hours and minutes.
+ */
+export const chartTime = (seconds: number, step: number) =>
+    step >= 900 ? formatTimestamp(new Date(seconds * 1000), { seconds: false }) : clock(seconds);

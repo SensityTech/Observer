@@ -27,7 +27,7 @@ import { useLiveMetrics } from '../metrics/live';
 import { mergeLive } from '../metrics/merge';
 import { downPeriods, type Period } from './coverage';
 import { MarkerBand, MarkerLines, markerWords, type PlacedMarker } from './MarkerOverlay';
-import { bucketOf, clock } from './markers';
+import { bucketOf, chartTime } from './markers';
 import { gapPoints } from './points';
 import { DownBands } from './primitives';
 import { RangeControl } from './RangeControl';
@@ -60,7 +60,7 @@ export default function TickChart() {
     const stale = query.isPlaceholderData;
     const measured = rows.some((row) => row.main !== null || row.network !== null || row.sync !== null);
     const figures = page ? tickFigures(page) : null;
-    const words = page ? markerWords(t, page.markers) : null;
+    const words = page ? markerWords(t, page.markers, page.step) : null;
     const share = (percent: number | null) => (percent === null ? t.tiles.unknown : format.percent(percent));
 
     return (
@@ -161,7 +161,7 @@ export default function TickChart() {
                                 unit={
                                     figures.hitch === null
                                         ? undefined
-                                        : t.charts.tick.msAt(clock(figures.hitch.at))
+                                        : t.charts.tick.msAt(chartTime(figures.hitch.at, page.step))
                                 }
                             />
                         </dl>

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { en } from '../i18n/en';
+import { formatTimestamp } from '../i18n/format';
 import { markerWords } from './MarkerOverlay';
 import { bucketOf, clock, clusters, sides } from './markers';
 
@@ -65,18 +66,36 @@ describe('clusters', () => {
 
 describe('markerWords', () => {
     it('should name the markers newest first, a crash with its return', () => {
-        const words = markerWords(en, [marker(0, 'restart'), marker(90, 'crash', 92)]);
+        const words = markerWords(en, [marker(0, 'restart'), marker(90, 'crash', 92)], 30);
 
         expect(words).toBe(
             `Crash ${clock(1_761_642_000 + 5400)}, back online ${clock(1_761_642_000 + 5520)} · Restart ${clock(1_761_642_000)}`,
         );
-        expect(markerWords(en, [])).toBeNull();
+        expect(markerWords(en, [], 30)).toBeNull();
+    });
+
+    it('should tell apart two restarts at the same time on different days, over a week', () => {
+        const day = 24 * 60;
+        const restarts = [marker(31, 'restart'), marker(day + 31, 'restart')];
+
+        const words = markerWords(en, restarts, 900);
+
+        const [newest, oldest] = words?.split(' · ') ?? [];
+        expect(newest).toBe(
+            `Restart ${formatTimestamp(new Date((1_761_642_000 + (day + 31) * 60) * 1000), { seconds: false })}`,
+        );
+        expect(oldest).toMatch(/^Restart \d{4}-\d\d-\d\d \d\d:\d\d$/);
+        expect(newest).not.toBe(oldest);
+        expect(markerWords(en, restarts, 120)).toBe(
+            `Restart ${clock(1_761_642_000 + 31 * 60)} · Restart ${clock(1_761_642_000 + 31 * 60)}`,
+        );
     });
 
     it('should name five markers at most and count the others', () => {
         const words = markerWords(
             en,
             Array.from({ length: 8 }, (_, index) => marker(index * 10, 'start')),
+            30,
         );
 
         expect(words?.split(' · ')).toHaveLength(5);
