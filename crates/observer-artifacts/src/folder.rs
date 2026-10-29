@@ -379,6 +379,57 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn a_trash_swapped_for_a_link_while_it_is_swept_is_swept_where_it_was() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("artifacts");
+        let trash = root.join(TRASH);
+        let moved = root.join("moved");
+        let photos = dir.path().join("photos");
+        let names: Vec<String> = (0..40).map(|n| format!("37{n:03}-0badf00d")).collect();
+        for name in &names {
+            fs::create_dir_all(photos.join(name)).unwrap();
+            fs::write(photos.join(name).join("notes.txt"), b"keep me").unwrap();
+            fs::create_dir_all(trash.join(name)).unwrap();
+            for file in 0..300 {
+                fs::write(trash.join(name).join(format!("{file}.lua")), b"--").unwrap();
+            }
+        }
+        // Once the sweep removed its first build, a resource of the same account moves the trash
+        // away and puts a link to the photos in its place; on Windows the held trash cannot move.
+        let resource = {
+            let (trash, moved, photos, names) = (trash.clone(), moved.clone(), photos.clone(), names.clone());
+            std::thread::spawn(move || {
+                let started = std::time::Instant::now();
+                while names.iter().all(|name| trash.join(name).exists()) {
+                    assert!(
+                        started.elapsed() < Duration::from_secs(60),
+                        "the sweep never started"
+                    );
+                    std::thread::sleep(Duration::from_micros(200));
+                }
+                fs::rename(&trash, &moved).ok()?;
+                let left = fs::read_dir(&moved).unwrap().count();
+                link_folder(&photos, &trash);
+                Some(left)
+            })
+        };
+
+        Installer::new(crate::Http::new().unwrap(), root).sweep().await;
+        let swapped = resource.join().unwrap();
+
+        let kept = names
+            .iter()
+            .filter(|name| photos.join(name).join("notes.txt").exists())
+            .count();
+        assert_eq!(kept, names.len(), "swapped with {swapped:?} builds left");
+        if swapped.is_some() {
+            assert_eq!(fs::read_dir(&moved).unwrap().count(), 0);
+        }
+        #[cfg(unix)]
+        assert!(matches!(swapped, Some(left) if left > 0), "{swapped:?}");
+    }
+
     #[cfg(unix)]
     #[test]
     fn a_build_observer_may_not_remove_fails_at_once_rather_than_as_busy() {

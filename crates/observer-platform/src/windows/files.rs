@@ -2,12 +2,13 @@ use std::ffi::OsString;
 use std::fs::File;
 use std::io;
 use std::os::windows::ffi::OsStringExt;
-use std::os::windows::fs::OpenOptionsExt;
+use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
 use std::os::windows::io::AsRawHandle;
 use std::path::{Path, PathBuf};
 
 use windows_sys::Win32::Storage::FileSystem::{
-    FILE_FLAG_OPEN_REPARSE_POINT, FILE_NAME_NORMALIZED, GetFinalPathNameByHandleW, VOLUME_NAME_DOS,
+    FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
+    FILE_NAME_NORMALIZED, FILE_SHARE_READ, FILE_SHARE_WRITE, GetFinalPathNameByHandleW, VOLUME_NAME_DOS,
 };
 
 pub(crate) fn open_resolved(path: &Path) -> io::Result<(File, PathBuf)> {
@@ -18,6 +19,22 @@ pub(crate) fn open_resolved(path: &Path) -> io::Result<(File, PathBuf)> {
         .open(path)?;
     let resolved = final_path(&file)?;
     Ok((file, resolved))
+}
+
+pub(crate) fn hold_folder(path: &Path) -> io::Result<(File, PathBuf)> {
+    // Shared for reading and writing but not for deletion: while the handle is open nobody
+    // renames or removes the folder, so its path keeps leading to it. A link or a junction in its
+    // place is opened itself, and refused.
+    let folder = File::options()
+        .read(true)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path)?;
+    let metadata = folder.metadata()?;
+    if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 || !metadata.is_dir() {
+        return Err(io::Error::from(io::ErrorKind::NotADirectory));
+    }
+    Ok((folder, path.to_path_buf()))
 }
 
 /// The path of an open file, every link and junction on the way to it resolved, in the

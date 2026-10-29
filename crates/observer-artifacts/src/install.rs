@@ -6,6 +6,7 @@ use std::sync::atomic::AtomicU64;
 use std::time::Duration;
 
 use jiff::Timestamp;
+use observer_platform::HeldFolder;
 use reqwest::Url;
 use tokio_util::sync::CancellationToken;
 
@@ -401,19 +402,22 @@ pub(crate) fn remove_tree(tree: &Path) -> io::Result<()> {
 /// Removes what earlier jobs left in a holding folder, a tree a scanner held while it was being
 /// removed or the download of an install that crashed, once it is older than `stale`. A holding
 /// folder that is a link, a junction included, is left alone: what it leads to is not Observer's.
+/// It is held open while it is swept, and read and emptied through that hold, so that its path
+/// swapped for a link midway takes nothing from where the link leads.
 pub(crate) fn sweep(holding: &Path, stale: Duration) {
-    match fs::symlink_metadata(holding) {
-        Ok(metadata) if metadata.is_dir() => {}
-        Ok(_) => {
+    let held = match HeldFolder::open(holding) {
+        Ok(held) => held,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return,
+        Err(error) => {
             tracing::warn!(
                 path = %holding.display(),
-                "a holding folder of the artifacts folder is a link or a file: nothing in it is removed"
+                %error,
+                "a holding folder of the artifacts folder is not a plain folder: nothing in it is removed"
             );
             return;
         }
-        Err(_) => return,
-    }
-    let Ok(entries) = fs::read_dir(holding) else {
+    };
+    let Ok(entries) = fs::read_dir(held.path()) else {
         return;
     };
     for entry in entries.flatten() {
@@ -431,6 +435,7 @@ pub(crate) fn sweep(holding: &Path, stale: Duration) {
             disk::remove_file(&path)
         };
         if let Err(error) = removed {
+            let path = holding.join(entry.file_name());
             tracing::warn!(path = %path.display(), %error, "cannot remove what an earlier job left");
         }
     }
