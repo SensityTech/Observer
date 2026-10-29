@@ -1,9 +1,13 @@
 use std::fmt::Write as _;
 
-use anyhow::{bail, ensure};
+use anyhow::{Context, bail, ensure};
 use jiff::Timestamp;
 use observer_artifacts::catalog::{Availability, Catalog, CatalogBuild, Listing, PolicyDate, Support};
 use observer_artifacts::{Branch, Http, Installer, Platform, Progress};
+use observer_domain::artifacts::BuildPlatform;
+use observer_store::Database;
+use observer_store::artifacts as stored;
+use tokio_util::sync::CancellationToken;
 
 use crate::config::Config;
 
@@ -143,9 +147,15 @@ pub async fn install(
         "build {build} is past its end of life: players cannot join a server running it; \
          --allow-end-of-life installs it anyway"
     );
-    let Some(request) = listing.install_request(build) else {
+    let Some(mut request) = listing.install_request(build) else {
         bail!("build {build} cannot be downloaded");
     };
+    let db = fingerprints(config).await?;
+    if let Some(db) = &db {
+        request.fingerprint = db
+            .read(move |conn| stored::fingerprint(conn, BuildPlatform::host(), build))
+            .await?;
+    }
 
     let artifacts = Installer::new(Http::new()?, config.paths().artifacts);
     if let Some(length) = artifacts.long_path() {
@@ -156,8 +166,9 @@ pub async fn install(
         );
     }
     let mut shown = None;
+    // Nothing cancels it but the end of the process.
     let installed = artifacts
-        .install(&request, |progress| match progress {
+        .install(&request, &CancellationToken::new(), |progress| match progress {
             Progress::Downloading { received, total } => {
                 if shown.is_none() {
                     eprintln!("downloading {} ({})", request.url, mebibytes(total));
@@ -168,23 +179,52 @@ pub async fn install(
                     eprintln!("downloaded {}%", tenth * 10);
                 }
             }
-            Progress::Extracting => eprintln!("extracting"),
-            Progress::Verifying => eprintln!("verifying"),
+            Progress::Verifying => eprintln!("verifying the archive"),
+            Progress::Extracting { .. } => eprintln!("extracting"),
+            Progress::Validating => eprintln!("validating the build"),
+            Progress::Checking | Progress::Copying { .. } | Progress::Committing => {}
         })
         .await?;
-    eprintln!(
-        "installed build {build}, archive sha256 {}",
-        installed.manifest.archive_sha256
-    );
+    let sha256 = installed
+        .manifest
+        .origin
+        .archive_sha256()
+        .unwrap_or_default()
+        .to_owned();
+    eprintln!("installed build {build}, archive sha256 {sha256}");
+    if let Some(db) = db {
+        let now = Timestamp::now();
+        db.write(move |tx| stored::remember_fingerprint(tx, BuildPlatform::host(), build, &sha256, now))
+            .await?;
+        db.close().await?;
+    }
     println!("{}", installed.path.display());
     Ok(())
+}
+
+/// The database that keeps the archive first installed of each build, when Observer has made one:
+/// a build is never installed again from an archive that differs.
+async fn fingerprints(config: &Config) -> anyhow::Result<Option<Database>> {
+    let paths = config.paths();
+    if !paths.database.exists() {
+        return Ok(None);
+    }
+    let db = Database::open_existing(&paths.database, &paths.backups)
+        .await
+        .with_context(|| {
+            format!(
+                "cannot read the archives first installed from {}; start Observer once to bring it up to date",
+                paths.database.display()
+            )
+        })?;
+    Ok(Some(db))
 }
 
 async fn catalog(platform: Platform, branches: &[Branch]) -> anyhow::Result<Listing> {
     if branches.iter().any(Branch::is_master) {
         bail!("master needs no --branch: the docs page lists it");
     }
-    let listing = Catalog::new(Http::new()?).list(platform, branches).await?;
+    let listing = Catalog::new(Http::new()?).list(platform, branches, &[]).await?;
     for warning in &listing.warnings {
         eprintln!("warning: {warning}");
     }

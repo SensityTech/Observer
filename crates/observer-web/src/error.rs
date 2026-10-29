@@ -59,7 +59,7 @@ fn status(code: ErrorCode) -> StatusCode {
         | ErrorCode::Hierarchy
         | ErrorCode::InvalidSetupToken
         | ErrorCode::OriginMismatch => StatusCode::FORBIDDEN,
-        ErrorCode::NotFound => StatusCode::NOT_FOUND,
+        ErrorCode::NotFound | ErrorCode::BuildNotListed => StatusCode::NOT_FOUND,
         ErrorCode::Conflict
         | ErrorCode::NameTaken
         | ErrorCode::AlreadySetUp
@@ -71,8 +71,24 @@ fn status(code: ErrorCode) -> StatusCode {
         | ErrorCode::AlreadySkipped
         | ErrorCode::NothingToRestore
         | ErrorCode::NothingToDelay
-        | ErrorCode::NoOneOff => StatusCode::CONFLICT,
-        ErrorCode::LaunchFailed | ErrorCode::DelayTooLong => StatusCode::UNPROCESSABLE_ENTITY,
+        | ErrorCode::NoOneOff
+        | ErrorCode::JobRunning
+        | ErrorCode::NoJob
+        | ErrorCode::JobCommitting
+        | ErrorCode::AlreadyInstalled
+        | ErrorCode::BuildNotInstalled
+        | ErrorCode::BuildBroken
+        | ErrorCode::NoScheduledRestart
+        | ErrorCode::AlreadySelected
+        | ErrorCode::NoPending
+        | ErrorCode::BuildProtected
+        | ErrorCode::BuildInUse => StatusCode::CONFLICT,
+        ErrorCode::LaunchFailed
+        | ErrorCode::DelayTooLong
+        | ErrorCode::NotDownloadable
+        | ErrorCode::EndOfLife
+        | ErrorCode::KvpRollback
+        | ErrorCode::NoBuildSelected => StatusCode::UNPROCESSABLE_ENTITY,
         ErrorCode::JsonRequired => StatusCode::UNSUPPORTED_MEDIA_TYPE,
         ErrorCode::UnknownHost => StatusCode::MISDIRECTED_REQUEST,
         ErrorCode::InvalidUsername
@@ -83,11 +99,15 @@ fn status(code: ErrorCode) -> StatusCode {
         | ErrorCode::InvalidLaunchSettings
         | ErrorCode::CommandRefused
         | ErrorCode::InvalidRequest
-        | ErrorCode::InvalidSchedule => StatusCode::BAD_REQUEST,
+        | ErrorCode::InvalidSchedule
+        | ErrorCode::InvalidArtifactSettings
+        | ErrorCode::InvalidImportFolder => StatusCode::BAD_REQUEST,
         ErrorCode::TooManyAttempts | ErrorCode::TooManySockets | ErrorCode::TooManyCommands => {
             StatusCode::TOO_MANY_REQUESTS
         }
-        ErrorCode::Busy | ErrorCode::ShuttingDown => StatusCode::SERVICE_UNAVAILABLE,
+        ErrorCode::Busy | ErrorCode::ShuttingDown | ErrorCode::CatalogUnavailable => {
+            StatusCode::SERVICE_UNAVAILABLE
+        }
         ErrorCode::Internal => StatusCode::INTERNAL_SERVER_ERROR,
     }
 }

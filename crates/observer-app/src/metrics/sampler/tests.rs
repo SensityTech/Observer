@@ -4,7 +4,7 @@ use jiff::{SignedDuration, Timestamp};
 use observer_domain::server::ServerState;
 use observer_fxserver::health::{PlayerList, Players};
 use observer_fxserver::supervisor::Stamped;
-use observer_platform::{Member, Memory};
+use observer_platform::{Clock as CpuClock, Member, Memory};
 use observer_store::{Database, StoreError};
 use tokio::sync::{oneshot, watch};
 
@@ -69,9 +69,13 @@ fn mid_slot(start: Instant, slot: u32) -> Instant {
 
 fn usage(cpu_ms: u64, started: u64) -> Usage {
     Usage {
-        cpu: Duration::from_millis(cpu_ms),
+        user: Duration::from_millis(cpu_ms),
+        kernel: Duration::ZERO,
         working_set: 300 << 20,
+        working_set_peak: Some(320 << 20),
         private: 250 << 20,
+        faults: None,
+        hard_faults: None,
         threads: Some(40),
         handles: Some(900),
         read: Some(cpu_ms * 1000),
@@ -106,7 +110,33 @@ fn sample_at(
     run: Option<RunReadings>,
     measures: Measures,
 ) -> Values {
-    assembler.sample(wake(start + SLOT * slot, run, measures)).0
+    assembler.sample(wake(start + SLOT * slot, run, measures)).values
+}
+
+fn thread(id: u32, name: &str, cpu_ms: u64) -> ThreadUsage {
+    ThreadUsage {
+        id,
+        started: u64::from(id) * 10,
+        name: name.to_owned(),
+        cpu: Duration::from_millis(cpu_ms),
+    }
+}
+
+/// A tree whose main process, started at 7, lists `threads`.
+fn listed(threads: Vec<ThreadUsage>) -> Measures {
+    Measures {
+        tree: Some(TreeUsage {
+            main: Some(usage(1000, 7)),
+            children: Vec::new(),
+            threads: Some(threads),
+            totals: None,
+        }),
+        ..Measures::default()
+    }
+}
+
+fn groups(values: &Values) -> [Option<f64>; 6] {
+    GROUP_COLUMNS.map(|(_, column)| values.get(column).map(|cpu| (cpu * 1e6).round() / 1e6))
 }
 
 fn event(generation: u32, kind: EventKind) -> Event {
@@ -171,6 +201,8 @@ fn a_process_s_first_sample_has_no_cpu_and_a_reused_pid_starts_over() {
         tree: Some(TreeUsage {
             main: Some(usage(cpu_ms, started)),
             children: Vec::new(),
+            threads: None,
+            totals: None,
         }),
         ..Measures::default()
     };
@@ -232,13 +264,15 @@ fn a_new_child_counts_at_once_in_count_and_memory_and_in_cpu_from_its_second_sam
         tree: Some(TreeUsage {
             main: Some(usage(0, 1)),
             children,
+            threads: None,
+            totals: None,
         }),
         ..Measures::default()
     };
     let running = || Some(run(1, no_readings()));
     sample_at(&mut assembler, start, 1, running(), tree(vec![child(10, 0)]));
 
-    let (values, children) = assembler.sample(wake(
+    let Assembled { values, children, .. } = assembler.sample(wake(
         start + SLOT * 2,
         running(),
         tree(vec![child(10, 2500), child(11, 4000)]),
@@ -249,6 +283,320 @@ fn a_new_child_counts_at_once_in_count_and_memory_and_in_cpu_from_its_second_sam
     assert!((values.get(Column::ChildrenCpu).unwrap() - 50.0).abs() < 1e-9);
     assert_eq!(children[1].cpu, None);
     assert!((children[0].cpu.unwrap() - 50.0).abs() < 1e-9);
+}
+
+#[test]
+fn the_kernel_share_faults_and_peak_come_from_the_same_readings_as_the_cpu() {
+    let start = Instant::now();
+    let mut assembler = Assembler::new(start);
+    let reading = |user_ms, kernel_ms, faults: u64, hard: u64| {
+        let mut main = usage(0, 7);
+        main.user = Duration::from_millis(user_ms);
+        main.kernel = Duration::from_millis(kernel_ms);
+        main.faults = Some(faults);
+        main.hard_faults = Some(hard);
+        Measures {
+            tree: Some(TreeUsage {
+                main: Some(main),
+                children: Vec::new(),
+                threads: None,
+                totals: None,
+            }),
+            ..Measures::default()
+        }
+    };
+    let running = || Some(run(1, no_readings()));
+
+    let first = sample_at(
+        &mut assembler,
+        start,
+        1,
+        running(),
+        reading(1000, 500, 90_000, 10),
+    );
+    let second = sample_at(
+        &mut assembler,
+        start,
+        2,
+        running(),
+        reading(3500, 1500, 96_200, 13),
+    );
+    let wrapped = sample_at(&mut assembler, start, 3, running(), reading(4000, 1600, 400, 13));
+
+    assert_eq!(first.get(Column::FxsCpuKernel), None);
+    assert_eq!(first.get(Column::FxsFaults), None);
+    assert_eq!(first.get(Column::FxsWsPeak), Some(f64::from(320 << 20)));
+    // 3.5 s of CPU in 5 s, 1 s of it in the kernel.
+    assert!((second.get(Column::FxsCpu).unwrap() - 70.0).abs() < 1e-9);
+    assert!((second.get(Column::FxsCpuKernel).unwrap() - 20.0).abs() < 1e-9);
+    assert_eq!(second.get(Column::FxsFaults), Some(6200.0));
+    assert_eq!(second.get(Column::FxsHardFaults), Some(3.0));
+    assert_eq!(wrapped.get(Column::FxsFaults), None, "the 32-bit counter wrapped");
+    assert_eq!(wrapped.get(Column::FxsHardFaults), Some(0.0));
+}
+
+#[test]
+fn thread_groups_count_a_thread_from_its_second_listing_and_empty_groups_as_zero() {
+    let start = Instant::now();
+    let mut assembler = Assembler::new(start);
+    let running = |generation| Some(run(generation, no_readings()));
+
+    let first = sample_at(
+        &mut assembler,
+        start,
+        1,
+        running(1),
+        listed(vec![
+            thread(1, "UV loop: svMain", 1000),
+            thread(2, "UV loop: svNetw", 100),
+        ]),
+    );
+    let second = sample_at(
+        &mut assembler,
+        start,
+        2,
+        running(1),
+        listed(vec![
+            thread(1, "UV loop: svMain", 3500),
+            thread(2, "UV loop: svNetw", 600),
+            thread(3, "Thread Pool Worker", 300),
+        ]),
+    );
+    let third = sample_at(
+        &mut assembler,
+        start,
+        3,
+        running(1),
+        listed(vec![
+            thread(1, "UV loop: svMain", 4000),
+            thread(3, "Thread Pool Worker", 550),
+        ]),
+    );
+    let restarted = sample_at(
+        &mut assembler,
+        start,
+        4,
+        running(2),
+        listed(vec![thread(1, "UV loop: svMain", 4000)]),
+    );
+    let unlisted = sample_at(&mut assembler, start, 5, running(2), {
+        let mut measures = listed(Vec::new());
+        if let Some(tree) = measures.tree.as_mut() {
+            tree.threads = None;
+        }
+        measures
+    });
+
+    assert_eq!(groups(&first), [None; 6], "no listing to compare with");
+    assert_eq!(
+        groups(&second),
+        [Some(50.0), Some(10.0), Some(0.0), Some(0.0), Some(0.0), Some(0.0)],
+        "the new Mono thread counts from its next listing"
+    );
+    assert_eq!(
+        groups(&third),
+        [Some(10.0), Some(0.0), Some(0.0), Some(0.0), Some(5.0), Some(0.0)],
+        "svNetwork ended between the two"
+    );
+    assert_eq!(groups(&restarted), [None; 6], "another run");
+    assert_eq!(groups(&unlisted), [None; 6]);
+}
+
+#[test]
+fn the_slot_keeps_the_twenty_four_busiest_names_each_once() {
+    let start = Instant::now();
+    let mut assembler = Assembler::new(start);
+    let running = || Some(run(1, no_readings()));
+    let threads = |grown: u64| -> Vec<ThreadUsage> {
+        let mut threads: Vec<ThreadUsage> = (1..=30)
+            .map(|id| thread(id, &format!("worker {id:02}"), grown * u64::from(id)))
+            .collect();
+        threads.push(thread(40, "libuv-worker", 0));
+        threads.push(thread(41, "  libuv-worker\u{7}", grown * 100));
+        threads.push(thread(42, "DevCon Thread", grown.min(1)));
+        threads
+    };
+    sample_at(&mut assembler, start, 1, running(), listed(threads(0)));
+
+    let Assembled { values, threads, .. } =
+        assembler.sample(wake(start + SLOT * 2, running(), listed(threads(50))));
+
+    assert_eq!(threads.len(), 24);
+    // 100 × 50 ms over 5 s: 100% of one core, under one name.
+    assert_eq!(threads[0].0, "libuv-worker");
+    assert!((threads[0].1 - 100.0).abs() < 1e-9);
+    assert_eq!(threads[1].0, "worker 30");
+    assert!((threads[1].1 - 30.0).abs() < 1e-9);
+    assert_eq!(threads[23].0, "worker 08");
+    assert!(
+        threads.iter().all(|(name, _)| name != "DevCon Thread"),
+        "0.02% of a core"
+    );
+    let other = values.get(Column::ThrOtherCpu).unwrap();
+    assert!((other - (100.0 + 465.0 + 0.02)).abs() < 1e-6, "{other}");
+}
+
+#[test]
+fn the_tree_totals_give_cpu_and_started_processes_until_a_new_run() {
+    let start = Instant::now();
+    let mut assembler = Assembler::new(start);
+    let totals = |cpu_ms, started| {
+        let mut measures = listed(Vec::new());
+        if let Some(tree) = measures.tree.as_mut() {
+            tree.totals = Some(TreeTotals {
+                cpu: Duration::from_millis(cpu_ms),
+                processes_started: started,
+                private_peak: Some(900 << 20),
+            });
+        }
+        measures
+    };
+    let running = |generation| Some(run(generation, no_readings()));
+
+    let first = sample_at(&mut assembler, start, 1, running(1), totals(10_000, Some(2)));
+    let second = sample_at(&mut assembler, start, 2, running(1), totals(19_500, Some(5)));
+    let linux = sample_at(&mut assembler, start, 3, running(1), totals(20_000, None));
+    let back = sample_at(&mut assembler, start, 4, running(1), totals(15_000, None));
+    let restarted = sample_at(&mut assembler, start, 5, running(2), totals(400, Some(2)));
+
+    assert_eq!(
+        (first.get(Column::TreeCpu), first.get(Column::TreeStarted)),
+        (None, None)
+    );
+    assert_eq!(first.get(Column::TreePrivatePeak), Some(f64::from(900 << 20)));
+    assert!((second.get(Column::TreeCpu).unwrap() - 190.0).abs() < 1e-9);
+    assert_eq!(second.get(Column::TreeStarted), Some(3.0));
+    assert!((linux.get(Column::TreeCpu).unwrap() - 10.0).abs() < 1e-9);
+    assert_eq!(linux.get(Column::TreeStarted), None);
+    assert_eq!(
+        back.get(Column::TreeCpu),
+        None,
+        "a member left without being waited for"
+    );
+    assert_eq!(restarted.get(Column::TreeCpu), None);
+}
+
+#[test]
+fn a_tree_total_that_went_back_is_measured_against_the_one_before_until_it_does_twice() {
+    let start = Instant::now();
+    let mut assembler = Assembler::new(start);
+    let totals = |cpu_ms| {
+        let mut measures = listed(Vec::new());
+        if let Some(tree) = measures.tree.as_mut() {
+            tree.totals = Some(TreeTotals {
+                cpu: Duration::from_millis(cpu_ms),
+                processes_started: None,
+                private_peak: None,
+            });
+        }
+        measures
+    };
+    let running = || Some(run(1, no_readings()));
+
+    sample_at(&mut assembler, start, 1, running(), totals(100_000));
+    let steady = sample_at(&mut assembler, start, 2, running(), totals(100_050));
+    // A member that used 60 s is missing from one total, then counted in its parent's.
+    let missing = sample_at(&mut assembler, start, 3, running(), totals(40_100));
+    let returned = sample_at(&mut assembler, start, 4, running(), totals(100_150));
+    // One that left for good.
+    let left = sample_at(&mut assembler, start, 5, running(), totals(40_200));
+    let still_less = sample_at(&mut assembler, start, 6, running(), totals(40_250));
+    let after = sample_at(&mut assembler, start, 7, running(), totals(40_300));
+
+    let share = |values: &Values| values.get(Column::TreeCpu);
+    assert!((share(&steady).unwrap() - 1.0).abs() < 1e-9);
+    assert_eq!(share(&missing), None);
+    let returned = share(&returned).unwrap();
+    assert!(
+        (returned - 1.0).abs() < 1e-9,
+        "100 ms over the two slots, not the member's time again: {returned}%"
+    );
+    assert_eq!((share(&left), share(&still_less)), (None, None));
+    assert!((share(&after).unwrap() - 1.0).abs() < 1e-9);
+}
+
+#[test]
+fn the_disk_latency_is_the_time_per_transfer_and_unknown_without_any() {
+    let start = Instant::now();
+    let mut assembler = Assembler::new(start);
+    let disk = |transfers, busy_ms| Measures {
+        disk: Some(Disk {
+            counters: Some(DiskCounters {
+                transfers,
+                busy: Duration::from_millis(busy_ms),
+            }),
+            ..Disk::default()
+        }),
+        ..Measures::default()
+    };
+
+    let first = sample_at(&mut assembler, start, 1, None, disk(1000, 800));
+    let busy = sample_at(&mut assembler, start, 2, None, disk(1250, 900));
+    let idle = sample_at(&mut assembler, start, 3, None, disk(1250, 900));
+    let back = sample_at(&mut assembler, start, 4, None, disk(10, 900));
+
+    assert_eq!(
+        (first.get(Column::HostDiskOps), first.get(Column::HostDiskMs)),
+        (None, None)
+    );
+    assert_eq!(busy.get(Column::HostDiskOps), Some(250.0));
+    assert!((busy.get(Column::HostDiskMs).unwrap() - 0.4).abs() < 1e-9);
+    assert_eq!(
+        (idle.get(Column::HostDiskOps), idle.get(Column::HostDiskMs)),
+        (Some(0.0), None)
+    );
+    assert_eq!(
+        (back.get(Column::HostDiskOps), back.get(Column::HostDiskMs)),
+        (None, None)
+    );
+}
+
+#[test]
+fn steal_and_pressure_are_shares_of_the_slot_and_the_clock_is_as_read() {
+    let start = Instant::now();
+    let mut assembler = Assembler::new(start);
+    let host = |busy: u64, steal: u64, stalled: Option<u64>| Measures {
+        host: Some(HostUsage {
+            cpu: Some(CpuTimes {
+                busy,
+                total: busy * 4,
+                steal: Some(steal),
+            }),
+            processors: Some(4),
+            memory: None,
+            interfaces: None,
+            clock: Some(CpuClock {
+                mhz: 4760.0,
+                max_mhz: 3400.0,
+                limit: Some(72.0),
+            }),
+            pressure: Some(Pressure {
+                cpu: stalled,
+                memory: Some(0),
+                io: Some(1_000_000),
+            }),
+        }),
+        ..Measures::default()
+    };
+
+    let first = sample_at(&mut assembler, start, 1, None, host(1000, 10, Some(1_000)));
+    let second = sample_at(&mut assembler, start, 2, None, host(2000, 30, Some(151_000)));
+    let gone = sample_at(&mut assembler, start, 3, None, host(3000, 30, None));
+
+    assert_eq!(first.get(Column::HostSteal), None);
+    assert_eq!(first.get(Column::HostPsiCpu), None);
+    assert_eq!(first.get(Column::HostCpuMhz), Some(4760.0));
+    assert_eq!(first.get(Column::HostCpuMaxMhz), Some(3400.0));
+    assert_eq!(first.get(Column::HostCpuLimit), Some(72.0));
+    // 20 of 4000 ticks.
+    assert!((second.get(Column::HostSteal).unwrap() - 0.5).abs() < 1e-9);
+    // 150 ms stalled over 5 s.
+    let cpu = second.get(Column::HostPsiCpu).unwrap();
+    assert!((cpu - 3.0).abs() < 0.01, "{cpu}");
+    assert_eq!(second.get(Column::HostPsiMemory), Some(0.0));
+    assert_eq!(second.get(Column::HostPsiIo), Some(0.0));
+    assert_eq!(gone.get(Column::HostPsiCpu), None);
+    assert_eq!(gone.get(Column::HostSteal), Some(0.0));
 }
 
 #[test]
@@ -263,6 +611,8 @@ fn the_first_tree_of_a_new_run_has_no_children_cpu_as_it_has_no_main_cpu() {
                 name: "conhost.exe".to_owned(),
                 usage: usage(child_cpu_ms, u64::from(child_pid)),
             }],
+            threads: None,
+            totals: None,
         }),
         ..Measures::default()
     };
@@ -563,6 +913,7 @@ fn hitches_and_barks_are_counted_per_slot_while_a_run_exists() {
             EventKind::Spawned {
                 pid: 4,
                 probe: "127.0.0.1:30120".parse().unwrap(),
+                build: "/srv/observer/artifacts/35245".into(),
             },
         ),
         start,
@@ -687,6 +1038,7 @@ fn the_host_rates_leave_out_an_adapter_whose_counters_went_back() {
             cpu: Some(CpuTimes {
                 busy,
                 total: busy * 4,
+                steal: None,
             }),
             processors: Some(28),
             memory: Some(Memory {
@@ -694,6 +1046,8 @@ fn the_host_rates_leave_out_an_adapter_whose_counters_went_back() {
                 total: 16 << 30,
             }),
             interfaces: Some(interfaces),
+            clock: None,
+            pressure: None,
         }),
         ..Measures::default()
     };
@@ -753,6 +1107,8 @@ fn shares_of_the_machine_count_the_processors_the_host_cpu_counts() {
             processors,
             memory: None,
             interfaces: None,
+            clock: None,
+            pressure: None,
         }),
         ..Measures::default()
     };
@@ -763,6 +1119,7 @@ fn shares_of_the_machine_count_the_processors_the_host_cpu_counts() {
                 ts: 1_761_642_000,
                 state: ServerState::Stopped,
                 values,
+                threads: Vec::new(),
             },
             Vec::new(),
             assembler.processors,
@@ -791,6 +1148,7 @@ fn observer_and_the_disk_are_measured_whether_or_not_a_server_runs() {
                 available: 100 << 30,
                 total: 500 << 30,
             }),
+            counters: None,
             state_db: Some(4096),
             metrics_db: None,
         }),
@@ -858,6 +1216,7 @@ async fn a_write_that_outlasts_the_next_slot_does_not_cost_that_slot() {
             clock: services,
             accounts,
             data_dir: dir.path().join("data"),
+            artifacts: dir.path().join("data/artifacts"),
             console_logs: dir.path().join("data/logs/console"),
             log: None,
         },

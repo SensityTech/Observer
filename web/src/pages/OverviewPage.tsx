@@ -1,9 +1,10 @@
 import { Link } from '@tanstack/react-router';
 import { ArrowRight, RotateCw } from 'lucide-react';
-import { Suspense } from 'react';
+import { Suspense, useId } from 'react';
 
 import type { ScheduleStatus } from '../api/generated/ScheduleStatus';
 import type { ServerStatus } from '../api/generated/ServerStatus';
+import { useArtifacts } from '../artifacts/context';
 import { useMe } from '../auth/me';
 import { Button } from '../components/Button';
 import { ErrorBoundary } from '../components/ErrorBoundary';
@@ -14,13 +15,16 @@ import { cn } from '../lib/cn';
 import { lazyCode } from '../lib/lazyCode';
 import { secondsSince, useNow } from '../lib/useNow';
 import { LiveMetricsProvider, useLiveMetrics } from '../metrics/live';
+import { ThreadsCard } from '../overview/ThreadsCard';
 import { Tiles } from '../overview/Tiles';
+import { TreeCard } from '../overview/TreeCard';
 import { useSchedule } from '../schedule/context';
 import { useServerStatus } from '../server/context';
-import { STATE_INK, STATE_LED, causeText, isRunning } from '../server/state';
+import { STATE_INK, STATE_LED, buildFact, causeText, isRunning } from '../server/state';
 
 // The chart library is the heaviest part of the panel: it loads after the page has painted.
 const PlayersChart = lazyCode(() => import('../charts/PlayersChart'));
+const TickChart = lazyCode(() => import('../charts/TickChart'));
 
 export function OverviewPage() {
     const { t } = useI18n();
@@ -35,43 +39,70 @@ export function OverviewPage() {
             <LiveMetricsProvider>
                 <ServerCard />
                 <Tiles />
-                <ErrorBoundary fallback={<ChartFailed />}>
-                    <Suspense fallback={<ChartPlaceholder />}>
+                <ErrorBoundary
+                    fallback={
+                        <ChartFailed title={t.charts.players.title} text={t.charts.players.unavailable} />
+                    }
+                >
+                    <Suspense
+                        fallback={<ChartPlaceholder label={t.charts.players.loading} height="h-[260px]" />}
+                    >
                         <PlayersChart />
                     </Suspense>
                 </ErrorBoundary>
+                <div className="grid grid-cols-1 gap-3 2xl:grid-cols-3">
+                    <div className="flex min-w-0 flex-col 2xl:col-span-2">
+                        <ErrorBoundary
+                            fallback={
+                                <ChartFailed title={t.charts.tick.title} text={t.charts.tick.unavailable} />
+                            }
+                        >
+                            <Suspense
+                                fallback={
+                                    <ChartPlaceholder label={t.charts.tick.loading} height="h-[240px]" />
+                                }
+                            >
+                                <TickChart />
+                            </Suspense>
+                        </ErrorBoundary>
+                    </div>
+                    <div className="flex min-w-0 flex-col gap-3">
+                        <ThreadsCard />
+                        <TreeCard />
+                    </div>
+                </div>
             </LiveMetricsProvider>
         </>
     );
 }
 
-/** The chart card's shape while its code loads. */
-function ChartPlaceholder() {
-    const { t } = useI18n();
+/** A chart card's shape while its code loads. */
+function ChartPlaceholder({ label, height }: { label: string; height: string }) {
     return (
-        <section className="card" aria-busy="true" aria-label={t.charts.players.loading}>
+        <section className="card flex-1" aria-busy="true" aria-label={label}>
             <div className="card-head">
                 <span className="skeleton h-3 w-40" />
             </div>
             <div className="card-body">
-                <div className="skeleton h-[260px] w-full max-md:h-[200px]" />
+                <div className={`skeleton ${height} w-full max-md:h-[200px]`} />
             </div>
         </section>
     );
 }
 
-/** The chart card when its code could not be loaded, or it could not be drawn: the tiles stay. */
-function ChartFailed() {
+/** A chart card when its code could not be loaded, or it could not be drawn: the rest stays. */
+function ChartFailed({ title, text }: { title: string; text: string }) {
     const { t } = useI18n();
+    const titleId = useId();
     return (
-        <section className="card" aria-labelledby="overview-chart">
+        <section className="card flex-1" aria-labelledby={titleId}>
             <div className="card-head">
-                <h2 id="overview-chart" className="card-title">
-                    {t.charts.players.title}
+                <h2 id={titleId} className="card-title">
+                    {title}
                 </h2>
             </div>
             <div className="card-body flex flex-col items-start gap-3">
-                <p className="text-ui text-ink-3">{t.charts.players.unavailable}</p>
+                <p className="text-ui text-ink-3">{text}</p>
                 <Button icon={RotateCw} onClick={() => window.location.reload()}>
                     {t.common.reload}
                 </Button>
@@ -140,7 +171,8 @@ function ServerState({ status }: { status: ServerStatus }) {
     const me = useMe();
     const now = useNow();
     const { latest } = useLiveMetrics();
-    const { schedule } = useSchedule();
+    const { schedule, zone } = useSchedule();
+    const { status: builds } = useArtifacts();
     const cause = causeText(t, status);
     const running = isRunning(status.state);
     const resources = running ? (latest?.values.resources ?? null) : null;
@@ -152,7 +184,11 @@ function ServerState({ status }: { status: ServerStatus }) {
                   format.duration(secondsSince(status.startedAt, now)),
               )
             : null,
-        status.build === null ? null : t.overview.build(String(status.build)),
+        buildFact(t, status, builds, (instant) =>
+            zone === null
+                ? t.overview.utcClock(formatClock(locale, instant, 'UTC'))
+                : formatClock(locale, instant, zone),
+        ) ?? (status.build === null ? null : t.overview.build(String(status.build))),
         status.players === null
             ? null
             : t.overview.players(
@@ -178,7 +214,9 @@ function ServerState({ status }: { status: ServerStatus }) {
                     t.overview.notConfigured,
                     me.isOwner ? t.overview.notConfiguredOwner : t.overview.notConfiguredOther,
                 ]
-              : [t.overview.invalid, me.isOwner ? t.overview.invalidOwner : t.overview.invalidOther];
+              : status.launch === 'noBuild'
+                ? [t.overview.noBuild, t.overview.noBuildHint]
+                : [t.overview.invalid, me.isOwner ? t.overview.invalidOwner : t.overview.invalidOther];
 
     return (
         <>
@@ -195,7 +233,16 @@ function ServerState({ status }: { status: ServerStatus }) {
                     <p>
                         {launch[0]} {launch[1]}
                     </p>
-                    {me.isOwner && (
+                    {status.launch === 'noBuild' && (
+                        <Link
+                            to="/artifacts"
+                            className="inline-flex items-center gap-1.5 font-medium text-ink underline-offset-2 hover:underline"
+                        >
+                            {t.overview.openArtifacts}
+                            <ArrowRight size={14} strokeWidth={1.5} aria-hidden="true" />
+                        </Link>
+                    )}
+                    {me.isOwner && status.launch !== 'noBuild' && (
                         <Link
                             to="/server"
                             className="inline-flex items-center gap-1.5 font-medium text-ink underline-offset-2 hover:underline"

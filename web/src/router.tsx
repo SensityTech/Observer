@@ -30,6 +30,9 @@ const ConsolePage = lazyCode(() =>
 const SchedulePage = lazyCode(() =>
     import('./pages/SchedulePage').then((page) => ({ default: page.SchedulePage })),
 );
+const ArtifactsPage = lazyCode(() =>
+    import('./pages/ArtifactsPage').then((page) => ({ default: page.ArtifactsPage })),
+);
 const ServerPage = lazyCode(() =>
     import('./pages/ServerPage').then((page) => ({ default: page.ServerPage })),
 );
@@ -143,6 +146,16 @@ const scheduleRoute = createRoute({
     ),
 });
 
+const artifactsRoute = createRoute({
+    getParentRoute: () => panelRoute,
+    path: '/artifacts',
+    component: () => (
+        <RequirePermission name="ArtifactsView">
+            <ArtifactsPage />
+        </RequirePermission>
+    ),
+});
+
 const serverRoute = createRoute({
     getParentRoute: () => panelRoute,
     path: '/server',
@@ -194,6 +207,7 @@ const routeTree = rootRoute.addChildren([
         overviewRoute,
         consoleRoute,
         scheduleRoute,
+        artifactsRoute,
         serverRoute,
         usersRoute,
         auditRoute,

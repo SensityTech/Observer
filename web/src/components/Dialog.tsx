@@ -2,7 +2,9 @@ import { useEffect, useId, useLayoutEffect, useRef, type FormEvent, type ReactNo
 
 import { cn } from '../lib/cn';
 
-const FIELD = 'input:not([type="hidden"]):enabled, select:enabled';
+// Of a group of radio buttons, the checked one: the convention, and what Space would otherwise change.
+const FIELD =
+    'input:not([type="hidden"]):not([type="radio"]):enabled, input[type="radio"]:checked:enabled, select:enabled';
 
 type DialogProps = {
     title: ReactNode;

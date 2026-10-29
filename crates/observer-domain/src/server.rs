@@ -138,6 +138,8 @@ pub enum LaunchReadiness {
     NotConfigured,
     /// Saved, but refused by the rules in force on this host: the owner fixes them on the Server page.
     Invalid,
+    /// No build is selected: one is installed or imported on the Artifacts page.
+    NoBuild,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]

@@ -68,7 +68,7 @@ fn respond(mut stream: TcpStream, server: &Server) -> io::Result<()> {
     } else if path.starts_with("/players.json") {
         ("200 OK", players(server, header("x-players-token")))
     } else if path.starts_with("/info.json") {
-        ("200 OK", info())
+        ("200 OK", info(server))
     } else if path.starts_with("/perf") {
         if authorized(server, authorization) {
             ("200 OK", perf(server))
@@ -124,12 +124,16 @@ fn players(server: &Server, token: Option<&str>) -> String {
     serde_json::Value::from(players).to_string()
 }
 
-/// The build is FXServer 35245's, whose formats the fake follows.
-fn info() -> String {
+/// FXServer 35245's formats, with the build `fake_build` names, 35245 by default.
+fn info(server: &Server) -> String {
     let platform = if cfg!(windows) { "win32" } else { "linux" };
+    let build = server
+        .convar("fake_build")
+        .filter(|build| build.bytes().all(|digit| digit.is_ascii_digit()))
+        .unwrap_or_else(|| "35245".to_owned());
     json!({
         "resources": ["observer"],
-        "server": format!("FXServer-master SERVER v1.0.0.35245 {platform}"),
+        "server": format!("FXServer-master SERVER v1.0.0.{build} {platform}"),
         "version": 0,
     })
     .to_string()

@@ -104,6 +104,7 @@ mod tests {
                         ts,
                         state: ServerState::Online,
                         values,
+                        threads: Vec::new(),
                     },
                 )?;
             }

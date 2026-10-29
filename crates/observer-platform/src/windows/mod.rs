@@ -1,6 +1,8 @@
 pub mod authenticode;
 pub mod console;
+pub(crate) mod files;
 pub mod message_loop;
+pub(crate) mod processes;
 mod session;
 pub(crate) mod usage;
 

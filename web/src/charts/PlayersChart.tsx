@@ -11,43 +11,49 @@ import {
     type Time,
     type UTCTimestamp,
 } from 'lightweight-charts';
-import { OctagonX, Play, RotateCw, Users, type LucideIcon } from 'lucide-react';
+import { Users } from 'lucide-react';
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
-import type { MarkerKind } from '../api/generated/MarkerKind';
 import type { MetricsSeries } from '../api/generated/MetricsSeries';
 import type { Range } from '../api/generated/Range';
-import type { RunMarker } from '../api/generated/RunMarker';
 import { seriesQuery } from '../api/metrics';
 import { useI18n } from '../i18n/I18nProvider';
 import { formatTimestamp } from '../i18n/format';
 import { cn } from '../lib/cn';
 import { useLiveMetrics } from '../metrics/live';
 import { mergeLive } from '../metrics/merge';
-import { bucketOf, sides, type Side } from './markers';
+import { downPeriods, downTime, type Period } from './coverage';
+import { MarkerBand, MarkerLines, markerWords, type PlacedMarker } from './MarkerOverlay';
+import { bucketOf, chartTime } from './markers';
 import { buckets, playerPoints, resumes, slotPoints, type Bucket } from './points';
+import { DownBands, RangeBand, type Extremes } from './primitives';
+import { RangeControl } from './RangeControl';
 import { scaleTop } from './scale';
 import { chartOptions, tokenColor, withAlpha } from './theme';
 
-const RANGES: Range[] = ['1h', '6h', '24h', '7d', '30d'];
 const SERIES = ['players', 'slots'] as const;
 export const ATTRIBUTION = 'https://www.tradingview.com/';
 /** Players and slots are whole: the scale steps and reads in whole numbers. */
 const WHOLE = { type: 'price', precision: 0, minMove: 1 } as const;
+/** The min–max band's fill: the accent, lighter than the area under the line. */
+const BAND_ALPHA = 0.12;
 
-const MARKER_ICONS = { start: Play, restart: RotateCw, crash: OctagonX } satisfies Record<
-    MarkerKind,
-    LucideIcon
->;
-
-const pad = (value: number) => String(value).padStart(2, '0');
-const clock = (seconds: number) => {
-    const date = new Date(seconds * 1000);
-    return `${pad(date.getHours())}:${pad(date.getMinutes())}`;
+/** The players' lowest and highest of each bucket, which a range of one sample per bucket lacks. */
+const extremes = (page: MetricsSeries): Extremes[] => {
+    const players = page.series.find((data) => data.series === 'players');
+    if (players?.min === undefined || players.max === undefined) {
+        return [];
+    }
+    const { min, max } = players;
+    return Array.from({ length: page.buckets }, (_, index) => ({
+        time: page.from + index * page.step,
+        min: min[index] ?? null,
+        max: max[index] ?? null,
+    }));
 };
 
 type Overlay = {
-    markers: { marker: RunMarker; x: number }[];
+    markers: PlacedMarker[];
     peak: { x: number; y: number } | null;
     /** The slots label, just right of the price scale, whose width depends on its labels. */
     slots: { x: number; y: number; value: number } | null;
@@ -60,7 +66,10 @@ export default function PlayersChart() {
     const { recent, latest } = useLiveMetrics();
     const page = useMemo(() => (query.data ? mergeLive(query.data, recent) : null), [query.data, recent]);
     const rows = useMemo(() => (page ? buckets(page) : []), [page]);
+    const band = useMemo(() => (page ? extremes(page) : []), [page]);
+    const periods = useMemo(() => (page ? downPeriods(page) : []), [page]);
     const measured = rows.filter((row) => row.players !== null);
+    const banded = band.some((bucket) => bucket.min !== null && bucket.max !== null);
     const titleId = useId();
     const stale = query.isPlaceholderData;
 
@@ -74,21 +83,21 @@ export default function PlayersChart() {
     if (page !== null && peak !== null && peak.players !== null) {
         const average = measured.reduce((sum, row) => sum + (row.players ?? 0), 0) / measured.length;
         const newest = latest?.values.players ?? null;
-        const at =
-            page.step >= 900
-                ? formatTimestamp(new Date(peak.time * 1000), { seconds: false })
-                : clock(peak.time);
         const figures = [
             format.number(Math.round(average)),
-            t.charts.players.ranges[range],
+            t.charts.ranges[range],
             format.number(Math.round(peak.players)),
-            at,
+            chartTime(peak.time, page.step),
         ] as const;
         summary =
             newest === null
                 ? t.charts.players.summary(...figures)
                 : t.charts.players.summaryNow(format.number(newest), ...figures);
+        if (periods.length > 0) {
+            summary = `${summary} ${t.charts.downFor(format.duration(downTime(periods)), t.charts.ranges[range])}`;
+        }
     }
+    const words = page ? markerWords(t, page.markers, page.step) : null;
 
     return (
         <section className="card flex flex-col" aria-labelledby={titleId}>
@@ -107,20 +116,7 @@ export default function PlayersChart() {
                         {t.charts.players.every(format.duration(page.step))}
                     </span>
                 )}
-                <fieldset className="ml-auto inline-flex max-w-full gap-0.5 rounded-control border border-line bg-surface-2 p-0.75 md:-my-1.5">
-                    <legend className="sr-only">{t.charts.players.range}</legend>
-                    {RANGES.map((choice) => (
-                        <button
-                            key={choice}
-                            type="button"
-                            aria-pressed={range === choice}
-                            onClick={() => setRange(choice)}
-                            className="inline-flex h-6.5 items-center rounded-[7px] px-2.5 text-small font-medium text-ink-3 transition-colors hover:text-ink focus-visible:outline-offset-1 aria-pressed:bg-raise aria-pressed:text-ink aria-pressed:shadow-[var(--elev-sm),0_0_0_1px_var(--line)] max-md:h-11 max-md:min-w-11 max-md:justify-center"
-                        >
-                            {t.charts.players.ranges[choice]}
-                        </button>
-                    ))}
-                </fieldset>
+                <RangeControl label={t.charts.players.range} value={range} onChange={setRange} />
             </div>
             <div
                 className="flex flex-wrap gap-x-4 gap-y-1.5 border-b border-line px-5 py-2.5 text-small text-ink-2 max-md:px-4"
@@ -134,9 +130,21 @@ export default function PlayersChart() {
                     <span className="w-3.5 border-t-[1.5px] border-dashed border-ink-3" />
                     {t.charts.players.maxSlots}
                 </span>
+                {banded && (
+                    <span className="flex items-center gap-1.5">
+                        <span className="h-2.5 w-3.5 rounded-[2px] bg-accent/12" />
+                        {t.charts.players.minMax}
+                    </span>
+                )}
+                {periods.length > 0 && (
+                    <span className="flex items-center gap-1.5">
+                        <span className="h-3 w-[9px] border-x border-danger bg-danger-soft" />
+                        {t.charts.down}
+                    </span>
+                )}
                 <span className="flex items-center gap-1.5">
                     <span className="h-3 border-l border-dashed border-ink-3" />
-                    {t.charts.players.event}
+                    {t.charts.event}
                 </span>
             </div>
             <div className="card-body flex flex-1 flex-col max-md:p-4">
@@ -159,12 +167,15 @@ export default function PlayersChart() {
                             page={page}
                             fetched={query.data ?? null}
                             rows={rows}
+                            band={band}
+                            periods={periods}
                             top={top}
                             peakTime={peak?.time ?? null}
                         />
                         {summary !== null && (
                             <figcaption className="mt-4 border-t border-line pt-3 text-ui text-ink-3">
                                 {summary}
+                                {words !== null && <span className="mt-1.5 block text-small">{words}</span>}
                             </figcaption>
                         )}
                     </figure>
@@ -197,6 +208,8 @@ function Plot({
     page,
     fetched,
     rows,
+    band,
+    periods,
     top,
     peakTime,
 }: {
@@ -204,6 +217,8 @@ function Plot({
     /** The page as read, before live samples: a new one is drawn anew. */
     fetched: MetricsSeries | null;
     rows: Bucket[];
+    band: Extremes[];
+    periods: Period[];
     top: number;
     peakTime: number | null;
 }) {
@@ -217,10 +232,23 @@ function Plot({
     const localeRef = useRef(locale);
     const [overlay, setOverlay] = useState<Overlay>({ markers: [], peak: null, slots: null });
     const [tooltip, setTooltip] = useState<{ x: number; players: number; time: number } | null>(null);
-    const [layout, setLayout] = useState<Side[]>([]);
-    const labels = useRef<(HTMLSpanElement | null)[]>([]);
-    const band = useRef<HTMLDivElement>(null);
     const tip = useRef<HTMLSpanElement>(null);
+    const [primitives] = useState(() => ({ band: new RangeBand(), down: new DownBands() }));
+    const shown = useRef({ band, periods, step: page.step });
+
+    // Their colours are resolved here, again on each change of theme.
+    const paintPrimitives = useCallback(() => {
+        const element = host.current;
+        if (element === null) {
+            return;
+        }
+        const { band: points, periods: down, step } = shown.current;
+        primitives.band.set(points, withAlpha(tokenColor(element, '--accent'), BAND_ALPHA));
+        primitives.down.set(down, step, {
+            fill: tokenColor(element, '--danger-soft'),
+            edge: tokenColor(element, '--danger'),
+        });
+    }, [primitives]);
 
     const place = useCallback(() => {
         const api = chart.current;
@@ -281,6 +309,8 @@ function Plot({
             crosshairMarkerVisible: false,
             autoscaleInfoProvider: autoscale,
         });
+        players.current.attachPrimitive(primitives.band);
+        players.current.attachPrimitive(primitives.down);
         chart.current = api;
         const paint = () => {
             const accent = tokenColor(element, '--accent');
@@ -293,6 +323,7 @@ function Plot({
                 crosshairMarkerBackgroundColor: accent,
             });
             slots.current?.applyOptions({ color: tokenColor(element, '--ink-3') });
+            paintPrimitives();
         };
         paint();
         const theme = new MutationObserver(paint);
@@ -325,7 +356,12 @@ function Plot({
             slots.current = null;
             drawn.current = null;
         };
-    }, []);
+    }, [primitives, paintPrimitives]);
+
+    useEffect(() => {
+        shown.current = { band, periods, step: page.step };
+        paintPrimitives();
+    }, [band, periods, page.step, paintPrimitives]);
 
     useEffect(() => {
         localeRef.current = locale;
@@ -380,18 +416,6 @@ function Plot({
         };
     }, [place]);
 
-    useLayoutEffect(() => {
-        const next = sides(
-            overlay.markers.map(({ marker, x }, index) => ({
-                x,
-                width: labels.current[index]?.offsetWidth ?? 0,
-                weight: marker.kind === 'crash' ? 1 : 0,
-            })),
-            band.current?.offsetWidth ?? 0,
-        );
-        setLayout((current) => (current.join() === next.join() ? current : next));
-    }, [overlay]);
-
     // Centred on the pointer, but never past either side of the plot: at phone width the newest
     // bucket is close enough to the edge to scroll the page.
     useLayoutEffect(() => {
@@ -404,62 +428,13 @@ function Plot({
         element.style.left = `${Math.max(half, Math.min(tooltip.x, plot.clientWidth - half))}px`;
     }, [tooltip]);
 
-    const label = (marker: RunMarker) => {
-        const word = t.charts.markers[marker.kind];
-        const time = clock(marker.at);
-        const back =
-            marker.kind === 'crash' && marker.backOnlineAt !== null
-                ? t.charts.markers.backOnline(clock(marker.backOnlineAt))
-                : '';
-        return [word, time, back] as const;
-    };
-
     return (
         <div className="relative flex flex-1 flex-col" aria-hidden="true">
-            <div ref={band} className="relative h-6 overflow-hidden" aria-hidden="true">
-                {overlay.markers.map(({ marker, x }, index) => {
-                    const Icon = MARKER_ICONS[marker.kind];
-                    const right = layout[index] === 'right';
-                    const [word, time, back] = label(marker);
-                    return (
-                        <span
-                            key={`${marker.kind}-${marker.at}`}
-                            ref={(element) => {
-                                labels.current[index] = element;
-                            }}
-                            className={cn(
-                                'absolute top-0 flex h-5 items-center gap-1 text-caption leading-none whitespace-nowrap text-ink-2',
-                                right ? 'pl-1.75' : 'pr-1.75',
-                                layout[index] === 'hidden' && 'invisible',
-                            )}
-                            style={{ left: x, transform: right ? undefined : 'translateX(-100%)' }}
-                        >
-                            {right && <span className="font-mono text-[11px] text-ink-3">{time}</span>}
-                            <Icon
-                                size={12}
-                                strokeWidth={2}
-                                className={marker.kind === 'crash' ? 'text-danger' : 'text-ink-3'}
-                            />
-                            {word}
-                            {!right && <span className="font-mono text-[11px] text-ink-3">{time}</span>}
-                            {back}
-                        </span>
-                    );
-                })}
-            </div>
+            <MarkerBand markers={overlay.markers} />
             <div className="relative h-[260px] max-md:h-[200px]">
                 <div ref={host} className="absolute inset-0" />
                 <div className="pointer-events-none absolute inset-0" aria-hidden="true">
-                    {overlay.markers.map(({ marker, x }) => (
-                        <span
-                            key={`${marker.kind}-${marker.at}`}
-                            className={cn(
-                                'absolute -top-6 bottom-0 border-l border-dashed',
-                                marker.kind === 'crash' ? 'border-danger' : 'border-ink-3',
-                            )}
-                            style={{ left: x }}
-                        />
-                    ))}
+                    <MarkerLines markers={overlay.markers} />
                     {overlay.slots && (
                         <span
                             className="absolute font-mono text-micro leading-none text-ink-3"

@@ -1,6 +1,6 @@
-//! FXServer as Observer runs it: the supervisor, started from the stored launch settings, the
-//! status the panel shows of it, the console it fills, the commands operators send it, and the
-//! console log files.
+//! FXServer as Observer runs it: the supervisor, started from the stored launch settings and the
+//! selected build, the status the panel shows of it, the console it fills, the commands operators
+//! send it, and the console log files.
 
 use std::collections::{HashMap, VecDeque};
 use std::io;
@@ -22,11 +22,14 @@ use observer_domain::server::{
 use observer_fxserver::bridge::BridgeEvent;
 use observer_fxserver::console::{self as fx_console, ConsoleHub, ConsoleLog, LineFlags};
 use observer_fxserver::health;
+use observer_fxserver::launch::ServerLaunch;
 use observer_fxserver::stdin::{self, StdinError, UserCommand};
 use observer_fxserver::supervisor::{
     self as fx, Cause, ControlError, EventKind, Settings, State, Supervisor,
 };
 use observer_store::Database;
+use observer_store::artifacts::{self as stored_artifacts, ArtifactState};
+use observer_store::launch;
 use serde_json::json;
 use tokio::sync::broadcast::error::{RecvError, TryRecvError};
 use tokio::sync::{Mutex as AsyncMutex, broadcast, watch};
@@ -35,6 +38,7 @@ use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
+use crate::artifacts::{Promotion, promote_pending};
 use crate::audit::Record;
 use crate::{Accounts, Caller, Clock, Error, Servers};
 
@@ -61,6 +65,8 @@ pub struct Setup<'a> {
     pub servers: Servers,
     /// Observer's data folder: FXServer's crash dumps and pid file go there.
     pub data_dir: PathBuf,
+    /// Where the builds are installed, one folder per build number.
+    pub artifacts: PathBuf,
     /// The folder `log` writes to, which the log routes list.
     pub console_logs: PathBuf,
     pub log: Option<&'a ConsoleLog>,
@@ -75,6 +81,7 @@ pub struct Supervision {
 struct Inner {
     db: Database,
     clock: Clock,
+    artifacts: PathBuf,
     accounts: Accounts,
     servers: Servers,
     supervisor: Supervisor,
@@ -113,24 +120,48 @@ impl Running {
     }
 }
 
-/// Hands the supervisor the stored launch settings each time they change, so that every spawn, a
-/// restart after a crash included, launches the newest. Whoever read them before a newer save
-/// cannot hand them over after it: versions only go up.
+/// Hands the supervisor the stored launch settings and the selected build each time either
+/// changes, so that every spawn, a restart after a crash included, launches the newest. Whoever
+/// read them before a newer save cannot hand them over after it: both versions only go up.
 #[derive(Clone)]
 struct Launches {
     supervisor: Supervisor,
-    given: Arc<AsyncMutex<Option<i64>>>,
+    artifacts: PathBuf,
+    /// The versions of the launch settings and of the artifact state last given.
+    given: Arc<AsyncMutex<Option<(i64, i64)>>>,
 }
 
 impl Launches {
-    async fn give(&self, stored: &StoredLaunch) {
-        let mut given = self.given.lock().await;
-        if given.is_some_and(|version| version >= stored.version) {
+    async fn give(&self, stored: &StoredLaunch, state: &ArtifactState) {
+        let Some(build) = state.selected else {
             return;
+        };
+        let versions = (stored.version, state.version);
+        let mut given = self.given.lock().await;
+        if let Some(last) = *given {
+            let outdated = versions.0 < last.0 || versions.1 < last.1;
+            if outdated || versions == last {
+                return;
+            }
         }
-        self.supervisor.configure(stored.settings.clone()).await;
-        *given = Some(stored.version);
+        let launch = ServerLaunch {
+            build: self.artifacts.join(build.to_string()),
+            settings: stored.settings.clone(),
+        };
+        self.supervisor.configure(launch).await;
+        *given = Some(versions);
     }
+}
+
+/// The stored launch settings and the artifact state, read together.
+async fn read_launch(db: &Database) -> Result<(Option<StoredLaunch>, ArtifactState), Error> {
+    db.read(|conn| {
+        Ok::<_, Error>((
+            launch::get(conn, Servers::DEFAULT)?,
+            stored_artifacts::state(conn, Servers::DEFAULT)?,
+        ))
+    })
+    .await
 }
 
 /// A restart the schedule makes.
@@ -199,14 +230,15 @@ impl Supervision {
         let (supervisor, supervisor_task) = Supervisor::spawn(settings, Arc::clone(&console));
         let launches = Launches {
             supervisor: supervisor.clone(),
+            artifacts: setup.artifacts.clone(),
             given: Arc::default(),
         };
 
-        let stored = setup.servers.launch_settings(Servers::DEFAULT).await?;
+        let (stored, state) = read_launch(&setup.db).await?;
         if let Some(stored) = &stored {
-            launches.give(stored).await;
+            launches.give(stored, &state).await;
         }
-        let readiness = readiness(stored.as_ref());
+        let readiness = readiness(stored.as_ref(), &state);
         let first = server_status(&supervisor.status().borrow(), None, None, readiness);
         let (status_tx, status) = watch::channel(first);
         let stop = CancellationToken::new();
@@ -224,6 +256,7 @@ impl Supervision {
             inner: Arc::new(Inner {
                 db: setup.db,
                 clock: setup.clock,
+                artifacts: setup.artifacts,
                 accounts: setup.accounts,
                 servers: setup.servers,
                 supervisor,
@@ -243,9 +276,11 @@ impl Supervision {
     }
 
     /// Starts FXServer as Observer starts, when the stored settings ask for it. Settings this host
-    /// refuses leave it stopped, with a note in the console; the status says why.
+    /// refuses, or no build selected, leave it stopped, with a note in the console; the status
+    /// says why.
     pub async fn boot(&self) -> Result<(), Error> {
-        let Some(stored) = self.inner.servers.launch_settings(Servers::DEFAULT).await? else {
+        let (stored, state) = read_launch(&self.inner.db).await?;
+        let Some(stored) = stored else {
             info!("FXServer has no launch settings yet: the owner saves them on the Server page");
             return Ok(());
         };
@@ -260,7 +295,15 @@ impl Supervision {
             );
             return Ok(());
         }
-        self.inner.launches.give(&stored).await;
+        if state.selected.is_none() {
+            warn!("FXServer was not started: no build is selected");
+            self.note(
+                OBSERVER,
+                "FXServer was not started: no build is selected; install or import one on the Artifacts page",
+            );
+            return Ok(());
+        }
+        self.inner.launches.give(&stored, &state).await;
         let started = self.inner.supervisor.start(OBSERVER).await;
         let record = Record::operator(ActorKind::System, AuditAction::ServerStarted)
             .details(json!({ "automatic": true }));
@@ -329,11 +372,23 @@ impl Supervision {
     }
 
     /// The schedule's restart of a running server. The stored settings must be fit to start
-    /// before anything stops: otherwise the server keeps running, with a note in the console.
+    /// before anything stops: otherwise the server keeps running, with a note in the console. A
+    /// build waiting for this restart becomes the selected one first.
     pub(crate) async fn restart_on_schedule(
         &self,
         restart: &ScheduledRestart,
     ) -> Result<(), ScheduledRefusal> {
+        let fit = self
+            .inner
+            .servers
+            .launch_settings(Servers::DEFAULT)
+            .await
+            .ok()
+            .flatten()
+            .is_some_and(|stored| stored.settings.issues(Platform::host()).is_empty());
+        if fit {
+            self.promote_pending().await;
+        }
         if let Err(error) = self.hand_over_launch().await {
             warn!(%error, "the scheduled restart did not happen: the launch settings cannot start FXServer");
             self.note(
@@ -365,6 +420,48 @@ impl Supervision {
             warn!(%error, "cannot audit the scheduled restart");
         }
         Ok(())
+    }
+
+    /// Makes a build waiting for the scheduled restart the selected one, or drops it when it is
+    /// gone or broken, then lets everyone who follows the selection know.
+    async fn promote_pending(&self) {
+        let root = self.inner.artifacts.clone();
+        let now = self.inner.clock.now();
+        let promoted = self
+            .inner
+            .db
+            .write(move |tx| promote_pending(tx, &root, now))
+            .await;
+        match promoted {
+            Ok(None) => {}
+            Ok(Some(promotion)) => {
+                let text = match promotion {
+                    Promotion::Applied { build, .. } => format!("build {build} is applied at this restart"),
+                    Promotion::Dropped { build } => {
+                        format!(
+                            "build {build} was not applied at this restart: it is no longer installed or valid"
+                        )
+                    }
+                };
+                self.note(SCHEDULE, &text);
+                self.inner.servers.launch_changed();
+            }
+            Err(error) => warn!(%error, "cannot apply the pending build at the scheduled restart"),
+        }
+    }
+
+    /// Starts the last healthy build after a new one failed its probation: at once when FXServer
+    /// is down or waiting to come back, or by a restart when it came back on the failed build first.
+    pub(crate) async fn start_after_rollback(&self) -> Result<(), Error> {
+        self.hand_over_launch().await?;
+        let mut result = self.inner.supervisor.start(OBSERVER).await;
+        if result == Err(ControlError::AlreadyRunning) {
+            result = self.inner.supervisor.restart(OBSERVER).await;
+        }
+        let record = Record::operator(ActorKind::System, AuditAction::ServerStarted)
+            .details(json!({ "rollback": true }));
+        self.record_control(record, &result).await?;
+        result.map_err(control_error)
     }
 
     /// Raises an event of the integration contract on a running server whose bridge reported.
@@ -510,22 +607,21 @@ impl Supervision {
             .collect())
     }
 
-    /// Refuses a start the stored settings cannot make, then makes sure the supervisor has them:
-    /// a save a moment before may not have reached it yet.
+    /// Refuses a start the stored settings or the selection cannot make, then makes sure the
+    /// supervisor has them: a save a moment before may not have reached it yet.
     async fn hand_over_launch(&self) -> Result<(), Error> {
-        let stored = self
-            .inner
-            .servers
-            .launch_settings(Servers::DEFAULT)
-            .await?
-            .ok_or(ErrorCode::LaunchNotConfigured)?;
+        let (stored, state) = read_launch(&self.inner.db).await?;
+        let stored = stored.ok_or(ErrorCode::LaunchNotConfigured)?;
         let issues = stored.settings.issues(Platform::host());
         if !issues.is_empty() {
             return Err(ApiError::new(ErrorCode::InvalidLaunchSettings)
                 .with("issues", serde_json::to_value(issues).unwrap_or_default())
                 .into());
         }
-        self.inner.launches.give(&stored).await;
+        if state.selected.is_none() {
+            return Err(ErrorCode::NoBuildSelected.into());
+        }
+        self.inner.launches.give(&stored, &state).await;
         Ok(())
     }
 
@@ -643,12 +739,12 @@ async fn follow(
                 Err(RecvError::Lagged(_)) => {}
                 Err(RecvError::Closed) => return,
             },
-            Ok(()) = launch_changes.changed() => match servers.launch_settings(Servers::DEFAULT).await {
-                Ok(stored) => {
+            Ok(()) = launch_changes.changed() => match read_launch(&db).await {
+                Ok((stored, state)) => {
                     if let Some(stored) = &stored {
-                        launches.give(stored).await;
+                        launches.give(stored, &state).await;
                     }
-                    launch = readiness(stored.as_ref());
+                    launch = readiness(stored.as_ref(), &state);
                 }
                 Err(error) => warn!(%error, "cannot read the launch settings"),
             },
@@ -671,11 +767,12 @@ fn local(action: AuditAction) -> Record {
     Record::operator(ActorKind::Local, action)
 }
 
-fn readiness(stored: Option<&StoredLaunch>) -> LaunchReadiness {
+fn readiness(stored: Option<&StoredLaunch>, state: &ArtifactState) -> LaunchReadiness {
     match stored {
         None => LaunchReadiness::NotConfigured,
-        Some(stored) if stored.settings.issues(Platform::host()).is_empty() => LaunchReadiness::Ready,
-        Some(_) => LaunchReadiness::Invalid,
+        Some(stored) if !stored.settings.issues(Platform::host()).is_empty() => LaunchReadiness::Invalid,
+        Some(_) if state.selected.is_none() => LaunchReadiness::NoBuild,
+        Some(_) => LaunchReadiness::Ready,
     }
 }
 
@@ -842,6 +939,7 @@ mod tests {
             clock,
             accounts,
             data_dir: dir.path().join("data"),
+            artifacts: dir.path().join("data/artifacts"),
             console_logs: dir.path().join("data/logs/console"),
             log: None,
         };

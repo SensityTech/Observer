@@ -58,13 +58,40 @@ pub enum AuditAction {
     OneOffRestartPlanned,
     /// By a user, or by the system when the run it was planned for ended first.
     OneOffRestartCancelled,
+    /// An install or an import began, with the build and its `kind`.
+    BuildInstallStarted,
+    /// Someone cancelled the job, at the `step` it was at.
+    BuildInstallCancelled,
+    /// By whoever started the job; a failure when the build was not installed, with the `step`
+    /// and the `reason`.
+    BuildInstallFinished,
+    /// By a user, with how the build `apply`s; by the system for the first build installed or a
+    /// build folder adopted at start.
+    BuildSelected,
+    /// A build waits for the next scheduled restart.
+    PendingBuildSet,
+    PendingBuildCancelled,
+    /// The scheduled restart made the pending build the selected one.
+    PendingBuildApplied,
+    /// The pending build was deleted or broken by the scheduled restart: it was not applied.
+    PendingBuildDropped,
+    /// A new build stayed up long enough after it got ready: it is the last healthy one.
+    ProbationPassed,
+    /// A new build crashed or hung in its probation and FXServer kept it, for the `why` given.
+    ProbationFailed,
+    /// A new build failed its probation: FXServer went back to the last healthy one.
+    BuildRolledBack,
+    /// By hand, or by a `cleanup`.
+    BuildDeleted,
+    /// `details` holds each changed setting with its value before and after.
+    ArtifactSettingsChanged,
     /// Observer began to stop, and FXServer with it. `details` says where the request came
     /// `from`: someone at the host (its window or its console) or a signal.
     ObserverStopped,
 }
 
 impl AuditAction {
-    pub const ALL: [Self; 30] = [
+    pub const ALL: [Self; 43] = [
         Self::SetupCompleted,
         Self::SetupLinkCreated,
         Self::LoginSucceeded,
@@ -94,6 +121,19 @@ impl AuditAction {
         Self::ScheduledRestartMissed,
         Self::OneOffRestartPlanned,
         Self::OneOffRestartCancelled,
+        Self::BuildInstallStarted,
+        Self::BuildInstallCancelled,
+        Self::BuildInstallFinished,
+        Self::BuildSelected,
+        Self::PendingBuildSet,
+        Self::PendingBuildCancelled,
+        Self::PendingBuildApplied,
+        Self::PendingBuildDropped,
+        Self::ProbationPassed,
+        Self::ProbationFailed,
+        Self::BuildRolledBack,
+        Self::BuildDeleted,
+        Self::ArtifactSettingsChanged,
         Self::ObserverStopped,
     ];
 
@@ -128,6 +168,19 @@ impl AuditAction {
             Self::ScheduledRestartMissed => "scheduled_restart_missed",
             Self::OneOffRestartPlanned => "one_off_restart_planned",
             Self::OneOffRestartCancelled => "one_off_restart_cancelled",
+            Self::BuildInstallStarted => "build_install_started",
+            Self::BuildInstallCancelled => "build_install_cancelled",
+            Self::BuildInstallFinished => "build_install_finished",
+            Self::BuildSelected => "build_selected",
+            Self::PendingBuildSet => "pending_build_set",
+            Self::PendingBuildCancelled => "pending_build_cancelled",
+            Self::PendingBuildApplied => "pending_build_applied",
+            Self::PendingBuildDropped => "pending_build_dropped",
+            Self::ProbationPassed => "probation_passed",
+            Self::ProbationFailed => "probation_failed",
+            Self::BuildRolledBack => "build_rolled_back",
+            Self::BuildDeleted => "build_deleted",
+            Self::ArtifactSettingsChanged => "artifact_settings_changed",
             Self::ObserverStopped => "observer_stopped",
         }
     }

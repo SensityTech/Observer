@@ -4,6 +4,7 @@
 
 mod about;
 mod account;
+mod artifacts;
 mod audit;
 mod auth;
 mod metrics;
@@ -60,6 +61,13 @@ pub(crate) fn routes() -> Vec<Route> {
     let plan = Permission(P::SCHEDULE_MANAGE);
     let edit_schedule = Reauthenticated(P::SCHEDULE_MANAGE);
     let dashboard = Permission(P::DASHBOARD_VIEW);
+    // Builds are chosen among those Cfx.re signed or the owner imported; installing, choosing,
+    // deleting and the settings take the password again, cancelling only goes back. Bringing a
+    // folder of the host in is the owner's alone. `now` also takes SERVER_CONTROL, which the
+    // handler checks: it restarts the server.
+    let builds = Permission(P::ARTIFACTS_VIEW);
+    let manage_builds = Permission(P::ARTIFACTS_MANAGE);
+    let change_builds = Reauthenticated(P::ARTIFACTS_MANAGE);
     vec![
         route(M::GET,    "/health",                     Public,       health),
         route(M::GET,    "/setup",                      Public,       setup::status),
@@ -97,6 +105,18 @@ pub(crate) fn routes() -> Vec<Route> {
         route(M::PUT,    "/servers/default/schedule/once",  control,       schedule::restart_once),
         route(M::DELETE, "/servers/default/schedule/once",  control,       schedule::cancel_once),
         route(M::GET,    "/metrics/series",             dashboard,    metrics::series),
+        route(M::GET,    "/servers/default/artifacts/catalog",        builds,        artifacts::catalog),
+        route(M::POST,   "/servers/default/artifacts/install",        change_builds, artifacts::install),
+        route(M::POST,   "/servers/default/artifacts/import",         edit_launch,   artifacts::import),
+        route(M::DELETE, "/servers/default/artifacts/job",            manage_builds, artifacts::cancel_job),
+        route(M::PUT,    "/servers/default/artifacts/selection",      change_builds, artifacts::select),
+        route(M::DELETE, "/servers/default/artifacts/pending",        manage_builds, artifacts::cancel_pending),
+        route(M::DELETE, "/servers/default/artifacts/builds/{build}", change_builds, artifacts::delete),
+        route(M::GET,    "/servers/default/artifacts/cleanup",        manage_builds, artifacts::cleanup_preview),
+        route(M::POST,   "/servers/default/artifacts/cleanup",        change_builds, artifacts::cleanup),
+        route(M::PUT,    "/servers/default/artifacts/settings",       change_builds, artifacts::change_settings),
+        route(M::GET,    "/metrics/threads",            dashboard,    metrics::threads),
+        route(M::GET,    "/metrics/growth",             dashboard,    metrics::growth),
         route(M::GET,    "/about",                      Session,      about::about),
         route(M::GET,    "/about/licences",             Session,      about::licences),
     ]

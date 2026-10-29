@@ -2,7 +2,7 @@ use axum::Json;
 use axum::extract::State;
 use observer_app::Error;
 use observer_domain::error::{ApiError, ErrorCode};
-use observer_domain::metrics::{MetricsSeries, Range, Series};
+use observer_domain::metrics::{MetricsSeries, Range, RunGrowth, Series, ThreadShares};
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -34,4 +34,13 @@ pub(crate) async fn series(
     let series = Series::parse_list(query.series.as_deref().unwrap_or_default())
         .map_err(|_| refused("series", query.series.clone()))?;
     Ok(Json(state.metrics.series(range, &series).await?))
+}
+
+pub(crate) async fn threads(State(state): State<AppState>) -> Result<Json<ThreadShares>, Failure> {
+    Ok(Json(state.metrics.threads().await?))
+}
+
+/// `null` while no run is under way.
+pub(crate) async fn growth(State(state): State<AppState>) -> Result<Json<Option<RunGrowth>>, Failure> {
+    Ok(Json(state.metrics.growth().await?))
 }

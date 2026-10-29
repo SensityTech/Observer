@@ -21,7 +21,6 @@ export const saveLaunch = (change: LaunchChange) => send<StoredLaunch>('PUT', PA
 
 /** What the form starts from before anything is saved. */
 export const DEFAULT_LAUNCH: LaunchSettings = {
-    buildPath: '',
     dataPath: '',
     cfgFile: 'server.cfg',
     onesync: 'on',
@@ -31,7 +30,6 @@ export const DEFAULT_LAUNCH: LaunchSettings = {
 };
 
 const FIELDS = {
-    buildPath: true,
     dataPath: true,
     cfgFile: true,
     extraArguments: true,
@@ -70,6 +68,10 @@ const isIssue = (value: unknown): value is LaunchIssue =>
     'index' in value &&
     (value.index === null || Number.isSafeInteger(value.index));
 
+/** The problem a refusal names, when it is one the panel knows. */
+export const launchProblem = (value: unknown): LaunchProblem | null =>
+    typeof value === 'string' && Object.hasOwn(PROBLEMS, value) ? (value as LaunchProblem) : null;
+
 /** The issues an `invalid_launch_settings` refusal lists, leaving out any the panel cannot place. */
 export const launchIssues = (params: Record<string, unknown>): LaunchIssue[] =>
     Array.isArray(params.issues) ? params.issues.filter(isIssue) : [];
@@ -83,7 +85,6 @@ export const countChanges = (saved: LaunchSettings, draft: LaunchSettings) =>
 /** The draft as it is sent: names and paths lose the spaces a paste leaves around them. */
 export const cleaned = (draft: LaunchSettings): LaunchSettings => ({
     ...draft,
-    buildPath: draft.buildPath.trim(),
     dataPath: draft.dataPath.trim(),
     cfgFile: draft.cfgFile.trim(),
     extraArguments: draft.extraArguments.map(({ name, value }) => ({ name: name.trim(), value })),

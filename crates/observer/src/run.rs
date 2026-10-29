@@ -6,16 +6,20 @@ use anyhow::Context;
 use axum::Router;
 use jiff::tz::TimeZone;
 use observer_app::{
-    Accounts, AuditLog, Clock, DatabaseFiles, Metrics, MetricsSetup, PasswordCost, Running, Schedule,
-    ScheduleSetup, ScheduleTask, Servers, Setup, Sources, Supervision,
+    Accounts, Artifacts, ArtifactsSetup, ArtifactsTask, AuditLog, Clock, DatabaseFiles, Metrics,
+    MetricsSetup, PasswordCost, Running, Schedule, ScheduleSetup, ScheduleTask, Servers, Setup, Sources,
+    Supervision,
 };
+use observer_artifacts::Http;
+use observer_artifacts::catalog::Catalog;
 use observer_fxserver::console::{ConsoleLog, LogLimits};
 use observer_store::{BackupKind, Database};
 use tokio::net::TcpListener;
+use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
-use crate::config::Config;
+use crate::config::{Config, DataPaths};
 use crate::shutdown::{Signals, StopRequest};
 use crate::{BUILD, lock, logging, setup};
 
@@ -62,6 +66,7 @@ pub async fn run(config: Config, args: RunArgs) -> anyhow::Result<()> {
             accounts: accounts.clone(),
             servers: servers.clone(),
             data_dir: paths.root.clone(),
+            artifacts: paths.artifacts.clone(),
             console_logs,
             log: Some(&console_log),
         },
@@ -78,6 +83,8 @@ pub async fn run(config: Config, args: RunArgs) -> anyhow::Result<()> {
         |_| {},
     )
     .await?;
+    let (artifacts, building) =
+        builds(&db, &clock, &accounts, &servers, &supervision, &schedule, &paths).await?;
     let metrics = Metrics::open(MetricsSetup {
         path: paths.metrics.clone(),
         clock: Clock::system(),
@@ -99,6 +106,7 @@ pub async fn run(config: Config, args: RunArgs) -> anyhow::Result<()> {
         supervision: supervision.clone(),
         metrics: metrics.clone(),
         schedule: schedule.clone(),
+        artifacts,
     };
     let state = observer_web::AppState::new(BUILD, services, &instance_id, &config.http.hosts);
     let live = state.live.clone();
@@ -137,19 +145,14 @@ pub async fn run(config: Config, args: RunArgs) -> anyhow::Result<()> {
     if let Err(error) = audit.record_stop(first.from).await {
         warn!(%error, "cannot audit the stop of Observer");
     }
-    stop_fxserver(&supervision, scheduling, &mut supervised, &mut signals, first).await;
+    stop_fxserver(&supervision, building, scheduling, &mut supervised, &mut signals, first).await;
     supervised.close().await;
     // After the supervision, so that FXServer's stop is in the statistics.
     sampling.close().await;
     stop.cancel();
     live.shutdown().await;
 
-    if let Err(error) = server.await.context("the HTTP server task failed")? {
-        error!(%error, "the HTTP server stopped with an error");
-    }
-    backups.await.context("the backup task failed")?;
-    upkeep.await.context("the upkeep task failed")?;
-    audit_feed.await.context("the audit feed task failed")?;
+    join(server, [backups, upkeep, audit_feed]).await?;
     console_log.close().await;
     metrics
         .close()
@@ -242,6 +245,45 @@ impl Host {
     }
 }
 
+/// FXServer's builds, listed and downloaded from Cfx.re. After the schedule, whose next restart a
+/// build can wait for.
+async fn builds(
+    db: &Database,
+    clock: &Clock,
+    accounts: &Accounts,
+    servers: &Servers,
+    supervision: &Supervision,
+    schedule: &Schedule,
+    paths: &DataPaths,
+) -> anyhow::Result<(Artifacts, ArtifactsTask)> {
+    let root = &paths.artifacts;
+    let setup = ArtifactsSetup {
+        db: db.clone(),
+        clock: clock.clone(),
+        root: root.clone(),
+        accounts: accounts.clone(),
+        servers: servers.clone(),
+        supervision: supervision.clone(),
+        schedule: schedule.status(),
+        catalog: Catalog::new(Http::new()?),
+        http: Http::new()?,
+    };
+    Artifacts::start(setup, |_| {})
+        .await
+        .with_context(|| format!("cannot use {} for FXServer builds", root.display()))
+}
+
+/// Waits for the tasks the stop token ends: the HTTP server, then the periodic ones.
+async fn join(server: JoinHandle<io::Result<()>>, periodic: [JoinHandle<()>; 3]) -> anyhow::Result<()> {
+    if let Err(error) = server.await.context("the HTTP server task failed")? {
+        error!(%error, "the HTTP server stopped with an error");
+    }
+    for (task, name) in periodic.into_iter().zip(["backup", "upkeep", "audit feed"]) {
+        task.await.with_context(|| format!("the {name} task failed"))?;
+    }
+    Ok(())
+}
+
 async fn serve(listener: TcpListener, app: Router, stop: CancellationToken) -> io::Result<()> {
     axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
         .with_graceful_shutdown(stop.cancelled_owned())
@@ -252,13 +294,16 @@ async fn serve(listener: TcpListener, app: Router, stop: CancellationToken) -> i
 /// the stop as it happens.
 async fn stop_fxserver(
     supervision: &Supervision,
+    building: ArtifactsTask,
     scheduling: ScheduleTask,
     supervised: &mut Running,
     signals: &mut Signals,
     first: StopRequest,
 ) {
     let mut shortened = first.shortened;
-    // The schedule goes first: it must not restart a server Observer is stopping.
+    // A running job is cancelled first, then the schedule: it must not restart a server Observer
+    // is stopping.
+    building.close().await;
     scheduling.close().await;
     supervision.shutdown(shortened).await;
     loop {

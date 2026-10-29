@@ -1,6 +1,7 @@
 //! The API over HTTP: requests go through the router, its gates and the services, down to a real
 //! database in a temporary directory.
 
+mod artifacts;
 mod live;
 mod metrics;
 mod schedule;
@@ -15,9 +16,11 @@ use axum::http::{HeaderMap, Method, Request, StatusCode, header};
 use http_body_util::BodyExt;
 use jiff::SignedDuration;
 use observer_app::{
-    Accounts, AuditLog, Clock, Metrics, MetricsSetup, PasswordCost, Running, Schedule, ScheduleSetup,
-    ScheduleTask, Servers, Setup, Supervision,
+    Accounts, Artifacts, ArtifactsSetup, ArtifactsTask, AuditLog, Clock, Metrics, MetricsSetup, PasswordCost,
+    Running, Schedule, ScheduleSetup, ScheduleTask, Servers, Setup, Supervision,
 };
+use observer_artifacts::Http;
+use observer_artifacts::catalog::{Catalog, Listing};
 use observer_domain::about::Build;
 use observer_domain::audit::ActorKind;
 use observer_store::Database;
@@ -46,6 +49,7 @@ struct Server {
     metrics_clock: Clock,
     _supervised: Running,
     _scheduling: ScheduleTask,
+    _building: ArtifactsTask,
     cookie_name: String,
 }
 
@@ -100,6 +104,7 @@ impl Server {
                 accounts: accounts.clone(),
                 servers: servers.clone(),
                 data_dir: dir.path().join("data"),
+                artifacts: dir.path().join("data/artifacts"),
                 console_logs: dir.path().join("data/logs/console"),
                 log: None,
             },
@@ -112,6 +117,28 @@ impl Server {
                 db: db.clone(),
                 clock: clock.clone(),
                 supervision: supervision.clone(),
+            },
+            |_| {},
+        )
+        .await
+        .unwrap();
+        // A catalog that lists nothing: no test here reaches Cfx.re.
+        let listing = Listing {
+            platform: observer_artifacts::Platform::host(),
+            builds: Vec::new(),
+            warnings: Vec::new(),
+        };
+        let (artifacts, building) = Artifacts::start(
+            ArtifactsSetup {
+                db: db.clone(),
+                clock: clock.clone(),
+                root: dir.path().join("data/artifacts"),
+                accounts: accounts.clone(),
+                servers: servers.clone(),
+                supervision: supervision.clone(),
+                schedule: schedule.status(),
+                catalog: Catalog::fixed(Ok(listing)),
+                http: Http::new().unwrap(),
             },
             |_| {},
         )
@@ -133,6 +160,7 @@ impl Server {
             supervision: supervision.clone(),
             metrics: metrics.clone(),
             schedule,
+            artifacts,
         };
         let state = AppState::new(
             Build {
@@ -159,6 +187,7 @@ impl Server {
             metrics_clock,
             _supervised: supervised,
             _scheduling: scheduling,
+            _building: building,
             cookie_name: format!("observer_session_{instance_id}"),
         }
     }
@@ -287,6 +316,7 @@ async fn every_gated_route_refuses_a_request_without_a_session() {
             route
                 .path
                 .replace("{id}", "1")
+                .replace("{build}", "37872")
                 .replace("{name}", "console-2026-10-28.log")
         );
         let reply = server
@@ -320,6 +350,7 @@ async fn no_method_on_an_api_path_skips_the_gate() {
             route
                 .path
                 .replace("{id}", "1")
+                .replace("{build}", "37872")
                 .replace("{name}", "console-2026-10-28.log")
         );
         for method in methods.clone() {
@@ -990,7 +1021,6 @@ fn folder(name: &str) -> String {
 
 fn launch_settings() -> Value {
     json!({
-        "buildPath": folder("build"),
         "dataPath": folder("server-data"),
         "cfgFile": "server.cfg",
         "onesync": "on",
@@ -1044,7 +1074,7 @@ async fn the_owner_reads_and_saves_the_launch_settings_with_their_password_again
     assert_eq!(saved.status, StatusCode::OK, "{}", saved.text);
     assert_eq!(
         saved.json(),
-        json!({ "settings": launch_settings(), "version": 1 })
+        json!({ "settings": launch_settings(), "version": 1, "legacyBuildPath": null })
     );
     assert_eq!(read.json(), saved.json());
     assert_eq!(outdated.status, StatusCode::CONFLICT);

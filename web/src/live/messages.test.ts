@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { ARTIFACTS } from '../artifacts/fixtures';
 import { parseServerMessage } from './messages';
 
 const parse = (message: unknown) => parseServerMessage(JSON.stringify(message));
@@ -100,6 +101,22 @@ describe('parseServerMessage', () => {
                 topic: 'server.schedule',
                 data: { ...SCHEDULE, oneOff: { at: '2026-10-28T15:07:00Z', by: 'grace' }, version: null },
             },
+            { type: 'snapshot', topic: 'server.artifacts', data: ARTIFACTS },
+            {
+                type: 'event',
+                topic: 'server.artifacts',
+                data: {
+                    ...ARTIFACTS,
+                    job: { ...ARTIFACTS.job, state: 'failed', failure: { code: 'httpStatus', status: 503 } },
+                    notice: {
+                        kind: 'rolledBack',
+                        build: 37900,
+                        other: 35245,
+                        reason: 'crashed',
+                        at: '2026-10-28T02:31:00Z',
+                    },
+                },
+            },
             { type: 'resync', topic: 'audit' },
             { type: 'snapshot', topic: 'metrics.live', data: { latest: null } },
             { type: 'snapshot', topic: 'metrics.live', data: { latest: SAMPLE } },
@@ -167,6 +184,17 @@ describe('parseServerMessage', () => {
                 topic: 'server.schedule',
                 data: { ...SCHEDULE, upcoming: [{ ...SCHEDULE.upcoming[0], skipped: { kind: 'manual' } }] },
             },
+            {
+                type: 'snapshot',
+                topic: 'server.artifacts',
+                data: { ...ARTIFACTS, job: { ...ARTIFACTS.job, step: 'unpacking' } },
+            },
+            {
+                type: 'event',
+                topic: 'server.artifacts',
+                data: { ...ARTIFACTS, installed: [{ ...ARTIFACTS.installed[0], build: 12 }] },
+            },
+            { type: 'snapshot', topic: 'server.artifacts', data: { ...ARTIFACTS, disk: { free: '1 GB' } } },
             { type: 'shutdown' },
         ]) {
             expect(parse(message)).toBeNull();

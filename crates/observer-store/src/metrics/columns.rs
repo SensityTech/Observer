@@ -69,10 +69,32 @@ pub enum Column {
     ObsMetricsDb,
     ObsWsClients,
     CollectMs,
+    FxsCpuKernel,
+    FxsFaults,
+    FxsHardFaults,
+    FxsWsPeak,
+    ThrMainCpu,
+    ThrNetworkCpu,
+    ThrSyncCpu,
+    ThrJsCpu,
+    ThrMonoCpu,
+    ThrOtherCpu,
+    TreeCpu,
+    TreeStarted,
+    TreePrivatePeak,
+    HostCpuMhz,
+    HostCpuMaxMhz,
+    HostCpuLimit,
+    HostDiskMs,
+    HostDiskOps,
+    HostSteal,
+    HostPsiCpu,
+    HostPsiMemory,
+    HostPsiIo,
 }
 
 impl Column {
-    pub const ALL: [Self; 49] = [
+    pub const ALL: [Self; 71] = [
         Self::Players,
         Self::Slots,
         Self::PingAvgMs,
@@ -122,6 +144,28 @@ impl Column {
         Self::ObsMetricsDb,
         Self::ObsWsClients,
         Self::CollectMs,
+        Self::FxsCpuKernel,
+        Self::FxsFaults,
+        Self::FxsHardFaults,
+        Self::FxsWsPeak,
+        Self::ThrMainCpu,
+        Self::ThrNetworkCpu,
+        Self::ThrSyncCpu,
+        Self::ThrJsCpu,
+        Self::ThrMonoCpu,
+        Self::ThrOtherCpu,
+        Self::TreeCpu,
+        Self::TreeStarted,
+        Self::TreePrivatePeak,
+        Self::HostCpuMhz,
+        Self::HostCpuMaxMhz,
+        Self::HostCpuLimit,
+        Self::HostDiskMs,
+        Self::HostDiskOps,
+        Self::HostSteal,
+        Self::HostPsiCpu,
+        Self::HostPsiMemory,
+        Self::HostPsiIo,
     ];
 
     pub fn name(self) -> &'static str {
@@ -175,6 +219,28 @@ impl Column {
             Self::ObsMetricsDb => "obs_metrics_db",
             Self::ObsWsClients => "obs_ws_clients",
             Self::CollectMs => "collect_ms",
+            Self::FxsCpuKernel => "fxs_cpu_kernel",
+            Self::FxsFaults => "fxs_faults",
+            Self::FxsHardFaults => "fxs_hard_faults",
+            Self::FxsWsPeak => "fxs_ws_peak",
+            Self::ThrMainCpu => "thr_main_cpu",
+            Self::ThrNetworkCpu => "thr_network_cpu",
+            Self::ThrSyncCpu => "thr_sync_cpu",
+            Self::ThrJsCpu => "thr_js_cpu",
+            Self::ThrMonoCpu => "thr_mono_cpu",
+            Self::ThrOtherCpu => "thr_other_cpu",
+            Self::TreeCpu => "tree_cpu",
+            Self::TreeStarted => "tree_started",
+            Self::TreePrivatePeak => "tree_private_peak",
+            Self::HostCpuMhz => "host_cpu_mhz",
+            Self::HostCpuMaxMhz => "host_cpu_max_mhz",
+            Self::HostCpuLimit => "host_cpu_limit",
+            Self::HostDiskMs => "host_disk_ms",
+            Self::HostDiskOps => "host_disk_ops",
+            Self::HostSteal => "host_steal",
+            Self::HostPsiCpu => "host_psi_cpu",
+            Self::HostPsiMemory => "host_psi_memory",
+            Self::HostPsiIo => "host_psi_io",
         }
     }
 
@@ -194,7 +260,11 @@ impl Column {
             | Self::HitchMain
             | Self::HitchNetwork
             | Self::HitchSync
-            | Self::Barks => Kind::Count,
+            | Self::Barks
+            | Self::FxsFaults
+            | Self::FxsHardFaults
+            | Self::TreeStarted
+            | Self::HostDiskOps => Kind::Count,
             _ => Kind::Gauge,
         }
     }
@@ -209,7 +279,23 @@ impl Column {
             | Self::HostCpu
             | Self::HostRxBps
             | Self::HostTxBps
-            | Self::ObsCpu => Affinity::Real,
+            | Self::ObsCpu
+            | Self::FxsCpuKernel
+            | Self::ThrMainCpu
+            | Self::ThrNetworkCpu
+            | Self::ThrSyncCpu
+            | Self::ThrJsCpu
+            | Self::ThrMonoCpu
+            | Self::ThrOtherCpu
+            | Self::TreeCpu
+            | Self::HostCpuMhz
+            | Self::HostCpuMaxMhz
+            | Self::HostCpuLimit
+            | Self::HostDiskMs
+            | Self::HostSteal
+            | Self::HostPsiCpu
+            | Self::HostPsiMemory
+            | Self::HostPsiIo => Affinity::Real,
             _ => Affinity::Integer,
         }
     }

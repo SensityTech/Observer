@@ -32,9 +32,14 @@ impl Servers {
         }
     }
 
-    /// Changes after each save that changed the launch settings.
+    /// Changes after each save that changed the launch settings or the selected build.
     pub fn launch_changes(&self) -> watch::Receiver<()> {
         self.changes.subscribe()
+    }
+
+    /// Tells whoever follows the launch that the selected build changed.
+    pub(crate) fn launch_changed(&self) {
+        self.changes.send_replace(());
     }
 
     /// `None` until the owner first saves them.
@@ -76,6 +81,9 @@ impl Servers {
                 let stored = StoredLaunch {
                     settings,
                     version: version.map_or(1, |version| version + 1),
+                    legacy_build_path: before
+                        .as_ref()
+                        .and_then(|before| before.legacy_build_path.clone()),
                 };
                 launch::save(tx, &server, &stored, now)?;
                 let old = before.as_ref().map(|before| &before.settings);
