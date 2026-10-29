@@ -77,7 +77,7 @@ impl TreeContext {
             Flavour::Windows => path
                 .replace('/', "\\")
                 .eq_ignore_ascii_case(&known.replace('/', "\\")),
-            Flavour::Linux => path == known,
+            Flavour::Linux => lexical(&path) == lexical(&known),
         }
     }
 }
@@ -129,14 +129,17 @@ pub fn classify(process: &ProcessInfo, context: &TreeContext) -> ProcessKind {
             } else {
                 loaded.filter(|&at| context.same(Path::new(&args[at]), &context.fxserver))
             };
-            // A shell running the build's run.sh as its script, before any other argument.
+            // A shell running the build's run.sh as its script, before any other argument. FXServer
+            // names it from its own folder, `…/opt/cfx-server/../../../run.sh`, which the kernel
+            // hands the shell as given.
             let script = (image
                 .and_then(file_name)
                 .is_some_and(|name| ["sh", "bash", "dash"].contains(&name))
                 && args
                     .get(1)
+                    .filter(|script| script.starts_with('/'))
                     .zip(context.run_sh.as_deref())
-                    .is_some_and(|(script, run_sh)| context.same(Path::new(script), run_sh)))
+                    .is_some_and(|(script, run_sh)| context.same(&canonical(Path::new(script)), run_sh)))
             .then_some(1);
             // FXServer's own flags come after the program they are given to.
             let after = |program: Option<usize>, prefix: &str| {
@@ -209,6 +212,27 @@ fn canonical(path: &Path) -> PathBuf {
 fn plain(path: &Path) -> String {
     let text = path.to_string_lossy();
     text.strip_prefix(r"\\?\").unwrap_or(&text).to_owned()
+}
+
+/// A Linux path with its `.` and `..` resolved as written. A path that exists was made canonical
+/// before, links included; this one may not exist, or be read on Windows.
+fn lexical(path: &str) -> String {
+    let mut parts: Vec<&str> = Vec::new();
+    for part in path.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                parts.pop();
+            }
+            part => parts.push(part),
+        }
+    }
+    let joined = parts.join("/");
+    if path.starts_with('/') {
+        format!("/{joined}")
+    } else {
+        joined
+    }
 }
 
 #[cfg(test)]
@@ -406,6 +430,36 @@ mod tests {
                 &context
             ),
             ProcessKind::Other
+        );
+    }
+
+    #[test]
+    fn the_run_sh_fxserver_names_from_its_own_folder_is_the_build_s() {
+        let context = linux();
+        let dump_server = |script: &str| {
+            classify(
+                &process(
+                    "/usr/bin/bash",
+                    7,
+                    &["/bin/bash", script, "-dumpserver:5", "-parentppe:7"],
+                ),
+                &context,
+            )
+        };
+
+        assert_eq!(
+            dump_server("/srv/fx/alpine/opt/cfx-server/../../../run.sh"),
+            ProcessKind::DumpServer
+        );
+        assert_eq!(dump_server("/srv/fx/./alpine/../run.sh"), ProcessKind::DumpServer);
+        assert_eq!(
+            dump_server("/srv/fx/alpine/opt/cfx-server/../../run.sh"),
+            ProcessKind::Shell
+        );
+        assert_eq!(
+            dump_server("run.sh"),
+            ProcessKind::Shell,
+            "a relative script is found from the shell's folder, which may be a resource's"
         );
     }
 
