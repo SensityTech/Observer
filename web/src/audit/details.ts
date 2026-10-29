@@ -3,6 +3,7 @@ import type { Messages } from '../i18n/en';
 
 type Format = {
     number: (value: number) => string;
+    bytes: (bytes: number) => string;
     timestamp: (rfc3339: string) => string;
 };
 
@@ -102,6 +103,9 @@ const word = (t: Messages, format: Format, key: string, value: unknown): string 
         }
         if (MINUTES.has(key)) {
             return t.audit.minutes(format.number(value));
+        }
+        if (key === 'bytes') {
+            return format.bytes(value);
         }
         return IDS.has(key) || BUILDS.has(key) ? String(value) : format.number(value);
     }

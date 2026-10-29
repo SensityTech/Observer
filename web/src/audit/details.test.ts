@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
 import { en } from '../i18n/en';
-import { formatNumber, formatTimestamp } from '../i18n/format';
+import { formatBytes, formatNumber, formatTimestamp } from '../i18n/format';
 import { auditDetails } from './details';
 
 const format = {
     number: (value: number) => formatNumber('en', value),
+    bytes: (bytes: number) => formatBytes('en', bytes),
     timestamp: (rfc3339: string) => formatTimestamp(new Date(rfc3339)),
 };
 
@@ -14,6 +15,12 @@ describe('auditDetails', () => {
         expect(auditDetails(en, format, { userId: 2, added: '2', removed: '0', permissions: '103' })).toBe(
             'Account id: 2 · Added: View the console · Removed: none · ' +
                 'Permissions: View the dashboard, View the console, View the audit log',
+        );
+    });
+
+    it('should give the size of a build as the panel shows sizes', () => {
+        expect(auditDetails(en, format, { build: 38004, bytes: 196_642_542 })).toBe(
+            'Build: 38004 · Size: 188 MB',
         );
     });
 

@@ -1343,7 +1343,7 @@ export const en = {
             step: 'Step',
             apply: 'Applied',
             why: 'Kept because',
-            bytes: 'Bytes',
+            bytes: 'Size',
             archiveSha256: 'Archive SHA-256',
             allowEndOfLife: 'Past its end of life',
             endOfLifeAllowed: 'Past its end of life',
