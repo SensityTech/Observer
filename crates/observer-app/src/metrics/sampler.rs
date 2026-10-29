@@ -382,6 +382,16 @@ struct Listing {
     cpu: HashMap<(u32, u64), Duration>,
 }
 
+/// The tree's totals the next ones are measured against.
+#[derive(Clone, Copy)]
+struct TreeBaseline {
+    generation: u32,
+    at: Instant,
+    totals: TreeTotals,
+    /// Kept over a wake that found less CPU.
+    kept: bool,
+}
+
 /// One wake's sample: its values, the children as they were, and the slot's busiest thread
 /// names.
 pub(super) struct Assembled {
@@ -400,8 +410,7 @@ pub(super) struct Assembler {
     /// The children by pid and start stamp, as the run's last measure of the tree saw them.
     children: Option<(u32, Children)>,
     threads: Option<Listing>,
-    /// The tree's totals, by generation.
-    totals: Option<(u32, Instant, TreeTotals)>,
+    totals: Option<TreeBaseline>,
     observer: Option<Measured>,
     host_cpu: Option<CpuTimes>,
     /// The machine's processors, as the host's CPU share counts them.
@@ -781,18 +790,34 @@ impl Assembler {
     /// The tree's CPU and processes started since the run's previous totals, which keep the
     /// processes that ended.
     fn tree_totals(&mut self, values: &mut Values, generation: u32, totals: TreeTotals, at: Instant) {
-        if let Some((_, then, before)) = self.totals.filter(|(of, _, _)| *of == generation) {
-            values.set(
-                Column::TreeCpu,
-                core_share(elapsed(then, at), before.cpu, totals.cpu),
-            );
-            values.set(
-                Column::TreeStarted,
-                increase(before.processes_started, totals.processes_started),
-            );
-        }
         values.set(Column::TreePrivatePeak, totals.private_peak.map(real));
-        self.totals = Some((generation, at, totals));
+        let now = TreeBaseline {
+            generation,
+            at,
+            totals,
+            kept: false,
+        };
+        let Some(before) = self.totals.filter(|before| before.generation == generation) else {
+            self.totals = Some(now);
+            return;
+        };
+        // A member waited for between the reads of its parent and its own is missing from one
+        // total, and comes back in the next: the baseline stays over that wake, so that its time
+        // is not counted twice. Less CPU twice running, the time left the tree for good: a member
+        // left its group, or was waited for outside it.
+        if totals.cpu < before.totals.cpu && !before.kept {
+            self.totals = Some(TreeBaseline { kept: true, ..before });
+            return;
+        }
+        values.set(
+            Column::TreeCpu,
+            core_share(elapsed(before.at, at), before.totals.cpu, totals.cpu),
+        );
+        values.set(
+            Column::TreeStarted,
+            increase(before.totals.processes_started, totals.processes_started),
+        );
+        self.totals = Some(now);
     }
 
     /// The volume's transfers since the previous wake, and the time each took on average.

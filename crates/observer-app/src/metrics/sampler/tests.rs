@@ -477,6 +477,45 @@ fn the_tree_totals_give_cpu_and_started_processes_until_a_new_run() {
 }
 
 #[test]
+fn a_tree_total_that_went_back_is_measured_against_the_one_before_until_it_does_twice() {
+    let start = Instant::now();
+    let mut assembler = Assembler::new(start);
+    let totals = |cpu_ms| {
+        let mut measures = listed(Vec::new());
+        if let Some(tree) = measures.tree.as_mut() {
+            tree.totals = Some(TreeTotals {
+                cpu: Duration::from_millis(cpu_ms),
+                processes_started: None,
+                private_peak: None,
+            });
+        }
+        measures
+    };
+    let running = || Some(run(1, no_readings()));
+
+    sample_at(&mut assembler, start, 1, running(), totals(100_000));
+    let steady = sample_at(&mut assembler, start, 2, running(), totals(100_050));
+    // A member that used 60 s is missing from one total, then counted in its parent's.
+    let missing = sample_at(&mut assembler, start, 3, running(), totals(40_100));
+    let returned = sample_at(&mut assembler, start, 4, running(), totals(100_150));
+    // One that left for good.
+    let left = sample_at(&mut assembler, start, 5, running(), totals(40_200));
+    let still_less = sample_at(&mut assembler, start, 6, running(), totals(40_250));
+    let after = sample_at(&mut assembler, start, 7, running(), totals(40_300));
+
+    let share = |values: &Values| values.get(Column::TreeCpu);
+    assert!((share(&steady).unwrap() - 1.0).abs() < 1e-9);
+    assert_eq!(share(&missing), None);
+    let returned = share(&returned).unwrap();
+    assert!(
+        (returned - 1.0).abs() < 1e-9,
+        "100 ms over the two slots, not the member's time again: {returned}%"
+    );
+    assert_eq!((share(&left), share(&still_less)), (None, None));
+    assert!((share(&after).unwrap() - 1.0).abs() < 1e-9);
+}
+
+#[test]
 fn the_disk_latency_is_the_time_per_transfer_and_unknown_without_any() {
     let start = Instant::now();
     let mut assembler = Assembler::new(start);
