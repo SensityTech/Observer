@@ -209,6 +209,31 @@ describe('DiagnosticsPage', () => {
         live.stop();
     });
 
+    it('should say when a crash left no dump, and when its dump gave no frame', async () => {
+        const linux = {
+            ...CRASH,
+            id: 9,
+            exitCode: null,
+            signal: 11,
+            analysisState: 'noDump' as const,
+            analysis: null,
+            files: [],
+            group: null,
+        };
+        const bare = {
+            ...CRASH,
+            id: 10,
+            analysis: { ...CRASH.analysis!, exception: null, frames: [], threads: [] },
+            group: null,
+        };
+        const { getAllByRole, getByText, live } = await page(false, { ...SNAPSHOT, crashes: [linux, bare] });
+
+        expect(getByText(`build 35245 · ${en.diagnostics.crashes.noDump}`)).not.toBeNull();
+        fireEvent.click(getAllByRole('button', { name: en.diagnostics.crashes.details })[0]!);
+        expect(getByText(en.diagnostics.crashes.noFrames)).not.toBeNull();
+        live.stop();
+    });
+
     it('should say what shows once FXServer runs when nothing was recorded yet', async () => {
         const empty: DiagnosticsSnapshot = {
             ...SNAPSHOT,

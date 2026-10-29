@@ -298,6 +298,7 @@ function CrashRow({
         crash.build === null ? null : t.diagnostics.crashes.build(crash.build),
         crash.analysisState === 'pending' ? t.diagnostics.crashes.reading : null,
         crash.analysisState === 'unreadable' ? t.diagnostics.crashes.unreadable : null,
+        crash.analysisState === 'noDump' ? t.diagnostics.crashes.noDump : null,
     ].filter((fact) => fact !== null);
     const kept = crash.files.some((file) => file.kept);
     const detailsId = `crash-${crash.id}-details`;
@@ -425,6 +426,9 @@ function CrashDetails({ crash }: { crash: Crash }) {
     }
     const [main, ...rest] = analysis.threads;
     const threads = main === undefined ? [] : [main, ...rest.slice(0, 5)];
+    if (analysis.frames.length === 0 && crash.watchdogStack === null && threads.length === 0) {
+        return <p className="py-2 text-meta text-ink-3">{t.diagnostics.crashes.noFrames}</p>;
+    }
     return (
         <div className="flex flex-col gap-4 py-2">
             {analysis.frames.length > 0 && (
