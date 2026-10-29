@@ -48,6 +48,7 @@ pub(crate) fn broken_reason(broken: Broken) -> BrokenReason {
         Broken::BadManifest => BrokenReason::BadManifest,
         Broken::Link => BrokenReason::Link,
         Broken::Layout { .. } => BrokenReason::Layout,
+        Broken::ArchiveChanged => BrokenReason::ArchiveChanged,
     }
 }
 

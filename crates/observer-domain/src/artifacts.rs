@@ -118,6 +118,8 @@ pub enum BrokenReason {
     Link,
     /// A file FXServer needs is missing or changed kind.
     Layout,
+    /// It came from an archive other than the one first installed for this build.
+    ArchiveChanged,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]

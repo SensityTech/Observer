@@ -3,4 +3,4 @@
 /**
  * Why FXServer cannot start from an installed build.
  */
-export type BrokenReason = "noManifest" | "badManifest" | "link" | "layout";
+export type BrokenReason = "noManifest" | "badManifest" | "link" | "layout" | "archiveChanged";

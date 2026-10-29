@@ -18,8 +18,8 @@ use std::time::Duration;
 use jiff::Timestamp;
 use observer_artifacts::catalog::{Availability as Offered, Catalog, Support};
 use observer_artifacts::{
-    Error as InstallError, Health, Http, InstallRequest, Installed, Installer, Origin, Platform, Progress,
-    Scanned,
+    Broken, Error as InstallError, Health, Http, InstallRequest, Installed, Installer, Origin, Platform,
+    Progress, Scanned,
 };
 use observer_domain::artifacts::{
     ApplyMode, ArtifactNotice, ArtifactSettings, ArtifactSettingsChange, ArtifactSettingsField,
@@ -1360,6 +1360,12 @@ impl Driver {
     /// Looks at the folder, the volume and the manifests again. A build the command line
     /// installed shows up, with its fingerprint.
     async fn rescan(&mut self) {
+        let distrusted: Vec<u32> = self
+            .installed
+            .iter()
+            .filter(|scanned| scanned.health == Health::Broken(Broken::ArchiveChanged))
+            .map(|scanned| scanned.build)
+            .collect();
         match self.installer.installed().await {
             Ok(installed) => self.installed = installed,
             Err(error) => warn!(%error, "cannot list the installed builds"),
@@ -1384,18 +1390,40 @@ impl Driver {
         if fingerprints.is_empty() {
             return;
         }
+        // The first archive seen of a build is the one trusted: a build whose manifest names
+        // another, installed by hand or by a command line that did not compare, is not run.
         let (platform, now) = (BuildPlatform::host(), self.clock.now());
-        let remembered = self
+        let changed = self
             .db
             .write(move |tx| {
+                let mut changed = Vec::new();
                 for (build, sha256) in &fingerprints {
-                    stored::remember_fingerprint(tx, platform, *build, sha256, now)?;
+                    match stored::fingerprint(tx, platform, *build)? {
+                        Some(first) if first != *sha256 => changed.push(*build),
+                        Some(_) => {}
+                        None => stored::remember_fingerprint(tx, platform, *build, sha256, now)?,
+                    }
                 }
-                Ok::<_, Error>(())
+                Ok::<_, Error>(changed)
             })
             .await;
-        if let Err(error) = remembered {
-            warn!(%error, "cannot remember the fingerprints of the installed builds");
+        let changed = match changed {
+            Ok(changed) => changed,
+            Err(error) => {
+                warn!(%error, "cannot compare the installed builds with their fingerprints");
+                return;
+            }
+        };
+        for scanned in &mut self.installed {
+            if changed.contains(&scanned.build) {
+                if !distrusted.contains(&scanned.build) {
+                    warn!(
+                        build = scanned.build,
+                        "a build came from an archive other than the one first installed: it is not run"
+                    );
+                }
+                scanned.health = Health::Broken(Broken::ArchiveChanged);
+            }
         }
     }
 
@@ -1721,7 +1749,15 @@ pub(crate) fn promote_pending(
         return Ok(None);
     };
     let folder = root.join(pending.build.to_string());
-    let (_, health) = observer_artifacts::inspect(&folder, pending.build, Platform::host());
+    let (manifest, mut health) = observer_artifacts::inspect(&folder, pending.build, Platform::host());
+    let archive = manifest
+        .as_ref()
+        .and_then(|manifest| manifest.origin.archive_sha256());
+    if let Some(sha256) = archive
+        && stored::fingerprint(tx, BuildPlatform::host(), pending.build)?.is_some_and(|first| first != sha256)
+    {
+        health = Health::Broken(Broken::ArchiveChanged);
+    }
     let mut next = ArtifactState {
         pending: None,
         ..state.clone()

@@ -382,6 +382,8 @@ export const en = {
             } satisfies Record<Protection, string>,
             current: 'It is the build FXServer starts next already.',
             brokenReason: 'It is broken: delete it, then install it again.',
+            archiveChanged:
+                'It came from an archive other than the one first installed for it, so it is not trusted.',
             keep: (builds: number) =>
                 `Keep ${count(builds, { one: 'build', other: 'builds' })} besides the ones in use`,
             cleanup: 'Clean up…',
@@ -1523,7 +1525,10 @@ export const en = {
         end_of_life:
             'This build is past its end of life: players cannot join a server running it. Allow it to go on anyway.',
         build_not_installed: 'This build is not installed. Reload the page.',
-        build_broken: 'This build is broken: delete it, then install it again.',
+        build_broken: (params) =>
+            params.reason === 'archiveChanged'
+                ? 'This build came from an archive other than the one first installed for it, so it is not trusted.'
+                : 'This build is broken: delete it, then install it again.',
         kvp_rollback: (params) =>
             `Build ${formatNumber('en', numberParam(params, 'highestRun'), { useGrouping: false })} ran here: going below build 6449 may delete the server's KVP data. Type 6449 to confirm.`,
         no_scheduled_restart: 'No scheduled restart is ahead: apply the build at the next start instead.',

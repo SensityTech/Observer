@@ -192,10 +192,13 @@ const SCHEDULE_MODES = { fixedTimes: true, interval: true } satisfies Record<Sch
 
 const RESTART_SOURCES = { schedule: true, oneOff: true } satisfies Record<RestartSource, true>;
 
-const BROKEN_REASONS = { noManifest: true, badManifest: true, link: true, layout: true } satisfies Record<
-    BrokenReason,
-    true
->;
+const BROKEN_REASONS = {
+    noManifest: true,
+    badManifest: true,
+    link: true,
+    layout: true,
+    archiveChanged: true,
+} satisfies Record<BrokenReason, true>;
 
 const NOTICE_KINDS = { rolledBack: true, probationFailed: true, pendingDropped: true } satisfies Record<
     NoticeKind,

@@ -11,7 +11,9 @@ use observer_artifacts::catalog::{Availability as Offered, Catalog, CatalogBuild
 use observer_artifacts::samples::host_build;
 use observer_artifacts::test_server::{Reply, TestServer};
 use observer_artifacts::{Branch, Http, Manifest, Origin, Platform};
-use observer_domain::artifacts::{ArtifactsStatus, InstallFailure, JobState, JobStep};
+use observer_domain::artifacts::{
+    ArtifactsStatus, BrokenReason, BuildHealth, InstallFailure, JobState, JobStep,
+};
 use observer_domain::audit::{ActorKind, AuditAction, AuditEntry, AuditFilter, Outcome};
 use observer_domain::error::ErrorCode;
 use observer_domain::schedule::{ScheduleSettings, ScheduleStatus};
@@ -545,6 +547,59 @@ async fn a_fingerprint_survives_a_restart_of_observer() {
     assert!(lab.staging_is_empty());
     let deleted = lab.entries(AuditAction::BuildDeleted).await;
     assert_eq!(deleted[0].details, json!({ "build": 37872, "bytes": 1000 }));
+}
+
+#[tokio::test]
+async fn a_build_from_an_archive_other_than_the_first_one_is_broken_and_not_selected() {
+    let mut lab = Lab::prepared(
+        host_build(),
+        |_| Vec::new(),
+        |dir| place(&dir.join("data/artifacts"), 37872, &"a".repeat(64)),
+    )
+    .await;
+    let (platform, now) = (BuildPlatform::host(), lab.clock.now());
+    lab.db
+        .write(move |tx| {
+            tx.execute("DELETE FROM artifact_fingerprints", [])?;
+            stored::remember_fingerprint(tx, platform, 37872, &"b".repeat(64), now)
+        })
+        .await
+        .unwrap();
+    lab.restart(Vec::new()).await;
+
+    let status = lab.artifacts.status().borrow().clone();
+    let selected = lab
+        .artifacts
+        .select(
+            &lab.owner,
+            SelectBuild {
+                build: 37872,
+                apply: ApplyMode::NextStart,
+                confirm_kvp_rollback: false,
+                allow_end_of_life: false,
+            },
+            "PUT",
+            "/api/servers/default/artifacts/selection",
+        )
+        .await;
+
+    assert_eq!(
+        status.installed[0].health,
+        BuildHealth::Broken {
+            reason: BrokenReason::ArchiveChanged
+        }
+    );
+    let Err(Error::Refused(refusal)) = selected else {
+        panic!("a build from another archive was selected: {selected:?}");
+    };
+    assert_eq!(refusal.code, ErrorCode::BuildBroken);
+    assert_eq!(refusal.params["reason"], json!("archiveChanged"));
+    let kept = lab
+        .db
+        .read(move |conn| stored::fingerprint(conn, platform, 37872))
+        .await
+        .unwrap();
+    assert_eq!(kept, Some("b".repeat(64)), "the first fingerprint stays");
 }
 
 #[tokio::test]

@@ -775,7 +775,9 @@ function InstalledCard({
                                 const useReason = !canManage
                                     ? words.notPermitted
                                     : build.health.kind === 'broken'
-                                      ? words.brokenReason
+                                      ? build.health.reason === 'archiveChanged'
+                                          ? words.archiveChanged
+                                          : words.brokenReason
                                       : status.selected === build.build && status.pending === null
                                         ? words.current
                                         : null;

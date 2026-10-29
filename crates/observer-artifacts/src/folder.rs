@@ -45,6 +45,9 @@ pub enum Broken {
         path: &'static str,
         problem: LayoutProblem,
     },
+    /// Its manifest names an archive other than the one first installed for this build, which
+    /// only the service knows of.
+    ArchiveChanged,
 }
 
 /// The manifest of the build in `build_dir`, and whether FXServer can start from it on
