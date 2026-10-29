@@ -10,7 +10,7 @@ use tray_icon::menu::{Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem};
 use tray_icon::{Icon, MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 
 use super::window::stop_confirm;
-use super::{Action, Confirm, Shared, controls, text};
+use super::{Action, Confirm, Controls, Shared, controls, text};
 
 const TICK: Duration = Duration::from_secs(1);
 /// The executable's own icon, from which Windows picks the size the screen's scaling needs.
@@ -144,15 +144,18 @@ impl Tray {
             self.tooltip = tooltip;
         }
 
-        let rules = controls(&status);
-        let busy = stopping || self.shared.lock().in_flight.is_some();
+        let (in_flight, window_failed) = {
+            let state = self.shared.lock();
+            (state.in_flight.is_some(), state.window_failed)
+        };
+        let enabled = enabled(&controls(&status), stopping, in_flight, window_failed);
         let items = &self.items;
-        items.start.set_enabled(!busy && rules.start.is_none());
-        items.stop.set_enabled(!busy && rules.stop.is_none());
-        items.restart.set_enabled(!busy && rules.restart.is_none());
-        for item in [&items.open_panel, &items.data_folder, &items.quit] {
-            item.set_enabled(!stopping);
-        }
+        items.start.set_enabled(enabled.start);
+        items.stop.set_enabled(enabled.stop);
+        items.restart.set_enabled(enabled.restart);
+        items.open_panel.set_enabled(enabled.open);
+        items.data_folder.set_enabled(enabled.open);
+        items.quit.set_enabled(enabled.quit);
     }
 
     fn handle(&self, event: &Event) {
@@ -181,5 +184,82 @@ impl Tray {
         } else if id == items.quit.id() {
             shared.show(Some(Confirm::Quit));
         }
+    }
+}
+
+/// Which items of the menu act now.
+#[derive(Debug, PartialEq, Eq)]
+#[expect(clippy::struct_excessive_bools, reason = "one switch per item of the menu")]
+struct Enabled {
+    start: bool,
+    stop: bool,
+    restart: bool,
+    /// Open the panel, Open the data folder.
+    open: bool,
+    quit: bool,
+}
+
+/// Stop…, Restart… and Quit… confirm in the window: while it cannot open they stay off, rather
+/// than do nothing. Show the window tries it again; Ctrl+C in the console still stops Observer.
+fn enabled(rules: &Controls, stopping: bool, in_flight: bool, window_failed: bool) -> Enabled {
+    let busy = stopping || in_flight;
+    let asks = !window_failed;
+    Enabled {
+        start: !busy && rules.start.is_none(),
+        stop: asks && !busy && rules.stop.is_none(),
+        restart: asks && !busy && rules.restart.is_none(),
+        open: !stopping,
+        quit: asks && !stopping,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const RUNNING: Controls = Controls {
+        start: Some(text::RUNNING),
+        stop: None,
+        restart: None,
+    };
+
+    #[test]
+    fn what_asks_in_the_window_is_off_while_the_window_cannot_open() {
+        assert_eq!(
+            enabled(&RUNNING, false, false, false),
+            Enabled {
+                start: false,
+                stop: true,
+                restart: true,
+                open: true,
+                quit: true
+            }
+        );
+        assert_eq!(
+            enabled(&RUNNING, false, false, true),
+            Enabled {
+                start: false,
+                stop: false,
+                restart: false,
+                open: true,
+                quit: false
+            }
+        );
+        let stopped = Controls {
+            start: None,
+            stop: Some(text::NOT_RUNNING),
+            restart: Some(text::NOT_RUNNING),
+        };
+        assert!(enabled(&stopped, false, false, true).start);
+        assert_eq!(
+            enabled(&stopped, true, false, false),
+            Enabled {
+                start: false,
+                stop: false,
+                restart: false,
+                open: false,
+                quit: false
+            }
+        );
     }
 }

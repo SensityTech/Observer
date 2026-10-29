@@ -32,10 +32,16 @@ pub(super) fn spawn(shared: Arc<Shared>, requests: Receiver<Request>) -> io::Res
                 if exit_queued(&requests) {
                     return;
                 }
-                if let Err(error) = run(&shared) {
+                let result = run(&shared);
+                let mut state = shared.lock();
+                state.window = None;
+                if let Err(error) = result {
                     warn!(%error, "the status window could not open; Observer keeps running in this console");
+                    // A confirmation asked from the tray would otherwise wait for the next window
+                    // that opens, however late.
+                    state.window_failed = true;
+                    state.confirm = None;
                 }
-                shared.lock().window = None;
             }
         })
 }
@@ -84,7 +90,11 @@ fn run(shared: &Arc<Shared>) -> Result<(), eframe::Error> {
             for theme in [Theme::Dark, Theme::Light] {
                 context.set_visuals_of(theme, Palette::of(theme).visuals(theme));
             }
-            shared.lock().window = Some(context.clone());
+            {
+                let mut state = shared.lock();
+                state.window = Some(context.clone());
+                state.window_failed = false;
+            }
             Ok(Box::new(StatusWindow {
                 shared,
                 confirm: None,

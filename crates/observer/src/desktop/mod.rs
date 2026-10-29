@@ -155,6 +155,9 @@ struct State {
     exiting: bool,
     /// The open window's context, through which anyone can repaint or focus it.
     window: Option<egui::Context>,
+    /// The window could not open when last asked (no desktop, no graphics adapter): nothing can
+    /// confirm in it.
+    window_failed: bool,
     /// The confirmation the window shows next.
     confirm: Option<Confirm>,
     in_flight: Option<Action>,
