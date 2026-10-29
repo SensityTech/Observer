@@ -213,8 +213,14 @@ async fn a_crash_file_goes_to_the_owner_alone_with_the_password_entered_again() 
         json!({ "crash": id, "file": "6c1f0b2e.dmp", "bytes": 1_300 })
     );
     let denied = server.entries("permission_denied").await;
-    assert_eq!(denied.len(), 1);
-    assert_eq!(denied[0]["details"]["ownerOnly"], true);
+    let targets: Vec<&str> = denied
+        .iter()
+        .filter(|entry| entry["details"]["ownerOnly"] == true)
+        .filter_map(|entry| entry["target"].as_str())
+        .collect();
+    assert_eq!(targets.len(), 2, "{denied:?}");
+    assert!(targets.contains(&"GET /api/servers/default/crashes/{id}/files/{name}"));
+    assert!(targets.contains(&"DELETE /api/servers/default/crashes/{id}/files"));
 }
 
 #[tokio::test]

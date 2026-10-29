@@ -29,7 +29,8 @@ pub(crate) enum Gate {
     /// The owner, whatever anyone else holds: launch configuration amounts to running code on the
     /// host, which no permission grants.
     Owner,
-    /// The owner, with the password entered within the last ten minutes.
+    /// The owner, with the password entered within the last ten minutes. A refusal is audited,
+    /// a read's too: a crash's dumps are read behind it.
     ReauthenticatedOwner,
     /// A websocket ticket in the query, with the cookie of the session it was issued to, from the
     /// panel's own origin. A browser sends no header of its choosing with a websocket request, so
@@ -97,7 +98,8 @@ async fn admit(
         Gate::Permission(permission) | Gate::Reauthenticated(permission) => {
             accounts.authorize(&caller, permission, method, path).await?;
         }
-        Gate::Owner | Gate::ReauthenticatedOwner => accounts.authorize_owner(&caller, method, path).await?,
+        Gate::Owner => accounts.authorize_owner(&caller, method, path, false).await?,
+        Gate::ReauthenticatedOwner => accounts.authorize_owner(&caller, method, path, true).await?,
         Gate::Public | Gate::Account | Gate::Session | Gate::Ticket => {}
     }
     if let Gate::Reauthenticated(_) | Gate::ReauthenticatedOwner = guard.gate {

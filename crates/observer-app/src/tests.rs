@@ -1350,16 +1350,16 @@ async fn only_the_owner_passes_the_owner_check_and_a_refused_change_is_audited()
     let (owner, grace) = (lab.caller(&owner).await, lab.caller(&grace).await);
 
     lab.accounts
-        .authorize_owner(&owner, "PUT", "/api/servers/default/launch")
+        .authorize_owner(&owner, "PUT", "/api/servers/default/launch", false)
         .await
         .unwrap();
     let read = lab
         .accounts
-        .authorize_owner(&grace, "GET", "/api/servers/default/launch")
+        .authorize_owner(&grace, "GET", "/api/servers/default/launch", false)
         .await;
     let change = lab
         .accounts
-        .authorize_owner(&grace, "PUT", "/api/servers/default/launch")
+        .authorize_owner(&grace, "PUT", "/api/servers/default/launch", false)
         .await;
 
     assert_eq!(code(read), ErrorCode::OwnerOnly);
@@ -1372,6 +1372,22 @@ async fn only_the_owner_passes_the_owner_check_and_a_refused_change_is_audited()
         Some("PUT /api/servers/default/launch")
     );
     assert_eq!(denied[0].details, json!({ "ownerOnly": true }));
+}
+
+#[tokio::test]
+async fn a_refused_read_of_what_holds_the_host_s_secrets_is_audited() {
+    let lab = Lab::new().await;
+    let owner = lab.owner().await;
+    let grace = lab.user(&owner, "grace", P::all()).await;
+    let grace = lab.caller(&grace).await;
+    let route = "/api/servers/default/crashes/{id}/files/{name}";
+
+    let read = lab.accounts.authorize_owner(&grace, "GET", route, true).await;
+
+    assert_eq!(code(read), ErrorCode::OwnerOnly);
+    let denied = lab.entries(AuditAction::PermissionDenied).await;
+    assert_eq!(denied.len(), 1);
+    assert_eq!(denied[0].target.as_deref(), Some(&*format!("GET {route}")));
 }
 
 impl Lab {
