@@ -14,6 +14,7 @@ import { cn } from '../lib/cn';
 import { lazyCode } from '../lib/lazyCode';
 import { secondsSince, useNow } from '../lib/useNow';
 import { LiveMetricsProvider, useLiveMetrics } from '../metrics/live';
+import { Alerts } from '../overview/Alerts';
 import { Tiles } from '../overview/Tiles';
 import { useSchedule } from '../schedule/context';
 import { useServerStatus } from '../server/context';
@@ -34,6 +35,7 @@ export function OverviewPage() {
             </div>
             <LiveMetricsProvider>
                 <ServerCard />
+                <Alerts />
                 <Tiles />
                 <ErrorBoundary fallback={<ChartFailed />}>
                     <Suspense fallback={<ChartPlaceholder />}>

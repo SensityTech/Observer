@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
 import { en } from '../i18n/en';
-import { formatNumber, formatTimestamp } from '../i18n/format';
+import { formatBytes, formatNumber, formatTimestamp } from '../i18n/format';
 import { auditDetails } from './details';
 
 const format = {
     number: (value: number) => formatNumber('en', value),
+    bytes: (value: number) => formatBytes('en', value),
     timestamp: (rfc3339: string) => formatTimestamp(new Date(rfc3339)),
 };
 
@@ -119,5 +120,31 @@ describe('auditDetails', () => {
             'trigger: manual · Reason: unheard_of · extra: {"a":1}',
         );
         expect(auditDetails(en, format, { reason: 'gremlins' })).toBe('Reason: gremlins');
+    });
+
+    it('should word what the diagnostics audit', () => {
+        expect(
+            auditDetails(en, format, {
+                kind: 'shell',
+                name: 'powershell.exe',
+                commandLine: 'powershell -NoProfile -Command exit',
+                pid: 4120,
+                parent: { pid: 3312, name: 'FXServer.exe' },
+                generation: 4,
+                repeated: 3,
+            }),
+        ).toBe(
+            'Kind: Security alert · Program: powershell.exe · Command line: powershell -NoProfile -Command exit · ' +
+                'Pid: 4120 · Parent: FXServer.exe 3312 · Run: #4 · Repeated: 3',
+        );
+        expect(
+            auditDetails(en, format, { file: 'hang-4.dmp', bytes: 48_666, tookMs: 120, kind: 'dump' }),
+        ).toBe('File: hang-4.dmp · Size: 47.5 KB · Took: 120 ms · Kind: a stack dump');
+        expect(auditDetails(en, format, { reason: 'lowDisk', tookMs: 3 })).toBe(
+            'Reason: less than 1 GB free · Took: 3 ms',
+        );
+        expect(auditDetails(en, format, { crash: 2, names: ['a.dmp', 'a-full.dmp'], bytes: 500 })).toBe(
+            'Crash: 2 · Files: a.dmp, a-full.dmp · Size: 500 bytes',
+        );
     });
 });
