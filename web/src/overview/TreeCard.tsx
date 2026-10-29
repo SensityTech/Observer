@@ -7,7 +7,7 @@ import { growthQuery, seriesQuery } from '../api/metrics';
 import { useI18n } from '../i18n/I18nProvider';
 import { useLiveMetrics } from '../metrics/live';
 import { mergeLive } from '../metrics/merge';
-import { Facts, total, type Fact } from './Tiles';
+import { Facts, GROWTH, total, type Fact } from './Tiles';
 
 const STARTED = ['treeStarted'] as const satisfies readonly Series[];
 /** A slot's counts are over five seconds. */
@@ -82,9 +82,7 @@ export function TreeCard() {
             detail: t.tree.threadsHandles(
                 threads === null ? unknown : format.number(threads),
                 handles === null ? unknown : format.number(handles),
-                handlesGrowth === null
-                    ? null
-                    : `${handlesGrowth.perHour > 0 ? '+' : ''}${format.number(Math.round(handlesGrowth.perHour))}`,
+                handlesGrowth === null ? null : format.number(handlesGrowth.perHour, GROWTH),
             ),
         },
     );

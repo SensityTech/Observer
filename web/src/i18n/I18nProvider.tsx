@@ -21,8 +21,8 @@ type I18n = {
     setLocale: (locale: Locale) => void;
     format: {
         number: (value: number, options?: Intl.NumberFormatOptions) => string;
-        /** Memory and disk, in multiples of 1024. */
-        bytes: (bytes: number) => string;
+        /** Memory and disk, in multiples of 1024; a `signed` growth reads `+180 MB`. */
+        bytes: (bytes: number, options?: { signed?: boolean }) => string;
         /** Bytes per second, as bits per second in multiples of 1000. */
         bitRate: (bytesPerSecond: number) => string;
         /** `182.0` reads `182%`. */
@@ -67,7 +67,7 @@ export function I18nProvider({ children }: { children: ReactNode }) {
             },
             format: {
                 number: (number, options) => formatNumber(locale, number, options),
-                bytes: (bytes) => formatBytes(locale, bytes),
+                bytes: (bytes, options) => formatBytes(locale, bytes, options),
                 bitRate: (bytesPerSecond) => formatBitRate(locale, bytesPerSecond),
                 percent: (percent) => formatPercent(locale, percent),
                 milliseconds: (ms) => formatMilliseconds(locale, ms),

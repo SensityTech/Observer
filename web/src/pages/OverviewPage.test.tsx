@@ -287,6 +287,22 @@ describe('OverviewPage', () => {
         live.stop();
     });
 
+    it('should write a growth that rounds to nothing as 0, without a sign', async () => {
+        const growth: RunGrowth = {
+            startedAt: NOW - 7200,
+            from: NOW - 5400,
+            to: NOW,
+            private: { perHour: 0.3, fit: 0.01, start: 9 * 1024 ** 3, points: 90, leak: false },
+            handles: { perHour: -0.3, fit: 0.01, start: 3200, points: 90, leak: false },
+        };
+        const { say, live } = await page(hour(), { growth });
+        say({ type: 'snapshot', topic: 'metrics.live', data: { latest: SAMPLE } });
+
+        expect(tile(en.tiles.memory.label).getByText('0 bytes/h')).not.toBeNull();
+        expect(card(en.tree.title).getByText('142 · 3,210 · 0/h')).not.toBeNull();
+        live.stop();
+    });
+
     it('should flag handles that keep growing with a fact of their own', async () => {
         const growth: RunGrowth = {
             startedAt: NOW - 7200,

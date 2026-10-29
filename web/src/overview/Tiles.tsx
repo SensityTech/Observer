@@ -310,8 +310,11 @@ function CpuTile({ latest, trend }: TileProps) {
     );
 }
 
-/** `+180 MB/h`: a signed growth per hour. */
-const signed = (formatted: string, perHour: number) => (perHour > 0 ? `+${formatted}` : formatted);
+/** A count's growth, whole and signed: `+12`, and `0` once it rounds to nothing either way. */
+export const GROWTH = {
+    maximumFractionDigits: 0,
+    signDisplay: 'exceptZero',
+} satisfies Intl.NumberFormatOptions;
 
 function MemoryTile({ latest, trend, growth }: TileProps & { growth: RunGrowth | null }) {
     const { t, format, value } = useValues(latest);
@@ -334,7 +337,7 @@ function MemoryTile({ latest, trend, growth }: TileProps & { growth: RunGrowth |
             detail:
                 memory === null
                     ? t.tiles.unknown
-                    : t.tiles.memory.perHour(signed(format.bytes(memory.perHour), memory.perHour)),
+                    : t.tiles.memory.perHour(format.bytes(memory.perHour, { signed: true })),
             warning: leaking,
         },
         {
@@ -362,9 +365,7 @@ function MemoryTile({ latest, trend, growth }: TileProps & { growth: RunGrowth |
     if (handles?.leak === true) {
         facts.push({
             term: t.tiles.memory.handles,
-            detail: t.tiles.memory.handlesSinceStart(
-                signed(format.number(Math.round(handles.perHour)), handles.perHour),
-            ),
+            detail: t.tiles.memory.handlesSinceStart(format.number(handles.perHour, GROWTH)),
             warning: true,
         });
     }
