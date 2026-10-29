@@ -545,6 +545,11 @@ impl Driver {
                 warn!(%error, "the install job failed");
             }
         }
+        // The job's end is audited even now: interrupted, or installed when its commit came first,
+        // which also records its fingerprint and makes it the first build selected.
+        while let Ok(done) = finished.try_recv() {
+            self.finished(done).await;
+        }
     }
 
     async fn command(&mut self, command: Command, finished: &mpsc::Sender<Finished>) {
@@ -773,6 +778,11 @@ impl Driver {
             }
             Err(error) => {
                 warn!(build, ?kind, %error, "a build job ended without installing the build");
+                // Cancelled by nobody: Observer stopping cut it short.
+                let error = match error {
+                    InstallError::Cancelled if !slot.job.cancel_requested => &InstallError::Interrupted,
+                    error => error,
+                };
                 let failure = view::failure(error);
                 slot.job.state = if matches!(error, InstallError::Cancelled) {
                     JobState::Cancelled

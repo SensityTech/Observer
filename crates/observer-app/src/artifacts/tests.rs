@@ -390,6 +390,31 @@ async fn a_cancelled_install_leaves_nothing_in_staging() {
 }
 
 #[tokio::test]
+async fn a_job_cut_short_by_observer_stopping_ends_in_the_audit_log() {
+    let mut lab = Lab::new(host_build(), |server| vec![listed(server, 37872, "/slow")]).await;
+    lab.artifacts.install(&lab.owner, 37872, false).await.unwrap();
+    lab.until(|status| {
+        status
+            .job
+            .as_ref()
+            .is_some_and(|job| job.step == JobStep::Download)
+    })
+    .await;
+
+    lab.task.take().unwrap().close().await;
+
+    assert!(lab.staging_is_empty());
+    assert_eq!(lab.entries(AuditAction::BuildInstallCancelled).await.len(), 0);
+    let finished = lab.entries(AuditAction::BuildInstallFinished).await;
+    assert_eq!(finished.len(), 1);
+    assert_eq!(finished[0].outcome, Outcome::Failure);
+    assert_eq!(
+        finished[0].details,
+        json!({ "build": 37872, "kind": "install", "step": "download", "reason": "interrupted" })
+    );
+}
+
+#[tokio::test]
 async fn a_second_job_is_refused_while_one_runs() {
     let lab = Lab::new(host_build(), |server| {
         vec![listed(server, 37872, "/slow"), listed(server, 37900, "/archive")]
