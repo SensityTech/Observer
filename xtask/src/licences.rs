@@ -32,8 +32,10 @@ const NAMES: [&str; 6] = [
 const CODE: [&str; 16] = [
     "c", "cjs", "css", "cts", "h", "js", "json", "jsx", "map", "mjs", "mts", "py", "rs", "ts", "tsx", "wasm",
 ];
-/// Licence files under names of their own: egui's fonts ship theirs next to each font.
-const NAMED_FILES: [(&str, &[&str]); 1] = [(
+/// Licence files under names of their own, and the licences of the package's expression they
+/// hold: egui's fonts ship theirs next to each font, while the crate's own code licence has no
+/// file and comes from SPDX.
+const NAMED_FILES: [(&str, &[&str], &[&str]); 1] = [(
     "epaint_default_fonts",
     &[
         "fonts/Hack-Regular.txt",
@@ -41,6 +43,7 @@ const NAMED_FILES: [(&str, &[&str]); 1] = [(
         "fonts/UFL.txt",
         "fonts/emoji-icon-font-mit-license.txt",
     ],
+    &["OFL-1.1", "Ubuntu-font-1.0"],
 )];
 
 /// Where the list the API serves goes: beside the panel, never in `web/dist`, whose every file
@@ -115,13 +118,25 @@ struct Found {
     licence: Option<String>,
     repository: Option<String>,
     folder: PathBuf,
-    /// Files named elsewhere: Cargo's `license_file`, the panel's own NOTICE copies.
+    /// Cargo's `license_file`: the package's licence under a name of its own.
+    licence_file: Option<(String, PathBuf)>,
+    /// Other files that ship with it: the files of `NAMED_FILES`, the panel's own NOTICE copies.
+    /// They hold the licences `covered` names, not the package's whole expression.
     extra: Vec<(String, PathBuf)>,
+    covered: &'static [&'static str],
 }
 
 impl Found {
     fn into_package(self, texts: &mut Texts, spdx: &Path) -> anyhow::Result<ThirdPartyPackage> {
         let mut paths = licence_files(&self.folder, self.ecosystem == Ecosystem::Npm);
+        if let Some((shown, path)) = self.licence_file
+            && path.is_file()
+            && !paths.iter().any(|(_, known)| *known == path)
+        {
+            paths.push((shown, path));
+        }
+        // A file under a licence's name holds the package's licence; the others only theirs.
+        let whole = !paths.is_empty();
         for (shown, path) in self.extra {
             if path.is_file() && !paths.iter().any(|(_, known)| *known == path) {
                 paths.push((shown, path));
@@ -136,10 +151,10 @@ impl Found {
             });
         }
         let from_spdx = files.is_empty();
-        if from_spdx {
+        if !whole {
             let expression = self.licence.as_deref().unwrap_or_default();
             let identifiers = identifiers(expression);
-            if identifiers.is_empty() {
+            if identifiers.is_empty() && from_spdx {
                 bail!(
                     "{} {} ships no licence file and declares no licence; look in {}",
                     self.name,
@@ -147,11 +162,14 @@ impl Found {
                     self.folder.display()
                 );
             }
-            for identifier in identifiers {
+            for identifier in identifiers
+                .into_iter()
+                .filter(|identifier| !self.covered.contains(&identifier.as_str()))
+            {
                 let path = spdx.join(format!("{identifier}.txt"));
                 let Ok(text) = read_text(&path) else {
                     bail!(
-                        "{} {} ships no licence file and {} has no text for {identifier} (its licence: {expression}); \
+                        "{} {} ships no licence file for {identifier} and {} has no text for it (its licence: {expression}); \
                          looked in {}. A new licence is a decision: add its SPDX text there once it is accepted",
                         self.name,
                         self.version,
@@ -257,24 +275,21 @@ fn crates(root: &Path, target: &str) -> anyhow::Result<Vec<Found>> {
         let manifest = PathBuf::from(package["manifest_path"].as_str().unwrap_or_default());
         let folder = manifest.parent().map(Path::to_path_buf).unwrap_or_default();
         let name = string(&package["name"]);
-        let named = NAMED_FILES
+        let shown = |file: &str| (file.replace('\\', "/"), folder.join(file));
+        let (named, covered): (&[&str], &[&str]) = NAMED_FILES
             .iter()
-            .filter(|(package, _)| *package == name)
-            .flat_map(|(_, files)| files.iter().copied());
-        let extra = package["license_file"]
-            .as_str()
-            .into_iter()
-            .chain(named)
-            .map(|file| (file.replace('\\', "/"), folder.join(file)))
-            .collect();
+            .find(|(package, _, _)| *package == name)
+            .map_or((&[], &[]), |(_, files, covered)| (*files, *covered));
         found.push(Found {
             ecosystem: Ecosystem::Crate,
-            name,
             version: string(&package["version"]),
             licence: package["license"].as_str().map(str::to_owned),
             repository: package["repository"].as_str().map(str::to_owned),
+            licence_file: package["license_file"].as_str().map(shown),
+            extra: named.iter().map(|file| shown(file)).collect(),
+            covered,
             folder,
-            extra,
+            name,
         });
     }
     Ok(found)
@@ -313,7 +328,9 @@ fn npm(root: &Path) -> anyhow::Result<Vec<Found>> {
                 .map(str::to_owned),
             repository,
             folder,
+            licence_file: None,
             extra: vec![("NOTICE".to_owned(), notice)],
+            covered: &[],
             name,
         });
     }
@@ -526,8 +543,30 @@ mod tests {
             licence: Some(licence.to_owned()),
             repository: None,
             folder: folder.to_path_buf(),
+            licence_file: None,
             extra: Vec::new(),
+            covered: &[],
         }
+    }
+
+    #[test]
+    fn a_licence_no_shipped_file_holds_comes_from_spdx_beside_them() {
+        let folder = tempfile::tempdir().unwrap();
+        fs::create_dir_all(folder.path().join("fonts")).unwrap();
+        fs::write(folder.path().join("fonts/OFL.txt"), "SIL Open Font License\n").unwrap();
+        let spdx = tempfile::tempdir().unwrap();
+        fs::write(spdx.path().join("MIT.txt"), "MIT text\n").unwrap();
+        fs::write(spdx.path().join("Apache-2.0.txt"), "Apache text\n").unwrap();
+        let mut fonts = package(folder.path(), "(MIT OR Apache-2.0) AND OFL-1.1");
+        fonts.extra = vec![("fonts/OFL.txt".to_owned(), folder.path().join("fonts/OFL.txt"))];
+        fonts.covered = &["OFL-1.1"];
+
+        let mut texts = Texts::default();
+        let found = fonts.into_package(&mut texts, spdx.path()).unwrap();
+
+        let paths: Vec<&str> = found.files.iter().map(|file| file.path.as_str()).collect();
+        assert_eq!(paths, ["fonts/OFL.txt", "MIT (SPDX)", "Apache-2.0 (SPDX)"]);
+        assert!(!found.from_spdx);
     }
 
     #[test]
