@@ -66,7 +66,9 @@ pub(crate) fn decide(request: SelectBuild, context: &Context) -> Result<Change, 
         ApplyMode::Now => match context.server {
             Server::Down => Err(ErrorCode::ServerNotRunning.into()),
             Server::Stopping => Err(ErrorCode::ServerStopping.into()),
-            Server::Running if context.running == Some(build) => Ok(Change::Nothing),
+            Server::Running if context.running == Some(build) && settled => Ok(Change::Nothing),
+            // It runs already: it only needs to be the build that starts next again.
+            Server::Running if context.running == Some(build) => Ok(Change::Select { restart: false }),
             Server::Running => Ok(Change::Select { restart: true }),
         },
         ApplyMode::NextStart if settled => Ok(Change::Nothing),
@@ -202,6 +204,20 @@ mod tests {
             decide(request(37872, ApplyMode::NextStart), &pending),
             Ok(Change::Select { restart: false }),
             "the next start of the selected build drops the pending one"
+        );
+    }
+
+    #[test]
+    fn now_of_the_build_that_runs_takes_it_back_as_the_next_one_without_a_restart() {
+        let moved_on = Context {
+            selected: Some(37900),
+            pending: Some(37950),
+            ..context()
+        };
+
+        assert_eq!(
+            decide(request(37872, ApplyMode::Now), &moved_on),
+            Ok(Change::Select { restart: false })
         );
     }
 

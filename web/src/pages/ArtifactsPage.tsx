@@ -1434,7 +1434,12 @@ export function UseDialog({
                 confirmKvpRollback: kvp && typed.trim() === String(KVP_BUILD),
                 allowEndOfLife: endOfLife && allowed,
             }),
-        onSuccess: () => onDone(words.done[mode](String(build))),
+        onSuccess: () =>
+            onDone(
+                mode === 'now' && status.running === build
+                    ? words.kept(String(build))
+                    : words.done[mode](String(build)),
+            ),
     });
     const blocked =
         (kvp && typed.trim() !== String(KVP_BUILD)) ||

@@ -489,6 +489,7 @@ export const en = {
             kvpLabel: 'Type 6449',
             endOfLife: 'Use it anyway: players cannot join a server running a build past its end of life.',
             confirm: 'Use build',
+            kept: (build: string) => `FXServer runs build ${build} already: it starts next again.`,
             done: {
                 now: (build: string) => `FXServer is restarting on build ${build}.`,
                 nextStart: (build: string) => `Build ${build} starts at the next start.`,
