@@ -1280,9 +1280,16 @@ function SettingsCard({ status }: { status: ArtifactsStatus }) {
             noValidate
             onSubmit={(event) => {
                 event.preventDefault();
-                if (canManage && !save.isPending) {
-                    save.mutate();
+                if (!canManage || save.isPending) {
+                    return;
                 }
+                // A count of builds is whole: 2.5 is out of range here, as Observer would find it.
+                if (!Number.isInteger(draft.keepBuilds) || draft.keepBuilds < 1 || draft.keepBuilds > 20) {
+                    setOutcome(null);
+                    setIssues([{ field: 'keepBuilds', index: null, problem: 'outOfRange' }]);
+                    return;
+                }
+                save.mutate();
             }}
         >
             {stale && changes > 0 && <Notice tone="warning">{words.changedElsewhere}</Notice>}

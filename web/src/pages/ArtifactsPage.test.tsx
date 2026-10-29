@@ -406,6 +406,18 @@ describe('ArtifactsPage', () => {
         await waitFor(() => within(row(BUILD.build)).getByText(en.artifacts.installed.copyBlocked(commit)));
     });
 
+    it('should keep a count of builds whole before sending the settings', async () => {
+        const fetch = vi.fn(async () => Response.json(STATUS));
+        vi.stubGlobal('fetch', fetch);
+        const { getByLabelText, getByRole, getByText } = await page({ ...STATUS, job: null });
+
+        fireEvent.change(getByLabelText(en.artifacts.settings.keepBuilds), { target: { value: '2.5' } });
+        fireEvent.click(getByRole('button', { name: en.artifacts.settings.save }));
+
+        expect(getByText(en.artifacts.settings.problems.outOfRange)).toBeTruthy();
+        expect(fetch).not.toHaveBeenCalled();
+    });
+
     it('should say beside a build in use why it cannot be deleted', async () => {
         await page({ ...STATUS, job: null });
 
