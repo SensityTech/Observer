@@ -165,6 +165,24 @@ describe('DiagnosticsPage', () => {
         live.stop();
     });
 
+    it('should ask for the password before a download without calling it a change', async () => {
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(async () => answer(403, { code: 'reauth_required', params: {} })),
+        );
+        const { getByRole, live } = await page(true);
+
+        fireEvent.click(getByRole('button', { name: en.diagnostics.crashes.download('6c1f0b2e.dmp') }));
+        await settle();
+
+        const prompt = getByRole('dialog').textContent ?? '';
+        expect(prompt).toContain(en.reauth.body);
+        expect(prompt).not.toMatch(/change/i);
+        fireEvent.click(getByRole('button', { name: en.common.cancel }));
+        await settle();
+        live.stop();
+    });
+
     it('should keep the keyboard on the page once the deleted files take their button away', async () => {
         const deleted = { ...CRASH, files: CRASH.files.map((file) => ({ ...file, kept: false })) };
         vi.stubGlobal(

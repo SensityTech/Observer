@@ -857,7 +857,7 @@ export const en = {
     },
     reauth: {
         title: 'Confirm your password',
-        body: 'This change needs your password again. Once confirmed, it is not asked again for 10 minutes.',
+        body: 'This needs your password again. Once confirmed, it is not asked again for 10 minutes.',
         password: 'Password',
         submit: 'Confirm',
     },
@@ -1246,7 +1246,7 @@ export const en = {
         too_many_sockets:
             'Too many tabs of the panel are open in this browser. Close a few, then reload this one.',
         password_change_required: 'Choose a new password before you go on.',
-        reauth_required: 'This change needs your password again.',
+        reauth_required: 'This needs your password again.',
         wrong_password: 'Wrong password.',
         forbidden: (params) => {
             const key = stringParam(params, 'permission');
