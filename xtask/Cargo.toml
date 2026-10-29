@@ -10,7 +10,12 @@ anyhow.workspace = true
 brotli = "9.1.1"
 flate2 = "1.1.10"
 observer-domain.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
 walkdir = "2.5.0"
+
+[dev-dependencies]
+tempfile.workspace = true
 
 [lints]
 workspace = true

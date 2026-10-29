@@ -5585,6 +5585,9 @@ dependencies = [
  "brotli",
  "flate2",
  "observer-domain",
+ "serde_json",
+ "sha2",
+ "tempfile",
  "walkdir",
 ]
 

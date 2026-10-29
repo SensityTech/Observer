@@ -2,6 +2,7 @@
 
 mod compress;
 mod icons;
+mod licences;
 
 use std::fmt::Write as _;
 use std::fs;
@@ -18,7 +19,8 @@ tasks:
   bindings  regenerate the TypeScript types and permission constants in web/src/api/generated
   check     run every check CI runs: formatting, lints, tests, types, panel build
   dist      build the panel, then a release binary that embeds it
-  icons     draw the executable's icons from the mark (--check: fail if they differ)";
+  icons     draw the executable's icons from the mark (--check: fail if they differ)
+  licences  list the third-party software a target ships, with its licence texts (--target)";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -28,6 +30,7 @@ fn main() -> ExitCode {
         Some("check") => check(),
         Some("dist") => dist(),
         Some("icons") => icons::run(&root(), args.iter().any(|arg| arg == "--check")),
+        Some("licences") => target(&args).and_then(|target| licences::write(&root(), &target).map(drop)),
         _ => {
             eprintln!("{USAGE}");
             return ExitCode::FAILURE;
@@ -44,12 +47,31 @@ fn main() -> ExitCode {
 }
 
 fn web() -> anyhow::Result<()> {
+    build_panel(&licences::host()?).map(drop)
+}
+
+/// The panel and the licence list for `target`, precompressed together. Says where the list's
+/// plain text went.
+fn build_panel(target: &str) -> anyhow::Result<PathBuf> {
     let web = root().join("web");
     if !web.join("node_modules").exists() {
         run(npm().arg("ci").current_dir(&web))?;
     }
     run(npm().args(["run", "build"]).current_dir(&web))?;
-    compress::dist(&web.join("dist"))
+    let licences = licences::write(&root(), target)?;
+    compress::dist(&web.join("dist"))?;
+    Ok(licences)
+}
+
+/// `--target <triple>`, or the host's.
+fn target(args: &[String]) -> anyhow::Result<String> {
+    match args.iter().position(|arg| arg == "--target") {
+        Some(at) => args
+            .get(at + 1)
+            .cloned()
+            .context("--target needs a target triple"),
+        None => licences::host(),
+    }
 }
 
 /// ts-rs writes the bindings from the `export_bindings_*` tests it generates.
