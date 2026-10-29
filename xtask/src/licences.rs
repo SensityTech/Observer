@@ -117,6 +117,8 @@ struct Found {
     version: String,
     licence: Option<String>,
     repository: Option<String>,
+    /// As the manifest names them: Cargo's `authors`, npm's `author`.
+    authors: Vec<String>,
     folder: PathBuf,
     /// Cargo's `license_file`: the package's licence under a name of its own.
     licence_file: Option<(String, PathBuf)>,
@@ -179,7 +181,7 @@ impl Found {
                 };
                 files.push(LicenceFile {
                     path: format!("{identifier} (SPDX)"),
-                    text: texts.add(text),
+                    text: texts.add(text.replace(SPDX_HOLDERS, &holders(&self.name, &self.authors))),
                 });
             }
         }
@@ -285,6 +287,11 @@ fn crates(root: &Path, target: &str) -> anyhow::Result<Vec<Found>> {
             version: string(&package["version"]),
             licence: package["license"].as_str().map(str::to_owned),
             repository: package["repository"].as_str().map(str::to_owned),
+            authors: list(&package["authors"])
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_owned)
+                .collect(),
             licence_file: package["license_file"].as_str().map(shown),
             extra: named.iter().map(|file| shown(file)).collect(),
             covered,
@@ -318,6 +325,10 @@ fn npm(root: &Path) -> anyhow::Result<Vec<Found>> {
             Value::String(url) => Some(url.clone()),
             other => other["url"].as_str().map(str::to_owned),
         };
+        let author = match &manifest["author"] {
+            Value::String(author) => Some(author.clone()),
+            other => other["name"].as_str().map(str::to_owned),
+        };
         let notice = notices.join(format!("{}-NOTICE.txt", name.replace('/', "-")));
         found.push(Found {
             ecosystem: Ecosystem::Npm,
@@ -327,6 +338,7 @@ fn npm(root: &Path) -> anyhow::Result<Vec<Found>> {
                 .or_else(|| manifest["license"].as_str())
                 .map(str::to_owned),
             repository,
+            authors: author.into_iter().collect(),
             folder,
             licence_file: None,
             extra: vec![("NOTICE".to_owned(), notice)],
@@ -394,6 +406,28 @@ fn is_licence_name(name: &str) -> bool {
             name.strip_prefix(prefix)
                 .is_some_and(|rest| rest.is_empty() || rest.starts_with(['-', '.', '_']))
         })
+}
+
+/// Where an SPDX template names nobody (MIT's `Copyright (c) <year> <copyright holders>`), though
+/// the licence asks for the copyright notice to travel with the code.
+const SPDX_HOLDERS: &str = "<year> <copyright holders>";
+
+/// `Emil Ernerfeldt` from `Emil Ernerfeldt <emil.ernerfeldt@gmail.com>`, every author once, or the
+/// package's authors as a group when the manifest names none.
+fn holders(package: &str, authors: &[String]) -> String {
+    let mut names: Vec<&str> = Vec::new();
+    for author in authors {
+        let name = author.split(['<', '(']).next().unwrap_or_default().trim();
+        let name = if name.is_empty() { author.trim() } else { name };
+        if !name.is_empty() && !names.contains(&name) {
+            names.push(name);
+        }
+    }
+    if names.is_empty() {
+        format!("the {package} authors")
+    } else {
+        names.join(", ")
+    }
 }
 
 /// The licence identifiers of an SPDX expression, exceptions included, or of the older `A/B`.
@@ -542,11 +576,48 @@ mod tests {
             version: "1.2.3".to_owned(),
             licence: Some(licence.to_owned()),
             repository: None,
+            authors: Vec::new(),
             folder: folder.to_path_buf(),
             licence_file: None,
             extra: Vec::new(),
             covered: &[],
         }
+    }
+
+    #[test]
+    fn an_spdx_text_names_the_packages_authors_as_its_copyright_holders() {
+        let folder = tempfile::tempdir().unwrap();
+        let spdx = tempfile::tempdir().unwrap();
+        fs::write(
+            spdx.path().join("MIT.txt"),
+            "MIT License\n\nCopyright (c) <year> <copyright holders>\n\nPermission is hereby granted\n",
+        )
+        .unwrap();
+        let mut texts = Texts::default();
+        let mut egui = package(folder.path(), "MIT");
+        egui.authors = vec!["Emil Ernerfeldt <emil.ernerfeldt@gmail.com>".to_owned()];
+
+        let found = egui.into_package(&mut texts, spdx.path()).unwrap();
+
+        assert_eq!(
+            texts.0[&found.files[0].text],
+            "MIT License\n\nCopyright (c) Emil Ernerfeldt\n\nPermission is hereby granted\n"
+        );
+        assert_eq!(
+            holders("fancy-canvas", &["smakarov@tradingview.com".to_owned()]),
+            "smakarov@tradingview.com"
+        );
+        assert_eq!(
+            holders(
+                "ts-rs",
+                &[
+                    "Moritz Bischof <moritz.bischof1@gmail.com>".to_owned(),
+                    "Ada (https://example.com)".to_owned()
+                ]
+            ),
+            "Moritz Bischof, Ada"
+        );
+        assert_eq!(holders("quiet", &[]), "the quiet authors");
     }
 
     #[test]
