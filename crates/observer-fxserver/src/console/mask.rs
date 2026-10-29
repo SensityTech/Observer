@@ -98,10 +98,11 @@ pub fn mask_command(line: &str) -> Option<String> {
 /// A process's command line as the diagnostics and the audit log may show it: what [`mask`] hides,
 /// and the credentials of a URL (`mysql://user:pass@host`, or a token alone as its user), the
 /// value of any `NAME=value` whose name ends in `password`, `pwd`, `token`, `secret` or `key`
-/// (connection strings, `MYSQL_PWD=`, `API_KEY=`), `--password value`, the `-p<password>` of the
-/// MySQL and MariaDB tools, the password of `-u`/`--user user:password`, and the credentials of an
-/// `Authorization` header. Control characters are dropped. PowerShell's `-enc <base64>` stays: it
-/// is what the program was told to run, not a secret.
+/// (connection strings, `MYSQL_PWD=`, `API_KEY=`, cmd's `set "NAME=value"`, PowerShell's
+/// `$env:NAME = 'value'`), `--password value` and PowerShell's `-Password value`, the
+/// `-p<password>` of the MySQL and MariaDB tools, the password of `-u`/`--user user:password`, and
+/// the credentials of an `Authorization` header. Control characters are dropped. PowerShell's
+/// `-enc <base64>` stays: it is what the program was told to run, not a secret.
 pub fn mask_command_line(line: &str) -> String {
     let line: String = line.chars().filter(|c| !c.is_control()).collect();
     let lower = line.to_ascii_lowercase();
@@ -120,15 +121,13 @@ pub fn mask_command_line(line: &str) -> String {
         }
     }
     for (equals, _) in line.match_indices('=') {
-        let name = &lower[line[..equals].trim_end_matches(is_word).len()..equals];
-        if SECRET_NAMES.iter().any(|secret| name.ends_with(secret)) {
-            secrets.push(option_value(&line, equals + 1, None));
+        if let Some(value) = assigned_secret(&line, &lower, equals) {
+            secrets.push(value);
         }
     }
-    for (start, _) in lower.match_indices("--password") {
-        let end = start + "--password".len();
-        if line[end..].starts_with([' ', '\t']) {
-            secrets.push(value_after(&line, end));
+    for option in ["--password", "-password"] {
+        for (start, _) in options(&lower, option) {
+            secrets.extend(next_word(&line, start + option.len()));
         }
     }
     if lower
@@ -142,11 +141,9 @@ pub fn mask_command_line(line: &str) -> String {
     for option in ["-u", "--user"] {
         for (start, quote) in options(&line, option) {
             let end = start + option.len();
-            let user = if line[end..].starts_with([' ', '\t']) {
-                value_after(&line, end)
-            } else {
+            let user = next_word(&line, end).unwrap_or_else(|| {
                 option_value(&line, end + usize::from(line[end..].starts_with('=')), quote)
-            };
+            });
             if let Some(colon) = line[user.clone()].find(':') {
                 secrets.push(user.start + colon + 1..user.end);
             }
@@ -176,6 +173,50 @@ pub fn mask_command_line(line: &str) -> String {
     }
     shown.push_str(&line[copied..]);
     mask(&shown).unwrap_or(shown)
+}
+
+/// The value the `=` at `equals` gives a variable whose name ends in a secret word: `NAME=value`;
+/// cmd's `set NAME=value`, which runs to the next command, and `set "NAME=value"`, to the quote;
+/// PowerShell's `$name = 'value'` and `$env:NAME = 'value'`, with blanks around `=`.
+fn assigned_secret(line: &str, lower: &str, equals: usize) -> Option<std::ops::Range<usize>> {
+    if line[equals + 1..].starts_with('=') {
+        return None;
+    }
+    let before = line[..equals].trim_end_matches([' ', '\t']);
+    let name_start = before.trim_end_matches(is_word).len();
+    let name = &lower[name_start..before.len()];
+    if name.is_empty() || !SECRET_NAMES.iter().any(|secret| name.ends_with(secret)) {
+        return None;
+    }
+    let prefix = &lower[..name_start];
+    let variable = prefix.ends_with('$') || prefix.ends_with("$env:");
+    if before.len() < equals && !variable {
+        return None;
+    }
+    let value = if variable {
+        let rest = &line[equals + 1..];
+        equals + 1 + rest.len() - rest.trim_start_matches([' ', '\t']).len()
+    } else {
+        equals + 1
+    };
+    let opened = prefix.chars().next_back().filter(|c| matches!(c, '"' | '\''));
+    let unquoted = opened.map_or(prefix, |quote| &prefix[..prefix.len() - quote.len_utf8()]);
+    Some(match opened {
+        _ if !follows_set(unquoted) => option_value(line, value, None),
+        Some(quote) => value..until(line, value, |c| c == quote),
+        None => {
+            let end = until(line, value, |c| "&|\"".contains(c));
+            value..value + line[value..end].trim_end().len()
+        }
+    })
+}
+
+/// The word that follows the blanks after `end`, inside its quotes when it has some. `None` when
+/// no blank follows.
+fn next_word(line: &str, end: usize) -> Option<std::ops::Range<usize>> {
+    let rest = &line[end..];
+    let blanks = rest.len() - rest.trim_start_matches([' ', '\t']).len();
+    (blanks > 0).then(|| option_value(line, end + blanks, None))
 }
 
 /// Where `option` starts a word of `line`, after a blank, a quote or nothing, with that quote.
@@ -571,6 +612,38 @@ mod tests {
     }
 
     #[test]
+    fn a_secret_assigned_by_cmd_or_powershell_loses_its_whole_value() {
+        for (line, shown) in [
+            (
+                r#"cmd /c set "MYSQL_PWD=hunter 2" && mysqldump -u root qbcore"#,
+                r#"cmd /c set "MYSQL_PWD=[REDACTED]" && mysqldump -u root qbcore"#,
+            ),
+            (
+                "cmd /c set MYSQL_PWD=hunter 2&& mysqldump -u root qbcore",
+                "cmd /c set MYSQL_PWD=[REDACTED]&& mysqldump -u root qbcore",
+            ),
+            (
+                r#"powershell -Command "$env:MYSQL_PWD = 'hunter2'; mysqldump -u root qbcore""#,
+                r#"powershell -Command "$env:MYSQL_PWD = '[REDACTED]'; mysqldump -u root qbcore""#,
+            ),
+            (
+                r#"pwsh -c "$password = 'hunter2'; Invoke-Sqlcmd -Password $password""#,
+                r#"pwsh -c "$password = '[REDACTED]'; Invoke-Sqlcmd -Password [REDACTED]""#,
+            ),
+            (
+                r#"pwsh -c "Invoke-Sqlcmd -Username sa -Password 'hunter 2'""#,
+                r#"pwsh -c "Invoke-Sqlcmd -Username sa -Password '[REDACTED]'""#,
+            ),
+            (
+                r#"pwsh -c "if ($token -eq $null) { $apiKey == 'x' }""#,
+                r#"pwsh -c "if ($token -eq $null) { $apiKey == 'x' }""#,
+            ),
+        ] {
+            assert_eq!(mask_command_line(line), shown, "{line:?}");
+        }
+    }
+
+    #[test]
     fn the_short_password_option_of_mariadb_tools_is_masked_quoted_or_not() {
         for (line, shown) in [
             (
@@ -607,6 +680,10 @@ mod tests {
         assert_eq!(
             mask_command_line("curl --user=api:hunter2 -uops:x9 https://api.example.com"),
             "curl --user=api:[REDACTED] -uops:[REDACTED] https://api.example.com"
+        );
+        assert_eq!(
+            mask_command_line("curl -u 'api:hunter 2' --password 'x 9' https://api.example.com"),
+            "curl -u 'api:[REDACTED]' --password '[REDACTED]' https://api.example.com"
         );
         assert_eq!(
             mask_command_line("mysql -u fivem qbcore"),
