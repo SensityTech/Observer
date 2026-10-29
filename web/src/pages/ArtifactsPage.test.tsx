@@ -332,6 +332,41 @@ describe('ArtifactsPage', () => {
         expect(other.queryByRole('button', { name: en.artifacts.job.use })).not.toBeNull();
     });
 
+    it('should drop the install started line once the job card says how it ended', async () => {
+        const job = STATUS.job ?? FIXTURE.job!;
+        const started = { ...job, id: 2, build: 37950, step: 'preCheck' as const, state: 'running' as const };
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(async () => Response.json({ ...STATUS, job: started })),
+        );
+        const { getByRole, getByText, queryByText, say } = await page({ ...STATUS, job: null });
+        const line = [...document.querySelectorAll('tbody tr')].find((each) =>
+            each.textContent?.startsWith('37950'),
+        ) as HTMLElement;
+        fireEvent.click(within(line).getByRole('button', { name: en.artifacts.available.install }));
+        const dialog = getByRole('dialog', { name: en.artifacts.install.title('37950') });
+        fireEvent.click(within(dialog).getByRole('button', { name: en.artifacts.install.confirm }));
+        await waitFor(() => getByText(en.artifacts.available.started('37950')));
+
+        say({ type: 'event', topic: 'server.artifacts', data: { ...STATUS, job: started } });
+        expect(queryByText(en.artifacts.available.started('37950'))).not.toBeNull();
+        say({
+            type: 'event',
+            topic: 'server.artifacts',
+            data: {
+                ...STATUS,
+                job: {
+                    ...started,
+                    state: 'failed',
+                    finishedAt: '2026-10-28T02:31:00Z',
+                    failure: { code: 'unreachable' },
+                },
+            },
+        });
+
+        expect(queryByText(en.artifacts.available.started('37950'))).toBeNull();
+    });
+
     it('should say beside a build in use why it cannot be deleted', async () => {
         await page({ ...STATUS, job: null });
 

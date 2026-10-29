@@ -74,8 +74,29 @@ import { useSchedule } from '../schedule/context';
 import { useServerStatus } from '../server/context';
 import { isRunning } from '../server/state';
 
-/** `focus`: the control it answers goes away with it, so the keyboard moves to the notice. */
-type Outcome = { tone: 'success' | 'warning' | 'danger'; message: string; focus?: boolean };
+/**
+ * `focus`: the control it answers goes away with it, so the keyboard moves to the notice. `until`:
+ * the live status that overtakes it, after which the page shows what came of it instead.
+ */
+type Outcome = {
+    tone: 'success' | 'warning' | 'danger';
+    message: string;
+    focus?: boolean;
+    until?: (status: ArtifactsStatus) => boolean;
+};
+
+/** A job the answer started holds until it ends, or another starts: its card says how it ended. */
+const jobOver = (answer: ArtifactsStatus) => {
+    const id = answer.job?.id;
+    return (status: ArtifactsStatus) =>
+        id !== undefined &&
+        status.job !== null &&
+        (status.job.id > id || (status.job.id === id && status.job.state !== 'running'));
+};
+
+/** A restart onto `build` holds until FXServer runs it, or a notice says what happened instead. */
+const restarted = (build: number, answer: ArtifactsStatus) => (status: ArtifactsStatus) =>
+    status.running === build || (status.notice !== null && status.notice.at !== answer.notice?.at);
 
 type Open =
     | { kind: 'install'; entry: CatalogEntry }
@@ -140,10 +161,13 @@ export function ArtifactsPage() {
         }
     }, [outcome]);
     const close = () => setOpen(null);
-    const done = (message: string) => {
+    const done = (message: string, until?: Outcome['until']) => {
         setOpen(null);
-        setOutcome({ tone: 'success', message });
+        setOutcome({ tone: 'success', message, until });
     };
+    if (outcome?.until !== undefined && status !== null && outcome.until(status)) {
+        setOutcome(null);
+    }
 
     return (
         <div className="flex flex-col gap-5 max-md:gap-4">
@@ -1376,7 +1400,7 @@ export function InstallDialog({
     entry: CatalogEntry;
     status: ArtifactsStatus;
     onClose: () => void;
-    onDone: (message: string) => void;
+    onDone: (message: string, until?: Outcome['until']) => void;
 }) {
     const { t, format } = useI18n();
     const words = t.artifacts.install;
@@ -1385,7 +1409,7 @@ export function InstallDialog({
     const [allowed, setAllowed] = useState(false);
     const install = useMutation({
         mutationFn: () => installBuild(entry.build, endOfLife && allowed),
-        onSuccess: () => onDone(available.started(String(entry.build))),
+        onSuccess: (answer) => onDone(available.started(String(entry.build)), jobOver(answer)),
     });
     const blocked = endOfLife && !allowed;
     return (
@@ -1450,7 +1474,7 @@ export function UseDialog({
     status: ArtifactsStatus;
     catalog: CatalogView | null;
     onClose: () => void;
-    onDone: (message: string) => void;
+    onDone: (message: string, until?: Outcome['until']) => void;
 }) {
     const { t } = useI18n();
     const me = useMe();
@@ -1481,12 +1505,13 @@ export function UseDialog({
                 confirmKvpRollback: kvp && typed.trim() === String(KVP_BUILD),
                 allowEndOfLife: endOfLife && allowed,
             }),
-        onSuccess: () =>
-            onDone(
-                mode === 'now' && status.running === build
-                    ? words.kept(String(build))
-                    : words.done[mode](String(build)),
-            ),
+        onSuccess: (answer) =>
+            mode === 'now' && status.running === build
+                ? onDone(words.kept(String(build)))
+                : onDone(
+                      words.done[mode](String(build)),
+                      mode === 'now' ? restarted(build, answer) : undefined,
+                  ),
     });
     const blocked =
         (kvp && typed.trim() !== String(KVP_BUILD)) ||
@@ -1590,7 +1615,7 @@ export function DeleteDialog({
     status: ArtifactsStatus;
     catalog: CatalogView | null;
     onClose: () => void;
-    onDone: (message: string) => void;
+    onDone: (message: string, until?: Outcome['until']) => void;
 }) {
     const { t, format } = useI18n();
     const words = t.artifacts.delete;
@@ -1636,7 +1661,7 @@ export function CleanupDialog({
     onDone,
 }: {
     onClose: () => void;
-    onDone: (message: string) => void;
+    onDone: (message: string, until?: Outcome['until']) => void;
 }) {
     const { t, format } = useI18n();
     const words = t.artifacts.cleanup;
@@ -1717,7 +1742,7 @@ export function ImportDialog({
     onDone,
 }: {
     onClose: () => void;
-    onDone: (message: string) => void;
+    onDone: (message: string, until?: Outcome['until']) => void;
 }) {
     const { t } = useI18n();
     const words = t.artifacts.import;
@@ -1736,7 +1761,7 @@ export function ImportDialog({
     const valid = /^\d{4,7}$/.test(build.trim());
     const start = useMutation({
         mutationFn: () => importBuild(folder.trim(), Number(build.trim())),
-        onSuccess: () => onDone(words.started(build.trim())),
+        onSuccess: (answer) => onDone(words.started(build.trim()), jobOver(answer)),
     });
     const refused =
         start.error instanceof ApiError && start.error.code === 'invalid_import_folder'
