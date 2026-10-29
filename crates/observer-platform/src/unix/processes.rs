@@ -23,7 +23,8 @@ const AFTER_HINT: Duration = Duration::from_millis(5);
 /// Hints bring scans at most this close together: 20 a second.
 const HINTED_GAP: Duration = Duration::from_millis(50);
 /// A process that still has its parent's image and arguments after this long forked without
-/// running anything else, and is recorded as it is.
+/// running anything else, and one with an image but no arguments was started that way: either is
+/// recorded as it is.
 const FORK_GRACE: Duration = Duration::from_secs(1);
 /// The dynamic loaders whose opening means a program is being started on the host.
 const LOADERS: [&str; 3] = [
@@ -223,7 +224,9 @@ impl Poller {
             };
             let copy =
                 member.image.is_some() && member.image.as_ref() == parent_image && member.args == parent_args;
-            if copy && now.saturating_duration_since(member.seen) < FORK_GRACE {
+            // In the middle of an exec the new image reads a moment before its arguments do.
+            let mid_exec = member.image.is_some() && member.args.is_empty();
+            if (copy || mid_exec) && now.saturating_duration_since(member.seen) < FORK_GRACE {
                 continue;
             }
             let info = ProcessInfo {
@@ -529,6 +532,23 @@ mod tests {
             "{seen:#?}"
         );
         assert!(started(&seen, "sleep").is_some(), "{seen:#?}");
+    }
+
+    /// An exec shows the new image a moment before its arguments; `exec -a ""` keeps that state.
+    #[tokio::test]
+    async fn a_process_read_with_an_image_and_no_arguments_is_read_again_until_the_grace_ends() {
+        let spawned_at = Instant::now();
+        let mut spawned = spawn(&shell(r#"bash -c 'sleep 1.6 | (exec -a "" cat)'"#)).unwrap();
+
+        let seen = changes_until(&mut spawned.changes, |seen| started(seen, "cat").is_some()).await;
+
+        let cat = started(&seen, "cat").unwrap_or_else(|| panic!("no cat in {seen:#?}"));
+        assert!(cat.args.is_empty(), "{cat:?}");
+        assert!(
+            spawned_at.elapsed() >= FORK_GRACE,
+            "reported before the grace ended"
+        );
+        spawned.tree.kill().unwrap();
     }
 
     #[tokio::test]
