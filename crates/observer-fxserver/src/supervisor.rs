@@ -1680,7 +1680,8 @@ impl Actor {
 
     fn report_dumps(&mut self, collected: std::io::Result<Collected>) {
         match collected {
-            Ok(collected) if collected.moved.is_empty() => {}
+            // The trim may have taken older dumps even when every moved one went too.
+            Ok(collected) if collected.moved.is_empty() && collected.removed.is_empty() => {}
             Ok(Collected { moved, removed }) => {
                 for path in &moved {
                     self.note(&format!("crash dump saved to {}", path.display()));

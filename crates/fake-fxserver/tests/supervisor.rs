@@ -1457,3 +1457,52 @@ async fn a_hang_dump_is_reported_though_an_older_dump_could_not_be_removed() {
     assert_eq!(removed, &Vec::<PathBuf>::new());
     lab.shut_down(false).await;
 }
+
+#[tokio::test]
+async fn dumps_the_size_cap_removes_are_reported_even_when_nothing_moved_stays() {
+    let mut lab = Lab::tuned(&[("fake_crash_dump", "1")], |settings| {
+        settings.dumps = observer_fxserver::crashes::DumpLimits {
+            files: 10,
+            bytes: 64 * 1024,
+        };
+    })
+    .await;
+    lab.supervisor.start("test").await.unwrap();
+    lab.state(State::Online).await;
+    lab.type_command("fake_crash", "test").await;
+    let EventKind::CrashDumps { paths: first, .. } = lab
+        .event(|kind| matches!(kind, EventKind::CrashDumps { .. }))
+        .await
+    else {
+        unreachable!()
+    };
+    lab.state(State::Online).await;
+    // FXServer's full dump of the next crash, larger than the cap on its own, and finished after
+    // its minidump.
+    let build_crashes = fake_program(&lab.dir.path().join("build"))
+        .parent()
+        .unwrap()
+        .join("crashes");
+    fs::create_dir_all(&build_crashes).unwrap();
+    let full = build_crashes.join("0badc0de-full.dmp");
+    fs::write(&full, vec![0; 128 * 1024]).unwrap();
+    fs::File::options()
+        .write(true)
+        .open(&full)
+        .unwrap()
+        .set_modified(std::time::SystemTime::now() + Duration::from_hours(1))
+        .unwrap();
+
+    lab.type_command("fake_crash", "test").await;
+
+    let EventKind::CrashDumps { paths, removed } = lab
+        .event(|kind| matches!(kind, EventKind::CrashDumps { .. }))
+        .await
+    else {
+        unreachable!()
+    };
+    assert!(!first[0].exists());
+    assert!(removed.contains(&first[0]), "{removed:?}");
+    assert_eq!(paths, Vec::<PathBuf>::new());
+    lab.shut_down(false).await;
+}
