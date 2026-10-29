@@ -5587,8 +5587,10 @@ dependencies = [
  "observer-domain",
  "serde_json",
  "sha2",
+ "tar",
  "tempfile",
  "walkdir",
+ "zip",
 ]
 
 [[package]]

@@ -1,6 +1,7 @@
 //! Project tasks, run with `cargo xtask <task>`.
 
 mod compress;
+mod dist;
 mod icons;
 mod licences;
 
@@ -18,7 +19,7 @@ tasks:
   web       build the panel into web/dist and precompress it
   bindings  regenerate the TypeScript types and permission constants in web/src/api/generated
   check     run every check CI runs: formatting, lints, tests, types, panel build
-  dist      build the panel, then a release binary that embeds it
+  dist      the release archive of a target, its checksum and its checks (--target, --max-glibc)
   icons     draw the executable's icons from the mark (--check: fail if they differ)
   licences  list the third-party software a target ships, with its licence texts (--target)";
 
@@ -28,7 +29,7 @@ fn main() -> ExitCode {
         Some("web") => web(),
         Some("bindings") => bindings(),
         Some("check") => check(),
-        Some("dist") => dist(),
+        Some("dist") => target(&args).and_then(|target| dist::dist(&target, value(&args, "--max-glibc"))),
         Some("icons") => icons::run(&root(), args.iter().any(|arg| arg == "--check")),
         Some("licences") => target(&args).and_then(|target| licences::write(&root(), &target).map(drop)),
         _ => {
@@ -72,6 +73,12 @@ fn target(args: &[String]) -> anyhow::Result<String> {
             .context("--target needs a target triple"),
         None => licences::host(),
     }
+}
+
+/// What follows `flag` on the command line.
+fn value<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
+    let at = args.iter().position(|arg| arg == flag)?;
+    args.get(at + 1).map(String::as_str)
 }
 
 /// ts-rs writes the bindings from the `export_bindings_*` tests it generates.
@@ -129,11 +136,6 @@ fn check() -> anyhow::Result<()> {
         run(npm().args(["run", script]).current_dir(&web))?;
     }
     Ok(())
-}
-
-fn dist() -> anyhow::Result<()> {
-    web()?;
-    run(cargo().args(["build", "--release", "--package", "observer"]))
 }
 
 /// The committed bindings must match what the Rust types generate.
