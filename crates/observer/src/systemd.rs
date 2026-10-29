@@ -45,18 +45,42 @@ pub fn print_unit(config: &Path) -> anyhow::Result<()> {
             config.display()
         );
     }
-    let config = config.display();
-    eprintln!();
-    eprintln!("Install it with:");
-    eprintln!(
-        "  observer --config {config} service print-unit | sudo tee /etc/systemd/system/observer.service"
+    eprint!(
+        "{}",
+        instructions(plain(binary.as_os_str())?, plain(config.as_os_str())?, &user)
     );
-    eprintln!("  sudo systemctl daemon-reload && sudo systemctl enable --now observer");
-    eprintln!("Then, as {user}, print the link that creates the owner:");
-    eprintln!("  observer --config {config} setup-link");
-    eprintln!("Follow its logs with:");
-    eprintln!("  journalctl -u observer -f");
     Ok(())
+}
+
+/// What to do with the unit. The commands name this binary, which an extracted archive does not
+/// put on `PATH`, and run as printed in a POSIX shell.
+fn instructions(binary: &str, config: &str, user: &str) -> String {
+    let observer = format!("{} --config {}", shell_quoted(binary), shell_quoted(config));
+    format!(
+        "
+Install it with:
+  {observer} service print-unit | sudo tee /etc/systemd/system/observer.service
+  sudo systemctl daemon-reload && sudo systemctl enable --now observer
+Then, as {user}, print the link that creates the owner:
+  {observer} setup-link
+Follow its logs with:
+  journalctl -u observer -f
+"
+    )
+}
+
+/// A word a POSIX shell reads back as `text`: bare when the shell would do nothing with it,
+/// single-quoted otherwise, a quote inside written `'\''`.
+fn shell_quoted(text: &str) -> String {
+    let bare = !text.is_empty()
+        && text
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || "/._-+,:@%=".contains(character));
+    if bare {
+        text.to_owned()
+    } else {
+        format!("'{}'", text.replace('\'', r"'\''"))
+    }
 }
 
 fn unit(binary: &Path, config: &Path, folder: &Path, user: &str) -> anyhow::Result<String> {
@@ -334,6 +358,31 @@ mod tests {
             "{unit}"
         );
         assert!(unit.contains("WorkingDirectory=/srv/bob's\n"), "{unit}");
+    }
+
+    #[test]
+    fn the_install_commands_name_this_binary_and_quote_its_paths() {
+        let printed = instructions(
+            "/home/ada/observer-0.1.0/observer",
+            "/srv/bob's server/observer.toml",
+            "ada",
+        );
+
+        for line in [
+            r"  /home/ada/observer-0.1.0/observer --config '/srv/bob'\''s server/observer.toml' service print-unit | sudo tee /etc/systemd/system/observer.service",
+            r"  /home/ada/observer-0.1.0/observer --config '/srv/bob'\''s server/observer.toml' setup-link",
+            "Then, as ada, print the link that creates the owner:",
+        ] {
+            assert!(
+                printed.lines().any(|candidate| candidate == line),
+                "no {line:?} in\n{printed}"
+            );
+        }
+        assert_eq!(
+            shell_quoted("/srv/fivem/observer.toml"),
+            "/srv/fivem/observer.toml"
+        );
+        assert_eq!(shell_quoted("/srv/$HOME/a;b"), "'/srv/$HOME/a;b'");
     }
 
     #[test]
