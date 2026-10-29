@@ -181,12 +181,7 @@ impl StatusWindow {
         ui.horizontal(|ui| {
             let (rect, _) = ui.allocate_exact_size(Vec2::splat(24.0), Sense::hover());
             paint_mark(ui.painter(), rect, &shown.palette);
-            ui.label(
-                RichText::new(text::TITLE)
-                    .size(17.0)
-                    .strong()
-                    .color(shown.palette.ink),
-            );
+            ui.label(RichText::new(text::TITLE).size(17.0).color(shown.palette.ink));
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 let version = ui.label(
                     RichText::new(build.version)
@@ -262,7 +257,7 @@ impl StatusWindow {
             .inner_margin(Margin::same(14))
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
-                ui.label(RichText::new(text::SETUP_TITLE).strong().color(palette.ink));
+                ui.label(RichText::new(text::SETUP_TITLE).size(15.0).color(palette.ink));
                 ui.add(
                     egui::Label::new(RichText::new(&url).monospace().color(palette.ink_2))
                         .selectable(true)
@@ -415,7 +410,7 @@ impl StatusWindow {
             .show(context, |ui| {
                 ui.set_width(WIDTH - 80.0);
                 ui.spacing_mut().item_spacing = Vec2::new(8.0, 10.0);
-                ui.label(RichText::new(title).size(16.0).strong().color(palette.ink));
+                ui.label(RichText::new(title).size(16.0).color(palette.ink));
                 ui.label(RichText::new(body).color(palette.ink_2));
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if button(ui, palette, yes, kind, None).clicked() {
