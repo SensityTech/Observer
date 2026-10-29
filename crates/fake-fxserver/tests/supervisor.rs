@@ -1506,3 +1506,39 @@ async fn dumps_the_size_cap_removes_are_reported_even_when_nothing_moved_stays()
     assert_eq!(paths, Vec::<PathBuf>::new());
     lab.shut_down(false).await;
 }
+
+/// Node's `spawn(cmd, { detached: true, env: {...} })` does the same: a session and an environment
+/// of its own, so neither FXServer's group nor its marker finds the child.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_detached_child_with_an_environment_of_its_own_is_not_ended_while_it_runs() {
+    let mut lab = Lab::online(&[]).await;
+    let mut processes = lab.supervisor.processes();
+
+    lab.type_command("fake_spawn /usr/bin/env -i /usr/bin/setsid /bin/sleep 25", "test")
+        .await;
+
+    let (process, _) = started(&mut processes, |process, _| {
+        process.args.iter().any(|arg| arg == "25")
+    })
+    .await;
+    // Two reconciliations at least.
+    let ended = timeout(Duration::from_secs(12), async {
+        loop {
+            if processes.recv().await.unwrap().change == (ProcessChange::Ended { pid: process.pid }) {
+                return;
+            }
+        }
+    })
+    .await;
+    let alive = Path::new(&format!("/proc/{}", process.pid)).exists();
+    // It left the group: the tree's kill does not reach it.
+    let _ = std::process::Command::new("kill")
+        .arg(process.pid.to_string())
+        .status();
+    lab.shut_down(false).await;
+    assert!(
+        ended.is_err() || !alive,
+        "{process:?} was reported ended while it ran"
+    );
+}

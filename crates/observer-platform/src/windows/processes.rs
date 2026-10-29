@@ -152,6 +152,12 @@ impl ProcessTree {
         self.members()
     }
 
+    /// Whether `pid`, which the tree reported, still runs. A process never leaves the job, so the
+    /// job's list answers; `stamp` matters on Linux only.
+    pub fn still_runs(&self, pid: u32, _stamp: Option<u64>) -> bool {
+        self.members().is_ok_and(|members| members.contains(&pid))
+    }
+
     /// Writes a minidump of the main process into `file`: the threads' stacks and contexts, their
     /// names and times, and the modules. No heap and no environment block, which hold FXServer's
     /// secrets, so it stays a few megabytes.

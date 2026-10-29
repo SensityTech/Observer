@@ -271,6 +271,13 @@ impl ProcessTree {
         })
     }
 
+    /// Whether `pid`, which the tree reported started at `stamp`, still runs. It may have left the
+    /// tree's session and dropped the marker since, as a detached child with an environment of its
+    /// own does: [`Self::all_members`] no longer finds it, yet it runs, and the poller follows it.
+    pub fn still_runs(&self, pid: u32, stamp: Option<u64>) -> bool {
+        leftovers::stat(pid).is_some_and(|stat| stamp.is_none_or(|stamp| stat.start == stamp))
+    }
+
     /// Every process in the tree: FXServer's session and group, and whatever carries its marker
     /// after leaving them.
     pub fn all_members(&self) -> io::Result<Vec<u32>> {

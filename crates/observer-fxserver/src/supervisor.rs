@@ -1870,27 +1870,27 @@ impl TreeFollower {
             return;
         };
         let main = self.context.main_pid;
-        let members = tokio::task::spawn_blocking(move || {
-            let members = tree.all_members().ok()?;
-            Some(
-                members
-                    .into_iter()
-                    .filter(|&pid| pid != main)
-                    .filter_map(|pid| tree.describe(pid))
-                    .collect::<Vec<_>>(),
-            )
+        let reported: Vec<(u32, Option<u64>)> =
+            self.running.iter().map(|(&pid, &stamp)| (pid, stamp)).collect();
+        let looked = tokio::task::spawn_blocking(move || {
+            let members: HashSet<u32> = tree.all_members().ok()?.into_iter().collect();
+            // Reported processes the members miss may only have left the tree's session.
+            let gone: Vec<u32> = reported
+                .into_iter()
+                .filter(|(pid, stamp)| !members.contains(pid) && !tree.still_runs(*pid, *stamp))
+                .map(|(pid, _)| pid)
+                .collect();
+            let members: Vec<ProcessInfo> = members
+                .into_iter()
+                .filter(|&pid| pid != main)
+                .filter_map(|pid| tree.describe(pid))
+                .collect();
+            Some((members, gone))
         })
         .await;
-        let Ok(Some(members)) = members else {
+        let Ok(Some((members, gone))) = looked else {
             return;
         };
-        let alive: HashSet<u32> = members.iter().map(|member| member.pid).collect();
-        let gone: Vec<u32> = self
-            .running
-            .keys()
-            .filter(|pid| !alive.contains(pid))
-            .copied()
-            .collect();
         for pid in gone {
             self.apply(TreeChange::Ended { pid });
         }
