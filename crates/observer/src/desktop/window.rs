@@ -196,7 +196,7 @@ impl StatusWindow {
                 let commit = match (build.commit, build.commit_date) {
                     (Some(commit), Some(date)) => format!("{commit}, {date}"),
                     (Some(commit), None) => commit.to_owned(),
-                    _ => "development build".to_owned(),
+                    _ => text::DEVELOPMENT_BUILD.to_owned(),
                 };
                 version.on_hover_text(commit);
             });
@@ -308,9 +308,9 @@ impl StatusWindow {
             .or(shown.in_flight.map(|_| ""));
         let label = |action: Action, word: &'static str| match shown.in_flight {
             Some(flying) if flying == action => match action {
-                Action::Start => "Starting…",
-                Action::Stop => "Stopping…",
-                Action::Restart => "Restarting…",
+                Action::Start => text::START_SENT,
+                Action::Stop => text::STOP_SENT,
+                Action::Restart => text::RESTART_SENT,
             },
             _ => word,
         };

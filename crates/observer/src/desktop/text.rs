@@ -30,6 +30,12 @@ pub const STOP_ASKING: &str = "Stop…";
 pub const RESTART_ASKING: &str = "Restart…";
 pub const CANCEL: &str = "Cancel";
 pub const STOPPING_OBSERVER: &str = "Stopping FXServer, then Observer…";
+/// What a control says while its request is on its way.
+pub const START_SENT: &str = "Starting…";
+pub const STOP_SENT: &str = "Stopping…";
+pub const RESTART_SENT: &str = "Restarting…";
+/// The version's hover text when no commit is known, as the About page words it.
+pub const DEVELOPMENT_BUILD: &str = "Development build";
 
 pub const SETUP_TITLE: &str = "Create the owner account";
 pub const OPEN_SETUP: &str = "Open the setup page";
@@ -436,6 +442,7 @@ mod tests {
             SHUTTING_DOWN,
             INTERNAL,
             UNKNOWN_FAILURE,
+            DEVELOPMENT_BUILD,
             RESTART_TITLE,
             STOP_TITLE,
             KEEP_STOPPED_TITLE,
