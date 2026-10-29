@@ -1025,7 +1025,7 @@ export const en = {
         development: 'Development build',
         commitDate: 'Commit date',
         platform: 'Platform',
-        profile: 'Build',
+        profile: 'Profile',
         profiles: { release: 'Release', debug: 'Debug' },
         systems: { windows: 'Windows', linux: 'Linux' },
         thirdParty: 'Third-party software',

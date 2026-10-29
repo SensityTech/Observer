@@ -108,6 +108,13 @@ describe('AboutPage', () => {
         expect(view.getByText(en.about.profiles.release)).toBeTruthy();
     });
 
+    it('should not name the compile profile with the word the status bar uses for FXServer', async () => {
+        const view = await page(release, licences);
+
+        expect(view.getByText(en.about.profile)).toBeTruthy();
+        expect(view.queryByText(en.status.build)).toBeNull();
+    });
+
     it('should say a build without a commit is a development build', async () => {
         const view = await page({ ...release, commit: null, commitDate: null, profile: 'debug' }, licences);
 
