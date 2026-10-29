@@ -5,6 +5,7 @@ use std::thread;
 use std::time::Duration;
 
 use super::ProcessTree;
+use super::usage::{parse_comm, parse_stat};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RunState {
@@ -91,31 +92,30 @@ fn tasks(pid: u32) -> io::Result<HashMap<u32, (String, RunState, u64)>> {
         else {
             continue;
         };
-        let Ok(stat) = fs::read_to_string(format!("/proc/{pid}/task/{tid}/stat")) else {
+        let Ok(text) = fs::read_to_string(format!("/proc/{pid}/task/{tid}/stat")) else {
             continue;
         };
-        let Some((state, ticks)) = parse_task_stat(&stat) else {
+        let (Some(name), Some(stat)) = (parse_comm(&text), parse_stat(&text)) else {
             continue;
         };
-        let name = fs::read_to_string(format!("/proc/{pid}/task/{tid}/comm")).unwrap_or_default();
-        tasks.insert(tid, (name.trim_end_matches('\n').to_owned(), state, ticks));
+        let ticks = stat.user.saturating_add(stat.system);
+        tasks.insert(tid, (name.to_owned(), RunState::of(stat.state), ticks));
     }
     Ok(tasks)
 }
 
-/// A task's `stat`, counted from the last `)`: the state letter, then `utime` and `stime`.
-fn parse_task_stat(text: &str) -> Option<(RunState, u64)> {
-    let fields: Vec<&str> = text.get(text.rfind(')')? + 1..)?.split_whitespace().collect();
-    let state = match *fields.first()? {
-        "R" => RunState::Running,
-        "S" | "I" => RunState::Sleeping,
-        "D" => RunState::DiskWait,
-        "T" | "t" => RunState::Stopped,
-        "Z" | "X" => RunState::Zombie,
-        _ => RunState::Other,
-    };
-    let field = |number: usize| fields.get(number - 3)?.parse::<u64>().ok();
-    Some((state, field(14)?.checked_add(field(15)?)?))
+impl RunState {
+    /// The state a task's `stat` gives by its letter.
+    fn of(letter: u8) -> Self {
+        match letter {
+            b'R' => Self::Running,
+            b'S' | b'I' => Self::Sleeping,
+            b'D' => Self::DiskWait,
+            b'T' | b't' => Self::Stopped,
+            b'Z' | b'X' => Self::Zombie,
+            _ => Self::Other,
+        }
+    }
 }
 
 /// The first field of a task's `syscall`: the number of the call it waits in, `running` while it
@@ -136,8 +136,12 @@ mod tests {
         let line =
             "812 (UV loop: svMain) R 1 812 812 0 -1 4194560 100 0 0 0 250 30 0 0 20 0 12 0 98765 1000 77\n";
 
-        assert_eq!(parse_task_stat(line), Some((RunState::Running, 280)));
-        assert_eq!(parse_task_stat("812 (x) S 1"), None);
+        let stat = parse_stat(line).unwrap();
+        assert_eq!(RunState::of(stat.state), RunState::Running);
+        assert_eq!(stat.user + stat.system, 280);
+        assert_eq!(parse_comm(line), Some("UV loop: svMain"));
+        assert_eq!(RunState::of(b'I'), RunState::Sleeping);
+        assert_eq!(RunState::of(b'D'), RunState::DiskWait);
     }
 
     #[test]

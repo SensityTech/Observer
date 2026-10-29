@@ -171,13 +171,15 @@ fn ticks(count: u64) -> Duration {
         + Duration::from_nanos((count % per_second) * 1_000_000_000 / per_second)
 }
 
-/// The fields of `stat` the statistics use, times in clock ticks.
+/// The fields of `stat` the statistics and the thread states use, times in clock ticks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct Stat {
+pub(super) struct Stat {
+    /// The state letter: `R` running, `S` sleeping, `D` waiting on a device...
+    pub(super) state: u8,
     minor_faults: u64,
     major_faults: u64,
-    user: u64,
-    system: u64,
+    pub(super) user: u64,
+    pub(super) system: u64,
     /// `cutime` plus `cstime`: the children it waited for.
     waited: u64,
     threads: u32,
@@ -188,10 +190,11 @@ struct Stat {
 /// `/proc/<pid>/stat`, or a task's, counted from the last `)` since the command name may hold
 /// spaces and parentheses: the state is field 3, `minflt` 10, `majflt` 12, `utime` 14, `stime` 15,
 /// `cutime` 16, `cstime` 17, `num_threads` 20, `starttime` 22.
-fn parse_stat(text: &str) -> Option<Stat> {
+pub(super) fn parse_stat(text: &str) -> Option<Stat> {
     let fields: Vec<&str> = text.get(text.rfind(')')? + 1..)?.split_whitespace().collect();
     let field = |number: usize| fields.get(number - 3)?.parse::<u64>().ok();
     Some(Stat {
+        state: *fields.first()?.as_bytes().first()?,
         minor_faults: field(10)?,
         major_faults: field(12)?,
         user: field(14)?,
@@ -203,7 +206,7 @@ fn parse_stat(text: &str) -> Option<Stat> {
 }
 
 /// The command name of a `stat` line: what lies between the first `(` and the last `)`.
-fn parse_comm(text: &str) -> Option<&str> {
+pub(super) fn parse_comm(text: &str) -> Option<&str> {
     text.get(text.find('(')? + 1..text.rfind(')')?)
 }
 
@@ -437,6 +440,7 @@ mod tests {
         assert_eq!(
             parse_stat(line),
             Some(Stat {
+                state: b'S',
                 minor_faults: 1500,
                 major_faults: 7,
                 user: 512,
