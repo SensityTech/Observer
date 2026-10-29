@@ -24,7 +24,7 @@ use observer_app::{Accounts, Schedule, SetupToken, Supervision};
 use observer_domain::about::Build;
 use observer_domain::audit::ActorKind;
 use observer_domain::schedule::ScheduleStatus;
-use observer_domain::server::{LaunchReadiness, ServerState, ServerStatus};
+use observer_domain::server::{LaunchReadiness, ServerState, ServerStatus, StateCause};
 use observer_platform::{MessageLoop, Waker};
 use tokio::runtime::Handle;
 use tokio::sync::watch;
@@ -119,6 +119,15 @@ pub(crate) fn is_running(state: ServerState) -> bool {
         state,
         ServerState::Starting | ServerState::Online | ServerState::Degraded | ServerState::Hung
     )
+}
+
+/// FXServer stops for a restart someone asked for or the schedule made, and starts again next.
+pub(crate) fn restarting(status: &ServerStatus) -> bool {
+    status.state == ServerState::Stopping
+        && matches!(
+            status.cause,
+            Some(StateCause::Restart { .. } | StateCause::Scheduled { .. })
+        )
 }
 
 /// What the desktop threads and the runtime share.
@@ -483,5 +492,24 @@ mod tests {
                 "{state:?} with {launch:?}"
             );
         }
+    }
+
+    #[test]
+    fn a_stop_that_leads_to_a_start_is_a_restart() {
+        let stopping = |cause| ServerStatus {
+            cause: Some(cause),
+            ..status(S::Stopping, L::Ready)
+        };
+        let local = || "local".to_owned();
+
+        assert!(restarting(&stopping(StateCause::Restart { by: local() })));
+        assert!(restarting(&stopping(StateCause::Scheduled {
+            by: "observer".to_owned()
+        })));
+        assert!(!restarting(&stopping(StateCause::Requested { by: local() })));
+        assert!(!restarting(&ServerStatus {
+            cause: Some(StateCause::Restart { by: local() }),
+            ..status(S::Starting, L::Ready)
+        }));
     }
 }

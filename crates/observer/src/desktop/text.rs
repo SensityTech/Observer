@@ -30,6 +30,8 @@ pub const STOP_ASKING: &str = "Stop…";
 pub const RESTART_ASKING: &str = "Restart…";
 pub const CANCEL: &str = "Cancel";
 pub const STOPPING_OBSERVER: &str = "Stopping FXServer, then Observer…";
+/// The state while FXServer stops for a restart, to start again.
+pub const RESTARTING: &str = "Restarting";
 /// What a control says while its request is on its way.
 pub const START_SENT: &str = "Starting…";
 pub const STOP_SENT: &str = "Stopping…";
@@ -443,6 +445,7 @@ mod tests {
             INTERNAL,
             UNKNOWN_FAILURE,
             DEVELOPMENT_BUILD,
+            RESTARTING,
             RESTART_TITLE,
             STOP_TITLE,
             KEEP_STOPPED_TITLE,

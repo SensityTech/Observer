@@ -17,7 +17,7 @@ use observer_domain::server::{ServerState, ServerStatus};
 use tracing::warn;
 
 use super::palette::{self, CARD_RADIUS, CONTROL_RADIUS, Led, Palette};
-use super::{Action, Confirm, Request, Shared, controls, is_running, text};
+use super::{Action, Confirm, Request, Shared, controls, is_running, restarting, text};
 
 const WIDTH: f32 = 440.0;
 const PADDING: i8 = 20;
@@ -317,7 +317,8 @@ impl StatusWindow {
         // The setup page takes the ink while it shows: it is what to do first.
         let ink = if setup_shown { Kind::Plain } else { Kind::Ink };
         ui.horizontal(|ui| {
-            if is_running(status.state) {
+            // Restart stays in place, off, while the restart it made stops FXServer.
+            if is_running(status.state) || restarting(status) {
                 let reason = busy.or(rules.restart);
                 if button(ui, palette, label(Action::Restart, text::RESTART), ink, reason).clicked() {
                     self.ask(Some(Confirm::Restart));
@@ -460,6 +461,8 @@ fn state_line(ui: &mut Ui, shown: &Shown) {
         paint_led(ui, palette, led);
         let word = if shown.stopping {
             text::STOPPING_OBSERVER
+        } else if restarting(status) {
+            text::RESTARTING
         } else {
             text::state(status.state)
         };
