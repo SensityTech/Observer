@@ -507,6 +507,7 @@ export const en = {
             deleteBody:
                 "Its dumps hold FXServer's memory. They are deleted from the host; the analysis stays.",
             deleteConfirm: 'Delete files',
+            deleted: 'Files deleted from the host',
             emptyTitle: 'No crash or hang recorded',
             emptyBody: 'When FXServer crashes or stops responding, what Observer reads of it shows here.',
         },

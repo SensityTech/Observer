@@ -165,6 +165,32 @@ describe('DiagnosticsPage', () => {
         live.stop();
     });
 
+    it('should keep the keyboard on the page once the deleted files take their button away', async () => {
+        const deleted = { ...CRASH, files: CRASH.files.map((file) => ({ ...file, kept: false })) };
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(async () => answer(200, deleted)),
+        );
+        const { getAllByRole, getByRole, getByText, live } = await page(true);
+
+        const trigger = getAllByRole('button', { name: en.diagnostics.crashes.deleteFiles })[1]!;
+        trigger.focus();
+        fireEvent.click(trigger);
+        const confirm = getByRole('button', { name: en.diagnostics.crashes.deleteConfirm });
+        confirm.focus();
+        fireEvent.click(confirm);
+        await settle();
+        await settle();
+
+        expect(crashes().getAllByRole('button', { name: en.diagnostics.crashes.deleteFiles })).toHaveLength(
+            1,
+        );
+        expect(document.activeElement).toBe(
+            getByText(en.diagnostics.crashes.deleted).closest('[role="status"]'),
+        );
+        live.stop();
+    });
+
     it('should say what shows once FXServer runs when nothing was recorded yet', async () => {
         const empty: DiagnosticsSnapshot = {
             ...SNAPSHOT,

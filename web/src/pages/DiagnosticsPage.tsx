@@ -1,5 +1,5 @@
 import { Cpu, Download, Network, OctagonX, Trash2, TriangleAlert, type LucideIcon } from 'lucide-react';
-import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 
 import { deleteCrashFiles, downloadCrashFile, MAX_DOWNLOAD } from '../api/diagnostics';
 import type { Crash } from '../api/generated/Crash';
@@ -202,6 +202,15 @@ function CrashesCard({
     const { t, format } = useI18n();
     const [open, setOpen] = useState<number | null>(null);
     const [deleting, setDeleting] = useState<Crash | null>(null);
+    const [deleted, setDeleted] = useState(0);
+    const notice = useRef<HTMLDivElement>(null);
+    // The deletion takes the row's button away with the dialog: the keyboard goes to the notice
+    // saying what happened rather than back to the top of the document.
+    useEffect(() => {
+        if (deleted > 0 && document.activeElement === document.body) {
+            notice.current?.focus();
+        }
+    }, [deleted]);
     return (
         <Card
             id="diagnostics-crashes"
@@ -209,6 +218,13 @@ function CrashesCard({
             title={t.diagnostics.crashes.title}
             meta={folderMeta(t, format, folder)}
         >
+            {deleted > 0 && (
+                <div className="px-5 pt-4 max-md:px-4">
+                    <Notice ref={notice} tabIndex={-1} tone="success">
+                        {t.diagnostics.crashes.deleted}
+                    </Notice>
+                </div>
+            )}
             {crashes.length === 0 ? (
                 <Empty title={t.diagnostics.crashes.emptyTitle} body={t.diagnostics.crashes.emptyBody} />
             ) : (
@@ -255,6 +271,7 @@ function CrashesCard({
                     onDeleted={(crash) => {
                         onUpdated(crash);
                         setDeleting(null);
+                        setDeleted((count) => count + 1);
                     }}
                 />
             )}
