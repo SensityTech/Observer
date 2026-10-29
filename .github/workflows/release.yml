@@ -1,7 +1,8 @@
 name: Release
 
 # A tag v<version> builds both archives and drafts their release, which a maintainer publishes by
-# hand. Run by hand, the workflow builds the archives as artifacts and drafts nothing.
+# hand. Run by hand, the workflow builds the archives as artifacts and drafts nothing, even when
+# the run is started on a tag.
 on:
   push:
     tags: ["v*"]
@@ -72,7 +73,7 @@ jobs:
 
   release:
     name: Draft the release
-    if: github.ref_type == 'tag'
+    if: github.event_name == 'push' && github.ref_type == 'tag'
     needs: build
     runs-on: ubuntu-latest
     permissions:
