@@ -18,6 +18,8 @@ use crate::{Installer, Platform, disk};
 /// What the copy creates, in order: folders before what they hold, links last.
 #[derive(Debug)]
 struct Plan {
+    /// Where the named folder led before it was checked: every file copied must lie under it.
+    canonical: PathBuf,
     entries: Vec<(PathBuf, Entry)>,
     /// Links by their path inside the build, `/`-separated, with their targets.
     links: HashMap<String, String>,
@@ -92,6 +94,9 @@ fn check(source: &Path, root: &Path, platform: Platform) -> Result<Plan, Error> 
         path: source.to_path_buf(),
         refusal,
     };
+    // Resolved before the folder is checked: one swapped for a link after the check leads
+    // elsewhere than this, and the copy refuses what it finds there.
+    let canonical = fs::canonicalize(source);
     let metadata = fs::symlink_metadata(source).map_err(|_| refuse(ImportRefusal::NotAFolder))?;
     if metadata.is_symlink() || reparse_point(&metadata) {
         return Err(refuse(ImportRefusal::Link));
@@ -99,23 +104,24 @@ fn check(source: &Path, root: &Path, platform: Platform) -> Result<Plan, Error> 
     if !metadata.is_dir() {
         return Err(refuse(ImportRefusal::NotAFolder));
     }
-    let canonical = fs::canonicalize(source).map_err(io(source))?;
+    let canonical = canonical.map_err(io(source))?;
     let artifacts = fs::canonicalize(root).map_err(io(root))?;
     // A folder holding the artifacts folder would copy the copy being made.
     if canonical.starts_with(&artifacts) || artifacts.starts_with(&canonical) {
         return Err(refuse(ImportRefusal::InsideArtifacts));
     }
     layout::validate(source, platform)?;
-    let plan = list(source, platform)?;
+    let plan = list(source, canonical, platform)?;
     disk::require_space(root, plan.bytes + disk::SPACE_MARGIN)?;
     Ok(plan)
 }
 
 /// Walks the source without following links, leaving out what FXServer and Observer write at
 /// runtime and an earlier manifest.
-fn list(source: &Path, platform: Platform) -> Result<Plan, Error> {
+fn list(source: &Path, canonical: PathBuf, platform: Platform) -> Result<Plan, Error> {
     let skipped = layout::runtime_paths(source, platform);
     let mut plan = Plan {
+        canonical,
         entries: Vec::new(),
         links: HashMap::new(),
         bytes: 0,
@@ -173,7 +179,6 @@ fn list(source: &Path, platform: Platform) -> Result<Plan, Error> {
 }
 
 fn copy_plan(source: &Path, tree: &Path, plan: &Plan, track: &Track) -> Result<(), Error> {
-    let canonical = fs::canonicalize(source).map_err(io(source))?;
     fs::create_dir(tree).map_err(io(tree))?;
     for (relative, entry) in &plan.entries {
         track.entry()?;
@@ -184,7 +189,7 @@ fn copy_plan(source: &Path, tree: &Path, plan: &Plan, track: &Track) -> Result<(
                 if let Some(parent) = path.parent() {
                     fs::create_dir_all(parent).map_err(io(parent))?;
                 }
-                copy_file(source, &canonical, relative, &path)?;
+                copy_file(source, &plan.canonical, relative, &path)?;
             }
         }
     }
@@ -206,8 +211,9 @@ fn copy_plan(source: &Path, tree: &Path, plan: &Plan, track: &Track) -> Result<(
 }
 
 /// Copies a file from where the listing found it. The folder can change between the listing and
-/// the copy: a file read through a folder swapped for a link, or one that is no longer a plain
-/// file, refuses the import rather than bringing in something from elsewhere.
+/// the copy: a file read through a folder swapped for a link, the named folder included, or one
+/// that is no longer a plain file, refuses the import rather than bringing in something from
+/// elsewhere.
 fn copy_file(source: &Path, canonical: &Path, relative: &Path, to: &Path) -> Result<(), Error> {
     let from = source.join(relative);
     let link = || Error::Import {
@@ -612,6 +618,56 @@ mod tests {
                 if matches!(progress, Progress::Copying { .. }) {
                     fs::rename(citizen.join("scripting"), citizen.join("scripting-listed")).unwrap();
                     link_folder(&outside, &citizen.join("scripting"));
+                }
+            })
+            .await
+            .unwrap_err();
+
+        assert!(
+            matches!(
+                error,
+                Error::Import {
+                    refusal: ImportRefusal::Link,
+                    ..
+                }
+            ),
+            "{error}"
+        );
+        assert!(!lab.installer.root().join("35245").exists());
+        assert!(lab.staging_is_empty());
+    }
+
+    fn copy_tree(from: &Path, to: &Path) {
+        fs::create_dir_all(to).unwrap();
+        for entry in fs::read_dir(from).unwrap() {
+            let entry = entry.unwrap();
+            if entry.file_type().unwrap().is_dir() {
+                copy_tree(&entry.path(), &to.join(entry.file_name()));
+            } else {
+                fs::copy(entry.path(), to.join(entry.file_name())).unwrap();
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn the_named_folder_swapped_for_a_link_once_it_was_listed_refuses_the_import() {
+        let lab = Lab::new();
+        let parent = lab.source.parent().unwrap();
+        let outside = parent.join("outside");
+        let scheduler = match Platform::host() {
+            Platform::Windows => "citizen/scripting/lua/scheduler.lua",
+            Platform::Linux => "alpine/opt/cfx-server/citizen/scripting/lua/scheduler.lua",
+        };
+
+        let error = lab
+            .installer
+            .import(&lab.source, 35245, None, &CancellationToken::new(), |progress| {
+                if matches!(progress, Progress::Copying { .. }) {
+                    let listed = parent.join("fxserver-listed");
+                    fs::rename(&lab.source, &listed).unwrap();
+                    copy_tree(&listed, &outside);
+                    fs::write(outside.join(scheduler), b"not part of the build").unwrap();
+                    link_folder(&outside, &lab.source);
                 }
             })
             .await
