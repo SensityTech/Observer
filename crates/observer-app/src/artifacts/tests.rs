@@ -586,6 +586,95 @@ async fn a_legacy_folder_elsewhere_stays_until_the_owner_imports_it() {
     assert!(status.legacy_folder);
 }
 
+/// Points the stored legacy folder at `folder`, as the migration of an older Observer leaves it.
+async fn legacy(lab: &Lab, folder: &Path) {
+    let legacy = folder.to_str().unwrap().to_owned();
+    let now = lab.clock.now();
+    lab.db
+        .write(move |tx| {
+            let mut state = stored::state(tx, Servers::DEFAULT)?;
+            state.legacy_build_path = Some(legacy);
+            stored::save_state(tx, Servers::DEFAULT, &state, now)
+        })
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn a_legacy_folder_is_forgotten_once_a_build_is_selected() {
+    let mut lab = Lab::prepared(
+        host_build(),
+        |_| Vec::new(),
+        |dir| place(&dir.join("data/artifacts"), 35245, &"a".repeat(64)),
+    )
+    .await;
+    legacy(&lab, &lab.dir.path().join("fxserver")).await;
+    lab.restart(Vec::new()).await;
+    assert!(lab.artifacts.status().borrow().legacy_folder);
+
+    let selected = lab
+        .artifacts
+        .select(
+            &lab.owner,
+            SelectBuild {
+                build: 35245,
+                apply: ApplyMode::NextStart,
+                confirm_kvp_rollback: false,
+                allow_end_of_life: false,
+            },
+            "PUT",
+            "/api/servers/default/artifacts/selection",
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(selected.selected, Some(35245));
+    assert!(!selected.legacy_folder);
+    let state = lab
+        .db
+        .read(|conn| stored::state(conn, Servers::DEFAULT))
+        .await
+        .unwrap();
+    assert_eq!(state.legacy_build_path, None);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_legacy_folder_is_forgotten_once_it_is_imported() {
+    let mut lab = Lab::prepared(
+        host_build(),
+        |_| Vec::new(),
+        |dir| {
+            place(&dir.join("data/artifacts"), 35245, &"a".repeat(64));
+            place(dir, 37000, &"b".repeat(64));
+        },
+    )
+    .await;
+    let folder = lab.dir.path().join("37000");
+    legacy(&lab, &folder).await;
+    let now = lab.clock.now();
+    lab.db
+        .write(move |tx| {
+            let mut state = stored::state(tx, Servers::DEFAULT)?;
+            state.selected = Some(35245);
+            stored::save_state(tx, Servers::DEFAULT, &state, now)
+        })
+        .await
+        .unwrap();
+    lab.restart(Vec::new()).await;
+    assert!(lab.artifacts.status().borrow().legacy_folder);
+
+    lab.artifacts
+        .import(&lab.owner, folder.to_str().unwrap(), 37000)
+        .await
+        .unwrap();
+    let done = lab.job_done().await;
+
+    assert_eq!(done.job.unwrap().state, JobState::Installed);
+    assert_eq!(done.selected, Some(35245));
+    assert!(!done.legacy_folder);
+}
+
 #[tokio::test]
 async fn a_pending_build_deleted_since_is_dropped_at_the_scheduled_restart_with_a_notice() {
     let lab = Lab::new(host_build(), |_| Vec::new()).await;

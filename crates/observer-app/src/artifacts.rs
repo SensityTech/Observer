@@ -18,7 +18,8 @@ use std::time::Duration;
 use jiff::Timestamp;
 use observer_artifacts::catalog::{Availability as Offered, Catalog, Support};
 use observer_artifacts::{
-    Error as InstallError, Health, Http, InstallRequest, Installed, Installer, Platform, Progress, Scanned,
+    Error as InstallError, Health, Http, InstallRequest, Installed, Installer, Origin, Platform, Progress,
+    Scanned,
 };
 use observer_domain::artifacts::{
     ApplyMode, ArtifactNotice, ArtifactSettings, ArtifactSettingsChange, ArtifactSettingsField,
@@ -800,16 +801,24 @@ impl Driver {
     }
 
     /// Keeps the fingerprint of a new build and, when none is selected yet, selects it: a new
-    /// Observer needs no other step.
+    /// Observer needs no other step. The legacy folder is forgotten once it is imported, or once
+    /// a build is selected.
     async fn installed_now(&mut self, build: u32, installed: &Installed) {
         let now = self.clock.now();
         let sha256 = installed.manifest.origin.archive_sha256().map(str::to_owned);
         let platform = BuildPlatform::host();
         let first = self.state.selected.is_none();
+        let legacy_imported = match (&installed.manifest.origin, &self.state.legacy_build_path) {
+            (Origin::Import { folder }, Some(legacy)) => same_folder(folder, Path::new(legacy)),
+            _ => false,
+        };
         let changed = self
             .change(move |tx, state| {
                 if let Some(sha256) = &sha256 {
                     stored::remember_fingerprint(tx, platform, build, sha256, now)?;
+                }
+                if legacy_imported || first {
+                    state.legacy_build_path = None;
                 }
                 if !first {
                     return Ok(false);
@@ -872,6 +881,9 @@ impl Driver {
                     state.selected = Some(build);
                     state.pending = None;
                     state.notice = None;
+                    // FXServer runs a build of the artifacts folder from now on, whatever it ran
+                    // before.
+                    state.legacy_build_path = None;
                     record.write(tx, now)?;
                     Ok(())
                 })
@@ -1527,6 +1539,14 @@ enum Fallback {
     Kept(NoticeReason),
     /// The last healthy build is selected again.
     RolledBack(u32),
+}
+
+/// Whether two paths name the same folder, as the file system resolves them when it can.
+fn same_folder(one: &Path, other: &Path) -> bool {
+    match (std::fs::canonicalize(one), std::fs::canonicalize(other)) {
+        (Ok(one), Ok(other)) => one == other,
+        _ => one == other,
+    }
 }
 
 fn system(action: AuditAction) -> Record {
