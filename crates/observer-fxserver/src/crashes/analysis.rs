@@ -3,6 +3,7 @@
 //! have been planted by a resource, which runs as the same user: every read is bounded and nothing
 //! read from it reaches a shell or a path.
 
+use std::io::Read as _;
 use std::path::Path;
 
 use minidump::{
@@ -18,6 +19,8 @@ use super::report::HangReport;
 const MAX_FRAMES: usize = 16;
 const MAX_SCAN_BYTES: usize = 64 * 1024;
 const MAX_SIGNATURE: usize = 256;
+/// A hang report is about 10 KB: past this a file is not one of Observer's.
+const MAX_REPORT_BYTES: u64 = 1024 * 1024;
 /// FXServer's main thread, whose name holds this.
 const SV_MAIN: &str = "svMain";
 /// svMain at this share of a core or more was busy on the processor rather than waiting.
@@ -123,9 +126,16 @@ pub fn analyse(path: &Path) -> Result<Analysis, AnalysisError> {
     })
 }
 
-/// Reads one of Observer's Linux hang reports: svMain and the five busiest threads.
+/// Reads one of Observer's Linux hang reports: svMain and the five busiest threads. A file over
+/// 1 MiB is unreadable, read no further: any file named like a report reaches here.
 pub fn analyse_report(path: &Path) -> Result<Analysis, AnalysisError> {
-    let text = std::fs::read(path).map_err(|_| AnalysisError::Unreadable)?;
+    let mut text = Vec::new();
+    std::fs::File::open(path)
+        .and_then(|file| file.take(MAX_REPORT_BYTES + 1).read_to_end(&mut text))
+        .map_err(|_| AnalysisError::Unreadable)?;
+    if text.len() as u64 > MAX_REPORT_BYTES {
+        return Err(AnalysisError::Unreadable);
+    }
     let report: HangReport = serde_json::from_slice(&text).map_err(|_| AnalysisError::Unreadable)?;
     let (main, mut others): (Vec<ThreadState>, Vec<ThreadState>) = report
         .threads
@@ -561,6 +571,22 @@ mod tests {
         assert_eq!(analysis.thread.unwrap().id, 4242);
         assert_eq!(analysis.syscalls_readable, Some(true));
         assert_eq!(signature, "hang UV loop: svMain busy");
+    }
+
+    #[test]
+    fn a_report_past_one_mebibyte_is_not_read() {
+        let (_dir, path) = report(vec![thread(
+            4242,
+            "UV loop: svMain",
+            ThreadRun::Running,
+            99.0,
+            None,
+        )]);
+        let mut padded = std::fs::read(&path).unwrap();
+        padded.resize(2 * 1024 * 1024, b' ');
+        std::fs::write(&path, padded).unwrap();
+
+        assert_eq!(analyse_report(&path), Err(AnalysisError::Unreadable));
     }
 
     #[test]
