@@ -845,7 +845,9 @@ function InstalledCard({
                                         <td className={cn(table.td, 'whitespace-nowrap tabular-nums')}>
                                             {build.installedAt === null ? '' : day(build.installedAt)}
                                             <div className={table.sub}>
-                                                {build.installedBy ?? words.commandLine}
+                                                {/* No manifest says nothing of who installed it. */}
+                                                {build.installedBy ??
+                                                    (build.origin === null ? null : words.commandLine)}
                                             </div>
                                         </td>
                                         <td className={cn(table.td, 'whitespace-nowrap tabular-nums')}>

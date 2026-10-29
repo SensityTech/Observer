@@ -273,6 +273,18 @@ describe('ArtifactsPage', () => {
         expect(confirm.disabled).toBe(false);
     });
 
+    it('should say a build came from the command line only when its manifest says so', async () => {
+        await page({
+            ...STATUS,
+            job: null,
+            installed: [{ ...BUILD, build: 37000, installedBy: null }, ...STATUS.installed],
+        });
+
+        expect(row(37000).textContent).toContain(en.artifacts.installed.commandLine);
+        // 35245 has no manifest.
+        expect(row(35245).textContent).not.toContain(en.artifacts.installed.commandLine);
+    });
+
     it('should say beside a build in use why it cannot be deleted', async () => {
         await page({ ...STATUS, job: null });
 
