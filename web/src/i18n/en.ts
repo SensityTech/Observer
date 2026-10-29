@@ -313,13 +313,13 @@ export const en = {
         loading: 'Loading the threads',
     },
     charts: {
-        range: 'Range',
         ranges,
         event: 'Event',
         down: 'Down',
         downFor: (duration: string, range: string) => `Down for ${duration} over ${range}.`,
         players: {
             title: 'Online players',
+            range: 'Online players range',
             every: (step: string) => `Every ${step}`,
             players: 'Players',
             maxSlots: 'Max slots',
@@ -337,6 +337,7 @@ export const en = {
         },
         tick: {
             title: 'Tick time',
+            range: 'Tick time range',
             meta: 'Milliseconds, log scale',
             main: 'svMain',
             network: 'svNetwork',

@@ -25,7 +25,7 @@ import { formatNumber, formatTimestamp } from '../i18n/format';
 import { cn } from '../lib/cn';
 import { useLiveMetrics } from '../metrics/live';
 import { mergeLive } from '../metrics/merge';
-import { downPeriods, type Period } from './coverage';
+import { downPeriods, downTime, type Period } from './coverage';
 import { MarkerBand, MarkerLines, markerWords, type PlacedMarker } from './MarkerOverlay';
 import { bucketOf, chartTime } from './markers';
 import { gapPoints } from './points';
@@ -61,6 +61,12 @@ export default function TickChart() {
     const measured = rows.some((row) => row.main !== null || row.network !== null || row.sync !== null);
     const figures = page ? tickFigures(page) : null;
     const words = page ? markerWords(t, page.markers, page.step) : null;
+    // The plot and its legend are hidden from screen readers: the stretches down are said here.
+    const down =
+        periods.length > 0
+            ? t.charts.downFor(format.duration(downTime(periods)), t.charts.ranges[range])
+            : null;
+    const said = [down, words].filter((part) => part !== null);
     const share = (percent: number | null) => (percent === null ? t.tiles.unknown : format.percent(percent));
 
     return (
@@ -76,7 +82,7 @@ export default function TickChart() {
                     {t.charts.tick.title}
                 </h2>
                 <span className="text-meta text-ink-3">{t.charts.tick.meta}</span>
-                <RangeControl value={range} onChange={setRange} />
+                <RangeControl label={t.charts.tick.range} value={range} onChange={setRange} />
             </div>
             <div
                 className="flex flex-wrap gap-x-4 gap-y-1.5 border-b border-line px-5 py-2.5 text-small text-ink-2 max-md:px-4"
@@ -165,7 +171,7 @@ export default function TickChart() {
                                 }
                             />
                         </dl>
-                        {words !== null && <p className="mt-2.5 text-small text-ink-3">{words}</p>}
+                        {said.length > 0 && <p className="mt-2.5 text-small text-ink-3">{said.join(' ')}</p>}
                     </figure>
                 )}
             </div>

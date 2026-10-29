@@ -116,7 +116,7 @@ export default function PlayersChart() {
                         {t.charts.players.every(format.duration(page.step))}
                     </span>
                 )}
-                <RangeControl value={range} onChange={setRange} />
+                <RangeControl label={t.charts.players.range} value={range} onChange={setRange} />
             </div>
             <div
                 className="flex flex-wrap gap-x-4 gap-y-1.5 border-b border-line px-5 py-2.5 text-small text-ink-2 max-md:px-4"

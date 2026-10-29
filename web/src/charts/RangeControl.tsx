@@ -3,12 +3,20 @@ import { useI18n } from '../i18n/I18nProvider';
 
 const RANGES: Range[] = ['1h', '6h', '24h', '7d', '30d'];
 
-/** The ranges a chart reads, as a segmented control in its card's head. */
-export function RangeControl({ value, onChange }: { value: Range; onChange: (range: Range) => void }) {
+/** The ranges a chart reads, as a segmented control in its card's head, named after its chart. */
+export function RangeControl({
+    label,
+    value,
+    onChange,
+}: {
+    label: string;
+    value: Range;
+    onChange: (range: Range) => void;
+}) {
     const { t } = useI18n();
     return (
         <fieldset className="ml-auto inline-flex max-w-full gap-0.5 rounded-control border border-line bg-surface-2 p-0.75 md:-my-1.5">
-            <legend className="sr-only">{t.charts.range}</legend>
+            <legend className="sr-only">{label}</legend>
             {RANGES.map((choice) => (
                 <button
                     key={choice}

@@ -1,11 +1,12 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { act, cleanup, render } from '@testing-library/react';
+import { act, cleanup, render, screen } from '@testing-library/react';
 import { AreaSeries, LineSeries } from 'lightweight-charts';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { LiveSample } from '../api/generated/LiveSample';
 import type { MetricsSeries } from '../api/generated/MetricsSeries';
 import { seriesQuery } from '../api/metrics';
+import { en } from '../i18n/en';
 import { I18nProvider } from '../i18n/I18nProvider';
 import { LiveContext } from '../live/context';
 import { Realtime, type SocketEvents } from '../live/realtime';
@@ -204,6 +205,18 @@ describe('PlayersChart', () => {
 
         expect(scaleTop(AreaSeries)).toBe(1000);
         expect(scaleTop(LineSeries)).toBe(1000);
+        live.stop();
+    });
+
+    it('should name its range control after the chart', async () => {
+        const { live } = await chart(
+            day(
+                () => 37,
+                () => 64,
+            ),
+        );
+
+        expect(screen.getByRole('group', { name: en.charts.players.range })).not.toBeNull();
         live.stop();
     });
 });
