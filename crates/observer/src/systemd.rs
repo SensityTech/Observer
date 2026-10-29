@@ -97,10 +97,11 @@ WantedBy=multi-user.target
     ))
 }
 
-/// An argument of `ExecStart=`, double-quoted when systemd would read it otherwise.
+/// An argument of `ExecStart=`, double-quoted when systemd would read it otherwise. A single
+/// quote anywhere in a word opens a quoted part for systemd; inside double quotes it is literal.
 fn quoted(value: &OsStr) -> anyhow::Result<String> {
     let text = plain(value)?;
-    if !text.contains([' ', '"', '\\', '%', '$']) {
+    if !text.contains([' ', '"', '\'', '\\', '%', '$']) {
         return Ok(text.to_owned());
     }
     let mut quoted = String::with_capacity(text.len() + 2);
@@ -322,6 +323,17 @@ mod tests {
             "{unit}"
         );
         assert_eq!(quoted(OsStr::new(r#"a"b\c$d"#)).unwrap(), r#""a\"b\\c$$d""#);
+    }
+
+    #[test]
+    fn a_path_with_a_single_quote_is_quoted_for_systemd() {
+        let unit = unit_for("/opt/observer/observer", "/srv/bob's/observer.toml").unwrap();
+
+        assert!(
+            unit.contains(r#"ExecStart=/opt/observer/observer --config "/srv/bob's/observer.toml" run"#),
+            "{unit}"
+        );
+        assert!(unit.contains("WorkingDirectory=/srv/bob's\n"), "{unit}");
     }
 
     #[test]
