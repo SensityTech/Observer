@@ -256,7 +256,8 @@ export const en = {
             idle: 'idle',
             network: 'Network in · out',
             clock: 'CPU clock',
-            clockValue: (now: string, max: string) => `${now} / ${max} GHz`,
+            // Windows gives the rated speed, which a boosting processor goes past.
+            clockValue: (now: string, rated: string) => `${now} GHz · ${rated} GHz rated`,
             limited: (share: string) => ` · limited to ${share}`,
             steal: 'Steal',
             pressure: 'Pressure',

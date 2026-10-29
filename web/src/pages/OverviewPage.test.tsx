@@ -256,7 +256,7 @@ describe('OverviewPage', () => {
         const host = tile(en.tiles.host.label);
         expect(host.getByText('22.1 GB / 64 GB')).not.toBeNull();
         expect(host.getByText('12 Mbit/s · 2 Mbit/s')).not.toBeNull();
-        expect(host.getByText('4.8 / 3.4 GHz')).not.toBeNull();
+        expect(host.getByText('4.8 GHz · 3.4 GHz rated')).not.toBeNull();
         expect(host.queryByText(en.tiles.host.steal)).toBeNull();
         expect(host.queryByText(en.tiles.host.pressure)).toBeNull();
         const observer = tile(en.tiles.observer.label);
