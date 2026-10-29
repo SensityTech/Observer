@@ -68,7 +68,8 @@ pub enum Progress {
     },
     /// The layout, the signature on Windows, the measure and the manifest.
     Validating,
-    /// The rename that makes the build appear: past this point a cancellation has no effect.
+    /// The rename that makes the build appear. A cancel that came before this was reported still
+    /// stops the job; past it a cancellation has no effect.
     Committing,
 }
 
@@ -102,8 +103,8 @@ impl Installer {
         disk::long_path(&self.root)
     }
 
-    /// Downloads, verifies and extracts a build. `cancel` stops it at the next chunk or entry until
-    /// the build is validated; the commit that follows runs whatever it says.
+    /// Downloads, verifies and extracts a build. `cancel` stops it at the next chunk or entry, and
+    /// once more as the commit starts; the commit itself runs whatever it says.
     pub async fn install<F>(
         &self,
         request: &InstallRequest,
@@ -153,7 +154,7 @@ impl Installer {
         if let Err(error) = blocking(move || disk::remove_file(&archive).map_err(io(&archive))).await {
             tracing::warn!(%error, "a downloaded archive is left in the staging folder");
         }
-        finish(staged, tree, target, request.build, &mut progress).await
+        finish(staged, tree, target, request.build, cancel, &mut progress).await
     }
 
     /// The staging folder, created if need be, once what earlier jobs left there is swept.
@@ -251,20 +252,26 @@ impl Installer {
     }
 }
 
-/// Commits a staged build, or removes what is left of it.
+/// Commits a staged build, or removes what is left of it. The commit step is reported before
+/// the token is read a last time: a cancel accepted while the job was still validating stops it,
+/// and one that comes once the step is reported finds it committing.
 pub(crate) async fn finish(
     staged: Result<Manifest, Error>,
     tree: PathBuf,
     target: PathBuf,
     build: u32,
+    cancel: &CancellationToken,
     progress: &mut (dyn FnMut(Progress) + Send),
 ) -> Result<Installed, Error> {
     let result = match staged {
         Ok(manifest) => {
             progress(Progress::Committing);
-            commit(tree.clone(), target, build)
-                .await
-                .map(|path| Installed { path, manifest })
+            match stop_if(cancel) {
+                Ok(()) => commit(tree.clone(), target, build)
+                    .await
+                    .map(|path| Installed { path, manifest }),
+                Err(error) => Err(error),
+            }
         }
         Err(error) => Err(error),
     };
@@ -606,21 +613,59 @@ pub(crate) mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
-    async fn a_cancel_once_the_build_is_validated_is_too_late() {
+    async fn a_cancel_while_the_build_is_validated_stops_the_install() {
         let lab = Lab::new(vec![host_build()]).await;
         let cancel = CancellationToken::new();
 
         let installed = lab
             .installer
             .install(&lab.request("/fx.tar.xz"), &cancel, |progress| {
-                if matches!(progress, Progress::Committing) {
+                if matches!(progress, Progress::Validating) {
                     cancel.cancel();
                 }
             })
             .await;
 
-        assert!(installed.is_ok(), "{installed:?}");
-        assert!(lab.installer.root().join("37872").is_dir());
+        assert!(matches!(installed, Err(Error::Cancelled)), "{installed:?}");
+        assert!(!lab.installer.root().join("37872").exists());
+        assert!(lab.staging_is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_staged_build_cancelled_before_its_commit_is_removed_rather_than_committed() {
+        let dir = tempfile::tempdir().unwrap();
+        let tree = dir.path().join(".staging/37872-0badf00d");
+        fs::create_dir_all(tree.join("citizen")).unwrap();
+        let manifest = Manifest {
+            format: MANIFEST_FORMAT,
+            build: 37872,
+            platform: Platform::host(),
+            installed_at: Timestamp::now(),
+            installed_by: None,
+            files: 1,
+            bytes: 1,
+            origin: Origin::Import {
+                folder: dir.path().join("fxserver"),
+            },
+        };
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+        let mut steps = Vec::new();
+
+        let finished = finish(
+            Ok(manifest),
+            tree.clone(),
+            dir.path().join("37872"),
+            37872,
+            &cancel,
+            &mut |progress| steps.push(progress),
+        )
+        .await;
+
+        assert!(matches!(finished, Err(Error::Cancelled)), "{finished:?}");
+        assert!(matches!(steps[..], [Progress::Committing]), "{steps:?}");
+        assert!(!dir.path().join("37872").exists());
+        assert!(!tree.exists());
     }
 
     #[tokio::test]

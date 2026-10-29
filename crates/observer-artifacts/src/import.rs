@@ -31,8 +31,8 @@ enum Entry {
 }
 
 impl Installer {
-    /// Copies the build in `source` as build `build`. `cancel` stops the copy at the next entry
-    /// until the copy is validated.
+    /// Copies the build in `source` as build `build`. `cancel` stops the copy at the next entry,
+    /// and once more as the commit starts.
     pub async fn import<F>(
         &self,
         source: &Path,
@@ -82,7 +82,7 @@ impl Installer {
             }
             Err(error) => Err(error),
         };
-        finish(staged, tree, target, build, &mut progress).await
+        finish(staged, tree, target, build, cancel, &mut progress).await
     }
 }
 
@@ -662,6 +662,26 @@ mod tests {
             ),
             "{error}"
         );
+        assert!(lab.staging_is_empty());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_cancel_while_the_copy_is_validated_stops_the_import() {
+        let lab = Lab::new();
+        let cancel = CancellationToken::new();
+
+        let imported = lab
+            .installer
+            .import(&lab.source, 35245, None, &cancel, |progress| {
+                if matches!(progress, Progress::Validating) {
+                    cancel.cancel();
+                }
+            })
+            .await;
+
+        assert!(matches!(imported, Err(Error::Cancelled)), "{imported:?}");
+        assert!(!lab.installer.root().join("35245").exists());
         assert!(lab.staging_is_empty());
     }
 

@@ -723,12 +723,22 @@ impl Driver {
         let Some(slot) = self.job.as_mut().filter(|slot| slot.task.is_some()) else {
             return Err(ErrorCode::NoJob.into());
         };
+        // The step is read and the token cancelled under the lock the job reports through: the job
+        // reports its commit, then reads the token, so a cancel either stops it or finds it
+        // committing.
+        let committing = {
+            let live = slot.live.lock().unwrap_or_else(PoisonError::into_inner);
+            let committing = live.step == Some(JobStep::Commit);
+            if !committing {
+                slot.cancel.cancel();
+            }
+            committing
+        };
         refresh(slot);
-        if slot.job.step == JobStep::Commit {
+        if committing {
             return Err(ErrorCode::JobCommitting.into());
         }
         if !slot.job.cancel_requested {
-            slot.cancel.cancel();
             slot.job.cancel_requested = true;
             let details = json!({ "build": slot.job.build, "kind": slot.job.kind, "step": slot.job.step });
             self.audit(Record::by(caller, AuditAction::BuildInstallCancelled).details(details))
