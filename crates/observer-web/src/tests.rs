@@ -35,6 +35,11 @@ use crate::{AppState, Live, SESSION_KEY_HEADER, Services, router};
 const HOST: &str = "observer.test:40125";
 const ORIGIN: &str = "http://observer.test:40125";
 const OWNER_PASSWORD: &str = "correct horse battery staple";
+const BUILD: Build = Build {
+    version: "0.0.0-test",
+    commit: None,
+    commit_date: None,
+};
 
 struct Server {
     dir: TempDir,
@@ -162,16 +167,7 @@ impl Server {
             schedule,
             artifacts,
         };
-        let state = AppState::new(
-            Build {
-                version: "0.0.0-test",
-                commit: None,
-                commit_date: None,
-            },
-            services,
-            &instance_id,
-            &["observer.test".to_owned()],
-        );
+        let state = AppState::new(BUILD, services, &instance_id, &["observer.test".to_owned()]);
         let live = state.live.clone();
         let app = router(state).layer(MockConnectInfo(SocketAddr::from(([203, 0, 113, 7], 50_000))));
         Self {
