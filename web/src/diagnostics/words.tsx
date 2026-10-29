@@ -14,9 +14,13 @@ export const exceptionWords = (t: Messages, code: string, name: string): ReactNo
 export const threadWord = (thread: string | null) =>
     thread === null || thread.includes('svMain') ? 'svMain' : thread;
 
-/** How FXServer ended in words: `exit code 0xC0000005`, or a signal by its name. */
-export const exitWords = (t: Messages, exit: string) =>
-    exit.startsWith('0x') ? t.alerts.exitCode(exit) : exit;
+/** How FXServer ended in words: a signal by its name, or `exit code 0xC0000005`. */
+export const exitWords = (t: Messages, exitCode: string | null, signal: number | null) => {
+    if (signal !== null) {
+        return t.alerts.signals[signal] ?? t.alerts.signal(signal);
+    }
+    return exitCode === null ? null : t.alerts.exitCode(exitCode);
+};
 
 /** A module or a file, as code. */
 export function Code({ children }: { children: ReactNode }) {

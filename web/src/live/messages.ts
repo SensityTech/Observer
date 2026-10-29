@@ -578,7 +578,8 @@ const isAlertCrash = (value: unknown) =>
         (isRecord(value.exception) && isText(value.exception.code) && isText(value.exception.name))) &&
     orNull(isText)(value.module) &&
     orNull(isText)(value.thread) &&
-    orNull(isText)(value.exit) &&
+    orNull(isText)(value.exitCode) &&
+    orNull(isId)(value.signal) &&
     isFlag(value.busy) &&
     orNull(isText)(value.waitingIn) &&
     isFlag(value.snapshot) &&

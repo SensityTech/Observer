@@ -441,8 +441,10 @@ pub struct AlertCrash {
     /// The module the crash or the hang was in.
     pub module: Option<String>,
     pub thread: Option<String>,
-    /// How FXServer ended when no dump says more: `0xC0000005`, `SIGSEGV`.
-    pub exit: Option<String>,
+    /// How FXServer ended when no dump says more: its exit code, such as `0xC0000005`, or the
+    /// number of the signal that killed it.
+    pub exit_code: Option<String>,
+    pub signal: Option<i32>,
     /// A Linux hang: svMain was running on the processor.
     pub busy: bool,
     /// A Linux hang: the system call svMain waited in.

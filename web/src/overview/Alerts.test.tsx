@@ -92,17 +92,29 @@ describe('Alerts', () => {
                 exception: null,
                 module: null,
                 thread: null,
-                exit: '0xC0000005',
+                exitCode: '0xC0000005',
                 groupCount: 1,
             },
         };
+        const linux: Alert = {
+            ...noDump,
+            key: 'crash:8',
+            crash: { ...noDump.crash!, exitCode: null, signal: 11 },
+        };
+        const unnamed: Alert = {
+            ...noDump,
+            key: 'crash:7',
+            crash: { ...noDump.crash!, exitCode: null, signal: 77 },
+        };
         const busy: Alert = { ...HANG_ALERT, key: 'crash:9', crash: { ...HANG_ALERT.crash!, busy: true } };
 
-        const { live } = await card([noDump, busy]);
+        const { live } = await card([noDump, busy, linux, unnamed]);
 
-        const [crash, hang] = events() as [[string, string], [string, string]];
-        expect(crash[0]).toBe(`${en.alerts.crash}FXServer exited with exit code 0xC0000005`);
-        expect(hang[0]).toBe(`${en.alerts.hang}svMain was busy on the CPU`);
+        const [crash, hang, signal, other] = events() as [string, string][];
+        expect(crash![0]).toBe(`${en.alerts.crash}FXServer exited with exit code 0xC0000005`);
+        expect(hang![0]).toBe(`${en.alerts.hang}svMain was busy on the CPU`);
+        expect(signal![0]).toBe(`${en.alerts.crash}FXServer exited with SIGSEGV`);
+        expect(other![0]).toBe(`${en.alerts.crash}FXServer exited with ${en.alerts.signal(77)}`);
         live.stop();
     });
 

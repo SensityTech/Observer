@@ -1012,14 +1012,7 @@ fn alerts(shells: &[TreeProcess], crashes: &[Crash], since: Timestamp) -> AlertL
 fn crash_alert(crash: &Crash) -> Alert {
     let analysis = crash.analysis.as_ref();
     let main = analysis.and_then(|analysis| analysis.threads.first());
-    let exit = match (crash.analysis_state, &crash.exit_code, crash.signal) {
-        (AnalysisState::NoDump, _, Some(signal)) => Some(
-            observer_fxserver::exit::signal_name(signal)
-                .map_or_else(|| format!("signal {signal}"), |(name, _)| name.to_owned()),
-        ),
-        (AnalysisState::NoDump, Some(code), None) => Some(code.clone()),
-        _ => None,
-    };
+    let without_dump = crash.analysis_state == AnalysisState::NoDump;
     Alert {
         key: format!("crash:{}", crash.id),
         kind: if crash.kind == CrashKind::Hang {
@@ -1042,7 +1035,8 @@ fn crash_alert(crash: &Crash) -> Alert {
             module: analysis
                 .and_then(|analysis| analysis.frames.iter().find_map(|frame| frame.module.clone())),
             thread: analysis.and_then(|analysis| analysis.thread.as_ref()?.name.clone()),
-            exit,
+            exit_code: crash.exit_code.clone().filter(|_| without_dump),
+            signal: crash.signal.filter(|_| without_dump),
             busy: main.is_some_and(|main| {
                 main.state == ThreadRun::Running && main.cpu.is_some_and(|cpu| cpu >= 90.0)
             }),

@@ -461,7 +461,7 @@ async fn a_crash_without_a_dump_is_signed_by_how_it_ended() {
     assert_eq!(crash.signature.as_deref(), Some("signal 11 SIGSEGV"));
     assert_eq!(crash.run_started, Some("2026-10-29T10:00:00Z".parse().unwrap()));
     let alert = lab.alerts().alerts.remove(0).crash.unwrap();
-    assert_eq!(alert.exit.as_deref(), Some("SIGSEGV"));
+    assert_eq!((alert.exit_code, alert.signal), (None, Some(11)));
     assert_eq!(alert.group_count, 1);
 }
 

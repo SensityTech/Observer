@@ -7,9 +7,10 @@ export type AlertCrash = { exception: AlertException | null,
  */
 module: string | null, thread: string | null, 
 /**
- * How FXServer ended when no dump says more: `0xC0000005`, `SIGSEGV`.
+ * How FXServer ended when no dump says more: its exit code, such as `0xC0000005`, or the
+ * number of the signal that killed it.
  */
-exit: string | null, 
+exitCode: string | null, signal: number | null, 
 /**
  * A Linux hang: svMain was running on the processor.
  */

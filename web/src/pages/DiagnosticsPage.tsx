@@ -183,8 +183,8 @@ const crashSentence = (t: Messages, crash: Crash): ReactNode => {
             </>
         );
     }
-    const exit = crash.exitCode ?? crash.exit;
-    return exit === null ? t.alerts.crashed : t.diagnostics.crashes.exited(exitWords(t, exit));
+    const exit = exitWords(t, crash.exitCode, crash.signal);
+    return exit === null ? t.alerts.crashed : t.diagnostics.crashes.exited(exit);
 };
 
 const CRASH_TONE = { crash: 'danger', hang: 'warning', found: 'neutral' } as const;

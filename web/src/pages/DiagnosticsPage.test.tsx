@@ -71,6 +71,19 @@ const height = (clamped: number, fits: number) =>
         return this.classList.contains('line-clamp-2') && this.textContent?.includes('ping') ? clamped : fits;
     };
 
+/** A crash no dump explains, as the server records it on either system. */
+const ended = (id: number, exitCode: string | null, signal: number | null) => ({
+    ...CRASH,
+    id,
+    exit: 'what the server side wrote',
+    exitCode,
+    signal,
+    analysisState: 'noDump' as const,
+    analysis: null,
+    files: [],
+    group: null,
+});
+
 describe('DiagnosticsPage', () => {
     beforeAll(() => {
         // jsdom has the element but not its modal methods.
@@ -210,16 +223,7 @@ describe('DiagnosticsPage', () => {
     });
 
     it('should say when a crash left no dump, and when its dump gave no frame', async () => {
-        const linux = {
-            ...CRASH,
-            id: 9,
-            exitCode: null,
-            signal: 11,
-            analysisState: 'noDump' as const,
-            analysis: null,
-            files: [],
-            group: null,
-        };
+        const linux = ended(9, null, 11);
         const bare = {
             ...CRASH,
             id: 10,
@@ -231,6 +235,36 @@ describe('DiagnosticsPage', () => {
         expect(getByText(`build 35245 · ${en.diagnostics.crashes.noDump}`)).not.toBeNull();
         fireEvent.click(getAllByRole('button', { name: en.diagnostics.crashes.details })[0]!);
         expect(getByText(en.diagnostics.crashes.noFrames)).not.toBeNull();
+        live.stop();
+    });
+
+    it('should word how FXServer ended from the catalog when no dump says more', async () => {
+        const { live } = await page(false, {
+            ...SNAPSHOT,
+            crashes: [
+                ended(9, null, 11),
+                ended(10, null, 77),
+                ended(11, '0xC0000005', null),
+                ended(12, null, null),
+            ],
+        });
+
+        const cells = [
+            ...document.querySelectorAll(
+                'section[aria-labelledby="diagnostics-crashes"] tbody td:nth-child(2)',
+            ),
+        ].map((cell) => cell.textContent ?? '');
+        const sentences = [
+            'FXServer exited with SIGSEGV',
+            `FXServer exited with ${en.alerts.signal(77)}`,
+            'FXServer exited with exit code 0xC0000005',
+            en.alerts.crashed,
+        ];
+        expect(cells).toHaveLength(4);
+        cells.forEach((cell, index) => {
+            expect(cell).toContain(sentences[index]);
+            expect(cell).not.toContain('what the server side wrote');
+        });
         live.stop();
     });
 

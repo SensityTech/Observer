@@ -173,6 +173,7 @@ const describe = (
         };
     }
     let sentence: ReactNode = t.alerts.crashed;
+    const exit = exitWords(t, crash.exitCode, crash.signal);
     if (crash.exception !== null) {
         const words = exceptionWords(t, crash.exception.code, crash.exception.name);
         sentence =
@@ -183,8 +184,8 @@ const describe = (
                     {words} {t.alerts.crashedIn} <Code>{crash.module}</Code>
                 </>
             );
-    } else if (crash.exit !== null) {
-        sentence = t.alerts.exitedWith(exitWords(t, crash.exit));
+    } else if (exit !== null) {
+        sentence = t.alerts.exitedWith(exit);
     }
     return {
         tone: 'danger',
