@@ -21,6 +21,7 @@ use super::{Action, Confirm, Request, Shared, controls, is_running, restarting, 
 
 const WIDTH: f32 = 440.0;
 const PADDING: i8 = 20;
+const BUTTON_HEIGHT: f32 = 32.0;
 const ICON: &[u8] = include_bytes!("../../assets/mark-64.rgba");
 
 pub(super) fn spawn(shared: Arc<Shared>, requests: Receiver<Request>) -> io::Result<JoinHandle<()>> {
@@ -223,23 +224,10 @@ impl StatusWindow {
     }
 
     fn panel(&self, ui: &mut Ui, shown: &Shown) {
-        ui.horizontal(|ui| {
-            ui.label(RichText::new(text::PANEL).color(shown.palette.ink_3));
-            ui.add(
-                egui::Label::new(
-                    RichText::new(&self.shared.panel)
-                        .monospace()
-                        .color(shown.palette.ink),
-                )
-                .selectable(true),
-            );
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                let off = shown.stopping.then_some(text::OBSERVER_STOPPING);
-                if button(ui, &shown.palette, text::OPEN_PANEL, Kind::Plain, off).clicked() {
-                    self.shared.open_panel();
-                }
-            });
-        });
+        let off = shown.stopping.then_some(text::OBSERVER_STOPPING);
+        if panel_row(ui, &shown.palette, &self.shared.panel, off).clicked() {
+            self.shared.open_panel();
+        }
     }
 
     /// The owner's link, while no owner exists. Says whether it showed.
@@ -444,6 +432,22 @@ impl StatusWindow {
     }
 }
 
+/// `Panel  http://localhost:40125  [Open the panel]`.
+fn panel_row(ui: &mut Ui, palette: &Palette, address: &str, off: Option<&str>) -> Response {
+    ui.horizontal(|ui| {
+        // Each label centres on the row's height as it stands when the label is placed: the row
+        // takes the button's height first.
+        ui.set_min_height(BUTTON_HEIGHT);
+        ui.label(RichText::new(text::PANEL).color(palette.ink_3));
+        ui.add(egui::Label::new(RichText::new(address).monospace().color(palette.ink)).selectable(true));
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            button(ui, palette, text::OPEN_PANEL, Kind::Plain, off)
+        })
+        .inner
+    })
+    .inner
+}
+
 fn state_line(ui: &mut Ui, shown: &Shown) {
     let status = &shown.status;
     let palette = &shown.palette;
@@ -495,7 +499,7 @@ fn button(ui: &mut Ui, palette: &Palette, label: &str, kind: Kind, off: Option<&
     let widget = egui::Button::new(RichText::new(label).color(ink))
         .fill(fill)
         .corner_radius(CornerRadius::same(CONTROL_RADIUS))
-        .min_size(Vec2::new(0.0, 32.0));
+        .min_size(Vec2::new(0.0, BUTTON_HEIGHT));
     let mut response = ui.add_enabled(off.is_none(), widget);
     if let Some(reason) = off.filter(|reason| !reason.is_empty()) {
         response = response.on_disabled_hover_text(reason);
@@ -533,6 +537,67 @@ fn paint_led(ui: &mut Ui, palette: &Palette, led: Led) {
         }
         _ => {
             ui.painter().circle_filled(centre, 4.0, palette.line_strong);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use eframe::egui::accesskit::Node;
+    use eframe::egui::{Pos2, RawInput};
+
+    use super::*;
+    use crate::desktop::palette::DARK;
+
+    /// One pass of `draw` inside the window's padding, and the accessibility tree it built.
+    fn drawn(mut draw: impl FnMut(&mut Ui)) -> Vec<Node> {
+        let context = egui::Context::default();
+        context.enable_accesskit();
+        let input = RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(WIDTH, 600.0))),
+            ..RawInput::default()
+        };
+        let mut output = context.run_ui(input, |ui| {
+            Frame::new().inner_margin(Margin::same(PADDING)).show(ui, |ui| {
+                ui.set_width(WIDTH - 2.0 * f32::from(PADDING));
+                draw(ui);
+            });
+        });
+        // Nothing renders: the font atlas the pass made goes nowhere.
+        output.textures_delta.clear();
+        output
+            .platform_output
+            .accesskit_update
+            .map(|update| update.nodes.into_iter().map(|(_, node)| node).collect())
+            .unwrap_or_default()
+    }
+
+    /// The node a screen reader reads as `text`.
+    fn read<'a>(nodes: &'a [Node], text: &str) -> &'a Node {
+        nodes
+            .iter()
+            .find(|node| node.label() == Some(text) || node.value() == Some(text))
+            .unwrap_or_else(|| panic!("nothing reads {text:?}"))
+    }
+
+    fn middle(node: &Node) -> f64 {
+        let bounds = node.bounds().expect("a drawn node has bounds");
+        f64::midpoint(bounds.y0, bounds.y1)
+    }
+
+    #[test]
+    fn the_panel_rows_words_centre_on_its_button() {
+        let nodes = drawn(|ui| {
+            panel_row(ui, &DARK, "http://localhost:40125", None);
+        });
+
+        let button = middle(read(&nodes, text::OPEN_PANEL));
+        for words in [text::PANEL, "http://localhost:40125"] {
+            let offset = middle(read(&nodes, words)) - button;
+            assert!(
+                offset.abs() < 1.0,
+                "{words:?} sits {offset} px off the button's middle"
+            );
         }
     }
 }
