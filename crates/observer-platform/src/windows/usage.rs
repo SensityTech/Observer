@@ -38,8 +38,9 @@ use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORY
 use windows_sys::Win32::System::Threading::{
     ALL_PROCESSOR_GROUPS, GetActiveProcessorCount, GetCurrentProcess, GetProcessHandleCount,
     GetProcessIdOfThread, GetProcessIoCounters, GetProcessTimes, GetSystemTimes, GetThreadDescription,
-    GetThreadTimes, IO_COUNTERS, OpenProcess, OpenThread, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_VM_READ,
-    THREAD_QUERY_LIMITED_INFORMATION, WaitForSingleObject,
+    GetThreadTimes, IO_COUNTERS, OpenProcess, OpenThread, PROCESS_ACCESS_RIGHTS,
+    PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_VM_READ, THREAD_QUERY_LIMITED_INFORMATION,
+    WaitForSingleObject,
 };
 use windows_sys::Win32::System::WindowsProgramming::{SYSTEM_PROCESS_INFORMATION, SYSTEM_THREAD_INFORMATION};
 
@@ -81,7 +82,11 @@ impl ProcessTree {
         };
         let mut children = Vec::new();
         for pid in members.into_iter().filter(|&pid| pid != self.pid) {
-            let Some(process) = open_member(pid, self.job.raw()) else {
+            let Some(process) = open_member(
+                pid,
+                self.job.raw(),
+                PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ,
+            ) else {
                 continue;
             };
             let entry = listed.processes.get(&pid);
@@ -228,11 +233,11 @@ pub(crate) fn disk_counters(dir: &Path) -> io::Result<DiskCounters> {
     })
 }
 
-/// Opens a member of the job to read its counters, unless it exited since the job listed it or its
+/// Opens a member of the job with `access`, unless it exited since the job listed it or its
 /// pid now belongs to a process outside the job.
-fn open_member(pid: u32, job: RawHandle) -> Option<OwnedHandle> {
+pub(crate) fn open_member(pid: u32, job: RawHandle, access: PROCESS_ACCESS_RIGHTS) -> Option<OwnedHandle> {
     // SAFETY: OpenProcess takes any pid and returns null when it cannot open it.
-    let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ, FALSE, pid) };
+    let handle = unsafe { OpenProcess(access, FALSE, pid) };
     if handle.is_null() {
         return None;
     }
@@ -624,7 +629,7 @@ fn counter_value(counter: PDH_HCOUNTER) -> Option<f64> {
     (value.is_finite() && value >= 0.0).then_some(value)
 }
 
-fn filetime(time: FILETIME) -> u64 {
+pub(crate) fn filetime(time: FILETIME) -> u64 {
     u64::from(time.dwHighDateTime) << 32 | u64::from(time.dwLowDateTime)
 }
 

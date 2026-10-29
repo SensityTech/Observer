@@ -123,6 +123,11 @@ pub enum ErrorCode {
     /// The folder of an import is not a path FXServer can run a build from. Params: `problem`, a
     /// `LaunchProblem`.
     InvalidImportFolder,
+    CrashNotFound,
+    /// The name is not one of the crash's files, or the file is gone.
+    CrashFileNotFound,
+    /// The file is too large to go through the panel: it stays on the host. Params: `maxBytes`.
+    CrashFileTooLarge,
 }
 
 /// The body of every error response.

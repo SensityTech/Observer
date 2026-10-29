@@ -8,6 +8,8 @@ import {
     ScrollText,
     Server,
     SquareTerminal,
+    Stethoscope,
+    TriangleAlert,
     Users,
     X,
     type LucideIcon,
@@ -19,6 +21,8 @@ import { Permission } from '../api/generated/Permission';
 import type { Me } from '../api/generated/Me';
 import { allows, MeContext } from '../auth/me';
 import { buttonVariants } from '../components/Button';
+import { Chip } from '../components/Chip';
+import { AlertsProvider, useAlerts } from '../diagnostics/alerts';
 import { useI18n } from '../i18n/I18nProvider';
 import { useRealtime } from '../live/context';
 import { cn } from '../lib/cn';
@@ -32,11 +36,13 @@ import { ThemeSwitch } from './ThemeSwitch';
 import { UserMenu } from './UserMenu';
 
 type NavEntry = {
-    to: '/' | '/console' | '/schedule' | '/artifacts' | '/server' | '/users' | '/audit';
+    to: '/' | '/console' | '/schedule' | '/artifacts' | '/diagnostics' | '/server' | '/users' | '/audit';
     label: string;
     icon: LucideIcon;
     /** A permission, any one of a list, or the owner alone for what no permission grants. */
     access: bigint | bigint[] | 'owner';
+    /** Shows how many alerts are live. */
+    alerts?: boolean;
 };
 
 export function AppShell() {
@@ -88,6 +94,13 @@ export function AppShell() {
             access: [Permission.DashboardView, Permission.ScheduleManage, Permission.ServerControl],
         },
         { to: '/artifacts', label: t.nav.artifacts, icon: Package, access: Permission.ArtifactsView },
+        {
+            to: '/diagnostics',
+            label: t.nav.diagnostics,
+            icon: Stethoscope,
+            access: Permission.DiagnosticsView,
+            alerts: true,
+        },
     ];
     const administration: NavEntry[] = [
         { to: '/server', label: t.nav.server, icon: Server, access: 'owner' },
@@ -100,79 +113,81 @@ export function AppShell() {
             <ServerStatusProvider>
                 <ScheduleProvider>
                     <ArtifactsProvider>
-                        <div className="app">
-                            <a className="skip" href="#content">
-                                {t.app.skipToContent}
-                            </a>
+                        <AlertsProvider>
+                            <div className="app">
+                                <a className="skip" href="#content">
+                                    {t.app.skipToContent}
+                                </a>
 
-                            <aside
-                                id="rail"
-                                className={menuOpen ? 'rail-wrap is-open' : 'rail-wrap'}
-                                aria-label={t.nav.label}
-                            >
-                                <div className="rail">
-                                    <div className="rail-head">
-                                        <Logo />
+                                <aside
+                                    id="rail"
+                                    className={menuOpen ? 'rail-wrap is-open' : 'rail-wrap'}
+                                    aria-label={t.nav.label}
+                                >
+                                    <div className="rail">
+                                        <div className="rail-head">
+                                            <Logo />
+                                            <button
+                                                type="button"
+                                                className={cn(
+                                                    buttonVariants({ tone: 'ghost', size: 'icon' }),
+                                                    'ml-auto xl:hidden',
+                                                )}
+                                                aria-label={t.nav.close}
+                                                onClick={closeMenu}
+                                            >
+                                                <X size={16} strokeWidth={1.5} aria-hidden="true" />
+                                            </button>
+                                        </div>
+                                        <nav className="nav" aria-label={t.nav.sections}>
+                                            <NavEntries me={me} entries={main} onNavigate={closeMenu} />
+                                            <NavEntries
+                                                me={me}
+                                                entries={operations}
+                                                group={t.nav.operations}
+                                                onNavigate={closeMenu}
+                                            />
+                                            <NavEntries
+                                                me={me}
+                                                entries={administration}
+                                                group={t.nav.administration}
+                                                onNavigate={closeMenu}
+                                            />
+                                        </nav>
+                                        <div className="rail-foot">
+                                            <ThemeSwitch />
+                                            <UserMenu me={me} onNavigate={closeMenu} />
+                                        </div>
+                                    </div>
+                                </aside>
+                                {menuOpen && <div className="scrim" aria-hidden="true" onClick={closeMenu} />}
+
+                                <div className="main" inert={menuOpen}>
+                                    <div className="mobilebar">
                                         <button
                                             type="button"
-                                            className={cn(
-                                                buttonVariants({ tone: 'ghost', size: 'icon' }),
-                                                'ml-auto xl:hidden',
-                                            )}
-                                            aria-label={t.nav.close}
-                                            onClick={closeMenu}
+                                            className={buttonVariants({ tone: 'ghost', size: 'icon' })}
+                                            aria-label={t.nav.open}
+                                            aria-controls="rail"
+                                            aria-expanded={menuOpen}
+                                            onClick={() => setMenuOpen(true)}
                                         >
-                                            <X size={16} strokeWidth={1.5} aria-hidden="true" />
+                                            <MenuIcon size={18} strokeWidth={1.5} aria-hidden="true" />
                                         </button>
+                                        <Logo />
                                     </div>
-                                    <nav className="nav" aria-label={t.nav.sections}>
-                                        <NavEntries me={me} entries={main} onNavigate={closeMenu} />
-                                        <NavEntries
-                                            me={me}
-                                            entries={operations}
-                                            group={t.nav.operations}
-                                            onNavigate={closeMenu}
-                                        />
-                                        <NavEntries
-                                            me={me}
-                                            entries={administration}
-                                            group={t.nav.administration}
-                                            onNavigate={closeMenu}
-                                        />
-                                    </nav>
-                                    <div className="rail-foot">
-                                        <ThemeSwitch />
-                                        <UserMenu me={me} onNavigate={closeMenu} />
-                                    </div>
+                                    <header className="topbar" aria-label={t.status.label}>
+                                        <StatusBar />
+                                        <ServerControls />
+                                    </header>
+                                    <main className="content" id="content" tabIndex={-1}>
+                                        <Suspense fallback={<PageLoading />}>
+                                            <Outlet />
+                                        </Suspense>
+                                    </main>
                                 </div>
-                            </aside>
-                            {menuOpen && <div className="scrim" aria-hidden="true" onClick={closeMenu} />}
-
-                            <div className="main" inert={menuOpen}>
-                                <div className="mobilebar">
-                                    <button
-                                        type="button"
-                                        className={buttonVariants({ tone: 'ghost', size: 'icon' })}
-                                        aria-label={t.nav.open}
-                                        aria-controls="rail"
-                                        aria-expanded={menuOpen}
-                                        onClick={() => setMenuOpen(true)}
-                                    >
-                                        <MenuIcon size={18} strokeWidth={1.5} aria-hidden="true" />
-                                    </button>
-                                    <Logo />
-                                </div>
-                                <header className="topbar" aria-label={t.status.label}>
-                                    <StatusBar />
-                                    <ServerControls />
-                                </header>
-                                <main className="content" id="content" tabIndex={-1}>
-                                    <Suspense fallback={<PageLoading />}>
-                                        <Outlet />
-                                    </Suspense>
-                                </main>
                             </div>
-                        </div>
+                        </AlertsProvider>
                     </ArtifactsProvider>
                 </ScheduleProvider>
             </ServerStatusProvider>
@@ -214,7 +229,7 @@ function NavEntries({
     return (
         <>
             {group && <p className="nav-group">{group}</p>}
-            {allowed.map(({ to, label, icon: Icon }) => (
+            {allowed.map(({ to, label, icon: Icon, alerts }) => (
                 <Link
                     key={to}
                     to={to}
@@ -224,8 +239,24 @@ function NavEntries({
                 >
                     <Icon size={16} strokeWidth={1.5} aria-hidden="true" />
                     {label}
+                    {alerts === true && <AlertCount />}
                 </Link>
             ))}
         </>
+    );
+}
+
+/** The live alerts' count on the Diagnostics entry, while there is any. */
+function AlertCount() {
+    const { t, format } = useI18n();
+    const count = useAlerts().length;
+    if (count === 0) {
+        return null;
+    }
+    return (
+        <Chip tone="warning" icon={TriangleAlert} className="ml-auto">
+            <span aria-hidden="true">{format.number(count)}</span>
+            <span className="sr-only">{t.nav.alertCount(count)}</span>
+        </Chip>
     );
 }

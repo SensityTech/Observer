@@ -22,8 +22,8 @@ import { SetupPage } from './pages/SetupPage';
 import { AppShell } from './shell/AppShell';
 
 // Pages beyond the Overview load when someone opens them: the console's virtual list and colour
-// parser, the restart schedule, the owner's launch settings, the accounts and the audit log are no
-// one's landing page.
+// parser, the restart schedule, the diagnostics, the owner's launch settings, the accounts and the audit
+// log are no one's landing page.
 const ConsolePage = lazyCode(() =>
     import('./pages/ConsolePage').then((page) => ({ default: page.ConsolePage })),
 );
@@ -39,6 +39,9 @@ const ServerPage = lazyCode(() =>
 const UsersPage = lazyCode(() => import('./pages/UsersPage').then((page) => ({ default: page.UsersPage })));
 const AuditPage = lazyCode(() => import('./pages/AuditPage').then((page) => ({ default: page.AuditPage })));
 const AboutPage = lazyCode(() => import('./pages/AboutPage').then((page) => ({ default: page.AboutPage })));
+const DiagnosticsPage = lazyCode(() =>
+    import('./pages/DiagnosticsPage').then((page) => ({ default: page.DiagnosticsPage })),
+);
 
 type RouterContext = { queryClient: QueryClient };
 
@@ -156,6 +159,16 @@ const artifactsRoute = createRoute({
     ),
 });
 
+const diagnosticsRoute = createRoute({
+    getParentRoute: () => panelRoute,
+    path: '/diagnostics',
+    component: () => (
+        <RequirePermission name="DiagnosticsView">
+            <DiagnosticsPage />
+        </RequirePermission>
+    ),
+});
+
 const serverRoute = createRoute({
     getParentRoute: () => panelRoute,
     path: '/server',
@@ -208,6 +221,7 @@ const routeTree = rootRoute.addChildren([
         consoleRoute,
         scheduleRoute,
         artifactsRoute,
+        diagnosticsRoute,
         serverRoute,
         usersRoute,
         auditRoute,

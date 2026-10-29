@@ -304,12 +304,20 @@ impl Accounts {
     }
 
     /// Refuses anyone but the owner. What only the owner may change amounts to running code on the
-    /// host, so a refused change is audited as a critical permission's would be.
-    pub async fn authorize_owner(&self, caller: &Caller, method: &str, path: &str) -> Result<(), Error> {
+    /// host, so a refused change is audited as a critical permission's would be. A refused read is
+    /// audited too when `reads_audited`: what it reads holds the host's secrets, as a crash's dumps
+    /// hold FXServer's memory.
+    pub async fn authorize_owner(
+        &self,
+        caller: &Caller,
+        method: &str,
+        path: &str,
+        reads_audited: bool,
+    ) -> Result<(), Error> {
         if caller.is_owner {
             return Ok(());
         }
-        if !matches!(method, "GET" | "HEAD") {
+        if reads_audited || !matches!(method, "GET" | "HEAD") {
             let route = format!("{method} {path}");
             let record = Record::by(caller, AuditAction::PermissionDenied)
                 .target(&route)

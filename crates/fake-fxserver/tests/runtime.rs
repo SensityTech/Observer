@@ -11,10 +11,15 @@ use std::time::{Duration, Instant};
 
 use jiff::{SignedDuration, Timestamp, Unit};
 use observer_app::{
-    Accounts, AuditLog, Caller, Client, Clock, DatabaseFiles, Error, Metrics, MetricsSetup, PasswordCost,
-    Running, Schedule, ScheduleSetup, ScheduleTask, Servers, Setup, Sources, Supervision,
+    Accounts, AuditLog, Caller, Client, Clock, DatabaseFiles, Diagnostics, DiagnosticsSetup, DiagnosticsTask,
+    Error, Metrics, MetricsSetup, PasswordCost, Running, Schedule, ScheduleSetup, ScheduleTask, Servers,
+    Setup, Sources, Supervision,
 };
 use observer_domain::audit::{ActorKind, AuditAction, AuditEntry, AuditFilter, Outcome};
+use observer_domain::diagnostics::{
+    Alert, AlertKind, AnalysisState, CrashFileKind, CrashKind, DiagnosticsEvent, ListenerRole, ProcessKind,
+    Protocol, Scope,
+};
 use observer_domain::error::ErrorCode;
 use observer_domain::launch::{ExtraArgument, LaunchSettings, OneSync};
 use observer_domain::metrics::{LiveSample, MarkerKind, Range, Series, ThreadGroup, ThreadShares};
@@ -83,6 +88,8 @@ struct Observer {
     running: Option<Running>,
     schedule: Schedule,
     scheduling: Option<ScheduleTask>,
+    diagnostics: Diagnostics,
+    diagnosing: Option<DiagnosticsTask>,
     owner: Caller,
 }
 
@@ -111,13 +118,20 @@ impl Services {
         }
     }
 
-    /// The supervision and the schedule, with timings short enough for tests.
+    /// The supervision, the schedule and the diagnostics, with timings short enough for tests.
     async fn supervise(
         &self,
         dir: &Path,
         clock: &Clock,
         longest_sleep: Duration,
-    ) -> (Supervision, Running, Schedule, ScheduleTask) {
+    ) -> (
+        Supervision,
+        Running,
+        Schedule,
+        ScheduleTask,
+        Diagnostics,
+        DiagnosticsTask,
+    ) {
         let setup = Setup {
             db: self.db.clone(),
             clock: Clock::system(),
@@ -160,7 +174,22 @@ impl Services {
         )
         .await
         .unwrap();
-        (supervision, running, schedule, scheduling)
+        let (diagnostics, diagnosing) = Diagnostics::start(DiagnosticsSetup {
+            db: self.db.clone(),
+            clock: Clock::system(),
+            supervision: supervision.clone(),
+            data_dir: dir.join("observer-data"),
+        })
+        .await
+        .unwrap();
+        (
+            supervision,
+            running,
+            schedule,
+            scheduling,
+            diagnostics,
+            diagnosing,
+        )
     }
 }
 
@@ -241,7 +270,7 @@ impl Observer {
 
         // On a whole second, as a one-off planned in minutes is.
         let clock = Clock::manual(Timestamp::now().round(Unit::Second).unwrap());
-        let (supervision, running, schedule, scheduling) =
+        let (supervision, running, schedule, scheduling, diagnostics, diagnosing) =
             services.supervise(dir.path(), &clock, longest_sleep).await;
         Self {
             dir,
@@ -255,6 +284,8 @@ impl Observer {
             running: Some(running),
             schedule,
             scheduling: Some(scheduling),
+            diagnostics,
+            diagnosing: Some(diagnosing),
             owner,
         }
     }
@@ -371,6 +402,9 @@ fake_print running {cfg_file}
         timeout(WAIT, running.close())
             .await
             .expect("the supervisor did not stop");
+        if let Some(diagnosing) = self.diagnosing.take() {
+            diagnosing.close().await;
+        }
     }
 
     /// Stops this Observer, then starts another on the same data, as after an update.
@@ -378,9 +412,11 @@ fake_print running {cfg_file}
         self.stop_observer().await;
         self.db.clone().close().await.unwrap();
         let services = Services::open(self.dir.path()).await;
-        let (supervision, running, schedule, scheduling) = services
+        let (supervision, running, schedule, scheduling, diagnostics, diagnosing) = services
             .supervise(self.dir.path(), &self.clock, self.longest_sleep)
             .await;
+        self.diagnostics = diagnostics;
+        self.diagnosing = Some(diagnosing);
         self.db = services.db;
         self.audit = services.audit;
         self.servers = services.servers;
@@ -1086,4 +1122,225 @@ async fn a_restart_whose_step_could_not_be_written_is_tried_again_while_the_stat
         waited < held + longest_sleep + Duration::from_secs(1),
         "the restart began {waited:?} after the clock passed its time"
     );
+}
+
+/// The next diagnostics event that `wanted` accepts, skipping the others.
+async fn diagnosed<T>(
+    events: &mut broadcast::Receiver<DiagnosticsEvent>,
+    wanted: impl Fn(DiagnosticsEvent) -> Option<T>,
+) -> T {
+    let found = timeout(WAIT, async {
+        loop {
+            if let Some(found) = wanted(events.recv().await.unwrap()) {
+                return found;
+            }
+        }
+    })
+    .await;
+    found.expect("the diagnostics never said it")
+}
+
+impl Observer {
+    async fn type_line(&self, line: &str) {
+        self.supervision
+            .command(&self.owner, line, CONSOLE_ROUTE.0, CONSOLE_ROUTE.1)
+            .await
+            .unwrap();
+    }
+
+    async fn alert(&self, wanted: impl Fn(&Alert) -> bool) -> Alert {
+        let mut alerts = self.diagnostics.alerts();
+        let found = timeout(WAIT, alerts.wait_for(|list| list.alerts.iter().any(&wanted)))
+            .await
+            .map(|list| list.unwrap().alerts.iter().find(|alert| wanted(alert)).cloned());
+        found.unwrap().unwrap()
+    }
+}
+
+/// A shell that lives a few seconds, as a resource would start one.
+fn shell_line() -> &'static str {
+    if cfg!(windows) {
+        "fake_spawn cmd /d /c \"ping -n 3 127.0.0.1 >nul\""
+    } else {
+        "fake_spawn /bin/sh -c \"sleep 2; true\""
+    }
+}
+
+#[tokio::test]
+async fn a_shell_the_server_starts_is_recorded_audited_noted_and_alerted() {
+    let mut observer = Observer::new(false).await;
+    let (_, mut events) = observer.diagnostics.follow().await.unwrap();
+    observer.supervision.start_server(&observer.owner).await.unwrap();
+    observer.state(ServerState::Online).await;
+
+    observer.type_line(shell_line()).await;
+
+    let shell = diagnosed(&mut events, |event| match event {
+        DiagnosticsEvent::Process { process } if process.kind == ProcessKind::Shell => Some(process),
+        _ => None,
+    })
+    .await;
+    let note = observer
+        .console_until("security alert: FXServer's tree started")
+        .await;
+    let alert = observer.alert(|alert| alert.kind == AlertKind::Shell).await;
+    let ended = diagnosed(&mut events, |event| match event {
+        DiagnosticsEvent::Process { process } if process.id == shell.id && process.ended_at.is_some() => {
+            Some(process)
+        }
+        _ => None,
+    })
+    .await;
+
+    assert_eq!(shell.generation, 1);
+    assert!(
+        shell
+            .command_line
+            .as_deref()
+            .is_some_and(|line| line.contains('3') || line.contains('2'))
+    );
+    assert_eq!(
+        (note.3, note.4.as_deref()),
+        (LineKind::Observer, Some("observer"))
+    );
+    assert_eq!(alert.count, 1);
+    assert!(ended.ended_at.is_some());
+    // The shell, and the program it ran, which FXServer never starts either.
+    let audited = observer.audited(AuditAction::TreeProcessStarted).await;
+    let kinds: Vec<&str> = audited
+        .iter()
+        .map(|entry| entry.details["kind"].as_str().unwrap())
+        .collect();
+    assert!(kinds.contains(&"shell") && kinds.contains(&"other"), "{kinds:?}");
+    assert!(audited.iter().all(|entry| entry.actor_kind == ActorKind::System));
+    observer.stop_observer().await;
+}
+
+#[tokio::test]
+async fn a_crash_dump_is_moved_recorded_analysed_and_published() {
+    let mut observer = Observer::new(false).await;
+    let (_, mut events) = observer.diagnostics.follow().await.unwrap();
+    observer.supervision.start_server(&observer.owner).await.unwrap();
+    observer.state(ServerState::Online).await;
+
+    observer.type_line("fake_crash_dump 1").await;
+    observer.type_line("fake_crash").await;
+
+    let analysed = diagnosed(&mut events, |event| match event {
+        DiagnosticsEvent::Crash { crash } if crash.analysis_state != AnalysisState::Pending => Some(crash),
+        _ => None,
+    })
+    .await;
+    let alert = observer
+        .alert(|alert| {
+            alert
+                .crash
+                .as_ref()
+                .is_some_and(|crash| crash.exception.is_some())
+        })
+        .await;
+
+    assert_eq!(analysed.kind, CrashKind::Crash);
+    assert_eq!(analysed.analysis_state, AnalysisState::Done);
+    assert_eq!(
+        analysed.signature.as_deref(),
+        Some("0xC0000005 citizen-scripting-lua.dll+0x1a2b3")
+    );
+    if cfg!(windows) {
+        assert_eq!(analysed.exit_code.as_deref(), Some("0xFFFFFFFE"));
+    }
+    assert_eq!(analysed.files.len(), 1);
+    assert!(analysed.files[0].kept);
+    let details = alert.crash.unwrap();
+    assert_eq!(details.exception.unwrap().code, "0xC0000005");
+    assert_eq!(details.module.as_deref(), Some("citizen-scripting-lua.dll"));
+    assert_eq!(details.thread.as_deref(), Some("UV loop: svMain"));
+    observer.stop_observer().await;
+}
+
+#[tokio::test]
+async fn a_hang_is_recorded_with_the_snapshot_taken_before_the_kill_and_audited() {
+    let mut observer = Observer::new(false).await;
+    let (_, mut events) = observer.diagnostics.follow().await.unwrap();
+    observer.supervision.start_server(&observer.owner).await.unwrap();
+    observer.state(ServerState::Online).await;
+
+    observer.type_line("fake_hang").await;
+
+    let hang = diagnosed(&mut events, |event| match event {
+        DiagnosticsEvent::Crash { crash } if crash.analysis_state != AnalysisState::Pending => Some(crash),
+        _ => None,
+    })
+    .await;
+    observer.console_until("before killing it").await;
+
+    assert_eq!(hang.kind, CrashKind::Hang);
+    assert_eq!(hang.analysis_state, AnalysisState::Done, "{hang:?}");
+    assert!(
+        hang.signature
+            .as_deref()
+            .is_some_and(|signature| signature.starts_with("hang UV loop: svMain"))
+    );
+    let snapshot = if cfg!(windows) {
+        CrashFileKind::HangDump
+    } else {
+        CrashFileKind::HangReport
+    };
+    assert!(
+        hang.files.iter().any(|file| file.kind == snapshot && file.kept),
+        "{:?}",
+        hang.files
+    );
+    let audited = observer.audited(AuditAction::HangSnapshotTaken).await;
+    assert_eq!(audited.len(), 1);
+    assert_eq!(audited[0].outcome, Outcome::Success);
+    assert_eq!(
+        audited[0].details["kind"],
+        if cfg!(windows) { "dump" } else { "report" }
+    );
+    observer.stop_observer().await;
+}
+
+#[tokio::test]
+async fn a_connection_the_server_holds_reaches_the_topic_open_then_closed() {
+    let mut observer = Observer::new(false).await;
+    let (_, mut events) = observer.diagnostics.follow().await.unwrap();
+    let peer = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = peer.local_addr().unwrap();
+    observer.supervision.start_server(&observer.owner).await.unwrap();
+    observer.state(ServerState::Online).await;
+
+    observer.type_line(&format!("fake_connect {address}")).await;
+    let _accepted = peer.accept().unwrap();
+    let destination = |open: u32| {
+        move |event: DiagnosticsEvent| match event {
+            DiagnosticsEvent::Connections {
+                destinations,
+                listeners,
+            } => destinations
+                .into_iter()
+                .find(|destination| destination.port == address.port() && destination.open == open)
+                .map(|destination| (destination, listeners)),
+            _ => None,
+        }
+    };
+    let (open, listeners) = diagnosed(&mut events, destination(1)).await;
+    observer.type_line("fake_disconnect").await;
+    let (closed, _) = diagnosed(&mut events, destination(0)).await;
+
+    assert_eq!(open.address, "127.0.0.1");
+    assert_eq!(open.scope, Scope::Loopback);
+    assert_eq!(open.protocol, Protocol::Tcp);
+    assert_eq!(
+        open.process,
+        if cfg!(windows) { "FXServer.exe" } else { "FXServer" }
+    );
+    assert_eq!(closed.peak, 1);
+    assert!(
+        listeners
+            .iter()
+            .any(|listener| listener.role == Some(ListenerRole::Game)),
+        "{listeners:?}"
+    );
+    observer.stop_observer().await;
 }

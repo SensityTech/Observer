@@ -2,6 +2,7 @@
 //! database in a temporary directory.
 
 mod artifacts;
+mod diagnostics;
 mod live;
 mod metrics;
 mod schedule;
@@ -16,8 +17,9 @@ use axum::http::{HeaderMap, Method, Request, StatusCode, header};
 use http_body_util::BodyExt;
 use jiff::SignedDuration;
 use observer_app::{
-    Accounts, Artifacts, ArtifactsSetup, ArtifactsTask, AuditLog, Clock, Metrics, MetricsSetup, PasswordCost,
-    Running, Schedule, ScheduleSetup, ScheduleTask, Servers, Setup, Supervision,
+    Accounts, Artifacts, ArtifactsSetup, ArtifactsTask, AuditLog, Clock, Diagnostics, DiagnosticsSetup,
+    DiagnosticsTask, Metrics, MetricsSetup, PasswordCost, Running, Schedule, ScheduleSetup, ScheduleTask,
+    Servers, Setup, Supervision,
 };
 use observer_artifacts::Http;
 use observer_artifacts::catalog::{Catalog, Listing};
@@ -55,6 +57,7 @@ struct Server {
     _supervised: Running,
     _scheduling: ScheduleTask,
     _building: ArtifactsTask,
+    _diagnosing: DiagnosticsTask,
     cookie_name: String,
 }
 
@@ -88,6 +91,15 @@ impl Reply {
             key: self.json()["sessionKey"].as_str().unwrap().to_owned(),
         }
     }
+}
+
+/// A catalog that lists nothing: no test here reaches Cfx.re.
+fn empty_catalog() -> Catalog {
+    Catalog::fixed(Ok(Listing {
+        platform: observer_artifacts::Platform::host(),
+        builds: Vec::new(),
+        warnings: Vec::new(),
+    }))
 }
 
 impl Server {
@@ -127,12 +139,6 @@ impl Server {
         )
         .await
         .unwrap();
-        // A catalog that lists nothing: no test here reaches Cfx.re.
-        let listing = Listing {
-            platform: observer_artifacts::Platform::host(),
-            builds: Vec::new(),
-            warnings: Vec::new(),
-        };
         let (artifacts, building) = Artifacts::start(
             ArtifactsSetup {
                 db: db.clone(),
@@ -142,7 +148,7 @@ impl Server {
                 servers: servers.clone(),
                 supervision: supervision.clone(),
                 schedule: schedule.status(),
-                catalog: Catalog::fixed(Ok(listing)),
+                catalog: empty_catalog(),
                 http: Http::new().unwrap(),
             },
             |_| {},
@@ -157,6 +163,14 @@ impl Server {
         })
         .await
         .unwrap();
+        let (diagnostics, diagnosing) = Diagnostics::start(DiagnosticsSetup {
+            db: db.clone(),
+            clock: clock.clone(),
+            supervision: supervision.clone(),
+            data_dir: dir.path().join("data"),
+        })
+        .await
+        .unwrap();
         let instance_id = db.instance_id().await.unwrap();
         let services = Services {
             accounts: accounts.clone(),
@@ -166,6 +180,7 @@ impl Server {
             metrics: metrics.clone(),
             schedule,
             artifacts,
+            diagnostics,
         };
         let state = AppState::new(BUILD, services, &instance_id, &["observer.test".to_owned()]);
         let live = state.live.clone();
@@ -184,6 +199,7 @@ impl Server {
             _supervised: supervised,
             _scheduling: scheduling,
             _building: building,
+            _diagnosing: diagnosing,
             cookie_name: format!("observer_session_{instance_id}"),
         }
     }
@@ -504,7 +520,7 @@ async fn setup_signs_the_owner_in_with_a_strict_http_only_cookie() {
     assert_eq!(session["sessionKey"].as_str().unwrap().len(), 64);
     assert_eq!(session["me"]["username"], "ada");
     assert_eq!(session["me"]["isOwner"], true);
-    assert_eq!(session["me"]["permissions"], "fff");
+    assert_eq!(session["me"]["permissions"], "1fff");
 
     let again = server.call(Method::POST, "/api/setup", None, Some(body)).await;
     assert_eq!(again.status, StatusCode::CONFLICT);
@@ -770,7 +786,7 @@ async fn accounts_are_managed_through_the_api_with_versions() {
         .call(Method::PATCH, &path, Some(&owner), Some(edit("800")))
         .await;
     let unknown = server
-        .call(Method::PATCH, &path, Some(&owner), Some(edit("1000")))
+        .call(Method::PATCH, &path, Some(&owner), Some(edit("10000000000")))
         .await;
     let reset = server
         .call(
@@ -785,7 +801,7 @@ async fn accounts_are_managed_through_the_api_with_versions() {
     assert_eq!(updated.json()["permissions"], "100");
     assert_eq!(stale.status, StatusCode::CONFLICT);
     assert_eq!(stale.code(), "conflict");
-    assert_eq!(unknown.json()["params"]["permissions"], "1000");
+    assert_eq!(unknown.json()["params"]["permissions"], "10000000000");
     assert_eq!(reset.json()["temporaryPassword"].as_str().unwrap().len(), 20);
 
     let catalog = server

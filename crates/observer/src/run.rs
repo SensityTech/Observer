@@ -6,9 +6,9 @@ use anyhow::Context;
 use axum::Router;
 use jiff::tz::TimeZone;
 use observer_app::{
-    Accounts, Artifacts, ArtifactsSetup, ArtifactsTask, AuditLog, Clock, DatabaseFiles, Metrics,
-    MetricsSetup, PasswordCost, Running, Schedule, ScheduleSetup, ScheduleTask, Servers, Setup, Sources,
-    Supervision,
+    Accounts, Artifacts, ArtifactsSetup, ArtifactsTask, AuditLog, Clock, DatabaseFiles, Diagnostics,
+    DiagnosticsSetup, Metrics, MetricsSetup, PasswordCost, Running, Schedule, ScheduleSetup, ScheduleTask,
+    Servers, Setup, Sources, Supervision,
 };
 use observer_artifacts::Http;
 use observer_artifacts::catalog::Catalog;
@@ -73,6 +73,14 @@ pub async fn run(config: Config, args: RunArgs) -> anyhow::Result<()> {
         |_| {},
     )
     .await?;
+    // Before FXServer boots, so that the first run's tree is seen.
+    let (diagnostics, diagnosing) = Diagnostics::start(DiagnosticsSetup {
+        db: db.clone(),
+        clock: clock.clone(),
+        supervision: supervision.clone(),
+        data_dir: paths.root.clone(),
+    })
+    .await?;
     // Before FXServer boots, so that Observer's own start counts as one for the schedule.
     let (schedule, scheduling) = Schedule::start(
         ScheduleSetup {
@@ -107,6 +115,7 @@ pub async fn run(config: Config, args: RunArgs) -> anyhow::Result<()> {
         metrics: metrics.clone(),
         schedule: schedule.clone(),
         artifacts,
+        diagnostics,
     };
     let state = observer_web::AppState::new(BUILD, services, &instance_id, &config.http.hosts);
     let live = state.live.clone();
@@ -155,6 +164,7 @@ pub async fn run(config: Config, args: RunArgs) -> anyhow::Result<()> {
     )
     .await;
     supervised.close().await;
+    diagnosing.close().await;
     // After the supervision, so that FXServer's stop is in the statistics.
     sampling.close().await;
     stop.cancel();

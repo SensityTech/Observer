@@ -59,7 +59,10 @@ fn status(code: ErrorCode) -> StatusCode {
         | ErrorCode::Hierarchy
         | ErrorCode::InvalidSetupToken
         | ErrorCode::OriginMismatch => StatusCode::FORBIDDEN,
-        ErrorCode::NotFound | ErrorCode::BuildNotListed => StatusCode::NOT_FOUND,
+        ErrorCode::NotFound
+        | ErrorCode::BuildNotListed
+        | ErrorCode::CrashNotFound
+        | ErrorCode::CrashFileNotFound => StatusCode::NOT_FOUND,
         ErrorCode::Conflict
         | ErrorCode::NameTaken
         | ErrorCode::AlreadySetUp
@@ -88,7 +91,8 @@ fn status(code: ErrorCode) -> StatusCode {
         | ErrorCode::NotDownloadable
         | ErrorCode::EndOfLife
         | ErrorCode::KvpRollback
-        | ErrorCode::NoBuildSelected => StatusCode::UNPROCESSABLE_ENTITY,
+        | ErrorCode::NoBuildSelected
+        | ErrorCode::CrashFileTooLarge => StatusCode::UNPROCESSABLE_ENTITY,
         ErrorCode::JsonRequired => StatusCode::UNSUPPORTED_MEDIA_TYPE,
         ErrorCode::UnknownHost => StatusCode::MISDIRECTED_REQUEST,
         ErrorCode::InvalidUsername

@@ -2,11 +2,14 @@
 //! stderr and file descriptor 3, owning its whole process tree, and the console and signal plumbing
 //! around it; and for installing builds, the free space of a volume and the signature check of
 //! FXServer.exe, the processes a build runs, files opened where they were listed, and folders held
-//! while they are swept; for the statistics, what the tree, Observer and the host use. The only
-//! crate allowed to use `unsafe` outside test tools.
+//! while they are swept; for the statistics, what the tree, Observer and the host use; for the
+//! diagnostics, the processes the tree starts, the sockets they hold and a picture of a hung server.
+//! The only crate allowed to use `unsafe` outside test tools.
 #![allow(unsafe_code)]
 
+mod sockets;
 mod stream;
+mod tree;
 #[cfg(unix)]
 mod unix;
 mod usage;
@@ -21,11 +24,15 @@ use std::time::{Duration, Instant};
 
 use tokio::sync::watch;
 
+pub use sockets::{Protocol, Socket, SocketState, sockets};
 pub use stream::{Output, Stdin};
+pub use tree::{ProcessInfo, TreeChange, TreeChanges};
 #[cfg(unix)]
 pub use unix::ProcessTree;
 #[cfg(unix)]
 pub use unix::leftovers::{PidFile, Sweep};
+#[cfg(unix)]
+pub use unix::threads::{RunState, ThreadState, ThreadStates};
 pub use usage::{
     Clock, CpuTimes, DiskCounters, HostUsage, Interface, Member, Memory, Pressure, Space, ThreadUsage,
     TreeTotals, TreeUsage, Usage,
@@ -58,6 +65,8 @@ pub struct Spawned {
     pub traces: Output,
     pub exit: ExitWatch,
     pub tree: ProcessTree,
+    /// The processes the tree starts and ends, the main one left out.
+    pub changes: TreeChanges,
 }
 
 #[derive(Debug, thiserror::Error)]

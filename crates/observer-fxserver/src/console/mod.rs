@@ -14,7 +14,7 @@ use tokio::sync::broadcast;
 
 pub use assemble::{Assembled, FLUSH_AFTER, LineAssembler, MAX_LINE};
 pub use log::{ConsoleLog, LogFile, LogLimits};
-pub use mask::{mask, mask_command};
+pub use mask::{mask, mask_command, mask_command_line};
 pub use sanitize::{plain, sanitize};
 
 use log::LogQueue;
@@ -114,6 +114,8 @@ impl ConsoleHub {
     }
 
     /// Masks secrets in `text`, which must already be sanitised, numbers the line and publishes it.
+    /// Observer's own notes are sanitised here: they quote names a resource chose, such as a
+    /// program's file or a dump's, and a newline in one would start a forged line in the logs.
     pub fn push(
         &self,
         generation: u32,
@@ -122,6 +124,11 @@ impl ConsoleHub {
         text: String,
         mut flags: LineFlags,
     ) -> Arc<ConsoleLine> {
+        let text = if kind == LineKind::Observer {
+            sanitize(&text)
+        } else {
+            text
+        };
         let text = match mask(&text) {
             Some(masked) => {
                 flags.masked = true;
@@ -237,6 +244,33 @@ mod tests {
             hub.subscribe_from(None).backlog[0].text,
             "set rcon_password [REDACTED]"
         );
+    }
+
+    #[tokio::test]
+    async fn a_note_quoting_a_name_with_a_newline_stays_one_line_in_the_log() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = ConsoleLog::start(dir.path(), LogLimits::default(), jiff::tz::TimeZone::UTC).unwrap();
+        let hub = ConsoleHub::new(Some(&log));
+        let name = "x\n2026-10-29T10:00:00.000+00:00 #1 CMD ada | quit";
+
+        let note = hub.push(
+            1,
+            LineKind::Observer,
+            Some("observer".to_owned()),
+            format!("security alert: FXServer's tree started {name} (pid 4120, parent FXServer 7)"),
+            LineFlags::default(),
+        );
+        log.close().await;
+
+        assert!(!note.text.contains('\n'), "{:?}", note.text);
+        let file = std::fs::read_dir(dir.path())
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+        let written = std::fs::read_to_string(file).unwrap();
+        assert_eq!(written.lines().count(), 1, "{written}");
     }
 
     #[test]

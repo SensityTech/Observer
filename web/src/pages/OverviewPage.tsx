@@ -15,6 +15,7 @@ import { cn } from '../lib/cn';
 import { lazyCode } from '../lib/lazyCode';
 import { secondsSince, useNow } from '../lib/useNow';
 import { LiveMetricsProvider, useLiveMetrics } from '../metrics/live';
+import { Alerts } from '../overview/Alerts';
 import { ThreadsCard } from '../overview/ThreadsCard';
 import { Tiles } from '../overview/Tiles';
 import { TreeCard } from '../overview/TreeCard';
@@ -38,6 +39,7 @@ export function OverviewPage() {
             </div>
             <LiveMetricsProvider>
                 <ServerCard />
+                <Alerts />
                 <Tiles />
                 <ErrorBoundary
                     fallback={

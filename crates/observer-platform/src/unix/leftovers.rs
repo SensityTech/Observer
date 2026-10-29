@@ -180,12 +180,13 @@ fn kill_each(processes: &[u32]) {
     }
 }
 
-fn all() -> io::Result<impl Iterator<Item = u32>> {
+pub(crate) fn all() -> io::Result<impl Iterator<Item = u32>> {
     Ok(fs::read_dir("/proc")?.filter_map(|entry| entry.ok()?.file_name().to_str()?.parse().ok()))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Stat {
+    pub parent: u32,
     pub group: u32,
     pub session: u32,
     /// Clock ticks after boot: with the pid, it tells a process from a later one that reused the pid.
@@ -200,10 +201,12 @@ pub(crate) fn stat(pid: u32) -> Option<Stat> {
 /// counted from the last `)`.
 fn parse_stat(line: &str) -> Option<Stat> {
     let mut fields = line.get(line.rfind(')')? + 1..)?.split_whitespace();
-    let group = fields.nth(2)?.parse().ok()?;
+    let parent = fields.nth(1)?.parse().ok()?;
+    let group = fields.next()?.parse().ok()?;
     let session = fields.next()?.parse().ok()?;
     let start = fields.nth(15)?.parse().ok()?;
     Some(Stat {
+        parent,
         group,
         session,
         start,
@@ -233,6 +236,7 @@ mod tests {
         assert_eq!(
             parse_stat(line),
             Some(Stat {
+                parent: 1,
                 group: 4242,
                 session: 4242,
                 start: 98765

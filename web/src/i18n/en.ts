@@ -28,7 +28,7 @@ import type { StopSource } from '../api/generated/StopSource';
 import type { SupportLevel } from '../api/generated/SupportLevel';
 import { parsePermissions, permissionKeys, type PermissionKey } from '../auth/permissions';
 import type { LinkState } from '../live/realtime';
-import { formatDuration, formatNumber, plural } from './format';
+import { formatBytes, formatDuration, formatNumber, plural } from './format';
 import { numberParam, stringParam } from './params';
 
 type Params = Record<string, unknown>;
@@ -38,6 +38,12 @@ const count = (value: number, forms: { one: string; other: string }) =>
     `${formatNumber('en', value)} ${plural('en', value, forms)}`;
 
 const list = (items: string[]) => new Intl.ListFormat('en', { type: 'conjunction' }).format(items);
+
+const ORDINAL_SUFFIXES: Partial<Record<Intl.LDMLPluralRule, string>> = { one: 'st', two: 'nd', few: 'rd' };
+
+/** `1st`, `2nd`, `3rd`, `11th`. */
+const ordinal = (value: number) =>
+    `${formatNumber('en', value)}${ORDINAL_SUFFIXES[new Intl.PluralRules('en', { type: 'ordinal' }).select(value)] ?? 'th'}`;
 
 const permissions = {
     dashboardView: { name: 'View the dashboard', description: 'Server state, statistics and charts.' },
@@ -73,6 +79,11 @@ const permissions = {
     settingsView: { name: 'View settings', description: "Observer's configuration." },
     settingsManage: { name: 'Change settings', description: "Change Observer's configuration." },
     logsDownload: { name: 'Download logs', description: "Observer's and FXServer's log files." },
+    diagnosticsView: {
+        name: 'View diagnostics',
+        description:
+            'Processes FXServer starts and their command lines, its connections, crash and hang analyses.',
+    },
 } satisfies Record<PermissionKey, { name: string; description: string }>;
 
 const permissionNames = (hex: string) =>
@@ -149,6 +160,8 @@ export const en = {
         server: 'Server',
         users: 'Users',
         audit: 'Audit log',
+        diagnostics: 'Diagnostics',
+        alertCount: (value: number) => count(value, { one: 'alert', other: 'alerts' }),
     },
     theme: {
         label: 'Theme',
@@ -863,6 +876,192 @@ export const en = {
             warnings: 'At most 16 warnings.',
         },
     },
+    alerts: {
+        title: 'Alerts',
+        meta: 'Last 24 hours',
+        caption: 'Alerts of the last 24 hours, newest first',
+        securityAlert: 'Security alert',
+        crash: 'Crash',
+        hang: 'Hang',
+        shellStarted: "FXServer's tree started",
+        crashedIn: 'in',
+        crashed: 'FXServer crashed',
+        exitedWith: (exit: string) => `FXServer exited with ${exit}`,
+        stuckIn: (thread: string) => `${thread} was stuck in`,
+        stuck: (thread: string) => `${thread} stopped responding`,
+        busy: (thread: string) => `${thread} was busy on the CPU`,
+        waitingIn: (thread: string) => `${thread} was waiting in`,
+        times: (value: number) => `${formatNumber('en', value)} times`,
+        parent: (name: string) => `parent ${name}`,
+        leftRunning: 'left running, audited',
+        inDays: (value: number) => `${ordinal(value)} time in 7 days`,
+        exitCode: (code: string) => `exit code ${code}`,
+        signal: (value: number) => `signal ${value}`,
+        signals: {
+            1: 'SIGHUP',
+            2: 'SIGINT',
+            4: 'SIGILL',
+            6: 'SIGABRT',
+            7: 'SIGBUS',
+            8: 'SIGFPE',
+            9: 'SIGKILL',
+            11: 'SIGSEGV',
+            13: 'SIGPIPE',
+            15: 'SIGTERM',
+        } as Record<number, string>,
+        thread: (name: string) => `thread ${name}`,
+        snapshot: 'dump taken before the kill',
+        open: 'Open Diagnostics',
+        needsPermission: 'Needs the View diagnostics permission',
+    },
+    diagnostics: {
+        title: 'Diagnostics',
+        gloss: 'What FXServer starts, where it connects, and why it stopped.',
+        forbidden: 'Your account cannot see the diagnostics.',
+        loading: 'Reading the diagnostics',
+        unavailable: 'The diagnostics are not known while the live link is down.',
+        crashes: {
+            title: 'Crashes and hangs',
+            meta: (files: string, maxFiles: string, bytes: string, maxBytes: string) =>
+                `Dumps ${files} of ${maxFiles} · ${bytes} of ${maxBytes}`,
+            free: (bytes: string) => `${bytes} free`,
+            caption: 'Crashes, hangs and dumps found, newest first',
+            when: 'When',
+            what: 'What',
+            group: 'Group',
+            files: 'Files',
+            actions: 'Actions',
+            kinds: { crash: 'Crash', hang: 'Hang', found: 'Found' },
+            found: 'Dumps no crash or hang explains',
+            hung: 'FXServer stopped responding',
+            exited: (exit: string) => `FXServer exited with ${exit}`,
+            reading: 'Reading the dump…',
+            unreadable: 'The dump could not be read',
+            noDump: 'No dump to read',
+            thread: (name: string) => `thread ${name}`,
+            build: (build: number) => `build ${build}`,
+            inDays: (value: number) => `${formatNumber('en', value)} in 7 days`,
+            fileKinds: {
+                minidump: 'minidump',
+                fullDump: 'full dump',
+                liveDump: 'live dump',
+                hangDump: 'hang dump',
+                hangReport: 'thread report',
+                other: 'file',
+            },
+            staysOnHost: 'stays on the host',
+            removed: 'removed',
+            details: 'Details',
+            hideDetails: 'Hide details',
+            frames: 'Stack scan, approximate without symbols',
+            noFrames: 'No frame was read.',
+            watchdog: 'Watchdog stack',
+            threads: 'Threads',
+            threadsCaption: 'svMain first, then the busiest threads',
+            threadName: 'Thread',
+            threadState: 'State',
+            threadCpu: 'CPU',
+            threadCall: 'System call',
+            syscallsHidden: 'This host hides the system calls threads wait in (kernel.yama.ptrace_scope).',
+            download: (name: string) => `Download ${name}`,
+            deleteFiles: 'Delete files…',
+            deleteTitle: 'Delete these files?',
+            deleteBody:
+                "Its dumps hold FXServer's memory. They are deleted from the host; the analysis stays.",
+            deleteConfirm: 'Delete files',
+            deleted: 'Files deleted from the host',
+            emptyTitle: 'No crash or hang recorded',
+            emptyBody: 'When FXServer crashes or stops responding, what Observer reads of it shows here.',
+        },
+        processes: {
+            title: 'Processes FXServer started',
+            meta: 'Watched as they start',
+            caption: 'Processes FXServer started, latest first',
+            started: 'Started',
+            process: 'Process',
+            kind: 'Kind',
+            parent: 'Parent',
+            run: 'Run',
+            count: 'Count',
+            state: 'State',
+            kinds: {
+                shell: 'Security alert',
+                other: 'Unexpected',
+                dumpServer: 'Crash dump server',
+                consoleHost: 'Console host',
+                node: 'Node.js of a resource',
+            },
+            unread: 'ended before it was read',
+            cut: 'cut at 4 KB',
+            more: 'Show the whole command line',
+            less: 'Show less',
+            generation: (value: number) => `#${value}`,
+            times: (value: number) => `×${formatNumber('en', value)}`,
+            running: 'Running',
+            ended: (time: string) => `Ended ${time}`,
+            limits: "A program started through a service, the task scheduler or WMI is not FXServer's child, and shows as the tool that launched it. On Linux a program that ends within a quarter of a second can be missed.",
+            emptyTitle: 'Nothing started yet',
+            emptyBody: "FXServer's crash dump server and console host show here once it runs.",
+        },
+        connections: {
+            title: 'Connections',
+            meta: 'Every 2 s · last 24 hours',
+            destinations: 'Destinations',
+            destinationsCaption: 'Where the processes of FXServer connected in the last 24 hours',
+            listening: 'Listening',
+            listeningCaption: 'Where the processes of FXServer listen',
+            destination: 'Destination',
+            scope: 'Scope',
+            protocol: 'Protocol',
+            process: 'Process',
+            openNow: 'Open now',
+            peak: 'Peak',
+            lastSeen: 'Last seen',
+            endpoint: 'Endpoint',
+            role: 'Role',
+            inbound: 'Inbound now',
+            new: 'New',
+            game: 'Game endpoint',
+            scopes: { loopback: 'Loopback', private: 'Private network', public: 'Public' },
+            services: {
+                mysql: 'MySQL',
+                postgresql: 'PostgreSQL',
+                redis: 'Redis',
+                mongodb: 'MongoDB',
+                https: 'HTTPS',
+                http: 'HTTP',
+                dns: 'DNS',
+            },
+            protocols: { tcp: 'TCP', udp: 'UDP' },
+            none: 'No connection in the last 24 hours.',
+            noListener: 'Nothing listens while FXServer is stopped.',
+            footer: 'Connections shorter than 2 s may not show. Windows lists UDP sockets without their remote end.',
+        },
+        exceptions: {
+            '0xC0000005': 'Access violation',
+            '0xC000001D': 'Illegal instruction',
+            '0xC0000017': 'Out of memory',
+            '0xC0000094': 'Integer division by zero',
+            '0xC00000FD': 'Stack overflow',
+            '0xC0000374': 'Heap corruption',
+            '0xC0000409': 'Stack buffer overrun',
+            '0x80000003': 'Breakpoint',
+        } as Record<string, string>,
+        threadStates: {
+            running: 'running',
+            sleeping: 'sleeping',
+            diskWait: 'waiting on a disk',
+            stopped: 'stopped',
+            zombie: 'ended',
+            other: 'other',
+        },
+        syscallGroups: {
+            lock: 'waiting for a lock',
+            io: 'waiting on input or output',
+            wait: 'waiting for events',
+            sleep: 'sleeping',
+        },
+    },
     server_state: {
         states: {
             stopped: 'Stopped',
@@ -1123,7 +1322,7 @@ export const en = {
     },
     reauth: {
         title: 'Confirm your password',
-        body: 'This change needs your password again. Once confirmed, it is not asked again for 10 minutes.',
+        body: 'This needs your password again. Once confirmed, it is not asked again for 10 minutes.',
         password: 'Password',
         submit: 'Confirm',
     },
@@ -1359,6 +1558,11 @@ export const en = {
             build_deleted: 'Build deleted',
             artifact_settings_changed: 'Artifact settings changed',
             observer_stopped: 'Observer stopped',
+            tree_process_started: 'Process started by FXServer',
+            hang_snapshot_taken: 'Hung server pictured',
+            crash_file_downloaded: 'Crash file downloaded',
+            crash_files_deleted: 'Crash files deleted',
+            tree_records_full: 'Process records full',
         } satisfies Record<AuditAction, string>,
         outcomes: {
             success: 'Success',
@@ -1500,7 +1704,25 @@ export const en = {
             skipAfterStart: 'Skip after a start',
             kind: 'Kind',
             by: 'By',
+            name: 'Program',
+            image: 'Image',
+            commandLine: 'Command line',
+            pid: 'Pid',
+            parent: 'Parent',
+            generation: 'Run',
+            file: 'File',
+            tookMs: 'Took',
+            crash: 'Crash',
+            names: 'Files',
+            unrecorded: 'Command lines not kept',
         },
+        snapshotKinds: { dump: 'a stack dump', report: 'a thread report' },
+        snapshotFailures: {
+            lowDisk: 'less than 1 GB free',
+            timeout: 'it took over 15 s',
+            failed: 'the system refused it',
+        },
+        milliseconds: (value: string) => `${value} ms`,
         sources: {
             schedule: 'the schedule',
             oneOff: 'a single restart',
@@ -1577,6 +1799,7 @@ export const en = {
         audit: 'Audit log',
         settings: 'Settings',
         logs: 'Logs',
+        diagnostics: 'Diagnostics',
     } satisfies Record<PermissionArea, string>,
     danger: {
         sensitive: 'Sensitive',
@@ -1598,7 +1821,7 @@ export const en = {
         too_many_sockets:
             'Too many tabs of the panel are open in this browser. Close a few, then reload this one.',
         password_change_required: 'Choose a new password before you go on.',
-        reauth_required: 'This change needs your password again.',
+        reauth_required: 'This needs your password again.',
         wrong_password: 'Wrong password.',
         forbidden: (params) => {
             const key = stringParam(params, 'permission');
@@ -1692,6 +1915,10 @@ export const en = {
         invalid_artifact_settings: 'Some settings need fixing. Each one says why next to its field.',
         invalid_import_folder: 'This folder cannot hold a build FXServer runs: the field says why.',
         no_build_selected: 'No build is selected yet. Install or import one on the Artifacts page.',
+        crash_not_found: 'This crash is no longer recorded.',
+        crash_file_not_found: 'This file is no longer on the host.',
+        crash_file_too_large: (params) =>
+            `This file is over ${formatBytes('en', numberParam(params, 'maxBytes'))}: it stays on the host, in Observer's data folder.`,
     } satisfies Record<ErrorCode, ErrorMessage>,
     failure: {
         unknown: 'Something went wrong. Try again.',

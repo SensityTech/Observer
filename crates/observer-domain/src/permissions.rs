@@ -27,6 +27,7 @@ impl Permissions {
     pub const SETTINGS_VIEW: Self = Self(1 << 9);
     pub const SETTINGS_MANAGE: Self = Self(1 << 10);
     pub const LOGS_DOWNLOAD: Self = Self(1 << 11);
+    pub const DIAGNOSTICS_VIEW: Self = Self(1 << 12);
 
     /// Every permission in the catalog, which is what the owner holds.
     pub fn all() -> Self {
@@ -189,6 +190,7 @@ pub enum PermissionArea {
     Audit,
     Settings,
     Logs,
+    Diagnostics,
 }
 
 /// One permission of the catalog, as `GET /api/permissions` returns it.
@@ -315,6 +317,15 @@ pub const CATALOG: &[PermissionInfo] = &[
         danger: Danger::Sensitive,
         implies: Permissions::NONE,
     },
+    PermissionInfo {
+        bit: 12,
+        constant: "DIAGNOSTICS_VIEW",
+        key: "diagnosticsView",
+        area: PermissionArea::Diagnostics,
+        // Command lines, full paths and what FXServer's memory held when it crashed.
+        danger: Danger::Sensitive,
+        implies: Permissions::NONE,
+    },
 ];
 
 #[cfg(test)]
@@ -337,6 +348,7 @@ mod tests {
             (9, "SETTINGS_VIEW", Permissions::SETTINGS_VIEW),
             (10, "SETTINGS_MANAGE", Permissions::SETTINGS_MANAGE),
             (11, "LOGS_DOWNLOAD", Permissions::LOGS_DOWNLOAD),
+            (12, "DIAGNOSTICS_VIEW", Permissions::DIAGNOSTICS_VIEW),
         ];
 
         assert_eq!(CATALOG.len(), frozen.len());

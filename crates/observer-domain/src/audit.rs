@@ -88,10 +88,24 @@ pub enum AuditAction {
     /// Observer began to stop, and FXServer with it. `details` says where the request came
     /// `from`: someone at the host (its window or its console) or a signal.
     ObserverStopped,
+    /// FXServer's tree started a shell or a program it never starts by itself. At most one entry
+    /// per program and run every 10 minutes, the starts since the previous one in `repeated`.
+    TreeProcessStarted,
+    /// Observer pictured a hung server before killing it: a dump, or on Linux a report of its
+    /// threads. A failure carries its `reason`.
+    HangSnapshotTaken,
+    /// The owner downloaded one of a crash's files.
+    CrashFileDownloaded,
+    /// The owner deleted a crash's files; the analysis stays.
+    CrashFilesDeleted,
+    /// A run's tree started more programs and command lines than its rows and audit entries keep:
+    /// once when it happens, then at the run's end with the starts whose command line was not kept
+    /// in `unrecorded`.
+    TreeRecordsFull,
 }
 
 impl AuditAction {
-    pub const ALL: [Self; 43] = [
+    pub const ALL: [Self; 48] = [
         Self::SetupCompleted,
         Self::SetupLinkCreated,
         Self::LoginSucceeded,
@@ -135,6 +149,11 @@ impl AuditAction {
         Self::BuildDeleted,
         Self::ArtifactSettingsChanged,
         Self::ObserverStopped,
+        Self::TreeProcessStarted,
+        Self::HangSnapshotTaken,
+        Self::CrashFileDownloaded,
+        Self::CrashFilesDeleted,
+        Self::TreeRecordsFull,
     ];
 
     pub const fn as_str(self) -> &'static str {
@@ -182,6 +201,11 @@ impl AuditAction {
             Self::BuildDeleted => "build_deleted",
             Self::ArtifactSettingsChanged => "artifact_settings_changed",
             Self::ObserverStopped => "observer_stopped",
+            Self::TreeProcessStarted => "tree_process_started",
+            Self::HangSnapshotTaken => "hang_snapshot_taken",
+            Self::CrashFileDownloaded => "crash_file_downloaded",
+            Self::CrashFilesDeleted => "crash_files_deleted",
+            Self::TreeRecordsFull => "tree_records_full",
         }
     }
 

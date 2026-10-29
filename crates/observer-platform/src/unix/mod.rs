@@ -1,6 +1,9 @@
 pub(crate) mod files;
 pub mod leftovers;
 pub(crate) mod processes;
+pub(crate) mod sockets;
+pub mod threads;
+pub(crate) mod tree;
 pub(crate) mod usage;
 
 use std::fs::{self, File};
@@ -9,7 +12,8 @@ use std::mem::ManuallyDrop;
 use std::os::fd::{AsRawFd, BorrowedFd, FromRawFd, OwnedFd};
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::process::{Child, Command, Stdio};
-use std::sync::{OnceLock, mpsc};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, OnceLock, mpsc};
 use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -18,6 +22,7 @@ use rustix::pipe::PipeFlags;
 use rustix::process::{Pid, Signal};
 
 use crate::stream::{Output, Stdin};
+use crate::tree::TreeChanges;
 use crate::{Exit, ExitWatch, Launch, SpawnError, Spawned};
 
 /// The descriptor FXServer writes its structured traces to.
@@ -81,7 +86,10 @@ pub(crate) fn spawn(launch: &Launch) -> Result<Spawned, SpawnError> {
     let tree = ProcessTree {
         group: pid_of(pid).map_err(SpawnError::Tree)?,
         marker,
+        stopped: Arc::new(AtomicBool::new(false)),
     };
+    let (sender, changes) = TreeChanges::channel();
+    tree::watch(pid, &tree.marker, sender, Arc::clone(&tree.stopped)).map_err(SpawnError::Threads)?;
     let (Some(stdin), Some(stdout), Some(stderr)) =
         (child.stdin.take(), child.stdout.take(), child.stderr.take())
     else {
@@ -112,6 +120,7 @@ pub(crate) fn spawn(launch: &Launch) -> Result<Spawned, SpawnError> {
         traces,
         exit,
         tree,
+        changes,
     })
 }
 
@@ -120,6 +129,8 @@ pub(crate) fn spawn(launch: &Launch) -> Result<Spawned, SpawnError> {
 pub struct ProcessTree {
     group: Pid,
     marker: String,
+    /// Ends the thread that watches the tree for new processes.
+    stopped: Arc<AtomicBool>,
 }
 
 impl ProcessTree {
@@ -174,6 +185,7 @@ impl ProcessTree {
 
 impl Drop for ProcessTree {
     fn drop(&mut self) {
+        self.stopped.store(true, Ordering::Relaxed);
         if !self.is_empty().unwrap_or(true) {
             let _ = self.kill();
         }

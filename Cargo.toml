@@ -27,6 +27,8 @@ getrandom = "0.4.3"
 jiff = { version = "0.2.38", features = ["serde"] }
 lzma-rust2 = { version = "0.24.0", default-features = false, features = ["std", "xz", "optimization"] }
 memchr = "2.8.3"
+minidump = "0.27.0"
+minidump-synth = "0.27.0"
 reqwest = { version = "0.13.5", default-features = false, features = ["rustls"] }
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 rusqlite_migration = "2.6.0"
@@ -40,6 +42,7 @@ http-body-util = "0.1.3"
 hyper = { version = "1.12.0", features = ["client", "http1"] }
 hyper-util = { version = "0.1.21", features = ["tokio"] }
 tempfile = "3.23.0"
+test-assembler = "0.1.6"
 thiserror = "2.0.21"
 tokio = { version = "1.54.1", features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-rusqlite = "0.8.0"

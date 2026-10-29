@@ -8,6 +8,7 @@ use ts_rs::TS;
 
 use crate::artifacts::ArtifactsStatus;
 use crate::audit::AuditEntry;
+use crate::diagnostics::{AlertList, DiagnosticsEvent, DiagnosticsSnapshot};
 use crate::error::ErrorCode;
 use crate::metrics::{LiveSample, MetricsSnapshot};
 use crate::schedule::ScheduleStatus;
@@ -54,10 +55,18 @@ pub enum Topic {
     /// or the artifacts permission.
     #[serde(rename = "server.artifacts")]
     ServerArtifacts,
+    /// What needs looking at: shells FXServer's tree started, crashes and hangs of the last 24
+    /// hours, without command lines or paths. Needs the dashboard or the diagnostics permission.
+    #[serde(rename = "server.alerts")]
+    ServerAlerts,
+    /// The tree's processes, its connections and the crash analyses. Needs the diagnostics
+    /// permission.
+    #[serde(rename = "server.diagnostics")]
+    ServerDiagnostics,
 }
 
 impl Topic {
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 9] = [
         Self::Status,
         Self::Audit,
         Self::ServerStatus,
@@ -65,6 +74,8 @@ impl Topic {
         Self::MetricsLive,
         Self::ServerSchedule,
         Self::ServerArtifacts,
+        Self::ServerAlerts,
+        Self::ServerDiagnostics,
     ];
 }
 
@@ -134,6 +145,10 @@ pub enum TopicSnapshot {
     ServerSchedule(ScheduleStatus),
     #[serde(rename = "server.artifacts")]
     ServerArtifacts(Box<ArtifactsStatus>),
+    #[serde(rename = "server.alerts")]
+    ServerAlerts(AlertList),
+    #[serde(rename = "server.diagnostics")]
+    ServerDiagnostics(DiagnosticsSnapshot),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, TS)]
@@ -154,6 +169,11 @@ pub enum TopicEvent {
     /// four times a second.
     #[serde(rename = "server.artifacts")]
     ServerArtifacts(Box<ArtifactsStatus>),
+    /// The whole list again, whenever any of it changes.
+    #[serde(rename = "server.alerts")]
+    ServerAlerts(AlertList),
+    #[serde(rename = "server.diagnostics")]
+    ServerDiagnostics(DiagnosticsEvent),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]

@@ -3,4 +3,4 @@
 /**
  * What the panel can follow.
  */
-export type Topic = "status" | "audit" | "server.status" | "console" | "metrics.live" | "server.schedule" | "server.artifacts";
+export type Topic = "status" | "audit" | "server.status" | "console" | "metrics.live" | "server.schedule" | "server.artifacts" | "server.alerts" | "server.diagnostics";

@@ -7,7 +7,7 @@ type Format = {
     timestamp: (rfc3339: string) => string;
 };
 
-const IDS = new Set<string>(['userId', 'sessionId']);
+const IDS = new Set<string>(['userId', 'sessionId', 'pid', 'crash']);
 /** FXServer build numbers, which read as they are written, not as quantities. */
 const BUILDS = new Set<string>(['build', 'from', 'to', 'previous']);
 const MASKS = new Set<string>(['permissions', 'added', 'removed']);
@@ -97,7 +97,17 @@ const word = (t: Messages, format: Format, key: string, value: unknown): string 
         ].filter((part) => part !== false);
         return parts.length > 0 ? parts.join('; ') : t.audit.argumentsReordered;
     }
+    // A process's parent: its program and pid, as the console names it.
+    if (key === 'parent' && isRecord(value)) {
+        return [value.name, value.pid].filter((part) => part !== null && part !== undefined).join(' ');
+    }
     if (typeof value === 'number') {
+        if (key === 'tookMs') {
+            return t.audit.milliseconds(format.number(value));
+        }
+        if (key === 'generation') {
+            return t.diagnostics.processes.generation(value);
+        }
         if (key === 'lateBySeconds') {
             return t.audit.seconds(format.number(value));
         }
@@ -110,7 +120,7 @@ const word = (t: Messages, format: Format, key: string, value: unknown): string 
         return IDS.has(key) || BUILDS.has(key) ? String(value) : format.number(value);
     }
     // A schedule's lists and what a change dropped: their items, one after the other.
-    if (LISTS.has(key) && Array.isArray(value)) {
+    if ((LISTS.has(key) || key === 'names') && Array.isArray(value)) {
         return value.length === 0
             ? t.audit.unset
             : value.map((item) => word(t, format, key, item)).join(', ');
@@ -172,6 +182,15 @@ const word = (t: Messages, format: Format, key: string, value: unknown): string 
     }
     if ((key === 'reason' || key === 'why') && has(t.audit.buildReasons, value)) {
         return t.audit.buildReasons[value];
+    }
+    if (key === 'kind' && has(t.diagnostics.processes.kinds, value)) {
+        return t.diagnostics.processes.kinds[value];
+    }
+    if (key === 'kind' && has(t.audit.snapshotKinds, value)) {
+        return t.audit.snapshotKinds[value];
+    }
+    if (key === 'reason' && has(t.audit.snapshotFailures, value)) {
+        return t.audit.snapshotFailures[value];
     }
     if (key === 'mode' && has(t.schedule.modes, value)) {
         return t.schedule.modes[value];

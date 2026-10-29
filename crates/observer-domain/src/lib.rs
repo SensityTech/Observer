@@ -10,6 +10,7 @@ pub mod api;
 pub mod artifacts;
 pub mod audit;
 pub mod delegation;
+pub mod diagnostics;
 pub mod error;
 pub mod launch;
 pub mod live;

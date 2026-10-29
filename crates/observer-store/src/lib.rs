@@ -6,6 +6,7 @@ pub mod artifacts;
 pub mod audit;
 mod backup;
 mod database;
+pub mod diagnostics;
 pub mod launch;
 pub mod login_failures;
 pub mod metrics;

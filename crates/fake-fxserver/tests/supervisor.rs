@@ -4,24 +4,30 @@
 #![allow(clippy::unwrap_used)]
 
 use std::fs;
-use std::net::TcpListener;
+use std::net::{SocketAddr, TcpListener, UdpSocket};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
+use observer_domain::diagnostics::ProcessKind;
+#[cfg(unix)]
+use observer_domain::diagnostics::ThreadRun;
 use observer_domain::launch::{ExtraArgument, LaunchSettings, OneSync};
 use observer_domain::schedule::RestartSource;
 use observer_domain::server::SpawnFailure;
 use observer_fxserver::bridge::BridgeEvent;
 use observer_fxserver::console::{ConsoleHub, LineKind, plain};
+use observer_fxserver::crashes::analysis;
+use observer_fxserver::crashes::{HangSnapshotLimits, SnapshotFailure};
 use observer_fxserver::health::{HangCause, HealthLimits, Problem};
 use observer_fxserver::launch::ServerLaunch;
 use observer_fxserver::perf::Thread;
 use observer_fxserver::recovery::RecoveryPolicy;
 use observer_fxserver::stdin::{StdinError, UserCommand};
 use observer_fxserver::supervisor::{
-    Cause, ControlError, Event, EventKind, Settings, State, StopTimings, Supervisor,
+    Cause, ControlError, Event, EventKind, ProcessChange, Settings, State, StopTimings, Supervisor, TreeEvent,
 };
+use observer_platform::{ProcessInfo, Protocol, Socket, SocketState};
 use tempfile::TempDir;
 use tokio::sync::broadcast;
 use tokio::task::JoinHandle;
@@ -71,6 +77,12 @@ struct Lab {
 
 impl Lab {
     async fn new(extra: &[(&str, &str)]) -> Self {
+        Self::tuned(extra, |_| {}).await
+    }
+
+    /// A lab whose supervisor settings `tune` adjusts. A hung server is killed without a snapshot
+    /// unless `tune` asks for one.
+    async fn tuned(extra: &[(&str, &str)], tune: impl FnOnce(&mut Settings)) -> Self {
         let port = Port::lease().await;
         let dir = tempfile::tempdir().unwrap();
         let program = fake_program(&dir.path().join("build"));
@@ -131,6 +143,8 @@ impl Lab {
             bind_cap: Duration::from_millis(900),
             ..RecoveryPolicy::default()
         };
+        settings.hang_snapshot = None;
+        tune(&mut settings);
 
         let console = Arc::new(ConsoleHub::new(None));
         let (supervisor, task) = Supervisor::spawn(settings, Arc::clone(&console));
@@ -962,7 +976,7 @@ async fn a_crash_dump_is_moved_out_of_the_build() {
 
     lab.type_command("fake_crash", "test").await;
 
-    let EventKind::CrashDumps { paths: dumps } = lab
+    let EventKind::CrashDumps { paths: dumps, .. } = lab
         .event(|kind| matches!(kind, EventKind::CrashDumps { .. }))
         .await
     else {
@@ -973,7 +987,7 @@ async fn a_crash_dump_is_moved_out_of_the_build() {
         dumps[0].starts_with(lab.dir.path().join("observer-data/crashes")),
         "{dumps:?}"
     );
-    assert_eq!(fs::read(&dumps[0]).unwrap(), b"MDMP");
+    assert!(fs::read(&dumps[0]).unwrap().starts_with(b"MDMP"));
     let build_crashes = fake_program(&lab.dir.path().join("build"))
         .parent()
         .unwrap()
@@ -1080,4 +1094,513 @@ async fn credentials_reset_behind_observer_show_as_an_unauthorized_probe() {
         "set sv_prometheusBasicAuthPassword [REDACTED]".to_owned()
     )));
     lab.shut_down(false).await;
+}
+
+/// The next start that `wanted` accepts on the process bus, skipping the others.
+async fn started(
+    processes: &mut broadcast::Receiver<TreeEvent>,
+    wanted: impl Fn(&ProcessInfo, ProcessKind) -> bool,
+) -> (ProcessInfo, ProcessKind) {
+    let found = timeout(WAIT, async {
+        loop {
+            if let ProcessChange::Started { process, kind } = processes.recv().await.unwrap().change
+                && wanted(&process, kind)
+            {
+                return (process, kind);
+            }
+        }
+    })
+    .await;
+    found.expect("the process never reached the bus")
+}
+
+/// Whether the program is `name`, by its image or by its argv[0]: `/bin/sh` is `dash` on Debian.
+fn named(process: &ProcessInfo, name: &str) -> bool {
+    let image = process.image.as_deref();
+    let first = process.args.first().map(Path::new);
+    [image, first]
+        .into_iter()
+        .flatten()
+        .filter_map(Path::file_name)
+        .any(|file| file.to_string_lossy().eq_ignore_ascii_case(name))
+}
+
+/// A shell that lives a few seconds, as a resource would start one.
+fn shell_command(seconds: u32) -> String {
+    if cfg!(windows) {
+        format!("fake_spawn cmd /d /c \"ping -n {} 127.0.0.1 >nul\"", seconds + 1)
+    } else {
+        format!("fake_spawn /bin/sh -c \"sleep {seconds}; true\"")
+    }
+}
+
+const SHELL: &str = if cfg!(windows) { "cmd.exe" } else { "sh" };
+
+#[tokio::test]
+async fn a_shell_the_server_starts_reaches_the_process_bus_as_a_shell() {
+    let mut lab = Lab::online(&[]).await;
+    let mut processes = lab.supervisor.processes();
+    let pid = lab.supervisor.status().borrow().pid.unwrap();
+
+    lab.type_command(&shell_command(2), "test").await;
+
+    let (shell, kind) = started(&mut processes, |process, _| named(process, SHELL)).await;
+    assert_eq!(kind, ProcessKind::Shell);
+    assert_eq!(shell.parent, Some(pid));
+    assert!(shell.command_line.is_some_and(|line| line.contains('2')));
+    let ended = timeout(WAIT, async {
+        loop {
+            if processes.recv().await.unwrap().change == (ProcessChange::Ended { pid: shell.pid }) {
+                return;
+            }
+        }
+    })
+    .await;
+    assert!(ended.is_ok(), "the shell's end never came");
+    lab.shut_down(false).await;
+}
+
+#[tokio::test]
+async fn the_dump_server_the_server_starts_is_known() {
+    let mut lab = Lab::online(&[]).await;
+    let mut processes = lab.supervisor.processes();
+
+    lab.type_command("fake_dump_server", "test").await;
+
+    let (process, kind) = started(&mut processes, |process, _| {
+        process.args.iter().any(|arg| arg.starts_with("-dumpserver:"))
+    })
+    .await;
+    assert_eq!(kind, ProcessKind::DumpServer, "{process:?}");
+    lab.shut_down(false).await;
+}
+
+/// FXServer starts one crash dump server as it begins; the same command line later is a
+/// resource's, whatever it runs before FXServer's code.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_second_dump_server_of_the_server_is_not_known() {
+    let mut lab = Lab::online(&[]).await;
+    let mut processes = lab.supervisor.processes();
+    let dump_server = |process: &ProcessInfo, _: ProcessKind| {
+        process.args.iter().any(|arg| arg.starts_with("-dumpserver:"))
+    };
+
+    lab.type_command("fake_dump_server", "test").await;
+    let (first, first_kind) = started(&mut processes, dump_server).await;
+    lab.type_command("fake_dump_server", "test").await;
+    let (second, second_kind) = started(&mut processes, |process, kind| {
+        process.pid != first.pid && dump_server(process, kind)
+    })
+    .await;
+
+    lab.shut_down(false).await;
+    assert_eq!(first_kind, ProcessKind::DumpServer, "{first:?}");
+    assert_eq!(second_kind, ProcessKind::Other, "{second:?}");
+}
+
+/// A resource giving bash the dump server's run.sh line, with a startup file of its own added to
+/// the environment as Node's `spawn(.., { env })` adds it: bash runs that file before run.sh.
+#[cfg(unix)]
+#[tokio::test]
+async fn bash_given_run_sh_and_a_startup_file_of_a_resource_is_a_shell() {
+    let mut lab = Lab::online(&[]).await;
+    let mut processes = lab.supervisor.processes();
+    let ran = lab.dir.path().join("startup-ran");
+    let startup = lab.dir.path().join("server-data/start.sh");
+    fs::write(&startup, format!("echo $$ > {}\nsleep 3\n", ran.display())).unwrap();
+    let run_sh = lab.dir.path().join("build/run.sh");
+
+    lab.type_command(
+        &format!(
+            "fake_spawn BASH_ENV={} /bin/bash {} -dumpserver:0 -parentppe:1",
+            startup.display(),
+            run_sh.display()
+        ),
+        "test",
+    )
+    .await;
+
+    let (process, kind) = started(&mut processes, |process, _| named(process, "bash")).await;
+    let startup_ran = timeout(WAIT, async {
+        while !ran.exists() {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await;
+    lab.shut_down(false).await;
+    assert!(startup_ran.is_ok(), "bash never ran the startup file");
+    assert_eq!(kind, ProcessKind::Shell, "{process:?}");
+}
+
+#[tokio::test]
+async fn a_dropped_notification_is_made_up_for_by_the_reconciliation() {
+    let mut lab = Lab::tuned(&[], |settings| settings.drop_first_tree_change = true).await;
+    let mut processes = lab.supervisor.processes();
+    lab.supervisor.start("test").await.unwrap();
+    lab.state(State::Online).await;
+    let spawned = Instant::now();
+
+    // On Windows the first process of the tree is FXServer's console host; on Linux, this shell.
+    lab.type_command(&shell_command(20), "test").await;
+
+    let first = if cfg!(windows) { "conhost.exe" } else { SHELL };
+    let (_, kind) = started(&mut processes, |process, _| named(process, first)).await;
+    let expected = if cfg!(windows) {
+        ProcessKind::ConsoleHost
+    } else {
+        ProcessKind::Shell
+    };
+    assert_eq!(kind, expected);
+    assert!(
+        cfg!(windows) || spawned.elapsed() >= Duration::from_secs(4),
+        "the shell came before the reconciliation"
+    );
+    lab.shut_down(false).await;
+}
+
+fn hang_snapshot(limits: HangSnapshotLimits) -> impl FnOnce(&mut Settings) {
+    move |settings| settings.hang_snapshot = Some(limits)
+}
+
+/// Hangs the server with `command` and returns its snapshot event, which comes before the exit.
+async fn hang_and_snapshot(lab: &mut Lab, command: &str) -> EventKind {
+    lab.supervisor.start("test").await.unwrap();
+    lab.state(State::Online).await;
+    lab.type_command(command, "test").await;
+    lab.state(State::Hung).await;
+    let snapshot = lab
+        .event(|kind| matches!(kind, EventKind::HangSnapshot { .. } | EventKind::Exited { .. }))
+        .await;
+    assert!(matches!(snapshot, EventKind::HangSnapshot { .. }), "{snapshot:?}");
+    lab.event(exited).await;
+    snapshot
+}
+
+#[tokio::test]
+async fn a_hung_server_is_dumped_before_its_tree_is_killed() {
+    let mut lab = Lab::tuned(&[], hang_snapshot(HangSnapshotLimits::default())).await;
+
+    let EventKind::HangSnapshot {
+        path, bytes, failure, ..
+    } = hang_and_snapshot(&mut lab, "fake_hang").await
+    else {
+        unreachable!()
+    };
+
+    assert_eq!(failure, None);
+    let path = path.unwrap();
+    assert!(
+        path.starts_with(lab.dir.path().join("observer-data/crashes")),
+        "{path:?}"
+    );
+    assert_eq!(fs::metadata(&path).unwrap().len(), bytes);
+    #[cfg(windows)]
+    {
+        let read = analysis::analyse(&path).unwrap();
+        assert_eq!(read.analysis.exception, None);
+        assert_eq!(
+            read.analysis.thread.and_then(|thread| thread.name).as_deref(),
+            Some("UV loop: svMain")
+        );
+        let in_known_module = read.analysis.frames.iter().any(|frame| {
+            frame.module.as_deref().is_some_and(|module| {
+                module.eq_ignore_ascii_case("ntdll.dll") || module.eq_ignore_ascii_case("FXServer.exe")
+            })
+        });
+        assert!(in_known_module, "{:?}", read.analysis.frames);
+        assert!(
+            read.signature.starts_with("hang UV loop: svMain"),
+            "{}",
+            read.signature
+        );
+    }
+    #[cfg(unix)]
+    {
+        let read = analysis::analyse_report(&path).unwrap();
+        let main = &read.analysis.threads[0];
+        assert_eq!(main.name, "UV loop: svMain");
+        assert_eq!(main.state, ThreadRun::Sleeping);
+        if read.analysis.syscalls_readable == Some(true) {
+            assert!(
+                matches!(main.syscall.as_deref(), Some("clock_nanosleep" | "nanosleep")),
+                "{main:?}"
+            );
+        }
+    }
+    lab.shut_down(false).await;
+}
+
+#[tokio::test]
+async fn a_busy_server_is_pictured_with_svmain_on_the_processor() {
+    let mut lab = Lab::tuned(&[], hang_snapshot(HangSnapshotLimits::default())).await;
+
+    let EventKind::HangSnapshot { path, .. } = hang_and_snapshot(&mut lab, "fake_spin").await else {
+        unreachable!()
+    };
+
+    let path = path.unwrap();
+    #[cfg(windows)]
+    assert!(analysis::analyse(&path).unwrap().analysis.thread.is_some());
+    #[cfg(unix)]
+    {
+        let read = analysis::analyse_report(&path).unwrap();
+        let main = &read.analysis.threads[0];
+        assert_eq!(main.state, ThreadRun::Running, "{main:?}");
+        assert!(main.cpu.is_some_and(|cpu| cpu > 50.0), "{main:?}");
+    }
+    lab.shut_down(false).await;
+}
+
+#[tokio::test]
+async fn a_hang_snapshot_is_skipped_when_the_disk_is_nearly_full() {
+    let limits = HangSnapshotLimits {
+        min_free: u64::MAX,
+        ..HangSnapshotLimits::default()
+    };
+    let mut lab = Lab::tuned(&[], hang_snapshot(limits)).await;
+
+    let snapshot = hang_and_snapshot(&mut lab, "fake_hang").await;
+
+    assert!(
+        matches!(
+            snapshot,
+            EventKind::HangSnapshot {
+                path: None,
+                failure: Some(SnapshotFailure::LowDisk),
+                ..
+            }
+        ),
+        "{snapshot:?}"
+    );
+    lab.console_until("no snapshot of the hung server").await;
+    lab.shut_down(false).await;
+}
+
+#[tokio::test]
+async fn a_slow_snapshot_does_not_hold_the_kill_past_its_limit() {
+    let limits = HangSnapshotLimits {
+        timeout: Duration::from_millis(1),
+        ..HangSnapshotLimits::default()
+    };
+    let mut lab = Lab::tuned(&[], hang_snapshot(limits)).await;
+
+    let snapshot = hang_and_snapshot(&mut lab, "fake_hang").await;
+
+    assert!(
+        matches!(
+            snapshot,
+            EventKind::HangSnapshot {
+                path: None,
+                failure: Some(SnapshotFailure::Timeout),
+                ..
+            }
+        ),
+        "{snapshot:?}"
+    );
+    // The snapshot finished after the kill and was thrown away.
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let crashes = lab.dir.path().join("observer-data/crashes");
+    let left: Vec<String> = fs::read_dir(&crashes)
+        .map(|entries| {
+            entries
+                .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+                .collect()
+        })
+        .unwrap_or_default();
+    assert!(left.iter().all(|name| !name.starts_with("hang-")), "{left:?}");
+    lab.shut_down(false).await;
+}
+
+#[tokio::test]
+async fn the_connections_the_server_opens_are_listed_with_its_listener() {
+    let mut lab = Lab::online(&[]).await;
+    let pid = lab.supervisor.status().borrow().pid.unwrap();
+    let peer = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = peer.local_addr().unwrap();
+    let udp_peer = UdpSocket::bind("127.0.0.1:0").unwrap();
+    let udp_address = udp_peer.local_addr().unwrap();
+
+    lab.type_command(&format!("fake_connect {address}"), "test").await;
+    lab.type_command(&format!("fake_udp {udp_address}"), "test").await;
+    let _accepted = peer.accept().unwrap();
+    let held = |sockets: &[Socket]| {
+        sockets
+            .iter()
+            .any(|socket| socket.state == SocketState::Established && socket.remote == Some(address))
+    };
+    let deadline = Instant::now() + WAIT;
+    let mut sockets = observer_platform::sockets(&[pid]).unwrap();
+    while !(held(&sockets)
+        && sockets
+            .iter()
+            .any(|socket| socket.local.port() != lab.port.0 && socket.protocol == Protocol::Udp))
+        && Instant::now() < deadline
+    {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        sockets = observer_platform::sockets(&[pid]).unwrap();
+    }
+
+    assert!(held(&sockets), "{sockets:#?}");
+    let listener: SocketAddr = format!("127.0.0.1:{}", lab.port.0).parse().unwrap();
+    assert!(
+        sockets
+            .iter()
+            .any(|socket| socket.state == SocketState::Listen && socket.local == listener),
+        "{sockets:#?}"
+    );
+    let udp = sockets
+        .iter()
+        .find(|socket| socket.protocol == Protocol::Udp && socket.local.port() != lab.port.0)
+        .unwrap_or_else(|| panic!("no UDP socket in {sockets:#?}"));
+    // Windows' table holds no remote end for UDP.
+    let remote = if cfg!(windows) { None } else { Some(udp_address) };
+    assert_eq!(udp.remote, remote);
+    assert!(sockets.iter().all(|socket| socket.pid == pid));
+
+    lab.type_command("fake_disconnect", "test").await;
+    let deadline = Instant::now() + WAIT;
+    while held(&observer_platform::sockets(&[pid]).unwrap()) && Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(!held(&observer_platform::sockets(&[pid]).unwrap()));
+    lab.shut_down(false).await;
+}
+
+/// An older dump in Observer's crash folder that another program holds open, as a debugger
+/// reading it does: it may be read, not deleted.
+#[cfg(windows)]
+fn held_old_dump(lab: &Lab) -> fs::File {
+    use std::os::windows::fs::OpenOptionsExt as _;
+    const FILE_SHARE_READ: u32 = 1;
+
+    let crashes = lab.dir.path().join("observer-data/crashes");
+    fs::create_dir_all(&crashes).unwrap();
+    let old = crashes.join("00000000-0000-4000-8000-000000000000.dmp");
+    fs::write(&old, b"MDMP").unwrap();
+    fs::File::options()
+        .write(true)
+        .open(&old)
+        .unwrap()
+        .set_modified(std::time::SystemTime::now() - Duration::from_hours(1))
+        .unwrap();
+    fs::File::options()
+        .read(true)
+        .share_mode(FILE_SHARE_READ)
+        .open(&old)
+        .unwrap()
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn a_hang_dump_is_reported_though_an_older_dump_could_not_be_removed() {
+    let mut lab = Lab::tuned(&[], |settings| {
+        settings.hang_snapshot = Some(HangSnapshotLimits::default());
+        settings.dumps = observer_fxserver::crashes::DumpLimits {
+            files: 1,
+            ..observer_fxserver::crashes::DumpLimits::default()
+        };
+    })
+    .await;
+    let _held = held_old_dump(&lab);
+
+    let snapshot = hang_and_snapshot(&mut lab, "fake_hang").await;
+
+    let EventKind::HangSnapshot {
+        path: Some(path),
+        failure: None,
+        removed,
+        ..
+    } = &snapshot
+    else {
+        panic!("{snapshot:?}")
+    };
+    assert!(path.exists(), "{path:?}");
+    assert_eq!(removed, &Vec::<PathBuf>::new());
+    lab.shut_down(false).await;
+}
+
+#[tokio::test]
+async fn dumps_the_size_cap_removes_are_reported_even_when_nothing_moved_stays() {
+    let mut lab = Lab::tuned(&[("fake_crash_dump", "1")], |settings| {
+        settings.dumps = observer_fxserver::crashes::DumpLimits {
+            files: 10,
+            bytes: 64 * 1024,
+        };
+    })
+    .await;
+    lab.supervisor.start("test").await.unwrap();
+    lab.state(State::Online).await;
+    lab.type_command("fake_crash", "test").await;
+    let EventKind::CrashDumps { paths: first, .. } = lab
+        .event(|kind| matches!(kind, EventKind::CrashDumps { .. }))
+        .await
+    else {
+        unreachable!()
+    };
+    lab.state(State::Online).await;
+    // FXServer's full dump of the next crash, larger than the cap on its own, and finished after
+    // its minidump.
+    let build_crashes = fake_program(&lab.dir.path().join("build"))
+        .parent()
+        .unwrap()
+        .join("crashes");
+    fs::create_dir_all(&build_crashes).unwrap();
+    let full = build_crashes.join("0badc0de-full.dmp");
+    fs::write(&full, vec![0; 128 * 1024]).unwrap();
+    fs::File::options()
+        .write(true)
+        .open(&full)
+        .unwrap()
+        .set_modified(std::time::SystemTime::now() + Duration::from_hours(1))
+        .unwrap();
+
+    lab.type_command("fake_crash", "test").await;
+
+    let EventKind::CrashDumps { paths, removed } = lab
+        .event(|kind| matches!(kind, EventKind::CrashDumps { .. }))
+        .await
+    else {
+        unreachable!()
+    };
+    assert!(!first[0].exists());
+    assert!(removed.contains(&first[0]), "{removed:?}");
+    assert_eq!(paths, Vec::<PathBuf>::new());
+    lab.shut_down(false).await;
+}
+
+/// Node's `spawn(cmd, { detached: true, env: {...} })` does the same: a session and an environment
+/// of its own, so neither FXServer's group nor its marker finds the child.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_detached_child_with_an_environment_of_its_own_is_not_ended_while_it_runs() {
+    let mut lab = Lab::online(&[]).await;
+    let mut processes = lab.supervisor.processes();
+
+    lab.type_command("fake_spawn /usr/bin/env -i /usr/bin/setsid /bin/sleep 25", "test")
+        .await;
+
+    let (process, _) = started(&mut processes, |process, _| {
+        process.args.iter().any(|arg| arg == "25")
+    })
+    .await;
+    // Two reconciliations at least.
+    let ended = timeout(Duration::from_secs(12), async {
+        loop {
+            if processes.recv().await.unwrap().change == (ProcessChange::Ended { pid: process.pid }) {
+                return;
+            }
+        }
+    })
+    .await;
+    let alive = Path::new(&format!("/proc/{}", process.pid)).exists();
+    // It left the group: the tree's kill does not reach it.
+    let _ = std::process::Command::new("kill")
+        .arg(process.pid.to_string())
+        .status();
+    lab.shut_down(false).await;
+    assert!(
+        ended.is_err() || !alive,
+        "{process:?} was reported ended while it ran"
+    );
 }

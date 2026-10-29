@@ -7,6 +7,7 @@ mod account;
 mod artifacts;
 mod audit;
 mod auth;
+mod diagnostics;
 mod metrics;
 mod schedule;
 mod servers;
@@ -68,6 +69,8 @@ pub(crate) fn routes() -> Vec<Route> {
     let builds = Permission(P::ARTIFACTS_VIEW);
     let manage_builds = Permission(P::ARTIFACTS_MANAGE);
     let change_builds = Reauthenticated(P::ARTIFACTS_MANAGE);
+    // A crash's files hold FXServer's memory: the owner's alone, with the password again.
+    let dumps = ReauthenticatedOwner;
     vec![
         route(M::GET,    "/health",                     Public,       health),
         route(M::GET,    "/setup",                      Public,       setup::status),
@@ -119,6 +122,8 @@ pub(crate) fn routes() -> Vec<Route> {
         route(M::GET,    "/metrics/growth",             dashboard,    metrics::growth),
         route(M::GET,    "/about",                      Session,      about::about),
         route(M::GET,    "/about/licences",             Session,      about::licences),
+        route(M::GET,    "/servers/default/crashes/{id}/files/{name}", dumps, diagnostics::download_file),
+        route(M::DELETE, "/servers/default/crashes/{id}/files",        dumps, diagnostics::delete_files),
     ]
 }
 
