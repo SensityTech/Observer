@@ -1,5 +1,6 @@
 pub mod authenticode;
 pub mod console;
+pub(crate) mod files;
 pub(crate) mod processes;
 pub(crate) mod usage;
 

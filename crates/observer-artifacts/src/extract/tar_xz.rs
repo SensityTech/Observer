@@ -191,7 +191,7 @@ impl Tree {
 /// Files keep their executable bits, owner read and write are always granted, and nothing becomes
 /// writable by others than the owner.
 #[cfg(unix)]
-fn keep_mode(file: &File, path: &Path, mode: u32) -> Result<(), Error> {
+pub(crate) fn keep_mode(file: &File, path: &Path, mode: u32) -> Result<(), Error> {
     use std::os::unix::fs::PermissionsExt;
     file.set_permissions(fs::Permissions::from_mode((mode & 0o755) | 0o600))
         .map_err(io(path))?;
@@ -199,7 +199,7 @@ fn keep_mode(file: &File, path: &Path, mode: u32) -> Result<(), Error> {
 }
 
 #[cfg(not(unix))]
-fn keep_mode(file: &File, path: &Path, _mode: u32) -> Result<(), Error> {
+pub(crate) fn keep_mode(file: &File, path: &Path, _mode: u32) -> Result<(), Error> {
     file.sync_all().map_err(io(path))
 }
 

@@ -173,6 +173,7 @@ fn list(source: &Path, platform: Platform) -> Result<Plan, Error> {
 }
 
 fn copy_plan(source: &Path, tree: &Path, plan: &Plan, track: &Track) -> Result<(), Error> {
+    let canonical = fs::canonicalize(source).map_err(io(source))?;
     fs::create_dir(tree).map_err(io(tree))?;
     for (relative, entry) in &plan.entries {
         track.entry()?;
@@ -183,17 +184,7 @@ fn copy_plan(source: &Path, tree: &Path, plan: &Plan, track: &Track) -> Result<(
                 if let Some(parent) = path.parent() {
                     fs::create_dir_all(parent).map_err(io(parent))?;
                 }
-                let from = source.join(relative);
-                fs::copy(&from, &path).map_err(io(&from))?;
-                // Executable bits stay, and nothing becomes writable by others than the owner, as
-                // in an install.
-                #[cfg(unix)]
-                {
-                    use std::os::unix::fs::PermissionsExt;
-                    let mode = fs::metadata(&path).map_err(io(&path))?.permissions().mode();
-                    fs::set_permissions(&path, fs::Permissions::from_mode((mode & 0o755) | 0o600))
-                        .map_err(io(&path))?;
-                }
+                copy_file(source, &canonical, relative, &path)?;
             }
         }
     }
@@ -212,6 +203,46 @@ fn copy_plan(source: &Path, tree: &Path, plan: &Plan, track: &Track) -> Result<(
         extract::create_link(&target, &tree.join(path))?;
     }
     Ok(())
+}
+
+/// Copies a file from where the listing found it. The folder can change between the listing and
+/// the copy: a file read through a folder swapped for a link, or one that is no longer a plain
+/// file, refuses the import rather than bringing in something from elsewhere.
+fn copy_file(source: &Path, canonical: &Path, relative: &Path, to: &Path) -> Result<(), Error> {
+    let from = source.join(relative);
+    let link = || Error::Import {
+        path: from.clone(),
+        refusal: ImportRefusal::Link,
+    };
+    let (mut file, resolved) = match observer_platform::open_resolved(&from) {
+        Ok(opened) => opened,
+        Err(_) if fs::symlink_metadata(&from).is_ok_and(|metadata| metadata.is_symlink()) => {
+            return Err(link());
+        }
+        Err(error) => return Err(io(&from)(error)),
+    };
+    let metadata = file.metadata().map_err(io(&from))?;
+    if resolved != canonical.join(relative) || metadata.is_symlink() || reparse_point(&metadata) {
+        return Err(link());
+    }
+    if !metadata.is_file() {
+        let shown = relative.to_string_lossy().replace('\\', "/");
+        return Err(extract::refuse(&shown, Refusal::EntryType(special(&metadata))));
+    }
+    let mut copy = fs::File::create_new(to).map_err(io(to))?;
+    std::io::copy(&mut file, &mut copy).map_err(io(&from))?;
+    extract::keep_mode(&copy, to, mode(&metadata))
+}
+
+#[cfg(unix)]
+fn mode(metadata: &fs::Metadata) -> u32 {
+    use std::os::unix::fs::PermissionsExt;
+    metadata.permissions().mode()
+}
+
+#[cfg(not(unix))]
+fn mode(_metadata: &fs::Metadata) -> u32 {
+    0
 }
 
 /// A reparse point other than a link, such as a junction or a mount point, which could lead
@@ -546,6 +577,92 @@ mod tests {
             "{relative:?}"
         );
         assert!(!lab.installer.root().join("35245").exists());
+    }
+
+    /// A link to a folder any account may make: a symbolic link on Unix, a junction on Windows.
+    fn link_folder(target: &Path, link: &Path) {
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(target, link).unwrap();
+        #[cfg(windows)]
+        {
+            let made = std::process::Command::new("cmd")
+                .args(["/C", "mklink", "/J"])
+                .arg(link)
+                .arg(target)
+                .output()
+                .unwrap();
+            assert!(made.status.success(), "{made:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_folder_swapped_for_a_link_once_it_was_listed_refuses_the_import() {
+        let lab = Lab::new();
+        let outside = lab.source.parent().unwrap().join("outside");
+        fs::create_dir_all(outside.join("lua")).unwrap();
+        fs::write(outside.join("lua/scheduler.lua"), b"not part of the build").unwrap();
+        let citizen = match Platform::host() {
+            Platform::Windows => lab.source.join("citizen"),
+            Platform::Linux => lab.source.join("alpine/opt/cfx-server/citizen"),
+        };
+
+        let error = lab
+            .installer
+            .import(&lab.source, 35245, None, &CancellationToken::new(), |progress| {
+                if matches!(progress, Progress::Copying { .. }) {
+                    fs::rename(citizen.join("scripting"), citizen.join("scripting-listed")).unwrap();
+                    link_folder(&outside, &citizen.join("scripting"));
+                }
+            })
+            .await
+            .unwrap_err();
+
+        assert!(
+            matches!(
+                error,
+                Error::Import {
+                    refusal: ImportRefusal::Link,
+                    ..
+                }
+            ),
+            "{error}"
+        );
+        assert!(!lab.installer.root().join("35245").exists());
+        assert!(lab.staging_is_empty());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_file_swapped_for_a_link_once_it_was_listed_refuses_the_import() {
+        let lab = Lab::new();
+        let outside = lab.source.parent().unwrap().join("outside.lua");
+        fs::write(&outside, b"not part of the build").unwrap();
+        let swapped = lab
+            .source
+            .join("alpine/opt/cfx-server/citizen/scripting/lua/scheduler.lua");
+
+        let error = lab
+            .installer
+            .import(&lab.source, 35245, None, &CancellationToken::new(), |progress| {
+                if matches!(progress, Progress::Copying { .. }) {
+                    fs::remove_file(&swapped).unwrap();
+                    std::os::unix::fs::symlink(&outside, &swapped).unwrap();
+                }
+            })
+            .await
+            .unwrap_err();
+
+        assert!(
+            matches!(
+                error,
+                Error::Import {
+                    refusal: ImportRefusal::Link,
+                    ..
+                }
+            ),
+            "{error}"
+        );
+        assert!(lab.staging_is_empty());
     }
 
     #[tokio::test]

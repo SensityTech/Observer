@@ -1,7 +1,7 @@
 //! What Observer needs from the operating system to run FXServer: spawning it with stdin, stdout,
 //! stderr and file descriptor 3, owning its whole process tree, and the console and signal plumbing
 //! around it; and for installing builds, the free space of a volume and the signature check of
-//! FXServer.exe, and the processes a build runs; for the statistics, what the tree, Observer and
+//! FXServer.exe, the processes a build runs, and files opened where they were listed; for the statistics, what the tree, Observer and
 //! the host use. The only crate
 //! allowed to use `unsafe` outside test tools.
 #![allow(unsafe_code)]
@@ -14,6 +14,7 @@ mod usage;
 mod windows;
 
 use std::ffi::OsString;
+use std::fs::File;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -94,6 +95,20 @@ pub fn processes_in(dir: &Path) -> io::Result<Vec<u32>> {
     #[cfg(unix)]
     {
         unix::processes::processes_in(dir)
+    }
+}
+
+/// Opens a file to read, with the path the file system took to it, every link and junction on the
+/// way resolved: a folder swapped for a link since it was listed shows there. A link in the file's
+/// own place is not followed, and a named pipe does not make the open wait.
+pub fn open_resolved(path: &Path) -> io::Result<(File, PathBuf)> {
+    #[cfg(windows)]
+    {
+        windows::files::open_resolved(path)
+    }
+    #[cfg(unix)]
+    {
+        unix::files::open_resolved(path)
     }
 }
 
@@ -199,5 +214,43 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
 
         assert!(available_space(dir.path()).unwrap() > 0);
+    }
+
+    #[test]
+    fn a_file_opened_through_a_linked_folder_shows_where_it_really_lies() {
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("real");
+        std::fs::create_dir(&real).unwrap();
+        std::fs::write(real.join("scheduler.lua"), b"--").unwrap();
+        let linked = dir.path().join("linked");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&real, &linked).unwrap();
+        #[cfg(windows)]
+        {
+            let made = std::process::Command::new("cmd")
+                .args(["/C", "mklink", "/J"])
+                .arg(&linked)
+                .arg(&real)
+                .output()
+                .unwrap();
+            assert!(made.status.success(), "{made:?}");
+        }
+
+        let (_, direct) = open_resolved(&real.join("scheduler.lua")).unwrap();
+        let (_, through) = open_resolved(&linked.join("scheduler.lua")).unwrap();
+
+        let canonical = std::fs::canonicalize(real.join("scheduler.lua")).unwrap();
+        assert_eq!(direct, canonical);
+        assert_eq!(through, canonical);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_link_in_the_place_of_a_file_is_not_followed() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("secret"), b"secret").unwrap();
+        std::os::unix::fs::symlink(dir.path().join("secret"), dir.path().join("link")).unwrap();
+
+        assert!(open_resolved(&dir.path().join("link")).is_err());
     }
 }

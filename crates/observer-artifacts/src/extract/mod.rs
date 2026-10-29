@@ -15,8 +15,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use tokio_util::sync::CancellationToken;
 
-pub(crate) use self::tar_xz::create_link;
 pub(crate) use self::tar_xz::extract as extract_tar_xz;
+pub(crate) use self::tar_xz::{create_link, keep_mode};
 pub(crate) use self::zip::{Plan, extract as extract_zip, plan as plan_zip};
 use crate::error::{Error, io};
 use crate::http::MIB;
