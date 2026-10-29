@@ -1,7 +1,7 @@
 //! What the processes FXServer's tree starts are: its own helpers, or programs it never starts by
 //! itself. The lists are closed: anything not known is unexpected.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use observer_domain::diagnostics::ProcessKind;
@@ -55,6 +55,8 @@ pub struct TreeContext {
     /// The tree's Node processes: FXServer too, which on Linux starts a crash dump server of its
     /// own in each and may start Node processes again.
     nodes: HashSet<u32>,
+    /// The crash dump server each FXServer process started, by that process.
+    dump_servers: HashMap<u32, u32>,
 }
 
 impl TreeContext {
@@ -71,6 +73,7 @@ impl TreeContext {
                 fxserver_startup,
                 system_root: std::env::var_os("SystemRoot").map(|root| canonical(Path::new(&root))),
                 nodes: HashSet::new(),
+                dump_servers: HashMap::new(),
             },
             Flavour::Linux => Self {
                 flavour: Flavour::Linux,
@@ -83,20 +86,39 @@ impl TreeContext {
                 fxserver_startup,
                 system_root: None,
                 nodes: HashSet::new(),
+                dump_servers: HashMap::new(),
             },
         }
     }
 
     /// Takes in what a started process was classified as.
     pub fn record(&mut self, process: &ProcessInfo, kind: ProcessKind) {
-        if kind == ProcessKind::Node {
-            self.nodes.insert(process.pid);
+        match (kind, process.parent) {
+            (ProcessKind::Node, _) => {
+                self.nodes.insert(process.pid);
+            }
+            (ProcessKind::DumpServer, Some(parent)) => {
+                self.dump_servers.entry(parent).or_insert(process.pid);
+            }
+            _ => {}
         }
     }
 
-    /// Forgets an ended process, whose pid may come back as another program.
+    /// Forgets an ended process, whose pid may come back as another program. The dump server of
+    /// a process that still runs stays its one: FXServer never starts another.
     pub fn forget(&mut self, pid: u32) {
         self.nodes.remove(&pid);
+        self.dump_servers.remove(&pid);
+    }
+
+    /// Whether `process` is the first crash dump server its parent started. Each FXServer process
+    /// starts its own as it begins, before it runs any resource: a later one is a resource's.
+    fn first_dump_server(&self, process: &ProcessInfo) -> bool {
+        process.parent.is_some_and(|parent| {
+            self.dump_servers
+                .get(&parent)
+                .is_none_or(|&pid| pid == process.pid)
+        })
     }
 
     /// Whether `process` was started by FXServer: its main process or one of its Node processes.
@@ -198,6 +220,7 @@ pub fn classify(process: &ProcessInfo, context: &TreeContext) -> ProcessKind {
             // one.
             let from_fxserver = context.started_by_fxserver(process) && inherited_startup(process, context);
             if from_fxserver
+                && context.first_dump_server(process)
                 && [binary, script]
                     .into_iter()
                     .any(|program| after(program, "-dumpserver:") && after(program, "-parentppe:"))
@@ -337,6 +360,7 @@ mod tests {
             fxserver_startup: Vec::new(),
             system_root: Some(PathBuf::from(r"C:\WINDOWS")),
             nodes: HashSet::new(),
+            dump_servers: HashMap::new(),
         }
     }
 
@@ -351,6 +375,7 @@ mod tests {
             fxserver_startup: vec!["LD_LIBRARY_PATH=/opt/owner/lib".to_owned()],
             system_root: None,
             nodes: HashSet::new(),
+            dump_servers: HashMap::new(),
         }
     }
 
@@ -699,6 +724,42 @@ mod tests {
         assert_eq!(classify(&dump_server, &context), ProcessKind::DumpServer);
         context.forget(node.pid);
         assert_eq!(classify(&dump_server, &context), ProcessKind::Shell);
+    }
+
+    #[test]
+    fn a_second_dump_server_of_the_same_fxserver_process_is_a_resource_s() {
+        let mut context = linux();
+        let loader = "/srv/fx/alpine/opt/cfx-server/ld-musl-x86_64.so.1";
+        let dump_server = |pid: u32| {
+            let mut started = process(
+                loader,
+                7,
+                &[
+                    loader,
+                    "--library-path",
+                    "/srv/fx/alpine/lib/",
+                    "--",
+                    "/srv/fx/alpine/opt/cfx-server/FXServer",
+                    "-dumpserver:5",
+                    "-parentppe:7",
+                ],
+            );
+            started.pid = pid;
+            started
+        };
+
+        let first = dump_server(4120);
+        let kind = classify(&first, &context);
+        assert_eq!(kind, ProcessKind::DumpServer);
+        context.record(&first, kind);
+        assert_eq!(classify(&dump_server(4300), &context), ProcessKind::Other);
+        assert_eq!(classify(&first, &context), ProcessKind::DumpServer, "read again");
+        context.forget(first.pid);
+        assert_eq!(
+            classify(&dump_server(4300), &context),
+            ProcessKind::Other,
+            "FXServer never starts another"
+        );
     }
 
     #[test]

@@ -1171,6 +1171,30 @@ async fn the_dump_server_the_server_starts_is_known() {
     lab.shut_down(false).await;
 }
 
+/// FXServer starts one crash dump server as it begins; the same command line later is a
+/// resource's, whatever it runs before FXServer's code.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_second_dump_server_of_the_server_is_not_known() {
+    let mut lab = Lab::online(&[]).await;
+    let mut processes = lab.supervisor.processes();
+    let dump_server = |process: &ProcessInfo, _: ProcessKind| {
+        process.args.iter().any(|arg| arg.starts_with("-dumpserver:"))
+    };
+
+    lab.type_command("fake_dump_server", "test").await;
+    let (first, first_kind) = started(&mut processes, dump_server).await;
+    lab.type_command("fake_dump_server", "test").await;
+    let (second, second_kind) = started(&mut processes, |process, kind| {
+        process.pid != first.pid && dump_server(process, kind)
+    })
+    .await;
+
+    lab.shut_down(false).await;
+    assert_eq!(first_kind, ProcessKind::DumpServer, "{first:?}");
+    assert_eq!(second_kind, ProcessKind::Other, "{second:?}");
+}
+
 /// A resource giving bash the dump server's run.sh line, with a startup file of its own added to
 /// the environment as Node's `spawn(.., { env })` adds it: bash runs that file before run.sh.
 #[cfg(unix)]
