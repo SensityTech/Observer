@@ -72,7 +72,8 @@ pub(crate) fn host_usage() -> HostUsage {
                 Path::new("/sys/class/net").join(name).join("device").exists()
             })
         }),
-        clock: clock_from(Path::new("/sys/devices/system/cpu")),
+        clock: read("/proc/cpuinfo")
+            .and_then(|cpuinfo| clock_from(&cpuinfo, Path::new("/sys/devices/system/cpu"))),
         pressure: pressure_from(Path::new("/proc/pressure")),
     }
 }
@@ -310,42 +311,54 @@ fn physical(interfaces: Vec<Interface>, has_device: impl Fn(&str) -> bool) -> Ve
     }
 }
 
-/// The clock of the processors under `root` (`/sys/devices/system/cpu`) that report all three of
-/// `cpufreq`'s figures, in kHz there. Most virtual machines have no `cpufreq` at all.
-fn clock_from(root: &Path) -> Option<Clock> {
+/// The clock of the processors `/proc/cpuinfo` lists whose `cpufreq` under `root`
+/// (`/sys/devices/system/cpu`) gives their highest and allowed clocks, in kHz there. Most virtual
+/// machines have no `cpufreq` at all. Its `scaling_cur_freq` is not read: x86 kernels up to 5.18
+/// (5.10 and 5.15 among them) sleep 10 ms in it for each processor not asked in the last second,
+/// where `/proc/cpuinfo` sleeps once for them all.
+fn clock_from(cpuinfo: &str, root: &Path) -> Option<Clock> {
     let (mut current, mut maximum, mut limit, mut counted) = (0.0, 0.0, 0.0, 0.0);
-    for entry in fs::read_dir(root).ok()?.flatten() {
-        let name = entry.file_name();
-        if !name
-            .to_str()
-            .and_then(|name| name.strip_prefix("cpu"))
-            .is_some_and(is_number)
-        {
-            continue;
-        }
-        let cpufreq = entry.path().join("cpufreq");
+    for (processor, mhz) in parse_cpuinfo(cpuinfo) {
+        let cpufreq = root.join(format!("cpu{processor}")).join("cpufreq");
         let read =
             |file: &str| -> Option<f64> { fs::read_to_string(cpufreq.join(file)).ok()?.trim().parse().ok() };
-        let (Some(now), Some(max), Some(allowed)) = (
-            read("scaling_cur_freq"),
-            read("cpuinfo_max_freq"),
-            read("scaling_max_freq"),
-        ) else {
+        let (Some(max), Some(allowed)) = (read("cpuinfo_max_freq"), read("scaling_max_freq")) else {
             continue;
         };
         if max <= 0.0 {
             continue;
         }
-        current += now;
-        maximum += max;
+        current += mhz;
+        maximum += max / 1000.0;
         limit += allowed / max * 100.0;
         counted += 1.0;
     }
     (counted > 0.0).then(|| Clock {
-        mhz: current / counted / 1000.0,
-        max_mhz: maximum / counted / 1000.0,
+        mhz: current / counted,
+        max_mhz: maximum / counted,
         limit: Some(limit / counted),
     })
+}
+
+/// Each processor of `/proc/cpuinfo` with its `cpu MHz`, which only x86 gives.
+fn parse_cpuinfo(text: &str) -> Vec<(u32, f64)> {
+    let mut processor = None;
+    let mut clocks = Vec::new();
+    for line in text.lines() {
+        let Some((key, value)) = line.split_once(':') else {
+            continue;
+        };
+        match key.trim() {
+            "processor" => processor = value.trim().parse::<u32>().ok(),
+            "cpu MHz" => {
+                if let (Some(number), Ok(mhz)) = (processor.take(), value.trim().parse::<f64>()) {
+                    clocks.push((number, mhz));
+                }
+            }
+            _ => {}
+        }
+    }
+    clocks
 }
 
 /// The `some` stall totals of `cpu`, `memory` and `io` under `root` (`/proc/pressure`), which a
@@ -598,10 +611,15 @@ mod tests {
     }
 
     #[test]
-    fn the_clock_averages_the_processors_that_report_all_three_figures() {
+    fn the_clock_is_cpuinfo_s_over_the_processors_cpufreq_gives_a_highest_and_allowed_clock_for() {
         let root = tempfile::tempdir().unwrap();
-        let cpu = |number: u32, now: &str, max: &str, allowed: Option<&str>| {
-            write(root.path(), &format!("cpu{number}/cpufreq/scaling_cur_freq"), now);
+        let cpu = |number: u32, max: &str, allowed: Option<&str>| {
+            // Read, it would sleep on the kernels this avoids, and give another clock here.
+            write(
+                root.path(),
+                &format!("cpu{number}/cpufreq/scaling_cur_freq"),
+                "800000\n",
+            );
             write(root.path(), &format!("cpu{number}/cpufreq/cpuinfo_max_freq"), max);
             if let Some(allowed) = allowed {
                 write(
@@ -611,22 +629,32 @@ mod tests {
                 );
             }
         };
-        cpu(0, "4200000\n", "5000000\n", Some("5000000\n"));
-        cpu(1, "3000000\n", "5000000\n", Some("2500000\n"));
-        cpu(2, "1000000\n", "5000000\n", None);
+        cpu(0, "5000000\n", Some("5000000\n"));
+        cpu(1, "5000000\n", Some("2500000\n"));
+        cpu(2, "5000000\n", None);
         fs::create_dir_all(root.path().join("cpu3")).unwrap();
         write(root.path(), "cpufreq/boost", "1\n");
-        write(root.path(), "online", "0-3\n");
+        let processor = |number: u32, mhz: &str| {
+            format!(
+                "processor\t: {number}\nvendor_id\t: GenuineIntel\nmodel name\t: Intel(R) Core(TM) i7 CPU @ 3.40GHz\n\
+                 cpu MHz\t\t: {mhz}\ncache size\t: 30720 KB\nflags\t\t: fpu vme de pse\n\n"
+            )
+        };
+        let cpuinfo: String = [(0, "4200.000"), (1, "3000.000"), (2, "1000.000"), (3, "900.000")]
+            .map(|(number, mhz)| processor(number, mhz))
+            .concat();
 
-        let clock = clock_from(root.path()).unwrap();
+        let clock = clock_from(&cpuinfo, root.path()).unwrap();
 
         assert!((clock.mhz - 3600.0).abs() < 1e-9, "{clock:?}");
         assert!((clock.max_mhz - 5000.0).abs() < 1e-9);
         assert!((clock.limit.unwrap() - 75.0).abs() < 1e-9);
+        let arm = "processor\t: 0\nBogoMIPS\t: 48.00\nCPU implementer\t: 0x41\n\n";
+        assert_eq!(clock_from(arm, root.path()), None, "no cpu MHz");
         let empty = tempfile::tempdir().unwrap();
         fs::create_dir_all(empty.path().join("cpu0")).unwrap();
-        assert_eq!(clock_from(empty.path()), None, "no cpufreq");
-        assert_eq!(clock_from(&empty.path().join("missing")), None);
+        assert_eq!(clock_from(&cpuinfo, empty.path()), None, "no cpufreq");
+        assert_eq!(clock_from(&cpuinfo, &empty.path().join("missing")), None);
     }
 
     #[test]
