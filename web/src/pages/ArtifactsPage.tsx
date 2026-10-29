@@ -18,7 +18,7 @@ import {
     X,
     type LucideIcon,
 } from 'lucide-react';
-import { useId, useState, type ReactNode } from 'react';
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 
 import {
     KVP_BUILD,
@@ -74,7 +74,8 @@ import { useSchedule } from '../schedule/context';
 import { useServerStatus } from '../server/context';
 import { isRunning } from '../server/state';
 
-type Outcome = { tone: 'success' | 'warning' | 'danger'; message: string };
+/** `focus`: the control it answers goes away with it, so the keyboard moves to the notice. */
+type Outcome = { tone: 'success' | 'warning' | 'danger'; message: string; focus?: boolean };
 
 type Open =
     | { kind: 'install'; entry: CatalogEntry }
@@ -130,7 +131,14 @@ export function ArtifactsPage() {
     const status = live ?? (refused ? null : last);
     const [open, setOpen] = useState<Open | null>(null);
     const [outcome, setOutcome] = useState<Outcome | null>(null);
+    const notice = useRef<HTMLDivElement>(null);
+    const title = useRef<HTMLHeadingElement>(null);
     const catalog = useQuery(catalogQuery);
+    useEffect(() => {
+        if (outcome?.focus) {
+            notice.current?.focus();
+        }
+    }, [outcome]);
     const close = () => setOpen(null);
     const done = (message: string) => {
         setOpen(null);
@@ -140,13 +148,17 @@ export function ArtifactsPage() {
     return (
         <div className="flex flex-col gap-5 max-md:gap-4">
             <div className="page-head">
-                <h1 className="page-title">
+                <h1 ref={title} tabIndex={-1} className="page-title">
                     {t.artifacts.title} <span className="gloss">{t.artifacts.gloss}</span>
                 </h1>
                 <ZoneNote />
             </div>
             {status !== null && live === null && <Notice tone="warning">{t.artifacts.outOfDate}</Notice>}
-            {outcome !== null && <Notice tone={outcome.tone}>{outcome.message}</Notice>}
+            {outcome !== null && (
+                <Notice ref={notice} tabIndex={-1} tone={outcome.tone}>
+                    {outcome.message}
+                </Notice>
+            )}
             {status === null ? (
                 <section className="card">
                     <div className="card-body flex flex-col gap-3" aria-busy={link !== 'offline'}>
@@ -167,6 +179,7 @@ export function ArtifactsPage() {
                         status={status}
                         warnings={catalog.data?.warnings ?? []}
                         onImport={() => setOpen({ kind: 'import' })}
+                        onHidden={() => title.current?.focus()}
                     />
                     <BuildCard status={status} onOutcome={setOutcome} />
                     {status.job !== null && (
@@ -332,10 +345,13 @@ function Notices({
     status,
     warnings,
     onImport,
+    onHidden,
 }: {
     status: ArtifactsStatus;
     warnings: CatalogWarning[];
     onImport: () => void;
+    /** The notice the keyboard was on is gone. */
+    onHidden: () => void;
 }) {
     const { t, format } = useI18n();
     const me = useMe();
@@ -345,6 +361,7 @@ function Notices({
     const notice = status.notice;
     const hide = (at: string) => {
         const next = [...hidden.filter((each) => each !== at), at].slice(-20);
+        onHidden();
         setHidden(next);
         try {
             localStorage.setItem(HIDDEN_KEY, JSON.stringify(next));
@@ -462,7 +479,7 @@ function BuildCard({
     const canManage = allows(me, Permission.ArtifactsManage);
     const cancel = useMutation({
         mutationFn: cancelPending,
-        onSuccess: () => onOutcome({ tone: 'success', message: words.pendingCancelled }),
+        onSuccess: () => onOutcome({ tone: 'success', message: words.pendingCancelled, focus: true }),
         onError: (error) =>
             onOutcome({
                 tone: 'danger',

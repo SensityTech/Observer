@@ -285,6 +285,35 @@ describe('ArtifactsPage', () => {
         expect(row(35245).textContent).not.toContain(en.artifacts.installed.commandLine);
     });
 
+    it('should keep the keyboard on the page when a notice is hidden or the pending build cancelled', async () => {
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(async () => Response.json({ ...STATUS, pending: null })),
+        );
+        const { getByRole, getByText } = await page({
+            ...STATUS,
+            job: null,
+            notice: {
+                kind: 'rolledBack',
+                build: 37900,
+                other: 35245,
+                reason: 'crashed',
+                at: '2026-10-28T02:40:00Z',
+            },
+        });
+
+        const hide = getByRole('button', { name: en.artifacts.notices.hideLabel });
+        hide.focus();
+        fireEvent.click(hide);
+        expect(document.activeElement).toBe(getByRole('heading', { level: 1 }));
+
+        const cancel = getByRole('button', { name: en.artifacts.build.cancelPending });
+        cancel.focus();
+        fireEvent.click(cancel);
+        await waitFor(() => getByText(en.artifacts.build.pendingCancelled));
+        expect(document.activeElement).toBe(getByText(en.artifacts.build.pendingCancelled).closest('[role]'));
+    });
+
     it('should say beside a build in use why it cannot be deleted', async () => {
         await page({ ...STATUS, job: null });
 
