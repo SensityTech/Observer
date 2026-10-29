@@ -143,6 +143,9 @@ describe('auditDetails', () => {
         expect(auditDetails(en, format, { reason: 'lowDisk', tookMs: 3 })).toBe(
             'Reason: less than 1 GB free · Took: 3 ms',
         );
+        expect(auditDetails(en, format, { crash: 1, file: '5aed9068.dmp', bytes: 2_867 })).toBe(
+            'Crash: 1 · File: 5aed9068.dmp · Size: 2.8 KB',
+        );
         expect(auditDetails(en, format, { crash: 2, names: ['a.dmp', 'a-full.dmp'], bytes: 500 })).toBe(
             'Crash: 2 · Files: a.dmp, a-full.dmp · Size: 500 bytes',
         );

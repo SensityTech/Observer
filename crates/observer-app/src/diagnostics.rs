@@ -222,7 +222,7 @@ impl Diagnostics {
         }
         let record = Record::by(caller, AuditAction::CrashFileDownloaded)
             .target(Servers::DEFAULT)
-            .details(json!({ "crash": id, "name": file.name, "bytes": bytes }));
+            .details(json!({ "crash": id, "file": file.name, "bytes": bytes }));
         self.inner.audit(record).await?;
         Ok((CrashFile { bytes, ..file }, opened))
     }

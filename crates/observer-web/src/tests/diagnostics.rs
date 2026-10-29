@@ -210,7 +210,7 @@ async fn a_crash_file_goes_to_the_owner_alone_with_the_password_entered_again() 
     assert_eq!(downloads.len(), 1);
     assert_eq!(
         downloads[0]["details"],
-        json!({ "crash": id, "name": "6c1f0b2e.dmp", "bytes": 1_300 })
+        json!({ "crash": id, "file": "6c1f0b2e.dmp", "bytes": 1_300 })
     );
     let denied = server.entries("permission_denied").await;
     assert_eq!(denied.len(), 1);
