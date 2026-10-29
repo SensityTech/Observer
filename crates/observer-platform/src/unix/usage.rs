@@ -20,19 +20,25 @@ impl ProcessTree {
         let mut children = Vec::new();
         let mut total = None;
         for pid in self.members()? {
-            let Ok(process) = measure(pid) else {
+            let Ok(stat) = stat_of(pid) else {
                 continue;
             };
-            *total.get_or_insert(Duration::ZERO) += process.usage.cpu() + process.waited;
+            // A process that ended keeps its times until its parent waits for it and takes them
+            // into its own `waited`: the total holds them all along.
+            *total.get_or_insert(Duration::ZERO) +=
+                ticks(stat.user.saturating_add(stat.system).saturating_add(stat.waited));
+            let Ok(usage) = measure(pid, &stat) else {
+                continue;
+            };
             if pid == leader {
-                main = Some(process.usage);
+                main = Some(usage);
                 continue;
             }
             let name = fs::read_to_string(format!("/proc/{pid}/comm")).unwrap_or_default();
             children.push(Member {
                 pid,
                 name: name.trim_end_matches('\n').to_owned(),
-                usage: process.usage,
+                usage,
             });
         }
         let threads = main.and_then(|_| threads_from(Path::new("/proc"), leader).ok());
@@ -50,7 +56,8 @@ impl ProcessTree {
 }
 
 pub(crate) fn own_usage() -> io::Result<Usage> {
-    measure(std::process::id()).map(|process| process.usage)
+    let pid = std::process::id();
+    measure(pid, &stat_of(pid)?)
 }
 
 pub(crate) fn host_usage() -> HostUsage {
@@ -91,44 +98,40 @@ pub(crate) fn disk_counters(dir: &Path) -> io::Result<DiskCounters> {
     })
 }
 
-struct Process {
-    usage: Usage,
-    /// What the children it waited for used.
-    waited: Duration,
+fn unreadable(pid: u32, file: &str) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidData,
+        format!("/proc/{pid}/{file} is unreadable"),
+    )
 }
 
-fn measure(pid: u32) -> io::Result<Process> {
+fn stat_of(pid: u32) -> io::Result<Stat> {
+    parse_stat(&fs::read_to_string(format!("/proc/{pid}/stat"))?).ok_or_else(|| unreadable(pid, "stat"))
+}
+
+/// What process `pid` uses, from its `stat` and its other files.
+fn measure(pid: u32, stat: &Stat) -> io::Result<Usage> {
     let read = |file: &str| fs::read_to_string(format!("/proc/{pid}/{file}"));
-    let invalid = |file: &str| {
-        io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("/proc/{pid}/{file} is unreadable"),
-        )
-    };
-    let stat = parse_stat(&read("stat")?).ok_or_else(|| invalid("stat"))?;
     // A zombie keeps its stat but has no memory left to report.
-    let memory = parse_status(&read("status")?).ok_or_else(|| invalid("status"))?;
+    let memory = parse_status(&read("status")?).ok_or_else(|| unreadable(pid, "status"))?;
     // Only the owner of a process, or root, may read its I/O counters and descriptors.
     let io = read("io").ok().as_deref().and_then(parse_io);
     let handles = fs::read_dir(format!("/proc/{pid}/fd"))
         .ok()
         .map(|entries| u32::try_from(entries.count()).unwrap_or(u32::MAX));
-    Ok(Process {
-        usage: Usage {
-            user: ticks(stat.user),
-            kernel: ticks(stat.system),
-            working_set: memory.resident,
-            working_set_peak: memory.peak,
-            private: memory.private,
-            faults: stat.minor_faults.checked_add(stat.major_faults),
-            hard_faults: Some(stat.major_faults),
-            threads: Some(stat.threads),
-            handles,
-            read: io.map(|io| io.0),
-            written: io.map(|io| io.1),
-            started: stat.start,
-        },
-        waited: ticks(stat.waited),
+    Ok(Usage {
+        user: ticks(stat.user),
+        kernel: ticks(stat.system),
+        working_set: memory.resident,
+        working_set_peak: memory.peak,
+        private: memory.private,
+        faults: stat.minor_faults.checked_add(stat.major_faults),
+        hard_faults: Some(stat.major_faults),
+        threads: Some(stat.threads),
+        handles,
+        read: io.map(|io| io.0),
+        written: io.map(|io| io.1),
+        started: stat.start,
     })
 }
 
@@ -784,6 +787,38 @@ mod tests {
             "{totals:?} against {measured:?}"
         );
         assert_eq!((totals.processes_started, totals.private_peak), (None, None));
+        spawned.tree.kill().unwrap();
+        spawned.exit.wait().await;
+    }
+
+    #[tokio::test]
+    async fn the_tree_totals_keep_a_busy_child_that_ended_before_its_parent_waits_for_it() {
+        let busy = "i=0; while [ $i -lt 300000 ]; do i=$((i+1)); done";
+        // `sleep` never waits for the child it inherits, which stays a zombie until the end.
+        let mut spawned = spawn(&shell(&format!("sh -c '{busy}' & exec sleep 30"))).unwrap();
+        let zombie = |pid: &u32| {
+            fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|stat| {
+                stat.rsplit_once(") ")
+                    .is_some_and(|(_, rest)| rest.starts_with('Z'))
+            })
+        };
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let ended = loop {
+            if let Some(pid) = spawned.tree.members().unwrap().into_iter().find(zombie) {
+                break pid;
+            }
+            assert!(Instant::now() < deadline, "the child never ended");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        };
+
+        let usage = spawned.tree.usage().unwrap();
+
+        let spun = stat_of(ended).unwrap();
+        let spun = ticks(spun.user + spun.system);
+        assert!(spun >= Duration::from_millis(50), "{spun:?}");
+        let totals = usage.totals.expect("the group has members");
+        assert!(totals.cpu >= spun, "{totals:?} against the child's {spun:?}");
+        assert!(usage.children.is_empty(), "{:?}", usage.children);
         spawned.tree.kill().unwrap();
         spawned.exit.wait().await;
     }
