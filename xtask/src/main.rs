@@ -20,6 +20,7 @@ tasks:
   bindings  regenerate the TypeScript types and permission constants in web/src/api/generated
   check     run every check CI runs: formatting, lints, tests, types, panel build
   dist      the release archive of a target, its checksum and its checks (--target, --max-glibc)
+  e2e       the browser tests: the panel, the debug binaries, Chromium, then Playwright
   icons     draw the executable's icons from the mark (--check: fail if they differ)
   licences  list the third-party software a target ships, with its licence texts (--target)";
 
@@ -30,6 +31,7 @@ fn main() -> ExitCode {
         Some("bindings") => bindings(),
         Some("check") => check(),
         Some("dist") => target(&args).and_then(|target| dist::dist(&target, value(&args, "--max-glibc"))),
+        Some("e2e") => e2e(),
         Some("icons") => icons::run(&root(), args.iter().any(|arg| arg == "--check")),
         Some("licences") => target(&args).and_then(|target| licences::write(&root(), &target).map(drop)),
         _ => {
@@ -79,6 +81,17 @@ fn target(args: &[String]) -> anyhow::Result<String> {
 fn value<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
     let at = args.iter().position(|arg| arg == flag)?;
     args.get(at + 1).map(String::as_str)
+}
+
+/// Not part of `check`: it downloads a browser and takes minutes.
+fn e2e() -> anyhow::Result<()> {
+    web()?;
+    let panel = root().join("web");
+    run(cargo().args(["build", "--package", "observer", "--package", "fake-fxserver"]))?;
+    run(npx()
+        .args(["playwright", "install", "chromium"])
+        .current_dir(&panel))?;
+    run(npm().args(["run", "e2e"]).current_dir(&panel))
 }
 
 /// ts-rs writes the bindings from the `export_bindings_*` tests it generates.
@@ -172,6 +185,10 @@ fn cargo() -> Command {
 fn npm() -> Command {
     // npm is a batch script on Windows, which Command does not resolve without its extension.
     Command::new(if cfg!(windows) { "npm.cmd" } else { "npm" })
+}
+
+fn npx() -> Command {
+    Command::new(if cfg!(windows) { "npx.cmd" } else { "npx" })
 }
 
 fn root() -> PathBuf {
