@@ -145,7 +145,15 @@ pub async fn run(config: Config, args: RunArgs) -> anyhow::Result<()> {
     if let Err(error) = audit.record_stop(first.from).await {
         warn!(%error, "cannot audit the stop of Observer");
     }
-    stop_fxserver(&supervision, building, scheduling, &mut supervised, &mut signals, first).await;
+    stop_fxserver(
+        &supervision,
+        building,
+        scheduling,
+        &mut supervised,
+        &mut signals,
+        first,
+    )
+    .await;
     supervised.close().await;
     // After the supervision, so that FXServer's stop is in the statistics.
     sampling.close().await;
