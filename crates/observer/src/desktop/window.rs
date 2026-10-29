@@ -211,16 +211,7 @@ impl StatusWindow {
                 text::next_restart(schedule.next.as_ref(), &zone, shown.now),
             ),
         ];
-        ui.horizontal_wrapped(|ui| {
-            ui.spacing_mut().item_spacing.x = 6.0;
-            for (index, (name, value)) in facts.into_iter().enumerate() {
-                if index > 0 {
-                    ui.add_space(10.0);
-                }
-                ui.label(RichText::new(name).color(shown.palette.ink_3));
-                ui.label(RichText::new(value).color(shown.palette.ink));
-            }
-        });
+        facts_row(ui, &shown.palette, &facts);
     }
 
     fn panel(&self, ui: &mut Ui, shown: &Shown) {
@@ -432,6 +423,41 @@ impl StatusWindow {
     }
 }
 
+/// `Players 12 / 64   Build 37872   Next restart 04:00 (in 3h 12m)`, on as many lines as the width
+/// needs. A fact moves to the next line whole: `30 Oct 01:00 (in 23h 6m)` never leaves part of
+/// itself behind, nor its name.
+fn facts_row(ui: &mut Ui, palette: &Palette, facts: &[(&str, String)]) {
+    const GAP: f32 = 10.0;
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing.x = 6.0;
+        let spacing = ui.spacing().item_spacing.x;
+        for (index, (name, value)) in facts.iter().enumerate() {
+            let name = whole(ui, name, palette.ink_3);
+            let value = whole(ui, value, palette.ink);
+            let width = name.size().x + spacing + value.size().x;
+            if index > 0 {
+                if ui.available_size_before_wrap().x < GAP + 2.0 * spacing + width {
+                    ui.end_row();
+                } else {
+                    ui.add_space(GAP);
+                }
+            }
+            ui.add(egui::Label::new(name));
+            ui.add(egui::Label::new(value));
+        }
+    });
+}
+
+/// Text laid out on one line, whatever the width left.
+fn whole(ui: &Ui, text: &str, colour: Color32) -> Arc<egui::Galley> {
+    egui::WidgetText::from(RichText::new(text).color(colour)).into_galley(
+        ui,
+        Some(egui::TextWrapMode::Extend),
+        f32::INFINITY,
+        egui::TextStyle::Body,
+    )
+}
+
 /// `Panel  http://localhost:40125  [Open the panel]`.
 fn panel_row(ui: &mut Ui, palette: &Palette, address: &str, off: Option<&str>) -> Response {
     ui.horizontal(|ui| {
@@ -583,6 +609,27 @@ mod tests {
     fn middle(node: &Node) -> f64 {
         let bounds = node.bounds().expect("a drawn node has bounds");
         f64::midpoint(bounds.y0, bounds.y1)
+    }
+
+    #[test]
+    fn a_fact_moves_to_the_next_line_whole() {
+        for players in ["12 / 64", "2,048 / 2,048"] {
+            let facts = [
+                (text::PLAYERS, players.to_owned()),
+                (text::BUILD, "35245".to_owned()),
+                (text::NEXT_RESTART, "30 Oct 01:00 (in 23h 6m)".to_owned()),
+            ];
+            let nodes = drawn(|ui| facts_row(ui, &DARK, &facts));
+
+            for (name, value) in &facts {
+                let name = read(&nodes, name).bounds().unwrap();
+                let value = read(&nodes, value).bounds().unwrap();
+                assert!(
+                    (value.y0 - name.y0).abs() < 0.5 && (value.height() - name.height()).abs() < 0.5,
+                    "{value:?} is not on one line beside its name {name:?} ({players} players)"
+                );
+            }
+        }
     }
 
     #[test]
