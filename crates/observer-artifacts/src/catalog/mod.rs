@@ -1,7 +1,8 @@
-//! The builds Cfx.re publishes for a platform, gathered from four sources: the docs download page,
-//! the changelogs API, the listings of the branches the caller names, and the builds the support
-//! policy mentions. Each source has its own parser, so a change in one leaves the others working,
-//! and a source that fails is replaced by its last good answer for a day.
+//! The builds Cfx.re publishes for a platform, gathered from five sources: the docs download page,
+//! the changelogs API, the listings of the branches the caller names, the builds the support policy
+//! mentions, and the builds the caller saw listed before. Each source has its own parser, so a
+//! change in one leaves the others working, and a source that fails is replaced by its last good
+//! answer for a day.
 
 mod changelog;
 mod docs_page;
@@ -100,6 +101,10 @@ pub enum Availability {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "four separate facts a source states about a build"
+)]
 pub struct CatalogBuild {
     pub build: u32,
     pub commit: Option<CommitSha>,
@@ -112,6 +117,20 @@ pub struct CatalogBuild {
     pub end_of_life: Option<PolicyDate>,
     /// Older than every build of the support policy: Cfx.re stopped tracking it.
     pub predates_policy: bool,
+    /// A source lists it now. A build only seen before is still offered, with what was learnt of
+    /// it then: the `HEAD` of its install proves whether it is still there.
+    pub listed: bool,
+}
+
+/// A downloadable build a listing named once, which the caller keeps.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SeenBuild {
+    pub build: u32,
+    pub commit: CommitSha,
+    pub branch: Branch,
+    pub url: Url,
+    pub published_at: Option<Timestamp>,
+    pub size: Option<u64>,
 }
 
 impl CatalogBuild {
@@ -141,6 +160,7 @@ impl CatalogBuild {
             end_of_support: None,
             end_of_life: None,
             predates_policy: false,
+            listed: true,
         }
     }
 
@@ -156,7 +176,23 @@ impl CatalogBuild {
             end_of_support: None,
             end_of_life: None,
             predates_policy: false,
+            listed: true,
         }
+    }
+
+    /// What a listing said of this build, when it is downloadable: what the caller keeps as seen.
+    pub fn seen(&self) -> Option<SeenBuild> {
+        let Availability::Downloadable { url, size, .. } = &self.availability else {
+            return None;
+        };
+        Some(SeenBuild {
+            build: self.build,
+            commit: self.commit?,
+            branch: self.branch.clone()?,
+            url: url.clone(),
+            published_at: self.published_at,
+            size: *size,
+        })
     }
 }
 
@@ -223,17 +259,22 @@ impl Listing {
             branch: entry.branch.clone()?,
             platform: self.platform,
             url: url.clone(),
+            fingerprint: None,
+            installed_by: None,
         })
     }
 }
 
 /// The catalog, with the last good answer of each source and what `HEAD` said about each archive.
-/// Both live in memory for now.
+/// Both live in memory.
 #[derive(Debug)]
 pub struct Catalog {
     http: Http,
     last_good: Mutex<LastGood>,
     archives: Mutex<HashMap<Url, Head>>,
+    /// The listing a test catalog answers, without contacting anything.
+    #[cfg(any(test, feature = "test-support"))]
+    fixed: Option<Result<Listing, Source>>,
 }
 
 #[derive(Debug, Default)]
@@ -255,11 +296,49 @@ impl Catalog {
             http,
             last_good: Mutex::default(),
             archives: Mutex::default(),
+            #[cfg(any(test, feature = "test-support"))]
+            fixed: None,
+        }
+    }
+
+    /// A catalog that answers `listing` to every request, or fails as `source` when it is an
+    /// error, as when no source answers.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn fixed(listing: Result<Listing, Source>) -> Self {
+        Self {
+            fixed: Some(listing),
+            ..Self::new(Http::new().expect("the HTTP client starts in tests"))
         }
     }
 
     /// Fails only when neither the docs page nor the API has an answer, fresh or from the last day.
-    pub async fn list(&self, platform: Platform, branches: &[Branch]) -> Result<Listing, Error> {
+    /// The `seen` builds no source lists any more come last, with `listed` false.
+    pub async fn list(
+        &self,
+        platform: Platform,
+        branches: &[Branch],
+        seen: &[SeenBuild],
+    ) -> Result<Listing, Error> {
+        #[cfg(any(test, feature = "test-support"))]
+        if let Some(fixed) = &self.fixed {
+            return match fixed {
+                Ok(listing) => {
+                    let mut listing = listing.clone();
+                    remember(&mut listing.builds, platform, seen);
+                    Ok(listing)
+                }
+                Err(source) => Err(Error::FormatChanged {
+                    origin: source.clone(),
+                    reason: "the test catalog has no answer".to_owned(),
+                }),
+            };
+        }
+        let mut listing = self.fetch(platform, branches).await?;
+        remember(&mut listing.builds, platform, seen);
+        Ok(listing)
+    }
+
+    async fn fetch(&self, platform: Platform, branches: &[Branch]) -> Result<Listing, Error> {
         let (docs, changelog) = tokio::join!(self.docs_page(platform), self.changelog(platform));
         let mut fetched = Vec::with_capacity(branches.len());
         for branch in branches {
@@ -383,6 +462,49 @@ impl Catalog {
             }
         }
     }
+}
+
+/// Adds the builds seen before that no source lists now, and gives a build only the policy names
+/// the folder a listing gave it then.
+fn remember(builds: &mut Vec<CatalogBuild>, platform: Platform, seen: &[SeenBuild]) {
+    let first_tracked = builds
+        .iter()
+        .filter(|entry| entry.end_of_support.is_some() || entry.end_of_life.is_some())
+        .map(|entry| entry.build)
+        .min();
+    for seen in seen {
+        let found = builds.iter_mut().find(|entry| entry.build == seen.build);
+        if found.as_ref().is_some_and(|entry| entry.commit.is_some()) {
+            continue;
+        }
+        let known = CatalogBuild {
+            commit: Some(seen.commit),
+            branch: Some(seen.branch.clone()),
+            availability: Availability::Downloadable {
+                url: seen.url.clone(),
+                kind: platform.archive(),
+                size: seen.size,
+            },
+            published_at: seen.published_at,
+            listed: false,
+            ..CatalogBuild::policy_only(seen.build)
+        };
+        match found {
+            Some(entry) => {
+                *entry = CatalogBuild {
+                    end_of_support: entry.end_of_support,
+                    end_of_life: entry.end_of_life,
+                    predates_policy: entry.predates_policy,
+                    ..known
+                };
+            }
+            None => builds.push(CatalogBuild {
+                predates_policy: first_tracked.is_some_and(|first| seen.build < first),
+                ..known
+            }),
+        }
+    }
+    builds.sort_by_key(|entry| std::cmp::Reverse(entry.build));
 }
 
 fn apply(entry: &mut CatalogBuild, head: Head) {
@@ -790,6 +912,67 @@ mod tests {
             ),
             "{warnings:?}"
         );
+    }
+
+    fn seen(build: u32) -> SeenBuild {
+        SeenBuild {
+            build,
+            commit: "1111111111111111111111111111111111111111".parse().unwrap(),
+            branch: Branch::master(),
+            url: format!(
+                "https://runtime.fivem.net/artifacts/fivem/build_server_windows/master/{build}-1111111111111111111111111111111111111111/server.zip"
+            )
+            .parse()
+            .unwrap(),
+            published_at: Some(at("2026-09-01T10:00:00Z")),
+            size: Some(66_000_000),
+        }
+    }
+
+    #[test]
+    fn a_build_seen_before_is_offered_unlisted_and_one_still_listed_is_left_as_it_is() {
+        let mut listing = merge(
+            Platform::Windows,
+            Some(&docs()),
+            Some(&api(Platform::Windows)),
+            &[],
+        );
+
+        // 37739 is policy-only now, 36000 nothing names any more, 37872 is listed.
+        remember(
+            &mut listing.builds,
+            Platform::Windows,
+            &[seen(37739), seen(36000), seen(37872)],
+        );
+
+        let failed = listing.find(37739).unwrap();
+        assert!(!failed.listed);
+        assert!(failed.end_of_support.is_some() || failed.end_of_life.is_some());
+        assert_eq!(failed.published_at, Some(at("2026-09-01T10:00:00Z")));
+        assert!(listing.install_request(37739).is_some());
+        let gone = listing.find(36000).unwrap();
+        assert!(!gone.listed);
+        assert_eq!(
+            gone.availability,
+            Availability::Downloadable {
+                url: seen(36000).url,
+                kind: ArchiveKind::Zip,
+                size: Some(66_000_000),
+            }
+        );
+        let latest = listing.find(37872).unwrap();
+        assert!(latest.listed);
+        assert_eq!(
+            latest.commit.unwrap().to_string(),
+            "0cfcdb5ead57a4a26fcb6ebad98adbcd0273e607"
+        );
+        assert!(
+            listing
+                .builds
+                .windows(2)
+                .all(|pair| pair[0].build > pair[1].build)
+        );
+        assert_eq!(latest.seen().unwrap().build, 37872);
     }
 
     #[tokio::test]

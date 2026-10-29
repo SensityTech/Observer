@@ -913,6 +913,7 @@ fn hitches_and_barks_are_counted_per_slot_while_a_run_exists() {
             EventKind::Spawned {
                 pid: 4,
                 probe: "127.0.0.1:30120".parse().unwrap(),
+                build: "/srv/observer/artifacts/35245".into(),
             },
         ),
         start,
@@ -1215,6 +1216,7 @@ async fn a_write_that_outlasts_the_next_slot_does_not_cost_that_slot() {
             clock: services,
             accounts,
             data_dir: dir.path().join("data"),
+            artifacts: dir.path().join("data/artifacts"),
             console_logs: dir.path().join("data/logs/console"),
             log: None,
         },

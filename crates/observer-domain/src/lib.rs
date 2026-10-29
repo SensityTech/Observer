@@ -6,6 +6,7 @@
 
 pub mod accounts;
 pub mod api;
+pub mod artifacts;
 pub mod audit;
 pub mod delegation;
 pub mod error;

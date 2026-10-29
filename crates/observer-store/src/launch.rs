@@ -6,20 +6,24 @@ use rusqlite::{Connection, OptionalExtension, Row, params};
 use crate::database::StoreError;
 use crate::time::Utc;
 
-/// A server's launch settings, or `None` until the owner first saves them.
+/// A server's launch settings, or `None` until the owner first saves them, with the build folder
+/// they named before builds lived in Observer's data folder.
 pub fn get(conn: &Connection, server_id: &str) -> Result<Option<StoredLaunch>, StoreError> {
     Ok(conn
         .query_row(
-            "SELECT build_path, data_path, cfg_file, onesync, auto_start, txadmin_events, extra_arguments,
-                 version
-             FROM launch_settings WHERE server_id = ?1",
+            "SELECT launch.data_path, launch.cfg_file, launch.onesync, launch.auto_start,
+                 launch.txadmin_events, launch.extra_arguments, launch.version, state.legacy_build_path
+             FROM launch_settings AS launch
+             LEFT JOIN artifact_state AS state ON state.server_id = launch.server_id
+             WHERE launch.server_id = ?1",
             [server_id],
             read,
         )
         .optional()?)
 }
 
-/// Stores the settings under their version, which the caller has already moved on.
+/// Stores the settings under their version, which the caller has already moved on. The legacy
+/// build folder is the artifact state's, which this leaves alone.
 pub fn save(
     conn: &Connection,
     server_id: &str,
@@ -30,17 +34,16 @@ pub fn save(
     let arguments = serde_json::to_string(&settings.extra_arguments)
         .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
     conn.execute(
-        "INSERT INTO launch_settings (server_id, build_path, data_path, cfg_file, onesync, auto_start,
+        "INSERT INTO launch_settings (server_id, data_path, cfg_file, onesync, auto_start,
              txadmin_events, extra_arguments, version, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
-         ON CONFLICT (server_id) DO UPDATE SET build_path = excluded.build_path,
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+         ON CONFLICT (server_id) DO UPDATE SET
              data_path = excluded.data_path, cfg_file = excluded.cfg_file, onesync = excluded.onesync,
              auto_start = excluded.auto_start, txadmin_events = excluded.txadmin_events,
              extra_arguments = excluded.extra_arguments, version = excluded.version,
              updated_at = excluded.updated_at",
         params![
             server_id,
-            settings.build_path,
             settings.data_path,
             settings.cfg_file,
             settings.onesync.as_str(),
@@ -55,27 +58,27 @@ pub fn save(
 }
 
 fn read(row: &Row<'_>) -> rusqlite::Result<StoredLaunch> {
-    let onesync: String = row.get(3)?;
-    let arguments: String = row.get(6)?;
+    let onesync: String = row.get(2)?;
+    let arguments: String = row.get(5)?;
     let settings = LaunchSettings {
-        build_path: row.get(0)?,
-        data_path: row.get(1)?,
-        cfg_file: row.get(2)?,
+        data_path: row.get(0)?,
+        cfg_file: row.get(1)?,
         onesync: OneSync::from_name(&onesync).ok_or_else(|| {
             rusqlite::Error::FromSqlConversionFailure(
-                3,
+                2,
                 Type::Text,
                 Box::new(FromSqlError::Other("unknown OneSync mode".into())),
             )
         })?,
-        auto_start: row.get(4)?,
-        txadmin_events: row.get(5)?,
+        auto_start: row.get(3)?,
+        txadmin_events: row.get(4)?,
         extra_arguments: serde_json::from_str(&arguments)
-            .map_err(|error| rusqlite::Error::FromSqlConversionFailure(6, Type::Text, Box::new(error)))?,
+            .map_err(|error| rusqlite::Error::FromSqlConversionFailure(5, Type::Text, Box::new(error)))?,
     };
     Ok(StoredLaunch {
         settings,
-        version: row.get(7)?,
+        version: row.get(6)?,
+        legacy_build_path: row.get(7)?,
     })
 }
 
@@ -88,7 +91,6 @@ mod tests {
 
     fn settings() -> LaunchSettings {
         LaunchSettings {
-            build_path: r"C:\FXServer\build".to_owned(),
             data_path: r"C:\FXServer\server-data".to_owned(),
             cfg_file: "server.cfg".to_owned(),
             onesync: OneSync::Legacy,
@@ -108,7 +110,11 @@ mod tests {
     }
 
     fn stored(settings: LaunchSettings, version: i64) -> StoredLaunch {
-        StoredLaunch { settings, version }
+        StoredLaunch {
+            settings,
+            version,
+            legacy_build_path: None,
+        }
     }
 
     #[test]
@@ -139,9 +145,9 @@ mod tests {
         let conn = memory();
         let insert = |onesync: &str, arguments: &str| {
             conn.execute(
-                "INSERT INTO launch_settings (server_id, build_path, data_path, cfg_file, onesync,
+                "INSERT INTO launch_settings (server_id, data_path, cfg_file, onesync,
                      auto_start, txadmin_events, extra_arguments, updated_at)
-                 VALUES ('default', '/srv/build', '/srv/data', 'server.cfg', ?1, 0, 0, ?2,
+                 VALUES ('default', '/srv/data', 'server.cfg', ?1, 0, 0, ?2,
                      '2026-10-28T09:00:00.000Z')",
                 [onesync, arguments],
             )

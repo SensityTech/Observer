@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
 import { en } from '../i18n/en';
-import { formatNumber, formatTimestamp } from '../i18n/format';
+import { formatBytes, formatNumber, formatTimestamp } from '../i18n/format';
 import { auditDetails } from './details';
 
 const format = {
     number: (value: number) => formatNumber('en', value),
+    bytes: (bytes: number) => formatBytes('en', bytes),
     timestamp: (rfc3339: string) => formatTimestamp(new Date(rfc3339)),
 };
 
@@ -15,6 +16,32 @@ describe('auditDetails', () => {
             'Account id: 2 · Added: View the console · Removed: none · ' +
                 'Permissions: View the dashboard, View the console, View the audit log',
         );
+    });
+
+    it('should give the size of a build as the panel shows sizes', () => {
+        expect(auditDetails(en, format, { build: 38004, bytes: 196_642_542 })).toBe(
+            'Build: 38004 · Size: 188 MB',
+        );
+    });
+
+    it('should write builds as they are numbered and word what happened to them', () => {
+        expect(auditDetails(en, format, { from: 37900, to: 35245, reason: 'crashed' })).toBe(
+            'From build: 37900 · To build: 35245 · Reason: crashed',
+        );
+        expect(auditDetails(en, format, { build: 37900, from: 35245, apply: 'nextStart' })).toBe(
+            'Build: 37900 · From build: 35245 · Applied: At the next start',
+        );
+        expect(
+            auditDetails(en, format, {
+                build: 37872,
+                kind: 'install',
+                step: 'validate',
+                reason: 'signature',
+            }),
+        ).toBe('Build: 37872 · Kind: Install · Step: Validating · Reason: not signed by Rockstar Games');
+        expect(
+            auditDetails(en, format, { branches: { before: [], after: ['feature/a', 'feature/b'] } }),
+        ).toBe('Test branches: not set → feature/a, feature/b');
     });
 
     it('should show times in local time and counts as numbers', () => {

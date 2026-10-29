@@ -1,8 +1,9 @@
 //! What Observer needs from the operating system to run FXServer: spawning it with stdin, stdout,
 //! stderr and file descriptor 3, owning its whole process tree, and the console and signal plumbing
 //! around it; and for installing builds, the free space of a volume and the signature check of
-//! FXServer.exe; for the statistics, what the tree, Observer and the host use. The only crate
-//! allowed to use `unsafe` outside test tools.
+//! FXServer.exe, the processes a build runs, files opened where they were listed, and folders held
+//! while they are swept; for the statistics, what the tree, Observer and the host use. The only
+//! crate allowed to use `unsafe` outside test tools.
 #![allow(unsafe_code)]
 
 mod stream;
@@ -13,6 +14,7 @@ mod usage;
 mod windows;
 
 use std::ffi::OsString;
+use std::fs::File;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -84,6 +86,60 @@ pub fn spawn(launch: &Launch) -> Result<Spawned, SpawnError> {
     #[cfg(unix)]
     {
         unix::spawn(launch)
+    }
+}
+
+/// The processes whose executable lies under `dir`, by pid: what keeps a build from being deleted.
+pub fn processes_in(dir: &Path) -> io::Result<Vec<u32>> {
+    #[cfg(windows)]
+    {
+        windows::processes::processes_in(dir)
+    }
+    #[cfg(unix)]
+    {
+        unix::processes::processes_in(dir)
+    }
+}
+
+/// Opens a file to read, with the path the file system took to it, every link and junction on the
+/// way resolved: a folder swapped for a link since it was listed shows there. A link in the file's
+/// own place is not followed, and a named pipe does not make the open wait.
+pub fn open_resolved(path: &Path) -> io::Result<(File, PathBuf)> {
+    #[cfg(windows)]
+    {
+        windows::files::open_resolved(path)
+    }
+    #[cfg(unix)]
+    {
+        unix::files::open_resolved(path)
+    }
+}
+
+/// A folder held open, so that what is removed through [`HeldFolder::path`] is removed from it
+/// even once its own path was swapped for a link. A link, a junction or a file in its place is
+/// refused as `NotADirectory`.
+#[derive(Debug)]
+pub struct HeldFolder {
+    _folder: File,
+    path: PathBuf,
+}
+
+impl HeldFolder {
+    pub fn open(path: &Path) -> io::Result<Self> {
+        #[cfg(windows)]
+        let (folder, path) = windows::files::hold_folder(path)?;
+        #[cfg(unix)]
+        let (folder, path) = unix::files::hold_folder(path)?;
+        Ok(Self {
+            _folder: folder,
+            path,
+        })
+    }
+
+    /// A path that leads into the folder: its entry in `/proc/self/fd` on Linux; its own path on
+    /// Windows, where nobody can rename or remove it while it is held.
+    pub fn path(&self) -> &Path {
+        &self.path
     }
 }
 
@@ -201,5 +257,95 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
 
         assert!(available_space(dir.path()).unwrap() > 0);
+    }
+
+    #[test]
+    fn a_file_opened_through_a_linked_folder_shows_where_it_really_lies() {
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("real");
+        std::fs::create_dir(&real).unwrap();
+        std::fs::write(real.join("scheduler.lua"), b"--").unwrap();
+        let linked = dir.path().join("linked");
+        link_folder(&real, &linked);
+
+        let (_, direct) = open_resolved(&real.join("scheduler.lua")).unwrap();
+        let (_, through) = open_resolved(&linked.join("scheduler.lua")).unwrap();
+
+        let canonical = std::fs::canonicalize(real.join("scheduler.lua")).unwrap();
+        assert_eq!(direct, canonical);
+        assert_eq!(through, canonical);
+    }
+
+    /// A link to a folder any account may make: a symbolic link on Unix, a junction on Windows.
+    fn link_folder(target: &Path, link: &Path) {
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(target, link).unwrap();
+        #[cfg(windows)]
+        {
+            let made = std::process::Command::new("cmd")
+                .args(["/C", "mklink", "/J"])
+                .arg(link)
+                .arg(target)
+                .output()
+                .unwrap();
+            assert!(made.status.success(), "{made:?}");
+        }
+    }
+
+    #[test]
+    fn a_link_or_a_file_in_the_place_of_a_folder_to_hold_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("photos")).unwrap();
+        link_folder(&dir.path().join("photos"), &dir.path().join("trash"));
+        std::fs::write(dir.path().join("notes.txt"), b"notes").unwrap();
+
+        for refused in ["trash", "notes.txt"] {
+            let error = HeldFolder::open(&dir.path().join(refused)).unwrap_err();
+
+            assert_eq!(error.kind(), io::ErrorKind::NotADirectory, "{refused}: {error}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_held_folder_is_still_reached_once_its_path_leads_elsewhere() {
+        let dir = tempfile::tempdir().unwrap();
+        let trash = dir.path().join("trash");
+        std::fs::create_dir(&trash).unwrap();
+        std::fs::create_dir(dir.path().join("photos")).unwrap();
+        let held = HeldFolder::open(&trash).unwrap();
+
+        std::fs::rename(&trash, dir.path().join("moved")).unwrap();
+        link_folder(&dir.path().join("photos"), &trash);
+        std::fs::write(held.path().join("left.txt"), b"left").unwrap();
+
+        assert!(dir.path().join("moved/left.txt").exists());
+        assert!(!dir.path().join("photos/left.txt").exists());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_held_folder_can_be_neither_moved_nor_removed() {
+        let dir = tempfile::tempdir().unwrap();
+        let trash = dir.path().join("trash");
+        std::fs::create_dir(&trash).unwrap();
+        let held = HeldFolder::open(&trash).unwrap();
+
+        assert!(std::fs::rename(&trash, dir.path().join("moved")).is_err());
+        assert!(std::fs::remove_dir(&trash).is_err());
+        std::fs::write(held.path().join("left.txt"), b"left").unwrap();
+        std::fs::remove_file(held.path().join("left.txt")).unwrap();
+        drop(held);
+        std::fs::rename(&trash, dir.path().join("moved")).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_link_in_the_place_of_a_file_is_not_followed() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("secret"), b"secret").unwrap();
+        std::os::unix::fs::symlink(dir.path().join("secret"), dir.path().join("link")).unwrap();
+
+        assert!(open_resolved(&dir.path().join("link")).is_err());
     }
 }

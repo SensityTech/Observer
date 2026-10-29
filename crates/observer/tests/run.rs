@@ -12,6 +12,8 @@ use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
+use observer_store::Database;
+use observer_store::artifacts::{self, ArtifactState};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
@@ -188,9 +190,10 @@ impl Observer {
         (observer, session)
     }
 
-    /// A build folder holding the fake, and a data folder whose cfgs print their own name.
+    /// A build holding the fake in Observer's artifacts folder, and a data folder whose cfgs
+    /// print their own name.
     fn lay_out_fake(&self) -> (PathBuf, PathBuf) {
-        let build = self.dir.path().join("build");
+        let build = self.dir.path().join("data/artifacts/35245");
         let program = if cfg!(windows) {
             build.join("FXServer.exe")
         } else {
@@ -216,10 +219,31 @@ impl Observer {
         (build, data)
     }
 
-    fn save(&self, session: &(String, String), build: &Path, data: &Path, cfg: &str) {
+    /// Makes the fake's build the one FXServer starts, in the database of the running Observer.
+    fn select(&self, build: u32) {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let data = self.dir.path().join("data");
+        runtime.block_on(async move {
+            let db = Database::open(data.join("observer.sqlite3"), data.join("backups"))
+                .await
+                .unwrap();
+            let state = ArtifactState {
+                selected: Some(build),
+                ..ArtifactState::default()
+            };
+            db.write(move |tx| artifacts::save_state(tx, "default", &state, jiff::Timestamp::now()))
+                .await
+                .unwrap();
+            db.close().await.unwrap();
+        });
+    }
+
+    fn save(&self, session: &(String, String), data: &Path, cfg: &str) {
         let stored = call(self.port, "GET", "/servers/default/launch", Some(session), None);
         let settings = json!({
-            "buildPath": build.to_str().unwrap(),
             "dataPath": data.to_str().unwrap(),
             "cfgFile": cfg,
             "onesync": "on",
@@ -296,8 +320,9 @@ impl Drop for Observer {
 #[test]
 fn observer_run_restarts_a_crashed_server_with_the_settings_saved_meanwhile_and_stops_with_it() {
     let (observer, owner) = Observer::start();
-    let (build, data) = observer.lay_out_fake();
-    observer.save(&owner, &build, &data, "a.cfg");
+    let (_, data) = observer.lay_out_fake();
+    observer.select(35245);
+    observer.save(&owner, &data, "a.cfg");
 
     let started = call(
         observer.port,
@@ -310,7 +335,7 @@ fn observer_run_restarts_a_crashed_server_with_the_settings_saved_meanwhile_and_
     wait_for("a.cfg running", || {
         observer.console_log().contains("] running a.cfg")
     });
-    observer.save(&owner, &build, &data, "b.cfg");
+    observer.save(&owner, &data, "b.cfg");
     let crash = json!({ "line": "fake_crash 3" });
     let crashed = call(
         observer.port,

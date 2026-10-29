@@ -6,6 +6,7 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
+use crate::artifacts::ArtifactsStatus;
 use crate::audit::AuditEntry;
 use crate::error::ErrorCode;
 use crate::metrics::{LiveSample, MetricsSnapshot};
@@ -49,16 +50,21 @@ pub enum Topic {
     /// control permission.
     #[serde(rename = "server.schedule")]
     ServerSchedule,
+    /// FXServer's builds, the install job and the probation of a new build. Needs the dashboard
+    /// or the artifacts permission.
+    #[serde(rename = "server.artifacts")]
+    ServerArtifacts,
 }
 
 impl Topic {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::Status,
         Self::Audit,
         Self::ServerStatus,
         Self::Console,
         Self::MetricsLive,
         Self::ServerSchedule,
+        Self::ServerArtifacts,
     ];
 }
 
@@ -126,6 +132,8 @@ pub enum TopicSnapshot {
     MetricsLive(MetricsSnapshot),
     #[serde(rename = "server.schedule")]
     ServerSchedule(ScheduleStatus),
+    #[serde(rename = "server.artifacts")]
+    ServerArtifacts(Box<ArtifactsStatus>),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, TS)]
@@ -142,6 +150,10 @@ pub enum TopicEvent {
     /// The whole schedule status again, whenever any of it changes.
     #[serde(rename = "server.schedule")]
     ServerSchedule(ScheduleStatus),
+    /// The whole artifacts status again, whenever any of it changes: during a job, at most
+    /// four times a second.
+    #[serde(rename = "server.artifacts")]
+    ServerArtifacts(Box<ArtifactsStatus>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]

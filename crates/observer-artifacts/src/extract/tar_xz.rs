@@ -7,7 +7,7 @@
 //! rewritten relative to `alpine/` (`busybox`), which is what the musl loader then finds.
 
 use std::cell::Cell;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::{self, BufReader, Read, Seek};
 use std::path::Path;
@@ -15,15 +15,14 @@ use std::path::Path;
 use lzma_rust2::XzReader;
 use tar::EntryType;
 
-use super::{Budget, MAX_UNPACKED, Refusal, check_characters, components, refuse, write_entry};
+use super::{
+    Budget, MAX_UNPACKED, Refusal, Track, check_characters, components, confine, refuse, write_entry,
+};
 use crate::disk::{self, SPACE_MARGIN};
 use crate::error::{Error, io};
 use crate::http::MIB;
 
 const XZ_MAGIC: [u8; 6] = [0xFD, b'7', b'z', b'X', b'Z', 0x00];
-/// What Linux allows when it resolves a path.
-const MAX_LINK_HOPS: usize = 40;
-const ALPINE: &str = "alpine";
 const BLOCK: u64 = 512;
 /// What the headers of an entry may take, beyond the data of the entry before it. FXServer's
 /// longest is a GNU long name of 119 bytes.
@@ -36,7 +35,7 @@ const MAX_STREAM: u64 = MAX_UNPACKED + 64 * MIB;
 ///
 /// `space` is what the volume was found to have free for the files. A tar does not say what it
 /// unpacks to, so once the files pass that, the volume is checked again, for as much more.
-pub(crate) fn extract(archive: &Path, into: &Path, space: u64) -> Result<(), Error> {
+pub(crate) fn extract(archive: &Path, into: &Path, space: u64, track: &Track) -> Result<(), Error> {
     let mut file = File::open(archive).map_err(io(archive))?;
     let mut magic = [0; 6];
     if file.read_exact(&mut magic).is_err() || magic != XZ_MAGIC {
@@ -73,6 +72,7 @@ pub(crate) fn extract(archive: &Path, into: &Path, space: u64) -> Result<(), Err
         if parts.is_empty() {
             return Err(refuse(Refusal::Empty));
         }
+        track.entry()?;
         let path = parts.join("/");
         let target = into.join(&path);
         match kind {
@@ -188,96 +188,10 @@ impl Tree {
     }
 }
 
-/// Rewrites absolute links under `alpine/` relative to it, then follows every link through the
-/// others the way the kernel would, to prove that none leads outside the build. Returns the links
-/// to create, with the targets to give them.
-fn confine(links: &HashMap<String, String>) -> Result<Vec<(String, String)>, Error> {
-    let mut relative = HashMap::with_capacity(links.len());
-    for (path, link) in links {
-        let target = if link.starts_with('/') {
-            if !path.starts_with("alpine/") {
-                return Err(refuse(path, Refusal::LinkOutsideAlpine));
-            }
-            inside_alpine(path, link)
-        } else {
-            link.clone()
-        };
-        relative.insert(path.clone(), target);
-    }
-    for path in relative.keys() {
-        resolve(path, &relative).map_err(|refusal| refuse(path, refusal))?;
-    }
-    let mut ordered: Vec<(String, String)> = relative.into_iter().collect();
-    ordered.sort();
-    Ok(ordered)
-}
-
-/// The relative target that reaches, from the link's folder, what `link` names inside `alpine/`.
-/// As at the root of a real system, `..` above `alpine/` stays there.
-fn inside_alpine(path: &str, link: &str) -> String {
-    let mut target = vec![ALPINE];
-    for part in link.split('/') {
-        match part {
-            "" | "." => {}
-            ".." => {
-                if target.len() > 1 {
-                    target.pop();
-                }
-            }
-            part => target.push(part),
-        }
-    }
-    let from: Vec<&str> = parent(path).collect();
-    let common = from.iter().zip(&target).take_while(|(a, b)| a == b).count();
-    let mut relative: Vec<&str> = vec![".."; from.len() - common];
-    relative.extend(&target[common..]);
-    if relative.is_empty() {
-        ".".to_owned()
-    } else {
-        relative.join("/")
-    }
-}
-
-fn parent(path: &str) -> impl Iterator<Item = &str> {
-    let mut parts: Vec<&str> = path.split('/').collect();
-    parts.pop();
-    parts.into_iter()
-}
-
-/// Walks a link's target component by component from the link's folder, replacing any component
-/// that is itself a link by that link's target, and fails as soon as the walk would leave the root.
-fn resolve(link: &str, links: &HashMap<String, String>) -> Result<(), Refusal> {
-    let mut position: Vec<String> = parent(link).map(str::to_owned).collect();
-    let mut pending: VecDeque<String> = links[link].split('/').map(str::to_owned).collect();
-    let mut hops = 0;
-    while let Some(part) = pending.pop_front() {
-        match part.as_str() {
-            "" | "." => {}
-            ".." => {
-                position.pop().ok_or(Refusal::LinkEscapes)?;
-            }
-            _ => {
-                position.push(part);
-                if let Some(target) = links.get(&position.join("/")) {
-                    hops += 1;
-                    if hops > MAX_LINK_HOPS {
-                        return Err(Refusal::LinkLoop);
-                    }
-                    position.pop();
-                    for part in target.split('/').rev() {
-                        pending.push_front(part.to_owned());
-                    }
-                }
-            }
-        }
-    }
-    Ok(())
-}
-
 /// Files keep their executable bits, owner read and write are always granted, and nothing becomes
 /// writable by others than the owner.
 #[cfg(unix)]
-fn keep_mode(file: &File, path: &Path, mode: u32) -> Result<(), Error> {
+pub(crate) fn keep_mode(file: &File, path: &Path, mode: u32) -> Result<(), Error> {
     use std::os::unix::fs::PermissionsExt;
     file.set_permissions(fs::Permissions::from_mode((mode & 0o755) | 0o600))
         .map_err(io(path))?;
@@ -285,12 +199,12 @@ fn keep_mode(file: &File, path: &Path, mode: u32) -> Result<(), Error> {
 }
 
 #[cfg(not(unix))]
-fn keep_mode(file: &File, path: &Path, _mode: u32) -> Result<(), Error> {
+pub(crate) fn keep_mode(file: &File, path: &Path, _mode: u32) -> Result<(), Error> {
     file.sync_all().map_err(io(path))
 }
 
 #[cfg(unix)]
-fn create_link(target: &str, path: &Path) -> Result<(), Error> {
+pub(crate) fn create_link(target: &str, path: &Path) -> Result<(), Error> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(io(parent))?;
     }
@@ -298,7 +212,7 @@ fn create_link(target: &str, path: &Path) -> Result<(), Error> {
 }
 
 #[cfg(not(unix))]
-fn create_link(_target: &str, _path: &Path) -> Result<(), Error> {
+pub(crate) fn create_link(_target: &str, _path: &Path) -> Result<(), Error> {
     Err(Error::WrongPlatform(crate::Platform::Linux))
 }
 
@@ -328,7 +242,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let archive = dir.path().join("fx.tar.xz");
         fs::write(&archive, tar_xz(entries)).unwrap();
-        let result = extract(&archive, &dir.path().join("tree"), PLENTY);
+        let result = extract(&archive, &dir.path().join("tree"), PLENTY, &Track::default());
         (dir, result)
     }
 
@@ -566,7 +480,7 @@ mod tests {
         let archive = dir.path().join("fx.tar.xz");
         fs::write(&archive, b"<html>maintenance</html>").unwrap();
 
-        let error = extract(&archive, &dir.path().join("tree"), PLENTY).unwrap_err();
+        let error = extract(&archive, &dir.path().join("tree"), PLENTY, &Track::default()).unwrap_err();
 
         assert!(matches!(error, Error::Damaged(_)), "{error}");
     }
@@ -582,7 +496,7 @@ mod tests {
         )]);
         fs::write(&archive, &bytes[..bytes.len() / 2]).unwrap();
 
-        let error = extract(&archive, &dir.path().join("tree"), PLENTY).unwrap_err();
+        let error = extract(&archive, &dir.path().join("tree"), PLENTY, &Track::default()).unwrap_err();
 
         assert!(matches!(error, Error::Damaged(_)), "{error}");
     }
@@ -591,7 +505,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let archive = dir.path().join("fx.tar.xz");
         fs::write(&archive, bytes).unwrap();
-        extract(&archive, &dir.path().join("tree"), PLENTY)
+        extract(&archive, &dir.path().join("tree"), PLENTY, &Track::default())
     }
 
     #[test]
@@ -636,7 +550,7 @@ mod tests {
         .unwrap();
 
         // Two bytes were found free: both files are past them, and the volume has room for more.
-        extract(&archive, &dir.path().join("tree"), 2).unwrap();
+        extract(&archive, &dir.path().join("tree"), 2, &Track::default()).unwrap();
 
         assert_eq!(fs::read(dir.path().join("tree/run.sh")).unwrap(), b"#!/bin/bash");
     }

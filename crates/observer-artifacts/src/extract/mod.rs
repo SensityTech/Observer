@@ -5,19 +5,46 @@
 mod tar_xz;
 mod zip;
 
+use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::fs::File;
 use std::io::{self, Read, Write};
 use std::path::Path;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+use tokio_util::sync::CancellationToken;
 
 pub(crate) use self::tar_xz::extract as extract_tar_xz;
-pub(crate) use self::zip::{extract as extract_zip, plan as plan_zip};
+pub(crate) use self::tar_xz::{create_link, keep_mode};
+pub(crate) use self::zip::{Plan, extract as extract_zip, plan as plan_zip};
 use crate::error::{Error, io};
 use crate::http::MIB;
 
-const MAX_ENTRIES: usize = 20_000;
-const MAX_UNPACKED: u64 = 2048 * MIB;
+pub(crate) const MAX_ENTRIES: usize = 20_000;
+pub(crate) const MAX_UNPACKED: u64 = 2048 * MIB;
 const MAX_NAME: usize = 1024;
+/// What Linux allows when it resolves a path.
+const MAX_LINK_HOPS: usize = 40;
+const ALPINE: &str = "alpine";
+
+/// What an extraction or a copy reports as it goes, and what stops it: it counts the entries it
+/// wrote and checks for a cancellation before each.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct Track {
+    pub cancel: CancellationToken,
+    pub done: Arc<AtomicU64>,
+}
+
+impl Track {
+    pub fn entry(&self) -> Result<(), Error> {
+        if self.cancel.is_cancelled() {
+            return Err(Error::Cancelled);
+        }
+        self.done.fetch_add(1, Ordering::Relaxed);
+        Ok(())
+    }
+}
 
 /// Why an archive entry was refused.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -172,6 +199,92 @@ pub(crate) fn write_entry(name: &str, mut reader: impl Read, path: &Path, size: 
         )));
     }
     Ok(file)
+}
+
+/// Rewrites absolute links under `alpine/` relative to it, then follows every link through the
+/// others the way the kernel would, to prove that none leads outside the build. Returns the links
+/// to create, with the targets to give them.
+pub(crate) fn confine(links: &HashMap<String, String>) -> Result<Vec<(String, String)>, Error> {
+    let mut relative = HashMap::with_capacity(links.len());
+    for (path, link) in links {
+        let target = if link.starts_with('/') {
+            if !path.starts_with("alpine/") {
+                return Err(refuse(path, Refusal::LinkOutsideAlpine));
+            }
+            inside_alpine(path, link)
+        } else {
+            link.clone()
+        };
+        relative.insert(path.clone(), target);
+    }
+    for path in relative.keys() {
+        resolve(path, &relative).map_err(|refusal| refuse(path, refusal))?;
+    }
+    let mut ordered: Vec<(String, String)> = relative.into_iter().collect();
+    ordered.sort();
+    Ok(ordered)
+}
+
+/// The relative target that reaches, from the link's folder, what `link` names inside `alpine/`.
+/// As at the root of a real system, `..` above `alpine/` stays there.
+fn inside_alpine(path: &str, link: &str) -> String {
+    let mut target = vec![ALPINE];
+    for part in link.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                if target.len() > 1 {
+                    target.pop();
+                }
+            }
+            part => target.push(part),
+        }
+    }
+    let from: Vec<&str> = parent(path).collect();
+    let common = from.iter().zip(&target).take_while(|(a, b)| a == b).count();
+    let mut relative: Vec<&str> = vec![".."; from.len() - common];
+    relative.extend(&target[common..]);
+    if relative.is_empty() {
+        ".".to_owned()
+    } else {
+        relative.join("/")
+    }
+}
+
+fn parent(path: &str) -> impl Iterator<Item = &str> {
+    let mut parts: Vec<&str> = path.split('/').collect();
+    parts.pop();
+    parts.into_iter()
+}
+
+/// Walks a link's target component by component from the link's folder, replacing any component
+/// that is itself a link by that link's target, and fails as soon as the walk would leave the root.
+fn resolve(link: &str, links: &HashMap<String, String>) -> Result<(), Refusal> {
+    let mut position: Vec<String> = parent(link).map(str::to_owned).collect();
+    let mut pending: VecDeque<String> = links[link].split('/').map(str::to_owned).collect();
+    let mut hops = 0;
+    while let Some(part) = pending.pop_front() {
+        match part.as_str() {
+            "" | "." => {}
+            ".." => {
+                position.pop().ok_or(Refusal::LinkEscapes)?;
+            }
+            _ => {
+                position.push(part);
+                if let Some(target) = links.get(&position.join("/")) {
+                    hops += 1;
+                    if hops > MAX_LINK_HOPS {
+                        return Err(Refusal::LinkLoop);
+                    }
+                    position.pop();
+                    for part in target.split('/').rev() {
+                        pending.push_front(part.to_owned());
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

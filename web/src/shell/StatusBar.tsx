@@ -6,6 +6,7 @@ import { useLinkState } from '../live/context';
 import type { LinkState } from '../live/realtime';
 import { cn } from '../lib/cn';
 import { secondsSince, useNow } from '../lib/useNow';
+import { useArtifacts } from '../artifacts/context';
 import { useSchedule } from '../schedule/context';
 import { useServerStatus } from '../server/context';
 import { STATE_INK, STATE_LED, isRunning } from '../server/state';
@@ -23,7 +24,17 @@ export function StatusBar() {
     const link = useLinkState();
     const { status } = useServerStatus();
     const { schedule, refused } = useSchedule();
+    const { status: builds } = useArtifacts();
     const now = useNow();
+    // One complement at most, from where the next restart's time left shows too.
+    const complement =
+        builds === null || builds.running === null
+            ? null
+            : builds.probation !== null && builds.probation.build === builds.running
+              ? t.status.probation
+              : builds.selected !== null && builds.selected !== builds.running
+                ? t.status.nextBuild(String(builds.selected))
+                : null;
     const unknown = <span className="font-normal text-ink-3">{t.status.unknown}</span>;
 
     const uptime =
@@ -67,6 +78,12 @@ export function StatusBar() {
                 <dt>{t.status.build}</dt>
                 <dd className="font-mono text-[12.5px]">
                     {status?.build == null ? unknown : String(status.build)}
+                    {complement !== null && (
+                        <span className="font-sans font-normal text-ink-3 max-[1620px]:hidden">
+                            {' '}
+                            · {complement}
+                        </span>
+                    )}
                 </dd>
             </div>
             <div className="status-cell">

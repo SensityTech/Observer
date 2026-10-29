@@ -4,6 +4,7 @@ import { Suspense, useId } from 'react';
 
 import type { ScheduleStatus } from '../api/generated/ScheduleStatus';
 import type { ServerStatus } from '../api/generated/ServerStatus';
+import { useArtifacts } from '../artifacts/context';
 import { useMe } from '../auth/me';
 import { Button } from '../components/Button';
 import { ErrorBoundary } from '../components/ErrorBoundary';
@@ -19,7 +20,7 @@ import { Tiles } from '../overview/Tiles';
 import { TreeCard } from '../overview/TreeCard';
 import { useSchedule } from '../schedule/context';
 import { useServerStatus } from '../server/context';
-import { STATE_INK, STATE_LED, causeText, isRunning } from '../server/state';
+import { STATE_INK, STATE_LED, buildFact, causeText, isRunning } from '../server/state';
 
 // The chart library is the heaviest part of the panel: it loads after the page has painted.
 const PlayersChart = lazyCode(() => import('../charts/PlayersChart'));
@@ -170,7 +171,8 @@ function ServerState({ status }: { status: ServerStatus }) {
     const me = useMe();
     const now = useNow();
     const { latest } = useLiveMetrics();
-    const { schedule } = useSchedule();
+    const { schedule, zone } = useSchedule();
+    const { status: builds } = useArtifacts();
     const cause = causeText(t, status);
     const running = isRunning(status.state);
     const resources = running ? (latest?.values.resources ?? null) : null;
@@ -182,7 +184,11 @@ function ServerState({ status }: { status: ServerStatus }) {
                   format.duration(secondsSince(status.startedAt, now)),
               )
             : null,
-        status.build === null ? null : t.overview.build(String(status.build)),
+        buildFact(t, status, builds, (instant) =>
+            zone === null
+                ? t.overview.utcClock(formatClock(locale, instant, 'UTC'))
+                : formatClock(locale, instant, zone),
+        ) ?? (status.build === null ? null : t.overview.build(String(status.build))),
         status.players === null
             ? null
             : t.overview.players(
@@ -208,7 +214,9 @@ function ServerState({ status }: { status: ServerStatus }) {
                     t.overview.notConfigured,
                     me.isOwner ? t.overview.notConfiguredOwner : t.overview.notConfiguredOther,
                 ]
-              : [t.overview.invalid, me.isOwner ? t.overview.invalidOwner : t.overview.invalidOther];
+              : status.launch === 'noBuild'
+                ? [t.overview.noBuild, t.overview.noBuildHint]
+                : [t.overview.invalid, me.isOwner ? t.overview.invalidOwner : t.overview.invalidOther];
 
     return (
         <>
@@ -225,7 +233,16 @@ function ServerState({ status }: { status: ServerStatus }) {
                     <p>
                         {launch[0]} {launch[1]}
                     </p>
-                    {me.isOwner && (
+                    {status.launch === 'noBuild' && (
+                        <Link
+                            to="/artifacts"
+                            className="inline-flex items-center gap-1.5 font-medium text-ink underline-offset-2 hover:underline"
+                        >
+                            {t.overview.openArtifacts}
+                            <ArrowRight size={14} strokeWidth={1.5} aria-hidden="true" />
+                        </Link>
+                    )}
+                    {me.isOwner && status.launch !== 'noBuild' && (
                         <Link
                             to="/server"
                             className="inline-flex items-center gap-1.5 font-medium text-ink underline-offset-2 hover:underline"

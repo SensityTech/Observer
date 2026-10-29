@@ -3,10 +3,13 @@ import type { Messages } from '../i18n/en';
 
 type Format = {
     number: (value: number) => string;
+    bytes: (bytes: number) => string;
     timestamp: (rfc3339: string) => string;
 };
 
 const IDS = new Set<string>(['userId', 'sessionId']);
+/** FXServer build numbers, which read as they are written, not as quantities. */
+const BUILDS = new Set<string>(['build', 'from', 'to', 'previous']);
 const MASKS = new Set<string>(['permissions', 'added', 'removed']);
 const TIMES = new Set<string>([
     'firstAt',
@@ -20,7 +23,7 @@ const TIMES = new Set<string>([
 ]);
 const ACTIONS = new Set<string>(['attempted', 'action']);
 /** The schedule's lists, and the nested entries of its audit details. */
-const LISTS = new Set<string>(['times', 'warnings', 'dropped']);
+const LISTS = new Set<string>(['times', 'warnings', 'dropped', 'branches']);
 const NESTED = new Set<string>(['scheduled', 'dropped']);
 /** The schedule's settings counted in minutes. */
 const MINUTES = new Set<string>(['intervalMinutes', 'skipAfterStart', 'warnings']);
@@ -64,10 +67,15 @@ export const auditDetails = (t: Messages, format: Format, details: Record<string
     pairs(t, format, details).join(' · ');
 
 const pairs = (t: Messages, format: Format, details: Record<string, unknown>) =>
-    Object.entries(details).map(
-        ([key, value]) =>
-            `${has(t.audit.detail, key) ? t.audit.detail[key] : key}: ${word(t, format, key, value)}`,
-    );
+    Object.entries(details).map(([key, value]) => `${label(t, key, value)}: ${word(t, format, key, value)}`);
+
+/** `from` and `to` name times in most entries, and builds in a return to the last healthy one. */
+const label = (t: Messages, key: string, value: unknown) => {
+    if (typeof value === 'number' && (key === 'from' || key === 'to')) {
+        return key === 'from' ? t.audit.detail.fromBuild : t.audit.detail.toBuild;
+    }
+    return has(t.audit.detail, key) ? t.audit.detail[key] : key;
+};
 
 const word = (t: Messages, format: Format, key: string, value: unknown): string => {
     if (isChange(value)) {
@@ -96,7 +104,10 @@ const word = (t: Messages, format: Format, key: string, value: unknown): string 
         if (MINUTES.has(key)) {
             return t.audit.minutes(format.number(value));
         }
-        return IDS.has(key) ? String(value) : format.number(value);
+        if (key === 'bytes') {
+            return format.bytes(value);
+        }
+        return IDS.has(key) || BUILDS.has(key) ? String(value) : format.number(value);
     }
     // A schedule's lists and what a change dropped: their items, one after the other.
     if (LISTS.has(key) && Array.isArray(value)) {
@@ -145,6 +156,18 @@ const word = (t: Messages, format: Format, key: string, value: unknown): string 
     }
     if (key === 'kind' && has(t.audit.dropped, value)) {
         return t.audit.dropped[value];
+    }
+    if (key === 'kind' && has(t.audit.buildKinds, value)) {
+        return t.audit.buildKinds[value];
+    }
+    if (key === 'step' && has(t.artifacts.job.steps, value)) {
+        return t.artifacts.job.steps[value];
+    }
+    if (key === 'apply' && has(t.audit.applyModes, value)) {
+        return t.audit.applyModes[value];
+    }
+    if ((key === 'reason' || key === 'why') && has(t.audit.buildReasons, value)) {
+        return t.audit.buildReasons[value];
     }
     if (key === 'mode' && has(t.schedule.modes, value)) {
         return t.schedule.modes[value];

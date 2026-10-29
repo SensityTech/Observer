@@ -67,7 +67,7 @@ impl ProcessTree {
     /// A child or a thread that exits meanwhile is left out.
     pub fn usage(&self) -> io::Result<TreeUsage> {
         let members = self.members()?;
-        let listed = snapshot(self.pid)?;
+        let listed = snapshot(Some(self.pid))?;
         // SAFETY: the handle stays open for as long as `self`; a zero wait only reads its state.
         let exited = unsafe { WaitForSingleObject(self.main.as_raw_handle(), 0) } == WAIT_OBJECT_0;
         let (main, threads) = if exited {
@@ -364,11 +364,16 @@ struct Snapshot {
     threads: Vec<u32>,
 }
 
+/// The ids of every process running now.
+pub(super) fn process_ids() -> io::Result<Vec<u32>> {
+    Ok(snapshot(None)?.processes.into_keys().collect())
+}
+
 /// Every process's thread count and executable name, and the threads of `owner`, from the system's
 /// list of processes and their threads. A Toolhelp snapshot holds the same list, but walking its
 /// threads one call at a time costs some 15 µs for each thread of the machine: 60 to 110 ms on a
 /// desktop, against a few milliseconds for the one call here.
-fn snapshot(owner: u32) -> io::Result<Snapshot> {
+fn snapshot(owner: Option<u32>) -> io::Result<Snapshot> {
     let (words, length) = process_list()?;
     let list = words.as_ptr().cast::<u8>();
     let entry_size = size_of::<SYSTEM_PROCESS_INFORMATION>();
@@ -401,7 +406,7 @@ fn snapshot(owner: u32) -> io::Result<Snapshot> {
                 name,
             },
         );
-        if pid == owner {
+        if Some(pid) == owner {
             // The entry's threads follow it.
             let first = offset + entry_size;
             for index in 0..entry.NumberOfThreads as usize {
@@ -840,7 +845,7 @@ mod tests {
         spinning.recv().unwrap();
 
         let pid = std::process::id();
-        let threads = measure_threads(pid, &snapshot(pid).unwrap().threads);
+        let threads = measure_threads(pid, &snapshot(Some(pid)).unwrap().threads);
         release.send(()).unwrap();
         worker.join().unwrap();
 

@@ -14,6 +14,7 @@ rustix.workspace = true
 [dev-dependencies]
 jiff.workspace = true
 observer-app.workspace = true
+observer-artifacts = { workspace = true, features = ["test-support"] }
 observer-domain.workspace = true
 observer-fxserver.workspace = true
 observer-platform.workspace = true

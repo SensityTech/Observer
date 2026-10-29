@@ -7,6 +7,7 @@ use reqwest::{Method, StatusCode, Url};
 use sha2::{Digest, Sha256};
 use tokio::fs::File;
 use tokio::io::{AsyncSeekExt, AsyncWriteExt};
+use tokio_util::sync::CancellationToken;
 
 use crate::disk;
 use crate::error::{Error, io};
@@ -26,13 +27,14 @@ pub(crate) struct Downloaded {
 /// Downloads `url` into a new file at `path`. After a cut, the next attempt asks for the rest with
 /// `Range`, guarded by `If-Range` so that a file changed in between is fetched whole again. The
 /// server must announce `length`, what its `HEAD` announced, and is then held to it exactly. A
-/// failed download leaves no file.
+/// failed or cancelled download leaves no file.
 pub(crate) async fn download(
     http: &Http,
     url: &Url,
     length: u64,
     path: &Path,
     retry_delays: &[Duration],
+    cancel: &CancellationToken,
     progress: &mut (dyn FnMut(u64, u64) + Send),
 ) -> Result<Downloaded, Error> {
     let mut file = File::create_new(path).await.map_err(io(path))?;
@@ -43,6 +45,7 @@ pub(crate) async fn download(
         received: 0,
         expected: length,
         validator: None,
+        cancel,
     };
     let result = partial.run(http, &mut file, retry_delays, progress).await;
     drop(file);
@@ -62,6 +65,7 @@ struct Partial<'a> {
     received: u64,
     expected: u64,
     validator: Option<HeaderValue>,
+    cancel: &'a CancellationToken,
 }
 
 impl Partial<'_> {
@@ -81,7 +85,10 @@ impl Partial<'_> {
                         return Err(error);
                     };
                     tracing::warn!(url = %self.url, %error, "download interrupted, trying again");
-                    tokio::time::sleep(*delay).await;
+                    tokio::select! {
+                        () = tokio::time::sleep(*delay) => {}
+                        () = self.cancel.cancelled() => return Err(Error::Cancelled),
+                    }
                 }
                 Err(error) => return Err(error),
             }
@@ -112,7 +119,10 @@ impl Partial<'_> {
                 headers.insert(IF_RANGE, validator.clone());
             }
         }
-        let mut response = http.send(Method::GET, self.url, headers, ATTEMPT_TIMEOUT).await?;
+        let mut response = tokio::select! {
+            response = http.send(Method::GET, self.url, headers, ATTEMPT_TIMEOUT) => response?,
+            () = self.cancel.cancelled() => return Err(Error::Cancelled),
+        };
         match response.status() {
             StatusCode::OK => {
                 if resuming {
@@ -150,11 +160,15 @@ impl Partial<'_> {
             }
         }
 
-        while let Some(chunk) = response
-            .chunk()
-            .await
-            .map_err(|error| http::network(self.url, &error))?
-        {
+        loop {
+            let chunk = tokio::select! {
+                biased;
+                () = self.cancel.cancelled() => return Err(Error::Cancelled),
+                chunk = response.chunk() => chunk.map_err(|error| http::network(self.url, &error))?,
+            };
+            let Some(chunk) = chunk else {
+                break;
+            };
             let length = chunk.len() as u64;
             if self.received + length > self.expected {
                 return Err(Error::Overlong {
@@ -237,6 +251,7 @@ mod tests {
             archive().len() as u64,
             path,
             &NO_WAIT,
+            &CancellationToken::new(),
             &mut |received, total| seen.push((received, total)),
         )
         .await;
@@ -405,6 +420,34 @@ mod tests {
 
         assert!(matches!(error, Error::Status { status: 404, .. }), "{error}");
         assert_eq!(server.requests().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_cancelled_download_stops_at_once_and_leaves_no_file() {
+        let server = TestServer::start(|_, _| Reply::ok(archive())).await;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("server.zip.part");
+        let cancel = CancellationToken::new();
+        let mut chunks = 0;
+
+        let error = download(
+            &Http::local(server.port),
+            &server.url("/server.zip"),
+            archive().len() as u64,
+            &path,
+            &NO_WAIT,
+            &cancel,
+            &mut |_, _| {
+                chunks += 1;
+                cancel.cancel();
+            },
+        )
+        .await
+        .unwrap_err();
+
+        assert!(matches!(error, Error::Cancelled), "{error}");
+        assert_eq!(chunks, 1);
+        assert!(!path.exists());
     }
 
     #[tokio::test]

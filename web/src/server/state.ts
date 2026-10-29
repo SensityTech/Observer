@@ -1,3 +1,4 @@
+import type { ArtifactsStatus } from '../api/generated/ArtifactsStatus';
 import type { ServerState } from '../api/generated/ServerState';
 import type { ServerStatus } from '../api/generated/ServerStatus';
 import type { Messages } from '../i18n/en';
@@ -109,6 +110,50 @@ export const commandLine = (
     }
 };
 
+/**
+ * What the Overview says of the build, first that applies: a probation, a return to the last
+ * healthy build, the build the next start or the next scheduled restart runs, a probation passed
+ * during this run. Null when there is nothing to add to the build's number.
+ */
+export const buildFact = (
+    t: Messages,
+    status: ServerStatus,
+    builds: ArtifactsStatus | null,
+    clock: (instant: string) => string,
+): string | null => {
+    const running = builds?.running ?? null;
+    if (builds === null || running === null) {
+        return null;
+    }
+    const build = String(running);
+    const words = t.overview;
+    if (builds.probation !== null && builds.probation.build === running) {
+        return builds.probation.passesAt === null
+            ? words.buildProbationWaiting(build)
+            : words.buildProbation(build, clock(builds.probation.passesAt));
+    }
+    const notice = builds.notice;
+    if (notice?.kind === 'rolledBack' && notice.other === running) {
+        return words.buildBack(build, String(notice.build));
+    }
+    if (builds.selected !== null && builds.selected !== running) {
+        return words.buildNextStart(build, String(builds.selected));
+    }
+    if (builds.pending !== null) {
+        return words.buildPending(build, String(builds.pending.build));
+    }
+    const healthy = builds.lastHealthy;
+    if (
+        healthy !== null &&
+        healthy.build === running &&
+        status.startedAt !== null &&
+        Date.parse(healthy.since) >= Date.parse(status.startedAt)
+    ) {
+        return words.buildPassed(build, clock(healthy.since));
+    }
+    return null;
+};
+
 export type Action = 'start' | 'stop' | 'restart';
 
 /** Why `action` cannot be taken now, or null when it can. */
@@ -140,6 +185,9 @@ export const blocked = (
     }
     if (status.launch === 'notConfigured') {
         return words.notConfigured;
+    }
+    if (status.launch === 'noBuild') {
+        return words.noBuild;
     }
     return status.launch === 'invalid' ? words.invalid : null;
 };

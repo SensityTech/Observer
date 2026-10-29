@@ -582,6 +582,7 @@ version = "0.1.0"
 dependencies = [
  "jiff",
  "observer-app",
+ "observer-artifacts",
  "observer-domain",
  "observer-fxserver",
  "observer-platform",
@@ -1335,6 +1336,7 @@ dependencies = [
  "argon2",
  "getrandom 0.4.3",
  "jiff",
+ "observer-artifacts",
  "observer-domain",
  "observer-fxserver",
  "observer-platform",
@@ -1364,6 +1366,7 @@ dependencies = [
  "tempfile",
  "thiserror",
  "tokio",
+ "tokio-util",
  "tracing",
  "zip",
 ]
@@ -1438,6 +1441,7 @@ dependencies = [
  "hyper-util",
  "jiff",
  "observer-app",
+ "observer-artifacts",
  "observer-domain",
  "observer-store",
  "rust-embed",

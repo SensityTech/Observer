@@ -52,12 +52,17 @@ pub enum Error {
     Unsafe { entry: String, refusal: Refusal },
     #[error("the archive is damaged, download it again: {}", Untrusted(.0))]
     Damaged(String),
-    #[error("the extracted build is incomplete: {0}")]
-    Layout(String),
+    #[error("the build is incomplete: {path} {problem}")]
+    Layout {
+        path: &'static str,
+        problem: LayoutProblem,
+    },
     #[error("FXServer.exe is not signed by Rockstar Games: {0}")]
     Signature(String),
     #[error("build {0} is already installed")]
     AlreadyInstalled(u32),
+    #[error("build {0} is not installed")]
+    NotInstalled(u32),
     #[error("a {0} build can only be installed on {0}")]
     WrongPlatform(Platform),
     #[error("{} is a link; it must be a plain folder on the same volume as the builds", .0.display())]
@@ -70,6 +75,57 @@ pub enum Error {
     Random(getrandom::Error),
     #[error("the installation was interrupted by a shutdown")]
     Interrupted,
+    #[error("the installation was cancelled")]
+    Cancelled,
+    #[error("{}: {refusal}", .path.display())]
+    Import { path: PathBuf, refusal: ImportRefusal },
+    #[error("{} stays busy: another program holds a file in it", .0.display())]
+    Busy(PathBuf),
+}
+
+/// What is wrong with a file a build must have.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LayoutProblem {
+    Missing,
+    /// A link, or a folder where a file belongs and the other way round.
+    NotPlain,
+    NotExecutable,
+}
+
+impl fmt::Display for LayoutProblem {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Missing => "is missing",
+            Self::NotPlain => "is not a plain file or folder",
+            Self::NotExecutable => "is not executable",
+        })
+    }
+}
+
+/// Why a folder cannot be imported as a build.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImportRefusal {
+    NotAbsolute,
+    NotAFolder,
+    /// The folder is a link, or holds one that leaves it (a reparse point on Windows).
+    Link,
+    /// The folder is the artifacts folder or inside it.
+    InsideArtifacts,
+    TooManyFiles,
+    TooLarge,
+}
+
+impl fmt::Display for ImportRefusal {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::NotAbsolute => "is not a full path",
+            Self::NotAFolder => "is not a folder",
+            Self::Link => "is or holds a link Observer does not copy",
+            Self::InsideArtifacts => "is inside the artifacts folder already",
+            Self::TooManyFiles => "has more than 20000 entries",
+            Self::TooLarge => "is larger than 2 GiB",
+        })
+    }
 }
 
 impl Error {
