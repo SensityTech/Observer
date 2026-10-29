@@ -184,8 +184,16 @@ fn copy_plan(source: &Path, tree: &Path, plan: &Plan, track: &Track) -> Result<(
                     fs::create_dir_all(parent).map_err(io(parent))?;
                 }
                 let from = source.join(relative);
-                // The copy keeps the file's permissions, its executable bits included.
                 fs::copy(&from, &path).map_err(io(&from))?;
+                // Executable bits stay, and nothing becomes writable by others than the owner, as
+                // in an install.
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    let mode = fs::metadata(&path).map_err(io(&path))?.permissions().mode();
+                    fs::set_permissions(&path, fs::Permissions::from_mode((mode & 0o755) | 0o600))
+                        .map_err(io(&path))?;
+                }
             }
         }
     }
@@ -365,6 +373,37 @@ mod tests {
         );
         assert!(lab.source.join("alpine/opt/cfx-server/crashes/dump.dmp").exists());
         assert!(lab.staging_is_empty());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn an_imported_build_gets_the_modes_an_install_gives() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let lab = Lab::new();
+        set_mode(&lab.source.join("run.sh"), 0o777);
+        set_mode(&lab.source.join("alpine/opt/cfx-server/FXServer"), 0o775);
+        set_mode(
+            &lab.source
+                .join("alpine/opt/cfx-server/citizen/scripting/lua/scheduler.lua"),
+            0o466,
+        );
+
+        let installed = lab.import().await.unwrap();
+
+        let mode = |path: &str| {
+            fs::metadata(installed.path.join(path))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o7777
+        };
+        assert_eq!(mode("run.sh"), 0o755);
+        assert_eq!(mode("alpine/opt/cfx-server/FXServer"), 0o755);
+        assert_eq!(
+            mode("alpine/opt/cfx-server/citizen/scripting/lua/scheduler.lua"),
+            0o644
+        );
     }
 
     #[cfg(unix)]
