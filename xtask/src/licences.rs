@@ -27,6 +27,11 @@ const NAMES: [&str; 6] = [
     "copyright",
     "unlicense",
 ];
+/// Extensions of code and data, never of a licence text: `copyright.mjs` is an icon. Licence
+/// files themselves take any other (`LICENSE.APACHE`, `LICENSE.httprouter`, `LICENSE.spdx`).
+const CODE: [&str; 16] = [
+    "c", "cjs", "css", "cts", "h", "js", "json", "jsx", "map", "mjs", "mts", "py", "rs", "ts", "tsx", "wasm",
+];
 /// Licence files under names of their own: egui's fonts ship theirs next to each font.
 const NAMED_FILES: [(&str, &[&str]); 1] = [(
     "epaint_default_fonts",
@@ -361,13 +366,17 @@ fn licence_files(folder: &Path, npm: bool) -> Vec<(String, PathBuf)> {
 }
 
 /// `LICENSE`, `license.md`, `COPYING`, `NOTICE.txt`, `LICENSE-MIT`: a licence name alone, or
-/// followed by `-`, `.` or `_` and anything.
+/// followed by `-`, `.` or `_` and anything, unless it ends as code does.
 fn is_licence_name(name: &str) -> bool {
     let name = name.to_ascii_lowercase();
-    NAMES.iter().any(|prefix| {
-        name.strip_prefix(prefix)
-            .is_some_and(|rest| rest.is_empty() || rest.starts_with(['-', '.', '_']))
-    })
+    let code = name
+        .rsplit_once('.')
+        .is_some_and(|(_, extension)| CODE.contains(&extension));
+    !code
+        && NAMES.iter().any(|prefix| {
+            name.strip_prefix(prefix)
+                .is_some_and(|rest| rest.is_empty() || rest.starts_with(['-', '.', '_']))
+        })
 }
 
 /// The licence identifiers of an SPDX expression, exceptions included, or of the older `A/B`.
@@ -446,10 +455,24 @@ mod tests {
             "NOTICE.txt",
             "Licence_MIT",
             "UNLICENSE",
+            "LICENSE.APACHE",
+            "LICENSE.httprouter",
+            "license-apache-2.0",
+            "LICENSE.spdx",
         ] {
             assert!(is_licence_name(name), "{name}");
         }
-        for name in ["licensed.rs", "noticeboard.md", "README.md", "unlicensed.txt"] {
+        for name in [
+            "licensed.rs",
+            "noticeboard.md",
+            "README.md",
+            "unlicensed.txt",
+            "copyright.mjs",
+            "copyright.mjs.map",
+            "license.rs",
+            "notice.js",
+            "license.d.ts",
+        ] {
             assert!(!is_licence_name(name), "{name}");
         }
     }
