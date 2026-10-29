@@ -114,6 +114,8 @@ pub(crate) fn routes() -> Vec<Route> {
         route(M::GET,    "/servers/default/artifacts/cleanup",        manage_builds, artifacts::cleanup_preview),
         route(M::POST,   "/servers/default/artifacts/cleanup",        change_builds, artifacts::cleanup),
         route(M::PUT,    "/servers/default/artifacts/settings",       change_builds, artifacts::change_settings),
+        route(M::GET,    "/metrics/threads",            dashboard,    metrics::threads),
+        route(M::GET,    "/metrics/growth",             dashboard,    metrics::growth),
     ]
 }
 

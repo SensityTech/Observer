@@ -8,11 +8,16 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use observer_domain::metrics::{ChildProcess, LiveSample, SLOT_MS, Series, next_slot_end, slot_of};
+use observer_domain::metrics::{
+    ChildProcess, LiveSample, SLOT_MS, Series, ThreadGroup, next_slot_end, slot_of,
+};
 use observer_fxserver::perf::{Thread, TickReport};
 use observer_fxserver::supervisor::{Event, EventKind, RunReadings};
-use observer_platform::{CpuTimes, HostUsage, Interface, Space, TreeUsage, Usage};
+use observer_platform::{
+    CpuTimes, DiskCounters, HostUsage, Interface, Pressure, Space, ThreadUsage, TreeTotals, TreeUsage, Usage,
+};
 use observer_store::metrics::samples::{self, Sample};
+use observer_store::metrics::threads::{MOST_NAMES, SHOWN_FROM};
 use observer_store::metrics::{Column, Values, series};
 use tokio::sync::broadcast::error::RecvError;
 use tokio::task::JoinHandle;
@@ -31,6 +36,18 @@ const SOURCE_LIMIT: Duration = Duration::from_secs(2);
 const DYNAMIC_FRESH: Duration = Duration::from_secs(5);
 /// The bridge reports the JS heap every ten seconds.
 const HEAP_FRESH: Duration = Duration::from_secs(25);
+
+/// The longest thread name kept, in characters.
+const NAME_LENGTH: usize = 64;
+
+const GROUP_COLUMNS: [(ThreadGroup, Column); 6] = [
+    (ThreadGroup::Main, Column::ThrMainCpu),
+    (ThreadGroup::Network, Column::ThrNetworkCpu),
+    (ThreadGroup::Sync, Column::ThrSyncCpu),
+    (ThreadGroup::Js, Column::ThrJsCpu),
+    (ThreadGroup::Mono, Column::ThrMonoCpu),
+    (ThreadGroup::Other, Column::ThrOtherCpu),
+];
 
 const TICK_COLUMNS: [(Thread, [Column; 3]); 3] = [
     (
@@ -109,14 +126,23 @@ impl Sampler {
             }
             let measures = measure(&mut busy, run.as_ref(), &sources.data_dir, &sources.databases).await;
             let collect_ms = u64::try_from(measured_at.elapsed().as_millis()).unwrap_or(u64::MAX);
-            let (values, children) = assembler.sample(Taken {
+            let Assembled {
+                values,
+                children,
+                threads,
+            } = assembler.sample(Taken {
                 at: measured_at,
                 run,
                 measures,
                 sockets: *sources.sockets.borrow(),
                 collect_ms,
             });
-            let sample = Sample { ts, state, values };
+            let sample = Sample {
+                ts,
+                state,
+                values,
+                threads,
+            };
             // From the wake, not from the end of the write: a write that waits behind the upkeep
             // must not cost the next slot.
             wake = Wake::after(woke_ms);
@@ -234,6 +260,7 @@ pub(super) struct Measures {
 #[derive(Debug, Clone, Copy, Default)]
 pub(super) struct Disk {
     pub space: Option<Space>,
+    pub counters: Option<DiskCounters>,
     pub state_db: Option<u64>,
     pub metrics_db: Option<u64>,
 }
@@ -265,6 +292,7 @@ async fn measure(
         );
         move || Disk {
             space: observer_platform::volume_space(&data_dir).ok(),
+            counters: observer_platform::disk_counters(&data_dir).ok(),
             state_db: database_size(&state),
             metrics_db: database_size(&metrics),
         }
@@ -346,6 +374,32 @@ struct Heap {
 
 type Children = HashMap<(u32, u64), Measured>;
 
+/// The main process's threads as one listing saw them: each one's CPU by id and start stamp.
+struct Listing {
+    /// The run's generation and the process's start stamp.
+    process: (u32, u64),
+    at: Instant,
+    cpu: HashMap<(u32, u64), Duration>,
+}
+
+/// The tree's totals the next ones are measured against.
+#[derive(Clone, Copy)]
+struct TreeBaseline {
+    generation: u32,
+    at: Instant,
+    totals: TreeTotals,
+    /// Kept over a wake that found less CPU.
+    kept: bool,
+}
+
+/// One wake's sample: its values, the children as they were, and the slot's busiest thread
+/// names.
+pub(super) struct Assembled {
+    pub values: Values,
+    pub children: Vec<ChildProcess>,
+    pub threads: Vec<(String, f64)>,
+}
+
 /// Turns each wake into a sample, keeping what the next one is measured against: rates and CPU
 /// shares are deltas between two wakes of the same process, joins and ticks deltas between two
 /// readings of the same run.
@@ -355,11 +409,15 @@ pub(super) struct Assembler {
     main: Option<(u32, Measured)>,
     /// The children by pid and start stamp, as the run's last measure of the tree saw them.
     children: Option<(u32, Children)>,
+    threads: Option<Listing>,
+    totals: Option<TreeBaseline>,
     observer: Option<Measured>,
     host_cpu: Option<CpuTimes>,
     /// The machine's processors, as the host's CPU share counts them.
     processors: Option<u32>,
     interfaces: Option<(Instant, Vec<Interface>)>,
+    pressure: Option<(Instant, Pressure)>,
+    disk: Option<DiskCounters>,
     perf: Option<(u32, TickReport)>,
     players: Option<(u32, HashSet<u32>)>,
     heap: Option<Heap>,
@@ -373,10 +431,14 @@ impl Assembler {
             previous_wake: started,
             main: None,
             children: None,
+            threads: None,
+            totals: None,
             observer: None,
             host_cpu: None,
             processors: None,
             interfaces: None,
+            pressure: None,
+            disk: None,
             perf: None,
             players: None,
             heap: None,
@@ -420,7 +482,7 @@ impl Assembler {
         self.slot.lagged = true;
     }
 
-    pub(super) fn sample(&mut self, wake: Taken) -> (Values, Vec<ChildProcess>) {
+    pub(super) fn sample(&mut self, wake: Taken) -> Assembled {
         let mut values = Values::default();
         let run = wake.run.as_ref();
         let generation = run.map(|run| run.generation);
@@ -462,7 +524,7 @@ impl Assembler {
             values.set(Column::Resources, Some(real(count as u64)));
         }
 
-        let children = self.tree(&mut values, run, wake.measures.tree, wake.at);
+        let (children, threads) = self.tree(&mut values, run, wake.measures.tree, wake.at);
         self.host(&mut values, wake.measures.host, wake.at);
         if let Some(disk) = wake.measures.disk {
             values.set(
@@ -470,6 +532,7 @@ impl Assembler {
                 disk.space.map(|space| real(space.available)),
             );
             values.set(Column::HostDiskTotal, disk.space.map(|space| real(space.total)));
+            self.disk_counters(&mut values, disk.counters);
             values.set(Column::ObsStateDb, disk.state_db.map(real));
             values.set(Column::ObsMetricsDb, disk.metrics_db.map(real));
         }
@@ -483,7 +546,11 @@ impl Assembler {
         values.set(Column::ObsWsClients, Some(real(wake.sockets as u64)));
         values.set(Column::CollectMs, Some(real(wake.collect_ms)));
         self.previous_wake = wake.at;
-        (values, children)
+        Assembled {
+            values,
+            children,
+            threads,
+        }
     }
 
     /// Each thread's ticks since the run's previous reading, and svMain's count of them.
@@ -569,15 +636,21 @@ impl Assembler {
         run: Option<&RunReadings>,
         tree: Option<TreeUsage>,
         at: Instant,
-    ) -> Vec<ChildProcess> {
+    ) -> (Vec<ChildProcess>, Vec<(String, f64)>) {
         let Some(run) = run else {
             self.main = None;
             self.children = None;
-            return Vec::new();
+            self.threads = None;
+            self.totals = None;
+            return (Vec::new(), Vec::new());
         };
         let Some(tree) = tree else {
-            return Vec::new();
+            return (Vec::new(), Vec::new());
         };
+        let threads = self.threads(values, run.generation, tree.main.as_ref(), tree.threads, at);
+        if let Some(totals) = tree.totals {
+            self.tree_totals(values, run.generation, totals, at);
+        }
         if let Some(usage) = tree.main {
             let now = Measured { at, usage };
             let before = self
@@ -587,6 +660,21 @@ impl Assembler {
                 })
                 .map(|(_, before)| before);
             values.set(Column::FxsCpu, before.and_then(|before| cpu(before, now)));
+            values.set(
+                Column::FxsCpuKernel,
+                before.and_then(|before| {
+                    core_share(elapsed(before.at, now.at), before.usage.kernel, usage.kernel)
+                }),
+            );
+            values.set(
+                Column::FxsFaults,
+                before.and_then(|before| increase(before.usage.faults, usage.faults)),
+            );
+            values.set(
+                Column::FxsHardFaults,
+                before.and_then(|before| increase(before.usage.hard_faults, usage.hard_faults)),
+            );
+            values.set(Column::FxsWsPeak, usage.working_set_peak.map(real));
             values.set(
                 Column::FxsReadBps,
                 before.and_then(|before| rate(before, now, |usage| usage.read)),
@@ -644,7 +732,112 @@ impl Assembler {
         );
         values.set(Column::ChildrenCpu, before.is_some().then_some(shared));
         self.children = Some((run.generation, seen));
-        listed
+        (listed, threads)
+    }
+
+    /// Each thread group's CPU since the main process's previous listing, and the busiest names.
+    /// A thread counts from its second listing; one that ended between two wakes is only in the
+    /// process's CPU.
+    fn threads(
+        &mut self,
+        values: &mut Values,
+        generation: u32,
+        main: Option<&Usage>,
+        threads: Option<Vec<ThreadUsage>>,
+        at: Instant,
+    ) -> Vec<(String, f64)> {
+        let (Some(main), Some(threads)) = (main, threads) else {
+            self.threads = None;
+            return Vec::new();
+        };
+        let process = (generation, main.started);
+        let before = self.threads.take().filter(|listing| listing.process == process);
+        let mut busiest = Vec::new();
+        if let Some(before) = &before {
+            let seconds = elapsed(before.at, at);
+            let mut groups: HashMap<ThreadGroup, f64> = HashMap::new();
+            let mut names: HashMap<String, f64> = HashMap::new();
+            for thread in &threads {
+                let Some(share) = before
+                    .cpu
+                    .get(&(thread.id, thread.started))
+                    .and_then(|&earlier| core_share(seconds, earlier, thread.cpu))
+                else {
+                    continue;
+                };
+                let name = normalised(&thread.name);
+                *groups.entry(ThreadGroup::of(&name)).or_default() += share;
+                *names.entry(name).or_default() += share;
+            }
+            for (group, column) in GROUP_COLUMNS {
+                values.set(column, Some(groups.get(&group).copied().unwrap_or(0.0)));
+            }
+            busiest = names.into_iter().filter(|&(_, cpu)| cpu >= SHOWN_FROM).collect();
+            busiest.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+            busiest.truncate(MOST_NAMES);
+        }
+        self.threads = Some(Listing {
+            process,
+            at,
+            cpu: threads
+                .iter()
+                .map(|thread| ((thread.id, thread.started), thread.cpu))
+                .collect(),
+        });
+        busiest
+    }
+
+    /// The tree's CPU and processes started since the run's previous totals, which keep the
+    /// processes that ended.
+    fn tree_totals(&mut self, values: &mut Values, generation: u32, totals: TreeTotals, at: Instant) {
+        values.set(Column::TreePrivatePeak, totals.private_peak.map(real));
+        let now = TreeBaseline {
+            generation,
+            at,
+            totals,
+            kept: false,
+        };
+        let Some(before) = self.totals.filter(|before| before.generation == generation) else {
+            self.totals = Some(now);
+            return;
+        };
+        // A member waited for between the reads of its parent and its own is missing from one
+        // total, and comes back in the next: the baseline stays over that wake, so that its time
+        // is not counted twice. Less CPU twice running, the time left the tree for good: a member
+        // left its group, or was waited for outside it.
+        if totals.cpu < before.totals.cpu && !before.kept {
+            self.totals = Some(TreeBaseline { kept: true, ..before });
+            return;
+        }
+        values.set(
+            Column::TreeCpu,
+            core_share(elapsed(before.at, at), before.totals.cpu, totals.cpu),
+        );
+        values.set(
+            Column::TreeStarted,
+            increase(before.totals.processes_started, totals.processes_started),
+        );
+        self.totals = Some(now);
+    }
+
+    /// The volume's transfers since the previous wake, and the time each took on average.
+    fn disk_counters(&mut self, values: &mut Values, counters: Option<DiskCounters>) {
+        let Some(now) = counters else {
+            return;
+        };
+        if let Some(transfers) = self
+            .disk
+            .and_then(|before| now.transfers.checked_sub(before.transfers))
+        {
+            values.set(Column::HostDiskOps, Some(real(transfers)));
+            let busy = self.disk.and_then(|before| now.busy.checked_sub(before.busy));
+            values.set(
+                Column::HostDiskMs,
+                busy.filter(|_| transfers > 0)
+                    .map(|busy| busy.as_secs_f64() * 1000.0 / real(transfers)),
+            );
+        }
+        self.disk = Some(now);
     }
 
     fn host(&mut self, values: &mut Values, host: Option<HostUsage>, at: Instant) {
@@ -659,6 +852,35 @@ impl Assembler {
                     Some(real(now.busy - before.busy) / real(total) * 100.0),
                 );
             }
+            if total > 0 {
+                values.set(
+                    Column::HostSteal,
+                    increase(before.steal, now.steal).map(|steal| steal / real(total) * 100.0),
+                );
+            }
+        }
+        if let Some(clock) = host.clock {
+            values.set(Column::HostCpuMhz, Some(clock.mhz));
+            values.set(Column::HostCpuMaxMhz, Some(clock.max_mhz));
+            values.set(Column::HostCpuLimit, clock.limit);
+        }
+        if let Some(now) = host.pressure {
+            if let Some((then, before)) = self.pressure {
+                let micros = elapsed(then, at) * 1e6;
+                for (column, stalled) in [
+                    (Column::HostPsiCpu, increase(before.cpu, now.cpu)),
+                    (Column::HostPsiMemory, increase(before.memory, now.memory)),
+                    (Column::HostPsiIo, increase(before.io, now.io)),
+                ] {
+                    values.set(
+                        column,
+                        stalled
+                            .filter(|_| micros > 0.0)
+                            .map(|stalled| (stalled / micros * 100.0).min(100.0)),
+                    );
+                }
+            }
+            self.pressure = Some((at, now));
         }
         self.host_cpu = host.cpu.or(self.host_cpu);
         self.processors = host.processors.or(self.processors);
@@ -699,9 +921,30 @@ impl Assembler {
 
 /// Percent of one core between two measures of the same process.
 fn cpu(before: Measured, now: Measured) -> Option<f64> {
-    let seconds = now.at.saturating_duration_since(before.at).as_secs_f64();
-    let used = now.usage.cpu.checked_sub(before.usage.cpu)?;
+    core_share(elapsed(before.at, now.at), before.usage.cpu(), now.usage.cpu())
+}
+
+/// Percent of one core a time counter grew by over `seconds`; `None` when it went back.
+fn core_share(seconds: f64, before: Duration, now: Duration) -> Option<f64> {
+    let used = now.checked_sub(before)?;
     (seconds > 0.0).then(|| used.as_secs_f64() / seconds * 100.0)
+}
+
+/// How much a counter grew; `None` when either reading is missing or it went back (a 32-bit
+/// counter that wrapped).
+fn increase(before: Option<u64>, now: Option<u64>) -> Option<f64> {
+    Some(real(now?.checked_sub(before?)?))
+}
+
+fn elapsed(then: Instant, now: Instant) -> f64 {
+    now.saturating_duration_since(then).as_secs_f64()
+}
+
+/// A thread name as it is stored: without control characters or surrounding blanks, at most
+/// [`NAME_LENGTH`] characters.
+fn normalised(name: &str) -> String {
+    let visible: String = name.chars().filter(|c| !c.is_control()).collect();
+    visible.trim().chars().take(NAME_LENGTH).collect()
 }
 
 /// Bytes per second of a counter between two measures of the same process.

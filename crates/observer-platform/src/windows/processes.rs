@@ -10,14 +10,14 @@ use windows_sys::Win32::System::Threading::{
     OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
 };
 
-use super::usage::snapshot;
+use super::usage::process_ids;
 
 /// The processes whose executable lies under `dir`. A process this account cannot open belongs
 /// to another account, which could not have started it from a folder of Observer's.
 pub(crate) fn processes_in(dir: &Path) -> io::Result<Vec<u32>> {
     let dir = folded(&fs::canonicalize(dir)?);
     let mut found = Vec::new();
-    for pid in snapshot()?.into_keys() {
+    for pid in process_ids()? {
         let Some(image) = image(pid) else {
             continue;
         };

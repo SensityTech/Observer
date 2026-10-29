@@ -89,13 +89,49 @@ pub enum Series {
     DashboardClients,
     /// Milliseconds the sampler took to gather the slot's sample.
     SampleTime,
+    /// The kernel part of `FxsCpu`, in percent of one core.
+    FxsKernel,
+    /// Page faults in the slot, soft and hard together.
+    FxsFaults,
+    /// Linux only: faults that read from the disk.
+    FxsHardFaults,
+    FxsWorkingSetPeak,
+    /// The main process's threads by group, in percent of one core.
+    MainThreadCpu,
+    NetworkThreadCpu,
+    SyncThreadCpu,
+    JsThreadsCpu,
+    MonoThreadsCpu,
+    OtherThreadsCpu,
+    /// The whole tree, the processes that ended included, in percent of one core.
+    TreeCpu,
+    /// Windows only: processes started in the tree in the slot.
+    TreeStarted,
+    /// Windows only: the most memory the tree has committed.
+    TreePrivatePeak,
+    /// MHz, averaged over the processors.
+    HostClock,
+    /// The highest clock the system states: Windows' base clock, Linux's maximum with boost.
+    HostClockMax,
+    /// The share of that maximum the processors are allowed, in percent.
+    HostClockLimit,
+    /// Milliseconds per read or write of the data folder's volume.
+    HostDiskLatency,
+    /// Reads and writes of that volume in the slot.
+    HostDiskTransfers,
+    /// Linux only, percent of the whole machine.
+    HostSteal,
+    /// Linux only: the share of the slot some task waited for each resource, in percent.
+    HostPressureCpu,
+    HostPressureMemory,
+    HostPressureIo,
 }
 
 /// The most series one request may ask for.
 pub const MAX_SERIES: usize = 16;
 
 impl Series {
-    pub const ALL: [Self; 46] = [
+    pub const ALL: [Self; 68] = [
         Self::Players,
         Self::Slots,
         Self::PingAvg,
@@ -142,6 +178,28 @@ impl Series {
         Self::MetricsDatabase,
         Self::DashboardClients,
         Self::SampleTime,
+        Self::FxsKernel,
+        Self::FxsFaults,
+        Self::FxsHardFaults,
+        Self::FxsWorkingSetPeak,
+        Self::MainThreadCpu,
+        Self::NetworkThreadCpu,
+        Self::SyncThreadCpu,
+        Self::JsThreadsCpu,
+        Self::MonoThreadsCpu,
+        Self::OtherThreadsCpu,
+        Self::TreeCpu,
+        Self::TreeStarted,
+        Self::TreePrivatePeak,
+        Self::HostClock,
+        Self::HostClockMax,
+        Self::HostClockLimit,
+        Self::HostDiskLatency,
+        Self::HostDiskTransfers,
+        Self::HostSteal,
+        Self::HostPressureCpu,
+        Self::HostPressureMemory,
+        Self::HostPressureIo,
     ];
 
     pub fn name(self) -> &'static str {
@@ -192,6 +250,28 @@ impl Series {
             Self::MetricsDatabase => "metricsDatabase",
             Self::DashboardClients => "dashboardClients",
             Self::SampleTime => "sampleTime",
+            Self::FxsKernel => "fxsKernel",
+            Self::FxsFaults => "fxsFaults",
+            Self::FxsHardFaults => "fxsHardFaults",
+            Self::FxsWorkingSetPeak => "fxsWorkingSetPeak",
+            Self::MainThreadCpu => "mainThreadCpu",
+            Self::NetworkThreadCpu => "networkThreadCpu",
+            Self::SyncThreadCpu => "syncThreadCpu",
+            Self::JsThreadsCpu => "jsThreadsCpu",
+            Self::MonoThreadsCpu => "monoThreadsCpu",
+            Self::OtherThreadsCpu => "otherThreadsCpu",
+            Self::TreeCpu => "treeCpu",
+            Self::TreeStarted => "treeStarted",
+            Self::TreePrivatePeak => "treePrivatePeak",
+            Self::HostClock => "hostClock",
+            Self::HostClockMax => "hostClockMax",
+            Self::HostClockLimit => "hostClockLimit",
+            Self::HostDiskLatency => "hostDiskLatency",
+            Self::HostDiskTransfers => "hostDiskTransfers",
+            Self::HostSteal => "hostSteal",
+            Self::HostPressureCpu => "hostPressureCpu",
+            Self::HostPressureMemory => "hostPressureMemory",
+            Self::HostPressureIo => "hostPressureIo",
         }
     }
 
@@ -298,6 +378,11 @@ pub struct MetricsSeries {
     pub last: Option<i64>,
     pub series: Vec<SeriesData>,
     pub markers: Vec<RunMarker>,
+    /// The samples Observer took in each bucket.
+    pub observed: Vec<u32>,
+    /// Of those, the ones taken while the server was online or degraded. A bucket observed but
+    /// never online is a stretch the server was down.
+    pub online: Vec<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, TS)]
@@ -379,6 +464,204 @@ pub struct ChildProcess {
     pub private: u64,
 }
 
+/// The groups the main process's threads are counted in, by their names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum ThreadGroup {
+    Main,
+    Network,
+    Sync,
+    Js,
+    Mono,
+    Other,
+}
+
+impl ThreadGroup {
+    pub const ALL: [Self; 6] = [
+        Self::Main,
+        Self::Network,
+        Self::Sync,
+        Self::Js,
+        Self::Mono,
+        Self::Other,
+    ];
+
+    /// The group of a thread by its name, as FXServer's libraries set it: the libuv loops are
+    /// `UV loop: <tag>`, Node's and Mono's threads keep their runtime's names. Each pattern
+    /// survives Linux's cut to 15 bytes (`UV loop: svNetw`). `libuv-worker`, which FXServer's
+    /// loops and Node share, the `[Cfx]` threads and unnamed ones are `Other`.
+    pub fn of(name: &str) -> Self {
+        const JS: [&str; 5] = ["v8", "node", "delayedtask", "traceevent", "inspector"];
+        const MONO: [&str; 4] = ["mono", "finalizer", "sgen", "thread pool"];
+        if name.contains("svMain") {
+            return Self::Main;
+        }
+        if name.contains("svNetw") {
+            return Self::Network;
+        }
+        if name.contains("svSync") {
+            return Self::Sync;
+        }
+        let lower = name.to_ascii_lowercase();
+        if JS.iter().any(|pattern| lower.contains(pattern)) {
+            Self::Js
+        } else if MONO.iter().any(|pattern| lower.contains(pattern)) {
+            Self::Mono
+        } else {
+            Self::Other
+        }
+    }
+}
+
+/// `GET /api/metrics/threads`: CPU per thread name of FXServer's main process over the hour of
+/// slots that ends with the newest one.
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ThreadShares {
+    /// Unix seconds.
+    pub from: i64,
+    pub to: i64,
+    /// The slots whose threads were measured.
+    pub measured: u32,
+    /// FXServer's average CPU over those slots, in percent of one core.
+    pub process: Option<f64>,
+    /// The busiest names first.
+    pub threads: Vec<ThreadShare>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ThreadShare {
+    /// Empty for threads without a name.
+    pub name: String,
+    pub group: ThreadGroup,
+    /// The average over the measured slots, in percent of one core; the threads of that name
+    /// together.
+    pub cpu: f64,
+}
+
+/// Growth is fitted from this long after a run started, once its resources have loaded, in
+/// seconds.
+pub const GROWTH_WARM_UP: i64 = 30 * 60;
+/// A leak is only suspected over at least an hour of minutes, thirty of them or more, that a
+/// straight line fits this well.
+pub const LEAK_SPAN: i64 = 3600;
+pub const LEAK_POINTS: u32 = 30;
+pub const LEAK_FIT: f64 = 0.6;
+/// Private bytes: at least 32 MB an hour, and at least 0.5% of the fitted start an hour.
+pub const PRIVATE_LEAK: LeakThreshold = LeakThreshold {
+    floor: 33_554_432.0,
+    share: 0.005,
+};
+/// Handles: at least 100 an hour, and at least 2% of the fitted start an hour.
+pub const HANDLES_LEAK: LeakThreshold = LeakThreshold {
+    floor: 100.0,
+    share: 0.02,
+};
+
+/// The growth per hour past which a steady line reads as a leak: the larger of a floor and a share
+/// of where the line started.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LeakThreshold {
+    pub floor: f64,
+    pub share: f64,
+}
+
+/// A straight line through weighted points.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Fit {
+    pub slope: f64,
+    pub intercept: f64,
+    /// How much of the points' spread the line explains, from 0 to 1.
+    pub r2: f64,
+}
+
+/// Weighted least squares over `(x, y, weight)` points, on sums centred on the weighted means.
+/// `None` under two points or when `x` does not vary; `r2` is 0 when `y` does not.
+pub fn fit(points: &[(f64, f64, f64)]) -> Option<Fit> {
+    if points.len() < 2 {
+        return None;
+    }
+    let weight: f64 = points.iter().map(|&(_, _, weight)| weight).sum();
+    if weight <= 0.0 {
+        return None;
+    }
+    let mean_x = points.iter().map(|&(x, _, weight)| x * weight).sum::<f64>() / weight;
+    let mean_y = points.iter().map(|&(_, y, weight)| y * weight).sum::<f64>() / weight;
+    let (mut xx, mut xy, mut yy) = (0.0, 0.0, 0.0);
+    for &(x, y, weight) in points {
+        let (dx, dy) = (x - mean_x, y - mean_y);
+        xx += weight * dx * dx;
+        xy += weight * dx * dy;
+        yy += weight * dy * dy;
+    }
+    if xx <= 0.0 {
+        return None;
+    }
+    let slope = xy / xx;
+    Some(Fit {
+        slope,
+        intercept: mean_y - slope * mean_x,
+        r2: if yy > 0.0 { xy * xy / (xx * yy) } else { 0.0 },
+    })
+}
+
+/// `GET /api/metrics/growth`: how the main process's memory and handles grew over the open run,
+/// from the minute averages after the warm-up. `null` without an open run.
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct RunGrowth {
+    /// Unix seconds.
+    pub started_at: i64,
+    /// The first minute fitted, once the warm-up is over.
+    pub from: i64,
+    /// The end of the newest minute fitted.
+    pub to: i64,
+    pub private: Option<Growth>,
+    pub handles: Option<Growth>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct Growth {
+    /// Bytes, or handles, per hour.
+    pub per_hour: f64,
+    /// The fit's r², from 0 to 1.
+    pub fit: f64,
+    /// The fitted value at `from`.
+    pub start: f64,
+    /// The minutes fitted.
+    pub points: u32,
+    /// Steady growth past the threshold: a possible leak.
+    pub leak: bool,
+}
+
+impl Growth {
+    /// The line through `(seconds since from, value, samples)` points spanning `span` seconds, and
+    /// the verdict against `threshold`.
+    pub fn of(points: &[(f64, f64, f64)], span: i64, threshold: LeakThreshold) -> Option<Self> {
+        let line = fit(points)?;
+        let per_hour = line.slope * 3600.0;
+        let count = u32::try_from(points.len()).unwrap_or(u32::MAX);
+        let leak = count >= LEAK_POINTS
+            && span >= LEAK_SPAN
+            && line.r2 >= LEAK_FIT
+            && per_hour >= threshold.floor.max(threshold.share * line.intercept);
+        Some(Self {
+            per_hour,
+            fit: line.r2,
+            start: line.intercept,
+            points: count,
+            leak,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -452,5 +735,166 @@ mod tests {
             assert!(from <= now && now < end);
         }
         assert_eq!(Range::parse("2h"), None);
+    }
+
+    #[test]
+    fn threads_fall_into_groups_by_the_names_of_the_lab_build_and_their_linux_cuts() {
+        use ThreadGroup::{Js, Main, Mono, Network, Other, Sync};
+        let names = [
+            ("UV loop: svMain", Main),
+            ("UV loop: svNetwork", Network),
+            ("UV loop: svNetw", Network),
+            ("UV loop: svSync", Sync),
+            ("UV loop: default", Other),
+            ("UV loop: defaul", Other),
+            ("UV loop: tcp0", Other),
+            ("UV loop: httpClient", Other),
+            ("UV loop: httpCl", Other),
+            ("UV loop: watchdog", Other),
+            ("UV loop: watchd", Other),
+            ("[Cfx] Server Thread", Other),
+            ("[Cfx] Server Th", Other),
+            ("[Cfx] Network Thread", Other),
+            ("[Cfx] Network T", Other),
+            ("[Cfx] StConThread", Other),
+            ("[Cfx] StConThre", Other),
+            ("[Cfx] Console Thread", Other),
+            ("[Cfx] Console T", Other),
+            ("[Mumble] Worker thread", Other),
+            ("[Mumble] Worker", Other),
+            ("DevCon Thread", Other),
+            ("libuv-worker", Other),
+            ("DelayedTaskSchedulerWorker", Js),
+            ("DelayedTaskSche", Js),
+            ("TraceEventWorker", Js),
+            ("TraceEventWorke", Js),
+            ("V8 DefaultWorker", Js),
+            ("node", Js),
+            ("Finalizer", Mono),
+            ("Thread Pool Worker", Mono),
+            ("Thread Pool Wor", Mono),
+            ("mono-2.0-sgen", Mono),
+            ("", Other),
+        ];
+
+        for (name, group) in names {
+            assert_eq!(ThreadGroup::of(name), group, "{name}");
+        }
+        for group in ThreadGroup::ALL {
+            let name = serde_json::to_value(group).unwrap();
+            assert!(name.as_str().unwrap().chars().next().unwrap().is_lowercase());
+        }
+    }
+
+    fn line(minutes: u32, start: f64, per_minute: f64) -> Vec<(f64, f64, f64)> {
+        (0..minutes)
+            .map(|minute| {
+                let x = 60.0 * f64::from(minute) + 30.0;
+                (x, start + per_minute * x / 60.0, 12.0)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn an_exact_line_is_fitted_exactly() {
+        let fit = fit(&[(0.0, 10.0, 1.0), (60.0, 16.0, 1.0), (120.0, 22.0, 5.0)]).unwrap();
+
+        assert!((fit.slope - 0.1).abs() < 1e-12);
+        assert!((fit.intercept - 10.0).abs() < 1e-9);
+        assert!((fit.r2 - 1.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn weights_pull_the_line_towards_the_heavier_points() {
+        let even = fit(&[(0.0, 0.0, 1.0), (1.0, 1.0, 1.0), (2.0, 0.0, 1.0), (3.0, 3.0, 1.0)]).unwrap();
+        let weighted = fit(&[
+            (0.0, 0.0, 1.0),
+            (1.0, 1.0, 1.0),
+            (2.0, 0.0, 1.0),
+            (3.0, 3.0, 10.0),
+        ])
+        .unwrap();
+
+        assert!(weighted.slope > even.slope, "{even:?} {weighted:?}");
+        assert_eq!(fit(&[(0.0, 1.0, 1.0)]), None, "one point");
+        assert_eq!(fit(&[(5.0, 1.0, 1.0), (5.0, 2.0, 1.0)]), None, "no spread in x");
+        assert_eq!(fit(&[(0.0, 1.0, 0.0), (1.0, 2.0, 0.0)]), None, "no weight");
+    }
+
+    #[test]
+    fn a_flat_series_has_no_slope_and_no_fit() {
+        let flat = fit(&line(60, 500.0, 0.0)).unwrap();
+
+        assert_eq!((flat.slope, flat.r2), (0.0, 0.0));
+        assert!((flat.intercept - 500.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn noise_around_a_flat_line_fits_poorly_and_is_never_a_leak() {
+        // A sawtooth of 64 MB around 1 GB.
+        let points: Vec<(f64, f64, f64)> = (0..90)
+            .map(|minute| {
+                let y = 1e9 + if minute % 2 == 0 { 64e6 } else { -64e6 };
+                (60.0 * f64::from(minute), y, 12.0)
+            })
+            .collect();
+
+        let growth = Growth::of(&points, 90 * 60, PRIVATE_LEAK).unwrap();
+
+        assert!(growth.fit < 0.01, "{growth:?}");
+        assert!(!growth.leak);
+    }
+
+    #[test]
+    fn steady_growth_is_a_leak_only_past_every_threshold() {
+        // 1 GB growing 40 MB an hour: past the 32 MB floor, and past 0.5% of 1 GB.
+        let per_minute = 40.0 * 1_048_576.0 / 60.0;
+        let leak = |minutes: u32, span: i64| {
+            Growth::of(&line(minutes, 1e9, per_minute), span, PRIVATE_LEAK).unwrap()
+        };
+
+        let flagged = leak(60, 3600);
+        assert!(flagged.leak, "{flagged:?}");
+        assert!((flagged.per_hour - 40.0 * 1_048_576.0).abs() < 1.0);
+        assert!((flagged.start - 1e9).abs() < 1.0);
+        assert_eq!(flagged.points, 60);
+        assert!(!leak(29, 3600).leak, "29 points");
+        assert!(!leak(60, 3540).leak, "59 minutes");
+    }
+
+    #[test]
+    fn a_line_that_fits_under_the_bar_is_no_leak() {
+        // A rising line with alternating noise of 14, which keeps its r² at 0.59.
+        let points: Vec<(f64, f64, f64)> = (0..60)
+            .map(|minute| {
+                let x = f64::from(minute);
+                let noise = if minute % 2 == 0 { 14.0 } else { -14.0 };
+                (x * 60.0, (x + noise) * 1e6, 1.0)
+            })
+            .collect();
+        let growth = Growth::of(&points, 3600, PRIVATE_LEAK).unwrap();
+        assert!(growth.fit < LEAK_FIT && growth.fit > 0.58, "{growth:?}");
+        assert!(growth.per_hour > 32.0 * 1_048_576.0);
+        assert!(!growth.leak);
+    }
+
+    #[test]
+    fn growth_just_under_either_floor_is_no_leak() {
+        let private_floor = PRIVATE_LEAK.floor / 60.0;
+        let under_bytes = Growth::of(&line(60, 1e8, private_floor - 0.1 / 60.0), 3600, PRIVATE_LEAK).unwrap();
+        let at_bytes = Growth::of(&line(60, 1e8, private_floor + 0.1 / 60.0), 3600, PRIVATE_LEAK).unwrap();
+        assert!(!under_bytes.leak && at_bytes.leak, "{under_bytes:?} {at_bytes:?}");
+
+        // 9.4 GB: 0.5% an hour is 47 MB, above the floor.
+        let big = Growth::of(&line(60, 9.4e9, 40.0 * 1_048_576.0 / 60.0), 3600, PRIVATE_LEAK).unwrap();
+        assert!(!big.leak, "{big:?}");
+
+        let handles_floor = HANDLES_LEAK.floor / 60.0;
+        let under = Growth::of(&line(60, 475.0, handles_floor - 0.1 / 60.0), 3600, HANDLES_LEAK).unwrap();
+        let over = Growth::of(&line(60, 475.0, handles_floor + 0.1 / 60.0), 3600, HANDLES_LEAK).unwrap();
+        assert!(!under.leak && over.leak, "{under:?} {over:?}");
+        // 10,000 handles: 2% an hour is 200.
+        let many = Growth::of(&line(60, 10_000.0, 150.0 / 60.0), 3600, HANDLES_LEAK).unwrap();
+        assert!(!many.leak);
     }
 }

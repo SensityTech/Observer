@@ -26,7 +26,10 @@ pub use stream::{Output, Stdin};
 pub use unix::ProcessTree;
 #[cfg(unix)]
 pub use unix::leftovers::{PidFile, Sweep};
-pub use usage::{CpuTimes, HostUsage, Interface, Member, Memory, Space, TreeUsage, Usage};
+pub use usage::{
+    Clock, CpuTimes, DiskCounters, HostUsage, Interface, Member, Memory, Pressure, Space, ThreadUsage,
+    TreeTotals, TreeUsage, Usage,
+};
 #[cfg(windows)]
 pub use windows::ProcessTree;
 #[cfg(windows)]
@@ -157,6 +160,18 @@ pub fn volume_space(dir: &Path) -> io::Result<Space> {
     }
 }
 
+/// The reads and writes completed on the volume that holds `dir`, and the time they took.
+pub fn disk_counters(dir: &Path) -> io::Result<DiskCounters> {
+    #[cfg(windows)]
+    {
+        windows::usage::disk_counters(dir)
+    }
+    #[cfg(unix)]
+    {
+        unix::usage::disk_counters(dir)
+    }
+}
+
 /// What Observer's own process uses.
 pub fn own_usage() -> io::Result<Usage> {
     #[cfg(windows)]
@@ -169,7 +184,7 @@ pub fn own_usage() -> io::Result<Usage> {
     }
 }
 
-/// The machine's processors, memory and physical network adapters.
+/// The machine's processors, memory, physical network adapters, clock and pressure.
 pub fn host_usage() -> HostUsage {
     #[cfg(windows)]
     {
