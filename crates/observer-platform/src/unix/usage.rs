@@ -41,7 +41,19 @@ impl ProcessTree {
                 usage,
             });
         }
-        let threads = main.and_then(|_| threads_from(Path::new("/proc"), leader).ok());
+        let threads = main
+            .and_then(|_| tasks_from(Path::new("/proc"), leader).ok())
+            .map(|tasks| {
+                tasks
+                    .into_iter()
+                    .map(|task| ThreadUsage {
+                        id: task.id,
+                        started: task.stat.start,
+                        name: task.name,
+                        cpu: ticks(task.stat.user.saturating_add(task.stat.system)),
+                    })
+                    .collect()
+            });
         Ok(TreeUsage {
             main,
             children,
@@ -136,11 +148,19 @@ fn measure(pid: u32, stat: &Stat) -> io::Result<Usage> {
     })
 }
 
+/// A thread of a process, with the name and the `stat` it had when it was read.
+#[derive(Debug)]
+pub(super) struct Task {
+    pub(super) id: u32,
+    pub(super) name: String,
+    pub(super) stat: Stat,
+}
+
 /// The tasks of process `pid` under `proc_root`. One that ends while they are read is left out.
-fn threads_from(proc_root: &Path, pid: u32) -> io::Result<Vec<ThreadUsage>> {
-    let tasks = proc_root.join(pid.to_string()).join("task");
-    let mut threads = Vec::new();
-    for entry in fs::read_dir(&tasks)? {
+pub(super) fn tasks_from(proc_root: &Path, pid: u32) -> io::Result<Vec<Task>> {
+    let folder = proc_root.join(pid.to_string()).join("task");
+    let mut tasks = Vec::new();
+    for entry in fs::read_dir(&folder)? {
         let Some(id) = entry?
             .file_name()
             .to_str()
@@ -148,20 +168,19 @@ fn threads_from(proc_root: &Path, pid: u32) -> io::Result<Vec<ThreadUsage>> {
         else {
             continue;
         };
-        let Ok(text) = fs::read_to_string(tasks.join(id.to_string()).join("stat")) else {
+        let Ok(text) = fs::read_to_string(folder.join(id.to_string()).join("stat")) else {
             continue;
         };
         let (Some(name), Some(stat)) = (parse_comm(&text), parse_stat(&text)) else {
             continue;
         };
-        threads.push(ThreadUsage {
+        tasks.push(Task {
             id,
-            started: stat.start,
             name: name.to_owned(),
-            cpu: ticks(stat.user.saturating_add(stat.system)),
+            stat,
         });
     }
-    Ok(threads)
+    Ok(tasks)
 }
 
 fn ticks(count: u64) -> Duration {
@@ -595,12 +614,12 @@ mod tests {
         );
         fs::create_dir_all(root.path().join("4242/task/4260")).unwrap();
 
-        let mut threads = threads_from(root.path(), 4242).unwrap();
-        threads.sort_by_key(|thread| thread.id);
+        let mut tasks = tasks_from(root.path(), 4242).unwrap();
+        tasks.sort_by_key(|task| task.id);
 
-        let named: Vec<(u32, &str, u64)> = threads
+        let named: Vec<(u32, &str, u64)> = tasks
             .iter()
-            .map(|thread| (thread.id, thread.name.as_str(), thread.started))
+            .map(|task| (task.id, task.name.as_str(), task.stat.start))
             .collect();
         assert_eq!(
             named,
@@ -610,8 +629,9 @@ mod tests {
                 (4251, "a (b) c", 9011)
             ]
         );
-        assert_eq!((threads[0].cpu, threads[1].cpu), (ticks(400), ticks(150)));
-        assert!(threads_from(root.path(), 4243).is_err(), "no such process");
+        let cpu = |task: &Task| task.stat.user + task.stat.system;
+        assert_eq!((cpu(&tasks[0]), cpu(&tasks[1])), (400, 150));
+        assert!(tasks_from(root.path(), 4243).is_err(), "no such process");
     }
 
     #[test]
@@ -983,15 +1003,16 @@ mod tests {
             .unwrap();
         spinning.recv().unwrap();
 
-        let threads = threads_from(Path::new("/proc"), std::process::id()).unwrap();
+        let tasks = tasks_from(Path::new("/proc"), std::process::id()).unwrap();
         release.send(()).unwrap();
         worker.join().unwrap();
 
-        let named = threads
+        let named = tasks
             .iter()
-            .find(|thread| thread.name == "UV loop: svNetw")
+            .find(|task| task.name == "UV loop: svNetw")
             .expect("the thread is listed by the first 15 bytes of its name");
-        assert!(named.cpu >= Duration::from_millis(50), "{named:?}");
+        let cpu = ticks(named.stat.user + named.stat.system);
+        assert!(cpu >= Duration::from_millis(50), "{named:?}");
     }
 
     #[test]
