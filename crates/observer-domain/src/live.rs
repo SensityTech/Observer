@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::audit::AuditEntry;
+use crate::diagnostics::{AlertList, DiagnosticsEvent, DiagnosticsSnapshot};
 use crate::error::ErrorCode;
 use crate::metrics::{LiveSample, MetricsSnapshot};
 use crate::schedule::ScheduleStatus;
@@ -49,16 +50,26 @@ pub enum Topic {
     /// control permission.
     #[serde(rename = "server.schedule")]
     ServerSchedule,
+    /// What needs looking at: shells FXServer's tree started, crashes and hangs of the last 24
+    /// hours, without command lines or paths. Needs the dashboard or the diagnostics permission.
+    #[serde(rename = "server.alerts")]
+    ServerAlerts,
+    /// The tree's processes, its connections and the crash analyses. Needs the diagnostics
+    /// permission.
+    #[serde(rename = "server.diagnostics")]
+    ServerDiagnostics,
 }
 
 impl Topic {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 8] = [
         Self::Status,
         Self::Audit,
         Self::ServerStatus,
         Self::Console,
         Self::MetricsLive,
         Self::ServerSchedule,
+        Self::ServerAlerts,
+        Self::ServerDiagnostics,
     ];
 }
 
@@ -126,6 +137,10 @@ pub enum TopicSnapshot {
     MetricsLive(MetricsSnapshot),
     #[serde(rename = "server.schedule")]
     ServerSchedule(ScheduleStatus),
+    #[serde(rename = "server.alerts")]
+    ServerAlerts(AlertList),
+    #[serde(rename = "server.diagnostics")]
+    ServerDiagnostics(DiagnosticsSnapshot),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, TS)]
@@ -142,6 +157,11 @@ pub enum TopicEvent {
     /// The whole schedule status again, whenever any of it changes.
     #[serde(rename = "server.schedule")]
     ServerSchedule(ScheduleStatus),
+    /// The whole list again, whenever any of it changes.
+    #[serde(rename = "server.alerts")]
+    ServerAlerts(AlertList),
+    #[serde(rename = "server.diagnostics")]
+    ServerDiagnostics(DiagnosticsEvent),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]

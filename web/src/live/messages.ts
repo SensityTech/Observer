@@ -1,23 +1,42 @@
 import type { ActorKind } from '../api/generated/ActorKind';
+import type { AlertKind } from '../api/generated/AlertKind';
+import type { AlertList } from '../api/generated/AlertList';
+import type { AnalysisState } from '../api/generated/AnalysisState';
 import type { AuditAction } from '../api/generated/AuditAction';
 import type { AuditEntry } from '../api/generated/AuditEntry';
 import type { ConsoleLine } from '../api/generated/ConsoleLine';
+import type { Crash } from '../api/generated/Crash';
+import type { CrashFileKind } from '../api/generated/CrashFileKind';
+import type { CrashFolder } from '../api/generated/CrashFolder';
+import type { CrashKind } from '../api/generated/CrashKind';
+import type { Destination } from '../api/generated/Destination';
+import type { DiagnosticsEvent } from '../api/generated/DiagnosticsEvent';
+import type { DiagnosticsSnapshot } from '../api/generated/DiagnosticsSnapshot';
 import type { HangCause } from '../api/generated/HangCause';
 import type { HealthProblem } from '../api/generated/HealthProblem';
 import type { LaunchReadiness } from '../api/generated/LaunchReadiness';
 import type { LineKind } from '../api/generated/LineKind';
+import type { Listener } from '../api/generated/Listener';
+import type { ListenerRole } from '../api/generated/ListenerRole';
 import type { LiveSample } from '../api/generated/LiveSample';
 import type { Outcome } from '../api/generated/Outcome';
+import type { ProcessKind } from '../api/generated/ProcessKind';
+import type { Protocol } from '../api/generated/Protocol';
 import type { RestartSource } from '../api/generated/RestartSource';
 import type { ScheduleMode } from '../api/generated/ScheduleMode';
 import type { ScheduleStatus } from '../api/generated/ScheduleStatus';
+import type { Scope } from '../api/generated/Scope';
 import type { Series } from '../api/generated/Series';
 import type { ServerMessage } from '../api/generated/ServerMessage';
 import type { ServerState } from '../api/generated/ServerState';
 import type { ServerStatus } from '../api/generated/ServerStatus';
+import type { Service } from '../api/generated/Service';
 import type { SpawnFailure } from '../api/generated/SpawnFailure';
 import type { StateCause } from '../api/generated/StateCause';
+import type { SyscallGroup } from '../api/generated/SyscallGroup';
+import type { ThreadRun } from '../api/generated/ThreadRun';
 import type { Topic } from '../api/generated/Topic';
+import type { TreeProcess } from '../api/generated/TreeProcess';
 
 // What arrives on the socket is untrusted JSON until it matches the contract field by field. The
 // records below list every value of the generated unions: one the Rust side adds fails the type check
@@ -30,6 +49,8 @@ const TOPICS = {
     console: true,
     'metrics.live': true,
     'server.schedule': true,
+    'server.alerts': true,
+    'server.diagnostics': true,
 } satisfies Record<Topic, true>;
 
 export const SERIES = {
@@ -119,6 +140,10 @@ const AUDIT_ACTIONS = {
     scheduled_restart_missed: true,
     one_off_restart_planned: true,
     one_off_restart_cancelled: true,
+    tree_process_started: true,
+    hang_snapshot_taken: true,
+    crash_file_downloaded: true,
+    crash_files_deleted: true,
 } satisfies Record<AuditAction, true>;
 
 const OUTCOMES = { success: true, failure: true, denied: true } satisfies Record<Outcome, true>;
@@ -355,6 +380,223 @@ export const isLiveSample = (value: unknown): value is LiveSample =>
     value.children.every(isChildProcess) &&
     (value.cores === null || (isCount(value.cores) && value.cores > 0));
 
+const PROCESS_KINDS = {
+    dumpServer: true,
+    consoleHost: true,
+    node: true,
+    shell: true,
+    other: true,
+} satisfies Record<ProcessKind, true>;
+
+const PROTOCOLS = { tcp: true, udp: true } satisfies Record<Protocol, true>;
+
+const SCOPES = { loopback: true, private: true, public: true } satisfies Record<Scope, true>;
+
+const SERVICES = {
+    mysql: true,
+    postgresql: true,
+    redis: true,
+    mongodb: true,
+    https: true,
+    http: true,
+    dns: true,
+} satisfies Record<Service, true>;
+
+const LISTENER_ROLES = { game: true } satisfies Record<ListenerRole, true>;
+
+const CRASH_KINDS = { crash: true, hang: true, found: true } satisfies Record<CrashKind, true>;
+
+const ANALYSIS_STATES = {
+    pending: true,
+    done: true,
+    noDump: true,
+    unreadable: true,
+} satisfies Record<AnalysisState, true>;
+
+const CRASH_FILE_KINDS = {
+    minidump: true,
+    fullDump: true,
+    liveDump: true,
+    hangDump: true,
+    hangReport: true,
+    other: true,
+} satisfies Record<CrashFileKind, true>;
+
+const THREAD_RUNS = {
+    running: true,
+    sleeping: true,
+    diskWait: true,
+    stopped: true,
+    zombie: true,
+    other: true,
+} satisfies Record<ThreadRun, true>;
+
+const SYSCALL_GROUPS = { lock: true, io: true, wait: true, sleep: true } satisfies Record<SyscallGroup, true>;
+
+const ALERT_KINDS = { shell: true, crash: true, hang: true } satisfies Record<AlertKind, true>;
+
+const isFlag = (value: unknown): value is boolean => typeof value === 'boolean';
+
+const isListOf =
+    <T>(check: (value: unknown) => value is T) =>
+    (value: unknown): value is T[] =>
+        Array.isArray(value) && value.every(check);
+
+const isTreeProcess = (value: unknown): value is TreeProcess =>
+    isRecord(value) &&
+    isId(value.id) &&
+    isTimestamp(value.runStarted) &&
+    isCount(value.generation) &&
+    isCount(value.pid) &&
+    (value.parent === null ||
+        (isRecord(value.parent) && isCount(value.parent.pid) && orNull(isText)(value.parent.name))) &&
+    orNull(isText)(value.image) &&
+    orNull(isText)(value.name) &&
+    orNull(isText)(value.commandLine) &&
+    isFlag(value.truncated) &&
+    oneOf<ProcessKind>(PROCESS_KINDS)(value.kind) &&
+    isTimestamp(value.startedAt) &&
+    isTimestamp(value.lastStartedAt) &&
+    orNull(isTimestamp)(value.endedAt) &&
+    isCount(value.count);
+
+const isDestination = (value: unknown): value is Destination =>
+    isRecord(value) &&
+    oneOf<Protocol>(PROTOCOLS)(value.protocol) &&
+    isText(value.address) &&
+    isCount(value.port) &&
+    isText(value.process) &&
+    oneOf<Scope>(SCOPES)(value.scope) &&
+    orNull(oneOf<Service>(SERVICES))(value.service) &&
+    isCount(value.open) &&
+    isCount(value.peak) &&
+    isTimestamp(value.firstSeen) &&
+    isTimestamp(value.lastSeen);
+
+const isListener = (value: unknown): value is Listener =>
+    isRecord(value) &&
+    oneOf<Protocol>(PROTOCOLS)(value.protocol) &&
+    isText(value.address) &&
+    isCount(value.port) &&
+    isText(value.process) &&
+    orNull(oneOf<ListenerRole>(LISTENER_ROLES))(value.role) &&
+    isCount(value.inbound);
+
+const isThreadState = (value: unknown) =>
+    isRecord(value) &&
+    isCount(value.tid) &&
+    isText(value.name) &&
+    oneOf<ThreadRun>(THREAD_RUNS)(value.state) &&
+    orNull(isFiniteNumber)(value.cpu) &&
+    orNull(isText)(value.syscall) &&
+    orNull(oneOf<SyscallGroup>(SYSCALL_GROUPS))(value.syscallGroup);
+
+const isFrame = (value: unknown) =>
+    isRecord(value) && orNull(isText)(value.module) && isText(value.offset) && isFlag(value.scanned);
+
+const isAnalysis = (value: unknown) =>
+    isRecord(value) &&
+    (value.exception === null ||
+        (isRecord(value.exception) &&
+            isText(value.exception.code) &&
+            isText(value.exception.name) &&
+            orNull(isText)(value.exception.address))) &&
+    (value.thread === null ||
+        (isRecord(value.thread) && isCount(value.thread.id) && orNull(isText)(value.thread.name))) &&
+    Array.isArray(value.frames) &&
+    value.frames.every(isFrame) &&
+    Array.isArray(value.threads) &&
+    value.threads.every(isThreadState) &&
+    orNull(isFlag)(value.syscallsReadable);
+
+const isCrashFile = (value: unknown) =>
+    isRecord(value) &&
+    isText(value.name) &&
+    isCount(value.bytes) &&
+    oneOf<CrashFileKind>(CRASH_FILE_KINDS)(value.kind) &&
+    isFlag(value.kept);
+
+const isCrash = (value: unknown): value is Crash =>
+    isRecord(value) &&
+    isId(value.id) &&
+    isTimestamp(value.at) &&
+    oneOf<CrashKind>(CRASH_KINDS)(value.kind) &&
+    orNull(isTimestamp)(value.runStarted) &&
+    orNull(isCount)(value.generation) &&
+    orNull(isCount)(value.build) &&
+    orNull(isText)(value.exit) &&
+    orNull(isText)(value.exitCode) &&
+    orNull(isId)(value.signal) &&
+    orNull(oneOf<HangCause>(HANG_CAUSES))(value.hangCause) &&
+    orNull(isText)(value.signature) &&
+    oneOf<AnalysisState>(ANALYSIS_STATES)(value.analysisState) &&
+    (value.analysis === null || isAnalysis(value.analysis)) &&
+    orNull(isText)(value.watchdogStack) &&
+    Array.isArray(value.files) &&
+    value.files.every(isCrashFile) &&
+    (value.group === null ||
+        (isRecord(value.group) && isCount(value.group.count) && isTimestamp(value.group.firstAt))) &&
+    isTimestamp(value.updatedAt);
+
+const isCrashFolder = (value: unknown): value is CrashFolder =>
+    isRecord(value) &&
+    isCount(value.files) &&
+    isCount(value.bytes) &&
+    isCount(value.maxFiles) &&
+    isCount(value.maxBytes) &&
+    orNull(isCount)(value.free);
+
+export const isDiagnosticsSnapshot = (value: unknown): value is DiagnosticsSnapshot =>
+    isRecord(value) &&
+    isListOf(isTreeProcess)(value.processes) &&
+    isListOf(isDestination)(value.destinations) &&
+    isListOf(isListener)(value.listeners) &&
+    isListOf(isCrash)(value.crashes) &&
+    isCrashFolder(value.crashFolder);
+
+export const isDiagnosticsEvent = (value: unknown): value is DiagnosticsEvent => {
+    if (!isRecord(value)) {
+        return false;
+    }
+    switch (value.kind) {
+        case 'process':
+            return isTreeProcess(value.process);
+        case 'connections':
+            return isListOf(isDestination)(value.destinations) && isListOf(isListener)(value.listeners);
+        case 'crash':
+            return isCrash(value.crash);
+        case 'crashFolder':
+            return isCrashFolder(value.folder);
+        default:
+            return false;
+    }
+};
+
+const isAlertCrash = (value: unknown) =>
+    isRecord(value) &&
+    (value.exception === null ||
+        (isRecord(value.exception) && isText(value.exception.code) && isText(value.exception.name))) &&
+    orNull(isText)(value.module) &&
+    orNull(isText)(value.thread) &&
+    orNull(isText)(value.exit) &&
+    isFlag(value.busy) &&
+    orNull(isText)(value.waitingIn) &&
+    isFlag(value.snapshot) &&
+    isCount(value.groupCount);
+
+const isAlert = (value: unknown) =>
+    isRecord(value) &&
+    isText(value.key) &&
+    oneOf<AlertKind>(ALERT_KINDS)(value.kind) &&
+    isTimestamp(value.at) &&
+    isTimestamp(value.lastAt) &&
+    isCount(value.count) &&
+    orNull(isText)(value.name) &&
+    orNull(isText)(value.parent) &&
+    (value.crash === null || isAlertCrash(value.crash));
+
+export const isAlertList = (value: unknown): value is AlertList =>
+    isRecord(value) && Array.isArray(value.alerts) && value.alerts.every(isAlert) && isTimestamp(value.since);
 const isSnapshotData = (topic: Topic, data: unknown) => {
     if (!isRecord(data)) {
         return false;
@@ -377,6 +619,10 @@ const isSnapshotData = (topic: Topic, data: unknown) => {
             return orNull(isLiveSample)(data.latest);
         case 'server.schedule':
             return isScheduleStatus(data);
+        case 'server.alerts':
+            return isAlertList(data);
+        case 'server.diagnostics':
+            return isDiagnosticsSnapshot(data);
     }
 };
 
@@ -394,6 +640,10 @@ const isEventData = (topic: Topic, data: unknown) => {
             return isLiveSample(data);
         case 'server.schedule':
             return isScheduleStatus(data);
+        case 'server.alerts':
+            return isAlertList(data);
+        case 'server.diagnostics':
+            return isDiagnosticsEvent(data);
     }
 };
 

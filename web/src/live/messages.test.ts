@@ -174,3 +174,175 @@ describe('parseServerMessage', () => {
         expect(parseServerMessage('{"type":')).toBeNull();
     });
 });
+
+const PROCESS = {
+    id: 7,
+    runStarted: '2026-10-29T10:00:00Z',
+    generation: 4,
+    pid: 4120,
+    parent: { pid: 3312, name: 'FXServer.exe' },
+    image: 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
+    name: 'powershell.exe',
+    commandLine: 'powershell -NoProfile -Command exit',
+    truncated: false,
+    kind: 'shell',
+    startedAt: '2026-10-29T11:05:00Z',
+    lastStartedAt: '2026-10-29T11:06:00Z',
+    endedAt: null,
+    count: 3,
+};
+
+const CRASH = {
+    id: 2,
+    at: '2026-10-29T14:02:07Z',
+    kind: 'crash',
+    runStarted: '2026-10-29T10:00:00Z',
+    generation: 4,
+    build: 35245,
+    exit: 'exit code 0xFFFFFFFE (ended by its crash dump server after a crash)',
+    exitCode: '0xFFFFFFFE',
+    signal: null,
+    hangCause: null,
+    signature: '0xC0000005 citizen-scripting-lua.dll+0x1a2b3',
+    analysisState: 'done',
+    analysis: {
+        exception: { code: '0xC0000005', name: 'EXCEPTION_ACCESS_VIOLATION_WRITE', address: '0x10' },
+        thread: { id: 812, name: 'UV loop: svMain' },
+        frames: [{ module: 'citizen-scripting-lua.dll', offset: '0x1a2b3', scanned: false }],
+        threads: [],
+        syscallsReadable: null,
+    },
+    watchdogStack: null,
+    files: [{ name: '6c1f0b2e.dmp', bytes: 1_300_000, kind: 'minidump', kept: true }],
+    group: { count: 3, firstAt: '2026-10-27T09:00:00Z' },
+    updatedAt: '2026-10-29T14:02:08Z',
+};
+
+const DESTINATION = {
+    protocol: 'tcp',
+    address: '127.0.0.1',
+    port: 3306,
+    process: 'FXServer.exe',
+    scope: 'loopback',
+    service: 'mysql',
+    open: 4,
+    peak: 9,
+    firstSeen: '2026-10-28T10:00:00Z',
+    lastSeen: '2026-10-29T14:02:00Z',
+};
+
+const LISTENER = {
+    protocol: 'udp',
+    address: '0.0.0.0',
+    port: 30120,
+    process: 'FXServer.exe',
+    role: 'game',
+    inbound: 0,
+};
+
+const FOLDER = { files: 2, bytes: 515_000_000, maxFiles: 10, maxBytes: 21_474_836_480, free: 41_000_000_000 };
+
+const ALERTS = {
+    alerts: [
+        {
+            key: 'process:7',
+            kind: 'shell',
+            at: '2026-10-29T11:05:00Z',
+            lastAt: '2026-10-29T11:06:00Z',
+            count: 3,
+            name: 'powershell.exe',
+            parent: 'FXServer.exe',
+            crash: null,
+        },
+        {
+            key: 'crash:2',
+            kind: 'hang',
+            at: '2026-10-29T14:20:00Z',
+            lastAt: '2026-10-29T14:20:00Z',
+            count: 1,
+            name: null,
+            parent: null,
+            crash: {
+                exception: null,
+                module: null,
+                thread: 'UV loop: svMain',
+                exit: null,
+                busy: false,
+                waitingIn: 'futex',
+                snapshot: true,
+                groupCount: 1,
+            },
+        },
+    ],
+    since: '2026-10-28T14:20:00Z',
+};
+
+describe('the diagnostics topics', () => {
+    it('should accept their snapshots and events', () => {
+        for (const message of [
+            { type: 'snapshot', topic: 'server.alerts', data: ALERTS },
+            { type: 'event', topic: 'server.alerts', data: { alerts: [], since: ALERTS.since } },
+            {
+                type: 'snapshot',
+                topic: 'server.diagnostics',
+                data: {
+                    processes: [PROCESS],
+                    destinations: [DESTINATION],
+                    listeners: [LISTENER],
+                    crashes: [CRASH],
+                    crashFolder: FOLDER,
+                },
+            },
+            { type: 'event', topic: 'server.diagnostics', data: { kind: 'process', process: PROCESS } },
+            {
+                type: 'event',
+                topic: 'server.diagnostics',
+                data: { kind: 'connections', destinations: [DESTINATION], listeners: [] },
+            },
+            { type: 'event', topic: 'server.diagnostics', data: { kind: 'crash', crash: CRASH } },
+            { type: 'event', topic: 'server.diagnostics', data: { kind: 'crashFolder', folder: FOLDER } },
+        ]) {
+            expect(parse(message), JSON.stringify(message)).toEqual(message);
+        }
+    });
+
+    it('should refuse a field out of the contract', () => {
+        for (const message of [
+            {
+                type: 'snapshot',
+                topic: 'server.alerts',
+                data: { alerts: [{ ...ALERTS.alerts[0], kind: 'virus' }] },
+            },
+            {
+                type: 'event',
+                topic: 'server.diagnostics',
+                data: { kind: 'process', process: { ...PROCESS, kind: 'backdoor' } },
+            },
+            {
+                type: 'event',
+                topic: 'server.diagnostics',
+                data: {
+                    kind: 'crash',
+                    crash: { ...CRASH, files: [{ name: 'a.dmp', bytes: -1, kind: 'minidump', kept: true }] },
+                },
+            },
+            {
+                type: 'event',
+                topic: 'server.diagnostics',
+                data: {
+                    kind: 'connections',
+                    destinations: [{ ...DESTINATION, scope: 'nearby' }],
+                    listeners: [],
+                },
+            },
+            { type: 'event', topic: 'server.diagnostics', data: { kind: 'reboot' } },
+            {
+                type: 'snapshot',
+                topic: 'server.diagnostics',
+                data: { processes: [], destinations: [], listeners: [], crashes: [] },
+            },
+        ]) {
+            expect(parse(message), JSON.stringify(message)).toBeNull();
+        }
+    });
+});

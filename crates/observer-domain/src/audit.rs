@@ -58,10 +58,20 @@ pub enum AuditAction {
     OneOffRestartPlanned,
     /// By a user, or by the system when the run it was planned for ended first.
     OneOffRestartCancelled,
+    /// FXServer's tree started a shell or a program it never starts by itself. At most one entry
+    /// per program and run every 10 minutes, the starts since the previous one in `repeated`.
+    TreeProcessStarted,
+    /// Observer pictured a hung server before killing it: a dump, or on Linux a report of its
+    /// threads. A failure carries its `reason`.
+    HangSnapshotTaken,
+    /// The owner downloaded one of a crash's files.
+    CrashFileDownloaded,
+    /// The owner deleted a crash's files; the analysis stays.
+    CrashFilesDeleted,
 }
 
 impl AuditAction {
-    pub const ALL: [Self; 29] = [
+    pub const ALL: [Self; 33] = [
         Self::SetupCompleted,
         Self::SetupLinkCreated,
         Self::LoginSucceeded,
@@ -91,6 +101,10 @@ impl AuditAction {
         Self::ScheduledRestartMissed,
         Self::OneOffRestartPlanned,
         Self::OneOffRestartCancelled,
+        Self::TreeProcessStarted,
+        Self::HangSnapshotTaken,
+        Self::CrashFileDownloaded,
+        Self::CrashFilesDeleted,
     ];
 
     pub const fn as_str(self) -> &'static str {
@@ -124,6 +138,10 @@ impl AuditAction {
             Self::ScheduledRestartMissed => "scheduled_restart_missed",
             Self::OneOffRestartPlanned => "one_off_restart_planned",
             Self::OneOffRestartCancelled => "one_off_restart_cancelled",
+            Self::TreeProcessStarted => "tree_process_started",
+            Self::HangSnapshotTaken => "hang_snapshot_taken",
+            Self::CrashFileDownloaded => "crash_file_downloaded",
+            Self::CrashFilesDeleted => "crash_files_deleted",
         }
     }
 

@@ -59,7 +59,9 @@ fn status(code: ErrorCode) -> StatusCode {
         | ErrorCode::Hierarchy
         | ErrorCode::InvalidSetupToken
         | ErrorCode::OriginMismatch => StatusCode::FORBIDDEN,
-        ErrorCode::NotFound => StatusCode::NOT_FOUND,
+        ErrorCode::NotFound | ErrorCode::CrashNotFound | ErrorCode::CrashFileNotFound => {
+            StatusCode::NOT_FOUND
+        }
         ErrorCode::Conflict
         | ErrorCode::NameTaken
         | ErrorCode::AlreadySetUp
@@ -72,7 +74,9 @@ fn status(code: ErrorCode) -> StatusCode {
         | ErrorCode::NothingToRestore
         | ErrorCode::NothingToDelay
         | ErrorCode::NoOneOff => StatusCode::CONFLICT,
-        ErrorCode::LaunchFailed | ErrorCode::DelayTooLong => StatusCode::UNPROCESSABLE_ENTITY,
+        ErrorCode::LaunchFailed | ErrorCode::DelayTooLong | ErrorCode::CrashFileTooLarge => {
+            StatusCode::UNPROCESSABLE_ENTITY
+        }
         ErrorCode::JsonRequired => StatusCode::UNSUPPORTED_MEDIA_TYPE,
         ErrorCode::UnknownHost => StatusCode::MISDIRECTED_REQUEST,
         ErrorCode::InvalidUsername

@@ -15,8 +15,8 @@ use axum::http::{HeaderMap, Method, Request, StatusCode, header};
 use http_body_util::BodyExt;
 use jiff::SignedDuration;
 use observer_app::{
-    Accounts, AuditLog, Clock, Metrics, MetricsSetup, PasswordCost, Running, Schedule, ScheduleSetup,
-    ScheduleTask, Servers, Setup, Supervision,
+    Accounts, AuditLog, Clock, Diagnostics, DiagnosticsSetup, DiagnosticsTask, Metrics, MetricsSetup,
+    PasswordCost, Running, Schedule, ScheduleSetup, ScheduleTask, Servers, Setup, Supervision,
 };
 use observer_domain::audit::ActorKind;
 use observer_store::Database;
@@ -45,6 +45,7 @@ struct Server {
     metrics_clock: Clock,
     _supervised: Running,
     _scheduling: ScheduleTask,
+    _diagnosing: DiagnosticsTask,
     cookie_name: String,
 }
 
@@ -124,6 +125,14 @@ impl Server {
         })
         .await
         .unwrap();
+        let (diagnostics, diagnosing) = Diagnostics::start(DiagnosticsSetup {
+            db: db.clone(),
+            clock: clock.clone(),
+            supervision: supervision.clone(),
+            data_dir: dir.path().join("data"),
+        })
+        .await
+        .unwrap();
         let instance_id = db.instance_id().await.unwrap();
         let services = Services {
             accounts: accounts.clone(),
@@ -132,6 +141,7 @@ impl Server {
             supervision: supervision.clone(),
             metrics: metrics.clone(),
             schedule,
+            diagnostics,
         };
         let state = AppState::new(
             "0.0.0-test",
@@ -154,6 +164,7 @@ impl Server {
             metrics_clock,
             _supervised: supervised,
             _scheduling: scheduling,
+            _diagnosing: diagnosing,
             cookie_name: format!("observer_session_{instance_id}"),
         }
     }
@@ -410,7 +421,7 @@ async fn setup_signs_the_owner_in_with_a_strict_http_only_cookie() {
     assert_eq!(session["sessionKey"].as_str().unwrap().len(), 64);
     assert_eq!(session["me"]["username"], "ada");
     assert_eq!(session["me"]["isOwner"], true);
-    assert_eq!(session["me"]["permissions"], "fff");
+    assert_eq!(session["me"]["permissions"], "1fff");
 
     let again = server.call(Method::POST, "/api/setup", None, Some(body)).await;
     assert_eq!(again.status, StatusCode::CONFLICT);
@@ -676,7 +687,7 @@ async fn accounts_are_managed_through_the_api_with_versions() {
         .call(Method::PATCH, &path, Some(&owner), Some(edit("800")))
         .await;
     let unknown = server
-        .call(Method::PATCH, &path, Some(&owner), Some(edit("1000")))
+        .call(Method::PATCH, &path, Some(&owner), Some(edit("10000000000")))
         .await;
     let reset = server
         .call(
@@ -691,7 +702,7 @@ async fn accounts_are_managed_through_the_api_with_versions() {
     assert_eq!(updated.json()["permissions"], "100");
     assert_eq!(stale.status, StatusCode::CONFLICT);
     assert_eq!(stale.code(), "conflict");
-    assert_eq!(unknown.json()["params"]["permissions"], "1000");
+    assert_eq!(unknown.json()["params"]["permissions"], "10000000000");
     assert_eq!(reset.json()["temporaryPassword"].as_str().unwrap().len(), 20);
 
     let catalog = server

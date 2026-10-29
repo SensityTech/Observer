@@ -18,7 +18,7 @@ import type { ServerState } from '../api/generated/ServerState';
 import type { SpawnFailure } from '../api/generated/SpawnFailure';
 import { parsePermissions, permissionKeys, type PermissionKey } from '../auth/permissions';
 import type { LinkState } from '../live/realtime';
-import { formatDuration, formatNumber, plural } from './format';
+import { formatBytes, formatDuration, formatNumber, plural } from './format';
 import { numberParam, stringParam } from './params';
 
 type Params = Record<string, unknown>;
@@ -63,6 +63,11 @@ const permissions = {
     settingsView: { name: 'View settings', description: "Observer's configuration." },
     settingsManage: { name: 'Change settings', description: "Change Observer's configuration." },
     logsDownload: { name: 'Download logs', description: "Observer's and FXServer's log files." },
+    diagnosticsView: {
+        name: 'View diagnostics',
+        description:
+            'Processes FXServer starts and their command lines, its connections, crash and hang analyses.',
+    },
 } satisfies Record<PermissionKey, { name: string; description: string }>;
 
 const permissionNames = (hex: string) =>
@@ -888,6 +893,10 @@ export const en = {
             scheduled_restart_missed: 'Scheduled restart missed',
             one_off_restart_planned: 'Single restart planned',
             one_off_restart_cancelled: 'Single restart cancelled',
+            tree_process_started: 'Process started by FXServer',
+            hang_snapshot_taken: 'Hung server pictured',
+            crash_file_downloaded: 'Crash file downloaded',
+            crash_files_deleted: 'Crash files deleted',
         } satisfies Record<AuditAction, string>,
         outcomes: {
             success: 'Success',
@@ -1016,6 +1025,7 @@ export const en = {
         audit: 'Audit log',
         settings: 'Settings',
         logs: 'Logs',
+        diagnostics: 'Diagnostics',
     } satisfies Record<PermissionArea, string>,
     danger: {
         sensitive: 'Sensitive',
@@ -1103,6 +1113,10 @@ export const en = {
                 : 'It cannot move any later: no more than 12 hours past its time, and before the next one.';
         },
         no_one_off: 'No single restart is planned.',
+        crash_not_found: 'This crash is no longer recorded.',
+        crash_file_not_found: 'This file is no longer on the host.',
+        crash_file_too_large: (params) =>
+            `This file is over ${formatBytes('en', numberParam(params, 'maxBytes'))}: it stays on the host, in Observer's data folder.`,
     } satisfies Record<ErrorCode, ErrorMessage>,
     failure: {
         unknown: 'Something went wrong. Try again.',

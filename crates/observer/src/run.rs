@@ -6,8 +6,8 @@ use anyhow::Context;
 use axum::Router;
 use jiff::tz::TimeZone;
 use observer_app::{
-    Accounts, AuditLog, Clock, DatabaseFiles, Metrics, MetricsSetup, PasswordCost, Running, Schedule,
-    ScheduleSetup, ScheduleTask, Servers, Setup, Sources, Supervision,
+    Accounts, AuditLog, Clock, DatabaseFiles, Diagnostics, DiagnosticsSetup, Metrics, MetricsSetup,
+    PasswordCost, Running, Schedule, ScheduleSetup, ScheduleTask, Servers, Setup, Sources, Supervision,
 };
 use observer_fxserver::console::{ConsoleLog, LogLimits};
 use observer_store::{BackupKind, Database};
@@ -25,6 +25,10 @@ const BACKUP_CHECK_INTERVAL: Duration = Duration::from_hours(1);
 const UPKEEP_INTERVAL: Duration = Duration::from_mins(1);
 const AUDIT_FOLLOW_INTERVAL: Duration = Duration::from_secs(1);
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "every service starts and stops here, in an order that reads best in one place"
+)]
 pub async fn run(config: Config) -> anyhow::Result<()> {
     let paths = config.paths();
     let _lock = lock::acquire(&paths.root)?;
@@ -57,6 +61,14 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
         |_| {},
     )
     .await?;
+    // Before FXServer boots, so that the first run's tree is seen.
+    let (diagnostics, diagnosing) = Diagnostics::start(DiagnosticsSetup {
+        db: db.clone(),
+        clock: clock.clone(),
+        supervision: supervision.clone(),
+        data_dir: paths.root.clone(),
+    })
+    .await?;
     // Before FXServer boots, so that Observer's own start counts as one for the schedule.
     let (schedule, scheduling) = Schedule::start(
         ScheduleSetup {
@@ -88,6 +100,7 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
         supervision: supervision.clone(),
         metrics: metrics.clone(),
         schedule,
+        diagnostics,
     };
     let state = observer_web::AppState::new(VERSION, services, &instance_id, &config.http.hosts);
     let live = state.live.clone();
@@ -111,6 +124,7 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
 
     stop_fxserver(&supervision, scheduling, &mut supervised, &mut signals).await;
     supervised.close().await;
+    diagnosing.close().await;
     // After the supervision, so that FXServer's stop is in the statistics.
     sampling.close().await;
     stop.cancel();

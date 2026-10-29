@@ -544,7 +544,7 @@ impl Supervision {
             .await
     }
 
-    fn note(&self, actor: &str, text: &str) {
+    pub(crate) fn note(&self, actor: &str, text: &str) {
         let generation = self.inner.supervisor.status().borrow().generation;
         self.inner.console.push(
             generation,

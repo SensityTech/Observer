@@ -535,7 +535,7 @@ async fn a_manager_can_neither_escalate_nor_touch_a_stronger_account() {
     assert_eq!(
         code(
             lab.accounts
-                .create_user(&manager, "eve", P::from_hex("1000").unwrap())
+                .create_user(&manager, "eve", P::from_hex("10000000000").unwrap())
                 .await
         ),
         ErrorCode::UnknownPermissions

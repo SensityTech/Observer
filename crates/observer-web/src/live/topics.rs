@@ -8,6 +8,7 @@ use futures_util::Stream;
 use futures_util::stream;
 use observer_app::{ConsoleLines, Error};
 use observer_domain::audit::AuditEntry;
+use observer_domain::diagnostics::DiagnosticsEvent;
 use observer_domain::live::{AuditSnapshot, ObserverStatus, Topic, TopicEvent, TopicSnapshot};
 use observer_domain::metrics::{LiveSample, MetricsSnapshot};
 use observer_domain::permissions::Permissions;
@@ -50,6 +51,9 @@ pub(super) fn allows(topic: Topic, held: Permissions) -> bool {
             Permissions::SCHEDULE_MANAGE,
             Permissions::SERVER_CONTROL,
         ]),
+        // The alert list names programs and modules, never a command line or a path.
+        Topic::ServerAlerts => any(&[Permissions::DASHBOARD_VIEW, Permissions::DIAGNOSTICS_VIEW]),
+        Topic::ServerDiagnostics => any(&[Permissions::DIAGNOSTICS_VIEW]),
     }
 }
 
@@ -102,7 +106,35 @@ pub(super) async fn open(topic: Topic, since: Option<u64>, state: &AppState) -> 
                 events: Some(metrics_events(samples)),
             })
         }
+        Topic::ServerAlerts => {
+            let mut alerts = state.diagnostics.alerts();
+            let snapshot = alerts.borrow_and_update().clone();
+            Ok(Feed {
+                snapshot: TopicSnapshot::ServerAlerts(snapshot),
+                events: Some(status_events(alerts, TopicEvent::ServerAlerts)),
+            })
+        }
+        Topic::ServerDiagnostics => {
+            let (snapshot, events) = state.diagnostics.follow().await?;
+            Ok(Feed {
+                snapshot: TopicSnapshot::ServerDiagnostics(snapshot),
+                events: Some(diagnostics_events(events)),
+            })
+        }
     }
+}
+
+/// Each change of the records as it is made. A socket that falls behind starts over from a new
+/// snapshot.
+fn diagnostics_events(events: broadcast::Receiver<DiagnosticsEvent>) -> Events {
+    Box::pin(stream::unfold(events, |mut events| async move {
+        let delivery = match events.recv().await {
+            Ok(event) => Delivery::Event(Box::new(TopicEvent::ServerDiagnostics(event))),
+            Err(RecvError::Lagged(_)) => Delivery::Missed,
+            Err(RecvError::Closed) => return None,
+        };
+        Some((delivery, events))
+    }))
 }
 
 /// Each sample as it is taken. One that falls more than a few samples behind starts over from the

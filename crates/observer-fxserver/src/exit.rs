@@ -54,7 +54,8 @@ fn code_meaning(code: u32) -> Option<&'static str> {
     })
 }
 
-fn signal_name(signal: i32) -> Option<(&'static str, &'static str)> {
+/// A signal's name and what it usually means.
+pub fn signal_name(signal: i32) -> Option<(&'static str, &'static str)> {
     Some(match signal {
         1 => ("SIGHUP", "hangup"),
         2 => ("SIGINT", "interrupted"),

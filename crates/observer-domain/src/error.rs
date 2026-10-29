@@ -86,6 +86,11 @@ pub enum ErrorCode {
     DelayTooLong,
     /// No single restart is planned.
     NoOneOff,
+    CrashNotFound,
+    /// The name is not one of the crash's files, or the file is gone.
+    CrashFileNotFound,
+    /// The file is too large to go through the panel: it stays on the host. Params: `maxBytes`.
+    CrashFileTooLarge,
 }
 
 /// The body of every error response.
