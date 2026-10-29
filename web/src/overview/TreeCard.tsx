@@ -5,6 +5,7 @@ import { useId, useMemo } from 'react';
 import type { Series } from '../api/generated/Series';
 import { growthQuery, seriesQuery } from '../api/metrics';
 import { useI18n } from '../i18n/I18nProvider';
+import { FIGURE } from '../i18n/format';
 import { useLiveMetrics } from '../metrics/live';
 import { mergeLive } from '../metrics/merge';
 import { Facts, GROWTH, total, type Fact } from './Tiles';
@@ -34,6 +35,8 @@ export function TreeCard() {
     const threads = value('fxsThreads');
     const handles = value('fxsHandles');
     const handlesGrowth = growth.data?.handles ?? null;
+    // Two hard faults in a slot are 0.4 a second, not none.
+    const perSecond = (count: number) => format.number(count / SLOT_SECONDS, FIGURE);
 
     const facts: Fact[] = [
         {
@@ -72,10 +75,7 @@ export function TreeCard() {
             detail:
                 faults === null
                     ? unknown
-                    : t.tree.faultsValue(
-                          format.number(Math.round(faults / SLOT_SECONDS)),
-                          hard === null ? null : format.number(Math.round(hard / SLOT_SECONDS)),
-                      ),
+                    : t.tree.faultsValue(perSecond(faults), hard === null ? null : perSecond(hard)),
         },
         {
             term: t.tiles.cpu.threadsHandles,

@@ -428,6 +428,17 @@ describe('OverviewPage', () => {
         linux.live.stop();
     });
 
+    it('should not read the few hard faults of a slot as none', async () => {
+        const { say, live } = await page();
+        const few = { ...SAMPLE.values, fxsFaults: 40, fxsHardFaults: 2 };
+        say({ type: 'snapshot', topic: 'metrics.live', data: { latest: { ...SAMPLE, values: few } } });
+
+        expect(card(en.tree.title).getByText(en.tree.faults).nextElementSibling?.textContent).toBe(
+            '8/s · 0.4 hard/s',
+        );
+        live.stop();
+    });
+
     it('should list the busiest threads, an unnamed one, then the rest of the process as Others', async () => {
         const { live } = await page(hour(), {
             threads: {

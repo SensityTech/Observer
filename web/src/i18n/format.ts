@@ -18,7 +18,7 @@ export const formatNumber = (locale: string, value: number, options?: Intl.Numbe
     new Intl.NumberFormat(locale, options).format(value);
 
 /** Three significant digits and one decimal at most: `6.8 ms`, `22.1 GB`, `412 ms`, `182%`. */
-const FIGURE = {
+export const FIGURE = {
     maximumSignificantDigits: 3,
     maximumFractionDigits: 1,
     roundingPriority: 'lessPrecision',
