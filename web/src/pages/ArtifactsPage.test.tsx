@@ -362,6 +362,19 @@ describe('ArtifactsPage', () => {
         expect(offered(35245)).toBe(true);
     });
 
+    it('should put the focus on the way a build is applied by default, not on Restart now', async () => {
+        const { getByRole } = await page({ ...STATUS, job: null });
+
+        fireEvent.click(within(row(35245)).getByRole('button', { name: en.artifacts.installed.use }));
+
+        const dialog = getByRole('dialog', { name: en.artifacts.use.title('35245') });
+        const checked = within(dialog)
+            .getAllByRole('radio')
+            .find((each) => (each as HTMLInputElement).checked) as HTMLInputElement;
+        expect(checked.value).toBe('scheduledRestart');
+        expect(document.activeElement).toBe(checked);
+    });
+
     it('should add the probation to the build in the status bar', async () => {
         const { container } = await page();
 
