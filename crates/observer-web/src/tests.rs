@@ -367,8 +367,10 @@ async fn about_reports_this_build() {
 }
 
 /// The list names every crate and version Observer runs: only a signed-in user reads it, through
-/// the API, whether or not this build carries one. The panel's file lookup turns `\` into `/`,
-/// and on disk resolves `.` and `..`, so every spelling is tried.
+/// the API. The panel's file lookup turns `\` into `/`, and on disk resolves `.` and `..`, so every
+/// spelling is tried. This only bites once `cargo xtask web` wrote a list: without one (CI's Rust
+/// job) every spelling is a 404 whatever the panel serves, and xtask's
+/// `the_list_is_written_beside_the_panel_never_in_it` keeps the list out of the panel's files.
 #[tokio::test]
 async fn the_licence_list_is_never_a_public_panel_file() {
     let server = Server::new().await;

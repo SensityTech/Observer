@@ -54,19 +54,7 @@ pub const PRIVATE: &str = "web/private";
 /// text went.
 pub fn write(root: &Path, target: &str) -> anyhow::Result<PathBuf> {
     let licences = collect(root, target)?;
-    let private = root.join(PRIVATE);
-    // The compressed copies of an older list must not outlive it.
-    if private.exists() {
-        fs::remove_dir_all(&private).with_context(|| format!("cannot empty {}", private.display()))?;
-    }
-    fs::create_dir_all(&private).with_context(|| format!("cannot create {}", private.display()))?;
-    let json = private.join("licences.json");
-    fs::write(&json, serde_json::to_vec(&licences)?)
-        .with_context(|| format!("cannot write {}", json.display()))?;
-    let folder = root.join("target/licences");
-    fs::create_dir_all(&folder).with_context(|| format!("cannot create {}", folder.display()))?;
-    let text = folder.join(format!("{target}.txt"));
-    fs::write(&text, plain_text(&licences)).with_context(|| format!("cannot write {}", text.display()))?;
+    let text = save(root, &licences)?;
     let count = |ecosystem| {
         licences
             .packages
@@ -79,6 +67,23 @@ pub fn write(root: &Path, target: &str) -> anyhow::Result<PathBuf> {
         count(Ecosystem::Crate),
         count(Ecosystem::Npm)
     );
+    Ok(text)
+}
+
+fn save(root: &Path, licences: &ThirdPartyLicences) -> anyhow::Result<PathBuf> {
+    let private = root.join(PRIVATE);
+    // The compressed copies of an older list must not outlive it.
+    if private.exists() {
+        fs::remove_dir_all(&private).with_context(|| format!("cannot empty {}", private.display()))?;
+    }
+    fs::create_dir_all(&private).with_context(|| format!("cannot create {}", private.display()))?;
+    let json = private.join("licences.json");
+    fs::write(&json, serde_json::to_vec(licences)?)
+        .with_context(|| format!("cannot write {}", json.display()))?;
+    let folder = root.join("target/licences");
+    fs::create_dir_all(&folder).with_context(|| format!("cannot create {}", folder.display()))?;
+    let text = folder.join(format!("{}.txt", licences.target));
+    fs::write(&text, plain_text(licences)).with_context(|| format!("cannot write {}", text.display()))?;
     Ok(text)
 }
 
@@ -706,6 +711,36 @@ mod tests {
             .unwrap();
         assert!(found.from_spdx);
         assert_eq!(texts.0[&found.files[0].text], "MIT text\n");
+    }
+
+    /// Every file of the built panel is public, so the list goes beside it. The server's test of
+    /// this only bites once a list exists, and CI's Rust job never builds one.
+    #[test]
+    fn the_list_is_written_beside_the_panel_never_in_it() {
+        let root = tempfile::tempdir().unwrap();
+        let panel = root.path().join("web/dist");
+        fs::create_dir_all(panel.join("assets")).unwrap();
+        fs::write(panel.join("index.html"), "<!doctype html>\n").unwrap();
+        let licences = ThirdPartyLicences {
+            target: "x86_64-unknown-linux-gnu".to_owned(),
+            packages: Vec::new(),
+            texts: BTreeMap::new(),
+        };
+
+        let text = save(root.path(), &licences).unwrap();
+
+        let in_panel: Vec<PathBuf> = WalkDir::new(&panel)
+            .into_iter()
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_type().is_file())
+            .map(walkdir::DirEntry::into_path)
+            .collect();
+        assert_eq!(in_panel, [panel.join("index.html")]);
+        assert!(root.path().join(PRIVATE).join("licences.json").is_file());
+        assert_eq!(
+            text,
+            root.path().join("target/licences/x86_64-unknown-linux-gnu.txt")
+        );
     }
 
     #[test]
