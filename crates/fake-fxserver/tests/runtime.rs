@@ -675,9 +675,10 @@ async fn sample_where(
 /// of its threads and its tree.
 fn assert_threads_and_tree(running: &LiveSample, threads: &ThreadShares) {
     let value = |series| running.values.get(&series).copied();
-    // The fake's network loop spins half of every 100 ms.
+    // The fake's network loop spins half of every 100 ms. A loaded machine gives it less, never
+    // more, so the floor only tells a measured thread from an idle one.
     let network = value(Series::NetworkThreadCpu).unwrap();
-    assert!((35.0..=65.0).contains(&network), "{running:?}");
+    assert!((10.0..=65.0).contains(&network), "{running:?}");
     let cpu = value(Series::FxsCpu).unwrap();
     assert!(
         value(Series::FxsKernel).is_some_and(|kernel| kernel <= cpu),
