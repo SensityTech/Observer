@@ -5,10 +5,11 @@ mod dist;
 mod icons;
 mod licences;
 
+use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitCode};
+use std::process::{Command, ExitCode, Stdio};
 
 use anyhow::{Context, bail};
 use observer_domain::permissions::CATALOG;
@@ -88,11 +89,51 @@ fn value<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
 fn e2e() -> anyhow::Result<()> {
     web()?;
     let panel = root().join("web");
-    run(cargo().args(["build", "--package", "observer", "--package", "fake-fxserver"]))?;
+    let binaries = built(cargo().args(["build", "--package", "observer", "--package", "fake-fxserver"]))?;
     run(npx()
         .args(["playwright", "install", "chromium"])
         .current_dir(&panel))?;
-    run(npm().args(["run", "e2e"]).current_dir(&panel))
+    run(npm()
+        .args(["run", "e2e"])
+        .current_dir(&panel)
+        .env("OBSERVER_BIN", binary(&binaries, "observer")?)
+        .env("FAKE_FXSERVER_BIN", binary(&binaries, "fake-fxserver")?))
+}
+
+/// Runs a `cargo build` and says where each binary it built went, by name: Cargo's target
+/// directory is not always `target/` (`CARGO_TARGET_DIR`, `build.target-dir`).
+fn built(build: &mut Command) -> anyhow::Result<BTreeMap<String, PathBuf>> {
+    let output = build
+        .arg("--message-format=json-render-diagnostics")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .output()
+        .with_context(|| format!("cannot run {build:?}"))?;
+    if !output.status.success() {
+        bail!("{build:?} failed with {}", output.status);
+    }
+    Ok(executables(&String::from_utf8_lossy(&output.stdout)))
+}
+
+/// The executables in Cargo's JSON messages, by target name.
+fn executables(messages: &str) -> BTreeMap<String, PathBuf> {
+    messages
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .filter(|message| message["reason"] == "compiler-artifact")
+        .filter_map(|message| {
+            let name = message["target"]["name"].as_str()?.to_owned();
+            let executable = message["executable"].as_str()?;
+            Some((name, PathBuf::from(executable)))
+        })
+        .collect()
+}
+
+fn binary<'a>(binaries: &'a BTreeMap<String, PathBuf>, name: &str) -> anyhow::Result<&'a Path> {
+    binaries
+        .get(name)
+        .map(PathBuf::as_path)
+        .with_context(|| format!("cargo built no {name} binary"))
 }
 
 /// ts-rs writes the bindings from the `export_bindings_*` tests it generates.
@@ -196,4 +237,31 @@ fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .map_or_else(|| PathBuf::from("."), Path::to_path_buf)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn binaries_are_found_where_cargo_says_it_built_them() {
+        let messages = r#"{"reason":"compiler-artifact","package_id":"path+file:///work/observer/crates/observer-web#0.1.0","target":{"kind":["lib"],"name":"observer_web"},"executable":null,"fresh":true}
+{"reason":"build-script-executed","package_id":"path+file:///work/observer/crates/observer#0.1.0"}
+{"reason":"compiler-artifact","package_id":"path+file:///work/observer/crates/observer#0.1.0","target":{"kind":["bin"],"name":"observer"},"executable":"/scratch/cargo/x86_64-unknown-linux-gnu/release/observer","fresh":false}
+{"reason":"compiler-artifact","package_id":"path+file:///work/observer/crates/fake-fxserver#0.1.0","target":{"kind":["bin"],"name":"fake-fxserver"},"executable":"/scratch/cargo/debug/fake-fxserver","fresh":true}
+{"reason":"build-finished","success":true}
+"#;
+
+        let binaries = executables(messages);
+
+        assert_eq!(binaries.keys().collect::<Vec<_>>(), ["fake-fxserver", "observer"]);
+        assert_eq!(
+            binary(&binaries, "observer").unwrap(),
+            Path::new("/scratch/cargo/x86_64-unknown-linux-gnu/release/observer")
+        );
+        assert_eq!(
+            binary(&binaries, "observer_web").unwrap_err().to_string(),
+            "cargo built no observer_web binary"
+        );
+    }
 }

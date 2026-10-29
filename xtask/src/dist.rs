@@ -13,7 +13,7 @@ use sha2::{Digest, Sha256};
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, DateTime, ZipWriter};
 
-use crate::{build_panel, cargo, root, run};
+use crate::{build_panel, built, cargo, root};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const LICENCES: &str = "THIRD-PARTY-LICENCES.txt";
@@ -31,24 +31,22 @@ pub fn dist(target: &str, max_glibc: Option<&str>) -> anyhow::Result<()> {
     let system = System::of(target)?;
     let licences = build_panel(target)?;
     let source = source()?;
-    run(cargo()
-        .args([
-            "build",
-            "--release",
-            "--locked",
-            "--package",
-            "observer",
-            "--target",
-            target,
-        ])
-        .env("OBSERVER_COMMIT", &source.commit)
-        .env("OBSERVER_COMMIT_DATE", &source.date))?;
-    let binary = root()
-        .join("target")
-        .join(target)
-        .join("release")
-        .join(system.binary());
-    let bytes = fs::read(&binary).with_context(|| format!("cannot read {}", binary.display()))?;
+    let binaries = built(
+        cargo()
+            .args([
+                "build",
+                "--release",
+                "--locked",
+                "--package",
+                "observer",
+                "--target",
+                target,
+            ])
+            .env("OBSERVER_COMMIT", &source.commit)
+            .env("OBSERVER_COMMIT_DATE", &source.date),
+    )?;
+    let binary = crate::binary(&binaries, "observer")?;
+    let bytes = fs::read(binary).with_context(|| format!("cannot read {}", binary.display()))?;
     match system {
         System::Windows => {
             if let Some(import) = crt_import(&bytes) {
@@ -126,13 +124,6 @@ impl System {
         match self {
             Self::Windows => "windows",
             Self::Linux => "linux",
-        }
-    }
-
-    fn binary(self) -> &'static str {
-        match self {
-            Self::Windows => "observer.exe",
-            Self::Linux => "observer",
         }
     }
 }
