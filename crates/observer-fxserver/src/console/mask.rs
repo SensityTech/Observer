@@ -20,6 +20,8 @@ const SET_COMMANDS: [&str; 4] = ["set", "sets", "setr", "seta"];
 const WEBHOOKS: [&str; 2] = ["discord.com/api/webhooks/", "discordapp.com/api/webhooks/"];
 const LICENSE_KEY_PREFIX: &str = "cfxk_";
 const REDACTED: &str = "[REDACTED]";
+/// A `NAME=value` on a command line whose name ends in one of these holds a secret.
+const SECRET_NAMES: [&str; 5] = ["password", "pwd", "token", "secret", "key"];
 
 /// The line with every secret replaced, or `None` when it holds none: the value of a secret
 /// convar being set (`set rcon_password x`, or `rcon_password x` as a command of its own) or
@@ -94,10 +96,12 @@ pub fn mask_command(line: &str) -> Option<String> {
 }
 
 /// A process's command line as the diagnostics and the audit log may show it: what [`mask`] hides,
-/// and the password of a URL (`mysql://user:pass@host`), the `password=` and `pwd=` pairs of a
-/// connection string, `--password value`, the `-p<password>` of `mysql` and `mysqldump`, and the
-/// credentials of an `Authorization` header. Control characters are dropped. PowerShell's
-/// `-enc <base64>` stays: it is what the program was told to run, not a secret.
+/// and the credentials of a URL (`mysql://user:pass@host`, or a token alone as its user), the
+/// value of any `NAME=value` whose name ends in `password`, `pwd`, `token`, `secret` or `key`
+/// (connection strings, `MYSQL_PWD=`, `API_KEY=`), `--password value`, the `-p<password>` of the
+/// MySQL and MariaDB tools, the password of `-u`/`--user user:password`, and the credentials of an
+/// `Authorization` header. Control characters are dropped. PowerShell's `-enc <base64>` stays: it
+/// is what the program was told to run, not a secret.
 pub fn mask_command_line(line: &str) -> String {
     let line: String = line.chars().filter(|c| !c.is_control()).collect();
     let lower = line.to_ascii_lowercase();
@@ -107,18 +111,18 @@ pub fn mask_command_line(line: &str) -> String {
         let end = until(&line, authority, |c| {
             c == '/' || c.is_whitespace() || "\"'?#".contains(c)
         });
-        if let Some(at) = line[authority..end].rfind('@')
-            && let Some(colon) = line[authority..authority + at].find(':')
-        {
-            secrets.push(authority + colon + 1..authority + at);
+        if let Some(at) = line[authority..end].rfind('@') {
+            let userinfo = authority..authority + at;
+            match line[userinfo.clone()].find(':') {
+                Some(colon) => secrets.push(authority + colon + 1..userinfo.end),
+                None => secrets.push(userinfo),
+            }
         }
     }
-    for key in ["password=", "pwd="] {
-        for (start, _) in lower.match_indices(key) {
-            if starts_word(&line, start) {
-                let value = start + key.len();
-                secrets.push(value..until(&line, value, |c| c.is_whitespace() || ";&\"'".contains(c)));
-            }
+    for (equals, _) in line.match_indices('=') {
+        let name = &lower[line[..equals].trim_end_matches(is_word).len()..equals];
+        if SECRET_NAMES.iter().any(|secret| name.ends_with(secret)) {
+            secrets.push(option_value(&line, equals + 1, None));
         }
     }
     for (start, _) in lower.match_indices("--password") {
@@ -129,14 +133,23 @@ pub fn mask_command_line(line: &str) -> String {
     }
     if lower
         .split(|c: char| !is_word(c))
-        .any(|word| word == "mysql" || word == "mysqldump")
+        .any(|word| word.starts_with("mysql") || word.starts_with("mariadb"))
     {
-        let mut offset = 0;
-        for word in line.split(' ') {
-            if word.len() > 2 && word.starts_with("-p") {
-                secrets.push(offset + 2..offset + word.len());
+        for (start, quote) in options(&line, "-p") {
+            secrets.push(option_value(&line, start + "-p".len(), quote));
+        }
+    }
+    for option in ["-u", "--user"] {
+        for (start, quote) in options(&line, option) {
+            let end = start + option.len();
+            let user = if line[end..].starts_with([' ', '\t']) {
+                value_after(&line, end)
+            } else {
+                option_value(&line, end + usize::from(line[end..].starts_with('=')), quote)
+            };
+            if let Some(colon) = line[user.clone()].find(':') {
+                secrets.push(user.start + colon + 1..user.end);
             }
-            offset += word.len() + 1;
         }
     }
     for (start, _) in lower.match_indices("authorization:") {
@@ -163,6 +176,31 @@ pub fn mask_command_line(line: &str) -> String {
     }
     shown.push_str(&line[copied..]);
     mask(&shown).unwrap_or(shown)
+}
+
+/// Where `option` starts a word of `line`, after a blank, a quote or nothing, with that quote.
+fn options<'a>(line: &'a str, option: &'a str) -> impl Iterator<Item = (usize, Option<char>)> + 'a {
+    line.match_indices(option).filter_map(|(start, _)| {
+        let before = line[..start].chars().next_back();
+        match before {
+            None => Some((start, None)),
+            Some(c) if c.is_whitespace() => Some((start, None)),
+            Some(quote @ ('"' | '\'')) => Some((start, Some(quote))),
+            Some(_) => None,
+        }
+    })
+}
+
+/// The value written right at `start`: up to the quote that opened the word it is in, inside the
+/// quotes it starts with, or up to a blank, a quote or a separator.
+fn option_value(line: &str, start: usize, quote: Option<char>) -> std::ops::Range<usize> {
+    if let Some(quote) = quote {
+        return start..until(line, start, |c| c == quote);
+    }
+    match line[start..].chars().next() {
+        Some(quote @ ('"' | '\'')) => start + 1..until(line, start + 1, |c| c == quote),
+        _ => start..until(line, start, |c| c.is_whitespace() || ";&\"'".contains(c)),
+    }
 }
 
 /// How many words name the secret convar a command sets, `set rcon_password` or `rcon_password`
@@ -493,6 +531,86 @@ mod tests {
         assert_eq!(
             mask_command_line("ffmpeg -pix_fmt yuv420p"),
             "ffmpeg -pix_fmt yuv420p"
+        );
+    }
+
+    #[test]
+    fn a_token_given_as_a_url_s_user_is_masked() {
+        assert_eq!(
+            mask_command_line("git clone https://ghp_hunter2token@github.com/org/private.git"),
+            "git clone https://[REDACTED]@github.com/org/private.git"
+        );
+    }
+
+    #[test]
+    fn a_variable_naming_a_password_token_secret_or_key_loses_its_value() {
+        for (line, shown) in [
+            (
+                "sh -c MYSQL_PWD=hunter2 mysqldump -u fivem qbcore",
+                "sh -c MYSQL_PWD=[REDACTED] mysqldump -u fivem qbcore",
+            ),
+            (
+                r#"sh -c "PGPASSWORD=hunter2 pg_dump -h db fivem""#,
+                r#"sh -c "PGPASSWORD=[REDACTED] pg_dump -h db fivem""#,
+            ),
+            (
+                "cmd /c set API_KEY=hunter2&& node sync.js",
+                "cmd /c set API_KEY=[REDACTED]&& node sync.js",
+            ),
+            (
+                "node bot.js --discord-token='hunter 2' --client_secret=x9",
+                "node bot.js --discord-token='[REDACTED]' --client_secret=[REDACTED]",
+            ),
+            (
+                "curl https://api.example.com/?apikey=hunter2",
+                "curl https://api.example.com/?apikey=[REDACTED]",
+            ),
+        ] {
+            assert_eq!(mask_command_line(line), shown, "{line:?}");
+        }
+    }
+
+    #[test]
+    fn the_short_password_option_of_mariadb_tools_is_masked_quoted_or_not() {
+        for (line, shown) in [
+            (
+                "mariadb-dump -u fivem -phunter2 qbcore",
+                "mariadb-dump -u fivem -p[REDACTED] qbcore",
+            ),
+            (
+                r"C:\mariadb\bin\mariadb.exe -u root -phunter2 fivem",
+                r"C:\mariadb\bin\mariadb.exe -u root -p[REDACTED] fivem",
+            ),
+            (
+                "mysqladmin -u root -phunter2 status",
+                "mysqladmin -u root -p[REDACTED] status",
+            ),
+            (
+                r#"mysqldump.exe -u root "-phunter 2" qbcore"#,
+                r#"mysqldump.exe -u root "-p[REDACTED]" qbcore"#,
+            ),
+            (
+                r#"mysql.exe -u root -p"hunter 2" qbcore"#,
+                r#"mysql.exe -u root -p"[REDACTED]" qbcore"#,
+            ),
+        ] {
+            assert_eq!(mask_command_line(line), shown, "{line:?}");
+        }
+    }
+
+    #[test]
+    fn the_password_of_a_user_option_is_masked_and_its_user_kept() {
+        assert_eq!(
+            mask_command_line("curl -u api:hunter2 https://api.example.com/backup"),
+            "curl -u api:[REDACTED] https://api.example.com/backup"
+        );
+        assert_eq!(
+            mask_command_line("curl --user=api:hunter2 -uops:x9 https://api.example.com"),
+            "curl --user=api:[REDACTED] -uops:[REDACTED] https://api.example.com"
+        );
+        assert_eq!(
+            mask_command_line("mysql -u fivem qbcore"),
+            "mysql -u fivem qbcore"
         );
     }
 
