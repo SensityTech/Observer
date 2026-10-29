@@ -31,6 +31,13 @@ const LOADERS: [&str; 3] = [
     "/lib/ld-linux-x86-64.so.2",
     "/lib/ld-musl-x86_64.so.1",
 ];
+/// Variables that make a program run code its arguments do not name: bash's and sh's startup
+/// files, the shell options that turn on tracing with a prompt of the caller's, and glibc's
+/// conversion modules.
+const STARTUP_VARIABLES: [&str; 5] = ["BASH_ENV", "ENV", "SHELLOPTS", "BASHOPTS", "GCONV_PATH"];
+/// The dynamic loaders' own (`LD_PRELOAD`, `LD_LIBRARY_PATH`, `LD_AUDIT`), and the functions bash
+/// imports, which replace the commands a script runs.
+const STARTUP_PREFIXES: [&str; 2] = ["LD_", "BASH_FUNC_"];
 
 /// Starts the thread that lists `/proc` for the tree's new and ended processes. Without a
 /// notification Linux offers an unprivileged process, a program that lives less than a scan can
@@ -108,6 +115,7 @@ struct Member {
     parent: u32,
     image: Option<PathBuf>,
     args: Vec<String>,
+    startup_variables: Option<Vec<String>>,
     /// Set once reported; until then the process may still be a fork about to run something else.
     reported: bool,
     seen: Instant,
@@ -194,8 +202,12 @@ impl Poller {
             }
             member.image = fs::read_link(format!("/proc/{pid}/exe")).ok();
             member.args = args(pid);
+            // After argv: a process read while still a copy of its parent waits for the next scan.
+            member.startup_variables = startup_variables(pid);
             started.push(pid);
         }
+        // Parents first: what a process is may depend on what started it.
+        started.sort_by_key(|pid| (self.members.get(pid).map(|member| member.start), *pid));
         for pid in started {
             let Some(member) = self.members.get(&pid) else {
                 continue;
@@ -222,6 +234,7 @@ impl Poller {
                 args: member.args.clone(),
                 created_ms: created_ms(member.start),
                 stamp: Some(member.start),
+                startup_variables: member.startup_variables.clone(),
             };
             if let Some(member) = self.members.get_mut(&pid) {
                 member.reported = true;
@@ -239,6 +252,7 @@ impl Poller {
                 parent: stat.parent,
                 image: None,
                 args: Vec::new(),
+                startup_variables: None,
                 reported: false,
                 seen: now,
             },
@@ -268,6 +282,7 @@ impl ProcessTree {
             args,
             created_ms: created_ms(stat.start),
             stamp: Some(stat.start),
+            startup_variables: startup_variables(pid),
         })
     }
 
@@ -295,6 +310,26 @@ impl ProcessTree {
 fn marked(pid: u32, entry: &[u8]) -> bool {
     fs::read(format!("/proc/{pid}/environ"))
         .is_ok_and(|environ| environ.split(|&byte| byte == 0).any(|variable| variable == entry))
+}
+
+/// The entries of the environment `pid` started with that choose code it runs before its own.
+fn startup_variables(pid: u32) -> Option<Vec<String>> {
+    let environ = fs::read(format!("/proc/{pid}/environ")).ok()?;
+    Some(
+        environ
+            .split(|&byte| byte == 0)
+            .filter(|entry| {
+                let name = entry.split(|&byte| byte == b'=').next().unwrap_or_default();
+                STARTUP_VARIABLES
+                    .iter()
+                    .any(|variable| name == variable.as_bytes())
+                    || STARTUP_PREFIXES
+                        .iter()
+                        .any(|prefix| name.starts_with(prefix.as_bytes()))
+            })
+            .map(|entry| String::from_utf8_lossy(entry).into_owned())
+            .collect(),
+    )
 }
 
 fn args(pid: u32) -> Vec<String> {
@@ -421,6 +456,56 @@ mod tests {
             seen.iter()
                 .all(|change| !matches!(change, TreeChange::Started(info) if info.pid == spawned.pid))
         );
+    }
+
+    #[tokio::test]
+    async fn a_child_s_startup_variables_are_read_and_its_other_variables_are_not() {
+        let mut spawned = spawn(&shell(
+            "env BASH_ENV=/srv/x/start.sh LD_LIBRARY_PATH=/srv/x 'BASH_FUNC_readlink%%=() { id; }' \
+             MYSQL_PWD=hunter2 sleep 0.6 & wait",
+        ))
+        .unwrap();
+
+        let seen = changes_until(&mut spawned.changes, |seen| started(seen, "sleep").is_some()).await;
+
+        let sleep = started(&seen, "sleep").unwrap_or_else(|| panic!("no sleep in {seen:#?}"));
+        let variables = sleep.startup_variables.clone().unwrap_or_default();
+        for given in [
+            "BASH_ENV=/srv/x/start.sh",
+            "LD_LIBRARY_PATH=/srv/x",
+            "BASH_FUNC_readlink%%=() { id; }",
+        ] {
+            assert!(
+                variables.iter().any(|variable| variable == given),
+                "{given} in {variables:?}"
+            );
+        }
+        assert!(variables.iter().all(|variable| !variable.contains("hunter2")));
+        let own = spawned
+            .tree
+            .describe(spawned.pid)
+            .and_then(|main| main.startup_variables);
+        assert!(own.is_some_and(|own| !own.iter().any(|variable| variable.starts_with("BASH_ENV="))));
+        spawned.tree.kill().unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_parent_is_reported_before_the_children_found_with_it() {
+        for _ in 0..8 {
+            let seen = changes_of("sleep 0.3; sh -c 'sleep 0.4 & sleep 0.4 & sleep 0.4 & wait'").await;
+
+            let reported: Vec<&ProcessInfo> = seen
+                .iter()
+                .filter_map(|change| match change {
+                    TreeChange::Started(info) => Some(info),
+                    TreeChange::Ended { .. } => None,
+                })
+                .collect();
+            for (at, child) in reported.iter().enumerate() {
+                let parent = reported.iter().position(|info| Some(info.pid) == child.parent);
+                assert!(parent.is_none_or(|parent| parent < at), "{reported:#?}");
+            }
+        }
     }
 
     #[tokio::test]

@@ -25,6 +25,10 @@ pub struct ProcessInfo {
     /// The start in the system's own unit: with the pid it tells a process from a later one that
     /// reused the pid.
     pub stamp: Option<u64>,
+    /// The entries of its environment (`NAME=value`) that make a program run code its arguments do
+    /// not name: a shell's startup file and options, the functions bash imports, the dynamic
+    /// loaders' variables. Read on Linux only; `None` there when the environment could not be read.
+    pub startup_variables: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

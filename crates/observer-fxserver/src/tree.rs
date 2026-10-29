@@ -1,6 +1,7 @@
 //! What the processes FXServer's tree starts are: its own helpers, or programs it never starts by
 //! itself. The lists are closed: anything not known is unexpected.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use observer_domain::diagnostics::ProcessKind;
@@ -34,7 +35,7 @@ const LINUX_SHELLS: [&str; 20] = [
 /// Interpreters whose name carries a version: `python3.11`, `php8.2`.
 const LINUX_SHELL_PREFIXES: [&str; 2] = ["python", "php"];
 
-/// What a run's processes are compared against.
+/// What a run's processes are compared against, and what its tree showed so far.
 #[derive(Debug, Clone)]
 pub struct TreeContext {
     pub flavour: Flavour,
@@ -44,12 +45,20 @@ pub struct TreeContext {
     /// The Linux build's own loader, which runs FXServer.
     pub loader: Option<PathBuf>,
     pub run_sh: Option<PathBuf>,
+    /// The Linux build's `alpine` folder, where the only libraries its loader is given live.
+    pub alpine: Option<PathBuf>,
+    /// The variables FXServer itself started with that choose code a program runs before its own
+    /// (see [`ProcessInfo::startup_variables`]): the owner's, which its helpers inherit.
+    pub fxserver_startup: Vec<String>,
     /// `%SystemRoot%`, where the only console host FXServer starts lives.
     pub system_root: Option<PathBuf>,
+    /// The tree's Node processes: FXServer too, which on Linux starts a crash dump server of its
+    /// own in each and may start Node processes again.
+    nodes: HashSet<u32>,
 }
 
 impl TreeContext {
-    pub fn new(layout: &Layout, main_pid: u32) -> Self {
+    pub fn new(layout: &Layout, main_pid: u32, fxserver_startup: Vec<String>) -> Self {
         let root = layout.citizen_root();
         match layout.flavour() {
             Flavour::Windows => Self {
@@ -58,7 +67,10 @@ impl TreeContext {
                 fxserver: canonical(&root.join("FXServer.exe")),
                 loader: None,
                 run_sh: None,
+                alpine: None,
+                fxserver_startup,
                 system_root: std::env::var_os("SystemRoot").map(|root| canonical(Path::new(&root))),
+                nodes: HashSet::new(),
             },
             Flavour::Linux => Self {
                 flavour: Flavour::Linux,
@@ -66,9 +78,32 @@ impl TreeContext {
                 fxserver: canonical(&root.join("FXServer")),
                 loader: Some(canonical(&root.join("ld-musl-x86_64.so.1"))),
                 run_sh: Some(canonical(&layout.build().join("run.sh"))),
+                // run.sh names the folders from its own resolved folder.
+                alpine: Some(canonical(layout.build()).join("alpine")),
+                fxserver_startup,
                 system_root: None,
+                nodes: HashSet::new(),
             },
         }
+    }
+
+    /// Takes in what a started process was classified as.
+    pub fn record(&mut self, process: &ProcessInfo, kind: ProcessKind) {
+        if kind == ProcessKind::Node {
+            self.nodes.insert(process.pid);
+        }
+    }
+
+    /// Forgets an ended process, whose pid may come back as another program.
+    pub fn forget(&mut self, pid: u32) {
+        self.nodes.remove(&pid);
+    }
+
+    /// Whether `process` was started by FXServer: its main process or one of its Node processes.
+    fn started_by_fxserver(&self, process: &ProcessInfo) -> bool {
+        process
+            .parent
+            .is_some_and(|parent| parent == self.main_pid || self.nodes.contains(&parent))
     }
 
     fn same(&self, path: &Path, known: &Path) -> bool {
@@ -79,6 +114,15 @@ impl TreeContext {
                 .eq_ignore_ascii_case(&known.replace('/', "\\")),
             Flavour::Linux => lexical(&path) == lexical(&known),
         }
+    }
+
+    /// Whether the Linux path `path`, as written, lies in the folder `root`.
+    fn inside(path: &str, root: &Path) -> bool {
+        let root = lexical(&plain(root));
+        path.starts_with('/')
+            && lexical(path)
+                .strip_prefix(&root)
+                .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
     }
 }
 
@@ -127,7 +171,10 @@ pub fn classify(process: &ProcessInfo, context: &TreeContext) -> ProcessKind {
             let binary = if is(&context.fxserver) {
                 Some(0)
             } else {
-                loaded.filter(|&at| context.same(Path::new(&args[at]), &context.fxserver))
+                loaded.filter(|&at| {
+                    context.same(Path::new(&args[at]), &context.fxserver)
+                        && build_libraries_only(&args[1..at], context)
+                })
             };
             // A shell running the build's run.sh as its script, before any other argument. FXServer
             // names it from its own folder, `…/opt/cfx-server/../../../run.sh`, which the kernel
@@ -145,13 +192,19 @@ pub fn classify(process: &ProcessInfo, context: &TreeContext) -> ProcessKind {
             let after = |program: Option<usize>, prefix: &str| {
                 program.is_some_and(|at| args.iter().skip(at + 1).any(|arg| arg.starts_with(prefix)))
             };
-            if [binary, script]
-                .into_iter()
-                .any(|program| after(program, "-dumpserver:") && after(program, "-parentppe:"))
+            // A resource can start the same command lines with a startup file, a preloaded library
+            // or shell functions of its own in the environment, which run before run.sh or
+            // FXServer. FXServer starts its helpers itself, with its own environment or an empty
+            // one.
+            let from_fxserver = context.started_by_fxserver(process) && inherited_startup(process, context);
+            if from_fxserver
+                && [binary, script]
+                    .into_iter()
+                    .any(|program| after(program, "-dumpserver:") && after(program, "-parentppe:"))
             {
                 return ProcessKind::DumpServer;
             }
-            if after(binary, "--start-node") {
+            if from_fxserver && after(binary, "--start-node") {
                 return ProcessKind::Node;
             }
             let names = [
@@ -184,6 +237,40 @@ fn loaded_program(args: &[String]) -> Option<usize> {
         }
     }
     (at < args.len()).then_some(at)
+}
+
+/// Whether the loader's `options`, before the program it runs, only give it library folders of the
+/// build, as run.sh does: no preloaded library, no folder a resource could fill.
+fn build_libraries_only(options: &[String], context: &TreeContext) -> bool {
+    let Some(alpine) = context.alpine.as_deref() else {
+        return false;
+    };
+    let mut options = options.iter();
+    while let Some(option) = options.next() {
+        let folders = match option.as_str() {
+            "--" => continue,
+            "--library-path" => options.next().map(String::as_str),
+            option => option.strip_prefix("--library-path="),
+        };
+        if !folders.is_some_and(|folders| {
+            folders
+                .split(':')
+                .all(|folder| TreeContext::inside(folder, alpine))
+        }) {
+            return false;
+        }
+    }
+    true
+}
+
+/// Whether `process` started with no variable choosing code to run beyond those FXServer started
+/// with. An environment that could not be read proves nothing.
+fn inherited_startup(process: &ProcessInfo, context: &TreeContext) -> bool {
+    process.startup_variables.as_ref().is_some_and(|variables| {
+        variables
+            .iter()
+            .all(|variable| context.fxserver_startup.contains(variable))
+    })
 }
 
 fn linux_shell(name: &str) -> bool {
@@ -246,7 +333,10 @@ mod tests {
             fxserver: PathBuf::from(r"C:\lab\build\FXServer.exe"),
             loader: None,
             run_sh: None,
+            alpine: None,
+            fxserver_startup: Vec::new(),
             system_root: Some(PathBuf::from(r"C:\WINDOWS")),
+            nodes: HashSet::new(),
         }
     }
 
@@ -257,7 +347,10 @@ mod tests {
             fxserver: PathBuf::from("/srv/fx/alpine/opt/cfx-server/FXServer"),
             loader: Some(PathBuf::from("/srv/fx/alpine/opt/cfx-server/ld-musl-x86_64.so.1")),
             run_sh: Some(PathBuf::from("/srv/fx/run.sh")),
+            alpine: Some(PathBuf::from("/srv/fx/alpine")),
+            fxserver_startup: vec!["LD_LIBRARY_PATH=/opt/owner/lib".to_owned()],
             system_root: None,
+            nodes: HashSet::new(),
         }
     }
 
@@ -270,6 +363,7 @@ mod tests {
             command_line: Some(args.join(" ")),
             created_ms: None,
             stamp: None,
+            startup_variables: Some(vec!["LD_LIBRARY_PATH=/opt/owner/lib".to_owned()]),
         }
     }
 
@@ -461,6 +555,150 @@ mod tests {
             ProcessKind::Shell,
             "a relative script is found from the shell's folder, which may be a resource's"
         );
+    }
+
+    #[test]
+    fn a_loader_given_more_than_the_build_s_libraries_is_not_a_helper() {
+        let context = linux();
+        let loader = "/srv/fx/alpine/opt/cfx-server/ld-musl-x86_64.so.1";
+        let dump_server = |options: &[&str]| {
+            let mut line = vec![loader];
+            line.extend_from_slice(options);
+            line.extend_from_slice(&[
+                "--",
+                "/srv/fx/alpine/opt/cfx-server/FXServer",
+                "-dumpserver:0",
+                "-parentppe:1",
+            ]);
+            classify(&process(loader, 7, &line), &context)
+        };
+
+        assert_eq!(
+            dump_server(&["--library-path", "/srv/fx/alpine/lib/:/srv/fx/alpine/usr/lib/"]),
+            ProcessKind::DumpServer
+        );
+        assert_eq!(
+            dump_server(&["--library-path=/srv/fx/alpine/lib/"]),
+            ProcessKind::DumpServer
+        );
+        for options in [
+            &["--preload", "/srv/fx/server-data/resources/x/payload.so"][..],
+            &["--preload=/srv/fx/alpine/lib/libc.so"],
+            &[
+                "--library-path",
+                "/srv/fx/alpine/lib/:/srv/fx/server-data/resources/x/",
+            ],
+            &[
+                "--library-path",
+                "/srv/fx/alpine/usr/lib/../../../server-data/resources/x",
+            ],
+            &["--library-path", "/srv/fx/alpine-x/lib"],
+            &["--library-path", "lib/"],
+            &["--argv0", "FXServer"],
+        ] {
+            assert_eq!(dump_server(options), ProcessKind::Other, "{options:?}");
+        }
+    }
+
+    #[test]
+    fn a_helper_with_startup_code_of_its_own_or_another_parent_is_not_a_helper() {
+        let context = linux();
+        let run_sh = |parent: u32, variables: Option<&[&str]>| {
+            let mut started = process(
+                "/usr/bin/bash",
+                parent,
+                &["/bin/bash", "/srv/fx/run.sh", "-dumpserver:0", "-parentppe:1"],
+            );
+            started.startup_variables =
+                variables.map(|variables| variables.iter().map(ToString::to_string).collect());
+            classify(&started, &context)
+        };
+
+        assert_eq!(
+            run_sh(7, Some(&["LD_LIBRARY_PATH=/opt/owner/lib"])),
+            ProcessKind::DumpServer,
+            "FXServer's own variables are inherited"
+        );
+        assert_eq!(run_sh(7, Some(&[])), ProcessKind::DumpServer);
+        for variables in [
+            &[
+                "LD_LIBRARY_PATH=/opt/owner/lib",
+                "BASH_ENV=/srv/fx/server-data/resources/x/start.sh",
+            ][..],
+            &["LD_LIBRARY_PATH=/srv/fx/server-data/resources/x"],
+            &["LD_PRELOAD=/srv/fx/server-data/resources/x/payload.so"],
+            &["BASH_FUNC_readlink%%=() { id; }"],
+        ] {
+            assert_eq!(run_sh(7, Some(variables)), ProcessKind::Shell, "{variables:?}");
+        }
+        assert_eq!(
+            run_sh(7, None),
+            ProcessKind::Shell,
+            "an environment that could not be read"
+        );
+        assert_eq!(run_sh(4120, Some(&[])), ProcessKind::Shell);
+
+        let loader = "/srv/fx/alpine/opt/cfx-server/ld-musl-x86_64.so.1";
+        let mut node = process(
+            loader,
+            7,
+            &[
+                loader,
+                "--library-path",
+                "/srv/fx/alpine/lib/",
+                "--",
+                "/srv/fx/alpine/opt/cfx-server/FXServer",
+                "--start-node",
+                "worker.js",
+            ],
+        );
+        assert_eq!(classify(&node, &context), ProcessKind::Node);
+        node.startup_variables = Some(vec![
+            "LD_PRELOAD=/srv/fx/server-data/resources/x/payload.so".to_owned(),
+        ]);
+        assert_eq!(classify(&node, &context), ProcessKind::Other);
+    }
+
+    /// On Linux each FXServer process starts a crash dump server, Node processes included, with an
+    /// empty environment.
+    #[test]
+    fn the_dump_server_of_a_node_process_is_known_while_that_process_runs() {
+        let mut context = linux();
+        let loader = "/srv/fx/alpine/opt/cfx-server/ld-musl-x86_64.so.1";
+        let mut node = process(
+            loader,
+            7,
+            &[
+                loader,
+                "--library-path",
+                "/srv/fx/alpine/usr/lib/v8/:/srv/fx/alpine/lib/:/srv/fx/alpine/usr/lib/",
+                "--",
+                "/srv/fx/alpine/opt/cfx-server/FXServer",
+                "--start-node",
+                "worker.js",
+            ],
+        );
+        node.pid = 5000;
+        let mut dump_server = process(
+            "/usr/bin/bash",
+            5000,
+            &[
+                "/bin/bash",
+                "/srv/fx/alpine/opt/cfx-server/../../../run.sh",
+                "-dumpserver:9",
+                "-parentppe:11",
+            ],
+        );
+        dump_server.pid = 5001;
+        dump_server.startup_variables = Some(Vec::new());
+
+        assert_eq!(classify(&dump_server, &context), ProcessKind::Shell);
+        let kind = classify(&node, &context);
+        assert_eq!(kind, ProcessKind::Node);
+        context.record(&node, kind);
+        assert_eq!(classify(&dump_server, &context), ProcessKind::DumpServer);
+        context.forget(node.pid);
+        assert_eq!(classify(&dump_server, &context), ProcessKind::Shell);
     }
 
     #[test]

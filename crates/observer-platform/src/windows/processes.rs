@@ -198,6 +198,7 @@ fn inspect(pid: u32, job: &Job) -> Option<ProcessInfo> {
         command_line,
         created_ms: created.and_then(unix_ms),
         stamp: created,
+        startup_variables: None,
     })
 }
 
@@ -211,6 +212,7 @@ fn gone(pid: u32) -> ProcessInfo {
         command_line: None,
         created_ms: None,
         stamp: None,
+        startup_variables: None,
     }
 }
 

@@ -1171,6 +1171,40 @@ async fn the_dump_server_the_server_starts_is_known() {
     lab.shut_down(false).await;
 }
 
+/// A resource giving bash the dump server's run.sh line, with a startup file of its own added to
+/// the environment as Node's `spawn(.., { env })` adds it: bash runs that file before run.sh.
+#[cfg(unix)]
+#[tokio::test]
+async fn bash_given_run_sh_and_a_startup_file_of_a_resource_is_a_shell() {
+    let mut lab = Lab::online(&[]).await;
+    let mut processes = lab.supervisor.processes();
+    let ran = lab.dir.path().join("startup-ran");
+    let startup = lab.dir.path().join("server-data/start.sh");
+    fs::write(&startup, format!("echo $$ > {}\nsleep 3\n", ran.display())).unwrap();
+    let run_sh = lab.dir.path().join("build/run.sh");
+
+    lab.type_command(
+        &format!(
+            "fake_spawn BASH_ENV={} /bin/bash {} -dumpserver:0 -parentppe:1",
+            startup.display(),
+            run_sh.display()
+        ),
+        "test",
+    )
+    .await;
+
+    let (process, kind) = started(&mut processes, |process, _| named(process, "bash")).await;
+    let startup_ran = timeout(WAIT, async {
+        while !ran.exists() {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await;
+    lab.shut_down(false).await;
+    assert!(startup_ran.is_ok(), "bash never ran the startup file");
+    assert_eq!(kind, ProcessKind::Shell, "{process:?}");
+}
+
 #[tokio::test]
 async fn a_dropped_notification_is_made_up_for_by_the_reconciliation() {
     let mut lab = Lab::tuned(&[], |settings| settings.drop_first_tree_change = true).await;

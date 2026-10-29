@@ -1437,6 +1437,10 @@ impl Actor {
         let spawned = observer_platform::spawn(&prepared.launch)
             .map_err(|error| SpawnError::new(SpawnFailure::Spawn, error.to_string()))?;
         let tree = Arc::new(spawned.tree);
+        let fxserver_startup = tree
+            .describe(spawned.pid)
+            .and_then(|main| main.startup_variables)
+            .unwrap_or_default();
         #[cfg(unix)]
         if let Err(error) = self.pid_file().record(&tree) {
             warn!(%error, "cannot record FXServer's process group; a crash of Observer could leave it running");
@@ -1472,7 +1476,7 @@ impl Actor {
             tokio::spawn(follow_tree(TreeFollower {
                 changes: spawned.changes,
                 tree: Arc::downgrade(&tree),
-                context: TreeContext::new(&layout, spawned.pid),
+                context: TreeContext::new(&layout, spawned.pid, fxserver_startup),
                 generation,
                 bus: self.processes.clone(),
                 cancel: cancel.clone(),
@@ -1851,14 +1855,17 @@ impl TreeFollower {
                         return;
                     }
                     // The pid was reused by a process started after the one it named.
+                    self.context.forget(process.pid);
                     self.publish(ProcessChange::Ended { pid: process.pid });
                 }
                 self.running.insert(process.pid, process.stamp);
                 let kind = tree::classify(&process, &self.context);
+                self.context.record(&process, kind);
                 self.publish(ProcessChange::Started { process, kind });
             }
             TreeChange::Ended { pid } => {
                 if self.running.remove(&pid).is_some() {
+                    self.context.forget(pid);
                     self.publish(ProcessChange::Ended { pid });
                 }
             }
@@ -1880,11 +1887,13 @@ impl TreeFollower {
                 .filter(|(pid, stamp)| !members.contains(pid) && !tree.still_runs(*pid, *stamp))
                 .map(|(pid, _)| pid)
                 .collect();
-            let members: Vec<ProcessInfo> = members
+            let mut members: Vec<ProcessInfo> = members
                 .into_iter()
                 .filter(|&pid| pid != main)
                 .filter_map(|pid| tree.describe(pid))
                 .collect();
+            // Parents first: what a process is may depend on what started it.
+            members.sort_by_key(|member| (member.stamp, member.pid));
             Some((members, gone))
         })
         .await;

@@ -25,8 +25,9 @@
 //!   crash dump server;
 //! - on stdin: `fake_crash [code]`, `fake_hang`, `fake_spin` (a busy loop), `fake_print <text>`,
 //!   `fake_trace <type>`, `fake_stall_input <ms>`, which stops reading stdin for a while, as
-//!   FXServer does while its main loop is stuck; `fake_spawn <program> <args...>`, which starts a
-//!   program as a resource would; `fake_dump_server`, which starts the fake again the way FXServer
+//!   FXServer does while its main loop is stuck; `fake_spawn [NAME=value...] <program> <args...>`,
+//!   which starts a program as a resource would, with those variables added to its environment as
+//!   Node's `spawn(.., { env })` adds them; `fake_dump_server`, which starts the fake again the way FXServer
 //!   starts its crash dump server; `fake_connect <address>` and `fake_udp <address>`, which open and
 //!   hold a TCP connection or a connected UDP socket, and `fake_disconnect`, which closes them.
 //!
@@ -301,7 +302,7 @@ impl Fake {
             ("fake_crash", code) => self.crash(code.and_then(|code| code.parse().ok())),
             ("fake_hang", _) => hang(),
             ("fake_spin", _) => spin(),
-            ("fake_spawn", Some(program)) => self.spawn(program, &args[1..]),
+            ("fake_spawn", Some(_)) => self.spawn_with_variables(args),
             ("fake_dump_server", _) => self.spawn_dump_server(),
             ("fake_connect", Some(address)) => {
                 if let Ok(stream) = TcpStream::connect(address) {
@@ -468,10 +469,24 @@ impl Fake {
             .map(|ms| self.server.started + Duration::from_millis(ms))
     }
 
+    /// `fake_spawn`'s words: the variables to add, then the program and its arguments.
+    fn spawn_with_variables(&mut self, words: &[String]) {
+        let given = words.iter().take_while(|word| word.contains('=')).count();
+        let Some((program, args)) = words[given..].split_first() else {
+            return;
+        };
+        let variables: Vec<(&str, &str)> = words[..given]
+            .iter()
+            .filter_map(|word| word.split_once('='))
+            .collect();
+        self.spawn(program, args, &variables);
+    }
+
     /// A program a resource starts, with nothing of the fake's own: no pipe to hold open.
-    fn spawn(&mut self, program: &str, args: &[String]) {
+    fn spawn(&mut self, program: &str, args: &[String], variables: &[(&str, &str)]) {
         let started = Command::new(program)
             .args(args)
+            .envs(variables.iter().copied())
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -493,16 +508,18 @@ impl Fake {
             vec![format!("{DUMP_SERVER}0"), format!("-parentpid:{pid}")]
         } else {
             let fxserver = program.with_file_name("FXServer");
+            // run.sh gives the loader the build's own library folders.
+            let alpine = program.ancestors().nth(3).unwrap_or(&program);
             vec![
                 "--library-path".to_owned(),
-                "lib/".to_owned(),
+                format!("{}/lib/", alpine.display()),
                 "--".to_owned(),
                 fxserver.to_string_lossy().into_owned(),
                 format!("{DUMP_SERVER}0"),
                 format!("-parentppe:{pid}"),
             ]
         };
-        self.spawn(&program.to_string_lossy(), &args);
+        self.spawn(&program.to_string_lossy(), &args, &[]);
     }
 }
 

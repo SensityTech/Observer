@@ -135,6 +135,7 @@ impl Lab {
                         command_line: Some(command_line.to_owned()),
                         created_ms: Some(self.at_ms()),
                         stamp: Some(1),
+                        startup_variables: None,
                     },
                     kind,
                 },
