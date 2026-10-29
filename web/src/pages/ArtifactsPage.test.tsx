@@ -136,6 +136,17 @@ const page = async (status: ArtifactsStatus = STATUS, permissions = 'fff') => {
     return { ...view, client, say, drop: () => act(() => socket?.close(1006)) };
 };
 
+/** Whether the Available builds card offers the install of `build`. */
+const offered = (build: number) => {
+    const available = [...document.querySelectorAll('section')].find((each) =>
+        each.textContent?.startsWith(en.artifacts.available.title),
+    ) as HTMLElement;
+    const line = [...available.querySelectorAll('tbody tr')].find((each) =>
+        each.textContent?.startsWith(String(build)),
+    ) as HTMLElement;
+    return within(line).queryByRole('button', { name: en.artifacts.available.install }) !== null;
+};
+
 const row = (build: number) => {
     const cell = [...document.querySelectorAll('td')].find((each) =>
         each.textContent?.startsWith(String(build)),
@@ -333,6 +344,22 @@ describe('ArtifactsPage', () => {
         expect(getByText(en.artifacts.outOfDate)).toBeTruthy();
         expect(head?.textContent).toContain('Times in Europe/Paris');
         expect(getByText(/since 27 Oct 03:28/)).toBeTruthy();
+    });
+
+    it('should offer the install of a build by what the live status says is installed', async () => {
+        // Installed since the catalog was read; and 35245, which the catalog says is installed,
+        // deleted since.
+        await page({
+            ...STATUS,
+            job: null,
+            installed: [
+                { ...BUILD, build: 37950 },
+                ...STATUS.installed.filter((each) => each.build !== 35245),
+            ],
+        });
+
+        expect(offered(37950)).toBe(false);
+        expect(offered(35245)).toBe(true);
     });
 
     it('should add the probation to the build in the status bar', async () => {

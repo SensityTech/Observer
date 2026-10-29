@@ -1046,7 +1046,10 @@ function AvailableCard({
                         </thead>
                         <tbody>
                             {entries.map((entry) => {
-                                const reason = entry.installed
+                                // The topic follows installs and deletions; the catalog only says
+                                // what was installed when it was read.
+                                const installed = status.installed.some((each) => each.build === entry.build);
+                                const reason = installed
                                     ? words.isInstalled
                                     : entry.availability.kind === 'noArchive'
                                       ? words.noArchive(words.platforms[view?.platform ?? 'windows'])
@@ -1118,7 +1121,7 @@ function AvailableCard({
                                                 : ''}
                                         </td>
                                         <td className={cn(table.td, 'text-right')}>
-                                            {entry.installed || entry.availability.kind !== 'downloadable' ? (
+                                            {installed || entry.availability.kind !== 'downloadable' ? (
                                                 <span className="text-small text-ink-3">{reason}</span>
                                             ) : (
                                                 <Action
