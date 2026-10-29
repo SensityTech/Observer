@@ -41,6 +41,9 @@ const NEW: u32 = 37900;
 /// A third build, chosen while 37900 is on probation.
 const OTHER: u32 = 37950;
 const SELECTION_ROUTE: (&str, &str) = ("PUT", "/api/servers/default/artifacts/selection");
+/// The build on probation crashes late enough that Observer has seen it online and read its
+/// number first, which a loaded machine can take a few seconds to do.
+const CRASH_ON_PROBATION: &str = "set fake_crash_after_ms 8000";
 
 /// Ports of their own, apart from the other test binaries'.
 static PORTS: LazyLock<Mutex<Vec<u16>>> = LazyLock::new(|| Mutex::new((41960..=41962).collect()));
@@ -409,7 +412,7 @@ async fn a_switch_at_the_next_start_runs_the_new_build_and_passes_probation() {
 
 #[tokio::test]
 async fn a_build_that_crashes_in_probation_is_rolled_back_and_the_last_healthy_one_starts() {
-    let mut lab = Lab::new(Duration::from_mins(5), "set fake_crash_after_ms 2500").await;
+    let mut lab = Lab::new(Duration::from_mins(5), CRASH_ON_PROBATION).await;
     lab.supervision.start_server(&lab.owner).await.unwrap();
     lab.online_on(HEALTHY).await;
 
@@ -445,7 +448,7 @@ async fn a_build_that_crashes_in_probation_is_rolled_back_and_the_last_healthy_o
 /// Chosen for the next start while 37900 is on probation: that choice stands when 37900 crashes.
 #[tokio::test]
 async fn a_build_chosen_during_a_probation_starts_when_the_build_on_probation_crashes() {
-    let mut lab = Lab::new(Duration::from_mins(5), "set fake_crash_after_ms 4000").await;
+    let mut lab = Lab::new(Duration::from_mins(5), CRASH_ON_PROBATION).await;
     install_fake(&lab.root(), OTHER, &format!("set fake_build {OTHER}\n"));
     // Installed behind Observer's back: a look at the catalog scans the folder again.
     lab.artifacts.catalog(false).await.unwrap();
@@ -484,7 +487,7 @@ async fn a_build_chosen_during_a_probation_starts_when_the_build_on_probation_cr
 /// healthy build.
 #[tokio::test]
 async fn a_pending_build_outlives_the_return_to_the_last_healthy_build() {
-    let mut lab = Lab::new(Duration::from_mins(5), "set fake_crash_after_ms 4000").await;
+    let mut lab = Lab::new(Duration::from_mins(5), CRASH_ON_PROBATION).await;
     install_fake(&lab.root(), OTHER, &format!("set fake_build {OTHER}\n"));
     // Installed behind Observer's back: a look at the catalog scans the folder again.
     lab.artifacts.catalog(false).await.unwrap();
