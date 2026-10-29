@@ -96,6 +96,8 @@ pub(crate) fn routes() -> Vec<Route> {
         route(M::PUT,    "/servers/default/schedule/once",  control,       schedule::restart_once),
         route(M::DELETE, "/servers/default/schedule/once",  control,       schedule::cancel_once),
         route(M::GET,    "/metrics/series",             dashboard,    metrics::series),
+        route(M::GET,    "/metrics/threads",            dashboard,    metrics::threads),
+        route(M::GET,    "/metrics/growth",             dashboard,    metrics::growth),
     ]
 }
 

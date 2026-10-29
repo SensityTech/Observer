@@ -13,6 +13,8 @@
 //! - `fake_players <n>`: `/dynamic.json` counts `n` clients and `/players.json` lists ids 1 to `n`
 //!   with a ping of `20 + 5 × id`, or the anonymised public list without the right token;
 //! - `fake_tick_ms <ms>` (0): how long each svMain tick is observed to take in `/perf/`;
+//! - `fake_busy_percent <p>` (0): the thread named like FXServer's network loop,
+//!   `UV loop: svNetwork`, which wakes every 10 ms, spins `p` ms of every 100;
 //! - `fake_crash_after_ms`, `fake_hang_after_ms`: crash or hang the main loop on a timer;
 //! - `fake_bind_error 1`: report the port as taken, as when it really is;
 //! - `fake_license missing|invalid`: refuse to run for want of a valid licence key, with FXServer's
@@ -218,6 +220,7 @@ impl Fake {
 
     fn run(&mut self) -> ! {
         let commands = read_stdin(Arc::clone(&self.server));
+        network_loop(Arc::clone(&self.server));
         let crash_at = self.deadline("fake_crash_after_ms");
         let hang_at = self.deadline("fake_hang_after_ms");
         loop {
@@ -423,6 +426,27 @@ impl Fake {
             .number(convar)
             .map(|ms| self.server.started + Duration::from_millis(ms))
     }
+}
+
+/// A thread by the name FXServer's network loop has, for the thread measures to find: Windows
+/// keeps the name as the thread's description, Linux cuts it to `UV loop: svNetw`.
+fn network_loop(server: Arc<Server>) {
+    const PERIOD: Duration = Duration::from_millis(100);
+    const WAKE: Duration = Duration::from_millis(10);
+    let _ = thread::Builder::new()
+        .name("UV loop: svNetwork".to_owned())
+        .spawn(move || {
+            loop {
+                let period = Instant::now();
+                let busy = Duration::from_millis(server.number("fake_busy_percent").unwrap_or(0).min(100));
+                while period.elapsed() < busy {
+                    std::hint::black_box(period.elapsed());
+                }
+                while period.elapsed() < PERIOD {
+                    thread::sleep(WAKE.min(PERIOD.saturating_sub(period.elapsed())));
+                }
+            }
+        });
 }
 
 fn spawn_child() {

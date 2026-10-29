@@ -76,6 +76,13 @@ describe('formatBytes', () => {
         expect(formatBytes('en', 1023.4)).toBe('1,023 bytes');
         expect(formatBytes('en', 1023.6)).toBe('1 KB');
     });
+
+    it('should sign a growth, but not one that rounds to nothing', () => {
+        expect(formatBytes('en', 180 * 1024 ** 2, { signed: true })).toBe('+180 MB');
+        expect(formatBytes('en', -2048, { signed: true })).toBe('-2 KB');
+        expect(formatBytes('en', 0.3, { signed: true })).toBe('0 bytes');
+        expect(formatBytes('en', -0.3, { signed: true })).toBe('0 bytes');
+    });
 });
 
 describe('formatBitRate', () => {
@@ -100,6 +107,13 @@ describe('formatMilliseconds', () => {
         expect(formatMilliseconds('en', 6.84)).toBe('6.8 ms');
         expect(formatMilliseconds('en', 412.3)).toBe('412 ms');
         expect(formatMilliseconds('en', 1250)).toBe('1,250 ms');
+    });
+
+    it('should keep two significant digits under a millisecond rather than round to zero', () => {
+        expect(formatMilliseconds('en', 0.042)).toBe('0.042 ms');
+        expect(formatMilliseconds('en', 0.0349)).toBe('0.035 ms');
+        expect(formatMilliseconds('en', 0.826)).toBe('0.83 ms');
+        expect(formatMilliseconds('en', 0)).toBe('0 ms');
     });
 });
 

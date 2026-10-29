@@ -3,10 +3,12 @@
 //! is set aside and a new one started, and it is never backed up.
 
 mod columns;
+pub mod growth;
 pub mod rollups;
 pub mod runs;
 pub mod samples;
 pub mod series;
+pub mod threads;
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -14,13 +16,16 @@ use std::time::Duration;
 use rusqlite::config::DbConfig;
 use rusqlite::{Connection, ErrorCode, OpenFlags, Transaction, TransactionBehavior};
 use rusqlite_migration::{M, Migrations, SchemaVersion};
-use tracing::warn;
+use tracing::{info, warn};
 
 use crate::database::StoreError;
 
 pub use columns::{Affinity, Column, Kind, Values};
 
-const MIGRATIONS: &[M<'static>] = &[M::up(include_str!("../../migrations/metrics/0001_samples.sql"))];
+const MIGRATIONS: &[M<'static>] = &[
+    M::up(include_str!("../../migrations/metrics/0001_samples.sql")),
+    M::up(include_str!("../../migrations/metrics/0002_depth.sql")),
+];
 
 /// The metrics database. One connection writes, as for the state database; reads have their own
 /// beside it, which the write-ahead log allows, so that a burst of them never holds up a sample.
@@ -121,11 +126,22 @@ fn open_blocking(path: &Path) -> Result<Connection, StoreError> {
         return Err(StoreError::Corrupt(verdict));
     }
     let migrations = Migrations::from_slice(MIGRATIONS);
-    if let SchemaVersion::Outside(found) = migrations.current_version(&conn)? {
-        return Err(StoreError::TooNew {
-            found: found.get(),
-            known: MIGRATIONS.len(),
-        });
+    match migrations.current_version(&conn)? {
+        SchemaVersion::Outside(found) => {
+            return Err(StoreError::TooNew {
+                found: found.get(),
+                known: MIGRATIONS.len(),
+            });
+        }
+        // A year of aggregates takes a second or two, before the panel answers.
+        SchemaVersion::Inside(current) if current.get() < MIGRATIONS.len() => {
+            info!(
+                from = current.get(),
+                to = MIGRATIONS.len(),
+                "migrating the metrics database"
+            );
+        }
+        SchemaVersion::NoneSet | SchemaVersion::Inside(_) => {}
     }
     migrations.to_latest(&mut conn)?;
     Ok(conn)
@@ -244,6 +260,81 @@ mod tests {
         }
         assert_eq!(table_columns(&conn, "sample_1m"), aggregates);
         assert_eq!(table_columns(&conn, "sample_1h"), aggregates);
+    }
+
+    #[test]
+    fn the_depth_migration_keeps_every_row_and_leaves_the_new_measures_unmeasured() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        Migrations::from_slice(&MIGRATIONS[..1])
+            .to_latest(&mut conn)
+            .unwrap();
+        conn.execute(
+            "INSERT INTO sample_5s (ts, state, players, fxs_cpu) VALUES (1761642000, 'online', 12, 41.5)",
+            [],
+        )
+        .unwrap();
+        for table in ["sample_1m", "sample_1h"] {
+            let counts: Vec<String> = table_columns(&conn, table)
+                .into_iter()
+                .map(|(name, _)| name)
+                .filter(|name| name.ends_with("_n") || name == "samples" || name == "online")
+                .collect();
+            conn.execute(
+                &format!(
+                    "INSERT INTO {table} (ts, players_avg, {}) VALUES (1761642000, 12.0, {})",
+                    counts.join(", "),
+                    vec!["1"; counts.len()].join(", ")
+                ),
+                [],
+            )
+            .unwrap();
+        }
+
+        Migrations::from_slice(MIGRATIONS).to_latest(&mut conn).unwrap();
+
+        let sample: (String, i64, f64, Option<f64>, Option<f64>) = conn
+            .query_row(
+                "SELECT state, players, fxs_cpu, fxs_cpu_kernel, host_psi_io FROM sample_5s",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+            )
+            .unwrap();
+        assert_eq!(sample, ("online".to_owned(), 12, 41.5, None, None));
+        for table in ["sample_1m", "sample_1h"] {
+            let aggregate: (i64, f64, i64, Option<f64>, i64, i64) = conn
+                .query_row(
+                    &format!(
+                        "SELECT ts, players_avg, players_n, fxs_cpu_kernel_avg, fxs_cpu_kernel_n, \
+                         host_disk_ops_n FROM {table}"
+                    ),
+                    [],
+                    |row| {
+                        Ok((
+                            row.get(0)?,
+                            row.get(1)?,
+                            row.get(2)?,
+                            row.get(3)?,
+                            row.get(4)?,
+                            row.get(5)?,
+                        ))
+                    },
+                )
+                .unwrap();
+            assert_eq!(aggregate, (1_761_642_000, 12.0, 1, None, 0, 0), "{table}");
+        }
+        let refused = conn.execute(
+            "INSERT INTO sample_5s (ts, state) VALUES (1761642005, 'paused')",
+            [],
+        );
+        assert!(refused.is_err(), "the state is still checked");
+        let strict: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM pragma_table_list WHERE name LIKE 'sample_%' AND strict",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(strict, 3);
     }
 
     #[tokio::test]
@@ -365,6 +456,6 @@ mod tests {
                 .unwrap()
         };
         assert_eq!(version(&dir.path().join(database)), 99);
-        assert_eq!(version(&path), 1);
+        assert_eq!(version(&path) as usize, MIGRATIONS.len());
     }
 }

@@ -8,9 +8,9 @@ mod upkeep;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use observer_domain::metrics::{LiveSample, MetricsSeries, Range, Series};
+use observer_domain::metrics::{LiveSample, MetricsSeries, Range, RunGrowth, Series, ThreadShares};
 use observer_store::MetricsDatabase;
-use observer_store::metrics::{runs as stored_runs, series};
+use observer_store::metrics::{growth, runs as stored_runs, series, threads};
 use tokio::sync::{broadcast, watch};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
@@ -116,6 +116,23 @@ impl Metrics {
             .inner
             .db
             .read(move |conn| series::read(conn, range, &wanted, now))
+            .await?)
+    }
+
+    /// CPU per thread name of FXServer's main process over the last hour.
+    pub async fn threads(&self) -> Result<ThreadShares, Error> {
+        let now = self.inner.clock.now().as_second();
+        Ok(self.inner.db.read(move |conn| threads::read(conn, now)).await?)
+    }
+
+    /// How FXServer's memory and handles grew over the run under way, if one is.
+    pub async fn growth(&self) -> Result<Option<RunGrowth>, Error> {
+        let now = self.inner.clock.now().as_second();
+        let observer_started = self.inner.started_ms;
+        Ok(self
+            .inner
+            .db
+            .read(move |conn| growth::read(conn, observer_started, now))
             .await?)
     }
 

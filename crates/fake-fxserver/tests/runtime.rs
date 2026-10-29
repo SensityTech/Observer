@@ -17,7 +17,7 @@ use observer_app::{
 use observer_domain::audit::{ActorKind, AuditAction, AuditEntry, AuditFilter, Outcome};
 use observer_domain::error::ErrorCode;
 use observer_domain::launch::{ExtraArgument, LaunchSettings, OneSync};
-use observer_domain::metrics::{LiveSample, MarkerKind, Range, Series};
+use observer_domain::metrics::{LiveSample, MarkerKind, Range, Series, ThreadGroup, ThreadShares};
 use observer_domain::schedule::{
     OneOffRequest, OneOffRestart, RestartSource, ScheduleChange, ScheduleSettings,
 };
@@ -167,6 +167,11 @@ impl Observer {
     }
 
     async fn with_longest_sleep(auto_start: bool, longest_sleep: Duration) -> Self {
+        Self::launched(auto_start, longest_sleep, &FAKE).await
+    }
+
+    /// The fake takes `arguments` instead of [`FAKE`]'s.
+    async fn launched(auto_start: bool, longest_sleep: Duration, arguments: &[(&str, &str)]) -> Self {
         let port = Port::lease().await;
         let dir = tempfile::tempdir().unwrap();
         let build = dir.path().join("build");
@@ -207,12 +212,13 @@ impl Observer {
             onesync: OneSync::On,
             auto_start,
             txadmin_events: false,
-            extra_arguments: FAKE
-                .map(|(name, value)| ExtraArgument {
+            extra_arguments: arguments
+                .iter()
+                .map(|&(name, value)| ExtraArgument {
                     name: name.to_owned(),
                     value: value.to_owned(),
                 })
-                .to_vec(),
+                .collect(),
         };
         services
             .servers
@@ -665,9 +671,41 @@ async fn sample_where(
     found.expect("no such sample came")
 }
 
+/// What the sample of a fake spinning half of its network loop, and the hour's thread shares, say
+/// of its threads and its tree.
+fn assert_threads_and_tree(running: &LiveSample, threads: &ThreadShares) {
+    let value = |series| running.values.get(&series).copied();
+    // The fake's network loop spins half of every 100 ms. A loaded machine gives it less, never
+    // more, so the floor only tells a measured thread from an idle one.
+    let network = value(Series::NetworkThreadCpu).unwrap();
+    assert!((10.0..=65.0).contains(&network), "{running:?}");
+    let cpu = value(Series::FxsCpu).unwrap();
+    assert!(
+        value(Series::FxsKernel).is_some_and(|kernel| kernel <= cpu),
+        "{running:?}"
+    );
+    // The tree's totals and the main process are read a moment apart.
+    assert!(
+        value(Series::TreeCpu).is_some_and(|tree| tree + 1.0 >= cpu),
+        "{running:?}"
+    );
+    if cfg!(windows) {
+        assert!(value(Series::HostDiskTransfers).is_some(), "{running:?}");
+    }
+    let named = threads
+        .threads
+        .iter()
+        .find(|thread| thread.name.starts_with("UV loop: svNetw"))
+        .unwrap_or_else(|| panic!("{threads:?}"));
+    assert_eq!(named.group, ThreadGroup::Network);
+    assert!(threads.measured >= 1);
+}
+
 #[tokio::test]
 async fn the_statistics_follow_a_run_from_before_its_start_to_after_its_stop() {
-    let mut observer = Observer::new(false).await;
+    let [heartbeat, players, tick] = FAKE;
+    let busy = [heartbeat, players, tick, ("fake_busy_percent", "50")];
+    let mut observer = Observer::launched(false, Duration::from_millis(50), &busy).await;
     let path = observer.dir.path().join("metrics.sqlite3");
     let metrics = Metrics::open(MetricsSetup {
         path: path.clone(),
@@ -690,7 +728,12 @@ async fn the_statistics_follow_a_run_from_before_its_start_to_after_its_stop() {
     let before = sample_where(&mut live, |_| true).await;
     observer.supervision.start_server(&observer.owner).await.unwrap();
     observer.state(ServerState::Online).await;
-    let running = sample_where(&mut live, |sample| sample.values.contains_key(&Series::PingAvg)).await;
+    // Thread shares need two listings of the same process.
+    let running = sample_where(&mut live, |sample| {
+        sample.values.contains_key(&Series::PingAvg) && sample.values.contains_key(&Series::NetworkThreadCpu)
+    })
+    .await;
+    let threads = metrics.threads().await.unwrap();
     observer.supervision.stop_server(&observer.owner).await.unwrap();
     observer.state(ServerState::Stopped).await;
     let after = sample_where(&mut live, |sample| sample.state == ServerState::Stopped).await;
@@ -719,11 +762,14 @@ async fn the_statistics_follow_a_run_from_before_its_start_to_after_its_stop() {
         Some(1.0),
         "the fake starts the bridge alone"
     );
+    assert_threads_and_tree(&running, &threads);
     for series in [
         Series::Players,
         Series::FxsCpu,
         Series::MainTick,
         Series::FxsWorkingSet,
+        Series::NetworkThreadCpu,
+        Series::TreeCpu,
     ] {
         assert!(
             !after.values.contains_key(&series),

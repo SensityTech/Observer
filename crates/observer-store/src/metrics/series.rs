@@ -94,6 +94,28 @@ fn source(series: Series) -> Source {
         Series::MetricsDatabase => Gauge(C::ObsMetricsDb),
         Series::DashboardClients => Gauge(C::ObsWsClients),
         Series::SampleTime => Gauge(C::CollectMs),
+        Series::FxsKernel => Gauge(C::FxsCpuKernel),
+        Series::FxsFaults => Count(C::FxsFaults),
+        Series::FxsHardFaults => Count(C::FxsHardFaults),
+        Series::FxsWorkingSetPeak => Gauge(C::FxsWsPeak),
+        Series::MainThreadCpu => Gauge(C::ThrMainCpu),
+        Series::NetworkThreadCpu => Gauge(C::ThrNetworkCpu),
+        Series::SyncThreadCpu => Gauge(C::ThrSyncCpu),
+        Series::JsThreadsCpu => Gauge(C::ThrJsCpu),
+        Series::MonoThreadsCpu => Gauge(C::ThrMonoCpu),
+        Series::OtherThreadsCpu => Gauge(C::ThrOtherCpu),
+        Series::TreeCpu => Gauge(C::TreeCpu),
+        Series::TreeStarted => Count(C::TreeStarted),
+        Series::TreePrivatePeak => Gauge(C::TreePrivatePeak),
+        Series::HostClock => Gauge(C::HostCpuMhz),
+        Series::HostClockMax => Gauge(C::HostCpuMaxMhz),
+        Series::HostClockLimit => Gauge(C::HostCpuLimit),
+        Series::HostDiskLatency => Gauge(C::HostDiskMs),
+        Series::HostDiskTransfers => Count(C::HostDiskOps),
+        Series::HostSteal => Gauge(C::HostSteal),
+        Series::HostPressureCpu => Gauge(C::HostPsiCpu),
+        Series::HostPressureMemory => Gauge(C::HostPsiMemory),
+        Series::HostPressureIo => Gauge(C::HostPsiIo),
     }
 }
 
@@ -132,6 +154,10 @@ struct Aggregate {
     samples: i64,
 }
 
+/// The samples of a bucket, and those of them taken while the server was online or degraded.
+const RAW_COVERAGE: &str = "count(*), sum(state IN ('online', 'degraded'))";
+const ROLLED_UP_COVERAGE: &str = "sum(samples), sum(online)";
+
 /// The range ending at `now` (Unix seconds).
 pub fn read(
     conn: &Connection,
@@ -148,18 +174,32 @@ pub fn read(
     columns.sort_unstable();
     columns.dedup();
 
-    let (table, slot_span, expressions) = match range {
-        Range::Hour | Range::SixHours | Range::Day => ("sample_5s", 5, raw_expressions(&columns)),
-        Range::Week => ("sample_1m", 60, rolled_up_expressions(&columns)),
-        Range::Month => ("sample_1h", 3600, rolled_up_expressions(&columns)),
+    let (table, slot_span, coverage, expressions) = match range {
+        Range::Hour | Range::SixHours | Range::Day => {
+            ("sample_5s", 5, RAW_COVERAGE, raw_expressions(&columns))
+        }
+        Range::Week => (
+            "sample_1m",
+            60,
+            ROLLED_UP_COVERAGE,
+            rolled_up_expressions(&columns),
+        ),
+        Range::Month => (
+            "sample_1h",
+            3600,
+            ROLLED_UP_COVERAGE,
+            rolled_up_expressions(&columns),
+        ),
     };
     let rolled_up = table != "sample_5s";
     let sql = format!(
-        "SELECT (ts - ?1) / ?2, max(ts), {} FROM {table} WHERE ts >= ?1 AND ts < ?3 GROUP BY 1",
+        "SELECT (ts - ?1) / ?2, max(ts), {coverage}, {} FROM {table} WHERE ts >= ?1 AND ts < ?3 GROUP BY 1",
         expressions.join(", ")
     );
     let buckets = usize::try_from(range.buckets()).unwrap_or_default();
     let mut grid: Vec<BTreeMap<Column, Aggregate>> = vec![BTreeMap::new(); buckets];
+    let mut observed = vec![0; buckets];
+    let mut online = vec![0; buckets];
     let mut newest: Option<i64> = None;
     let mut statement = conn.prepare_cached(&sql)?;
     let mut rows = statement.query(params![from, step, end])?;
@@ -172,8 +212,11 @@ pub fn read(
         };
         let ts: i64 = row.get(1)?;
         newest = newest.max(Some(ts));
+        let count = |samples: Option<i64>| u32::try_from(samples.unwrap_or(0)).unwrap_or(u32::MAX);
+        observed[bucket] = count(row.get(2)?);
+        online[bucket] = count(row.get(3)?);
         for (index, &column) in columns.iter().enumerate() {
-            let at = 2 + index * 4;
+            let at = 4 + index * 4;
             let mut aggregate = Aggregate {
                 value: row.get(at)?,
                 min: row.get(at + 1)?,
@@ -204,6 +247,8 @@ pub fn read(
         last: newest.map(|ts| ts + slot_span - 5),
         series: data,
         markers: runs::markers(conn, from, end)?,
+        observed,
+        online,
     })
 }
 
@@ -457,6 +502,105 @@ mod tests {
         assert_eq!(data.series[0].values[bucket], Some(41.0));
         assert_eq!(data.markers.len(), 1);
         assert_eq!(data.markers[0].kind, MarkerKind::Start);
+    }
+
+    #[test]
+    fn every_bucket_counts_the_samples_taken_and_those_taken_online() {
+        use ServerState::{Crashed, Degraded, Online, Starting, Stopped};
+        let mut conn = memory();
+        let mut samples = Vec::new();
+        let mut slots = |offset: i64, states: &[ServerState]| {
+            for (slot, &state) in (0..).zip(states) {
+                samples.push(sample(T + offset + 5 * slot, state, &[]));
+            }
+        };
+        slots(0, &[Online; 6]);
+        slots(30, &[Starting, Starting, Online, Degraded, Online, Online]);
+        slots(60, &[Stopped; 6]);
+        slots(90, &[Crashed, Starting, Starting]);
+        store(&mut conn, &samples);
+
+        let data = read(&conn, Range::SixHours, &[Series::Players], T + 150).unwrap();
+
+        let bucket = usize::try_from((T - data.from) / 30).unwrap();
+        assert_eq!((data.observed.len(), data.online.len()), (720, 720));
+        assert_eq!(data.observed[bucket..bucket + 5], [6, 6, 6, 3, 0]);
+        assert_eq!(
+            data.online[bucket..bucket + 5],
+            [6, 4, 0, 0, 0],
+            "down while stopped and starting"
+        );
+        assert_eq!(data.observed[bucket - 1], 0, "Observer was not running");
+    }
+
+    #[test]
+    fn rolled_up_buckets_count_the_samples_behind_their_aggregates() {
+        let mut conn = memory();
+        let mut samples: Vec<_> = (0..12)
+            .map(|slot| sample(T + slot * 5, ServerState::Online, &[]))
+            .collect();
+        samples.extend((0..6).map(|slot| sample(T + 60 + slot * 5, ServerState::Starting, &[])));
+        store(&mut conn, &samples);
+        let tx = conn.transaction().unwrap();
+        rollups::compute(&tx, Tier::Minute, &[T, T + 60]).unwrap();
+        rollups::compute(&tx, Tier::Hour, &[T]).unwrap();
+        tx.commit().unwrap();
+
+        let week = read(&conn, Range::Week, &[Series::Players], T + 200).unwrap();
+        let month = read(&conn, Range::Month, &[Series::Players], T + 200).unwrap();
+
+        let bucket = usize::try_from((T - week.from) / 900).unwrap();
+        assert_eq!((week.observed[bucket], week.online[bucket]), (18, 12));
+        let bucket = usize::try_from((T - month.from) / 3600).unwrap();
+        assert_eq!((month.observed[bucket], month.online[bucket]), (18, 12));
+    }
+
+    #[test]
+    fn the_deeper_series_read_their_own_columns() {
+        let mut conn = memory();
+        store(
+            &mut conn,
+            &[
+                sample(
+                    T,
+                    ServerState::Online,
+                    &[
+                        (Column::FxsFaults, 1200.0),
+                        (Column::ThrMainCpu, 50.0),
+                        (Column::HostDiskMs, 0.5),
+                    ],
+                ),
+                sample(
+                    T + 5,
+                    ServerState::Online,
+                    &[
+                        (Column::FxsFaults, 300.0),
+                        (Column::ThrMainCpu, 70.0),
+                        (Column::HostDiskOps, 9.0),
+                    ],
+                ),
+            ],
+        );
+
+        let data = read(
+            &conn,
+            Range::SixHours,
+            &[
+                Series::FxsFaults,
+                Series::MainThreadCpu,
+                Series::HostDiskLatency,
+                Series::HostDiskTransfers,
+            ],
+            T + 10,
+        )
+        .unwrap();
+
+        let bucket = usize::try_from((T - data.from) / 30).unwrap();
+        let at = |series| values(&data, series)[bucket];
+        assert_eq!(at(Series::FxsFaults), Some(1500.0));
+        assert_eq!(at(Series::MainThreadCpu), Some(60.0));
+        assert_eq!(at(Series::HostDiskLatency), Some(0.5));
+        assert_eq!(at(Series::HostDiskTransfers), Some(9.0));
     }
 
     #[test]
