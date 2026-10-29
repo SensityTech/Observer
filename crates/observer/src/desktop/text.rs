@@ -57,6 +57,14 @@ pub const NOT_RUNNING: &str = "FXServer is not running.";
 pub const SERVER_STOPPING: &str = "FXServer is stopping.";
 pub const OBSERVER_STOPPING: &str = "Observer is stopping.";
 
+pub const LAUNCH_NOT_CONFIGURED: &str =
+    "FXServer has no launch settings yet. The owner saves them on the Server page.";
+pub const LAUNCH_FAILED: &str = "FXServer could not start. The console says why.";
+pub const STOPPING_REFUSAL: &str = "FXServer is stopping. Start it again once it has stopped.";
+pub const SHUTTING_DOWN: &str = "Observer is stopping, and FXServer with it.";
+pub const INTERNAL: &str = "Observer hit an internal error. Its log has the details.";
+pub const UNKNOWN_FAILURE: &str = "Something went wrong. Try again.";
+
 /// The panel's word for each state.
 pub fn state(state: ServerState) -> &'static str {
     match state {
@@ -75,9 +83,7 @@ pub fn state(state: ServerState) -> &'static str {
 pub fn launch_note(launch: LaunchReadiness) -> Option<&'static str> {
     match launch {
         LaunchReadiness::Ready => None,
-        LaunchReadiness::NotConfigured => {
-            Some("FXServer has no launch settings yet: the owner saves them on the Server page.")
-        }
+        LaunchReadiness::NotConfigured => Some(LAUNCH_NOT_CONFIGURED),
         LaunchReadiness::Invalid => Some(INVALID),
     }
 }
@@ -172,28 +178,24 @@ pub fn quit_body(players: Option<u64>) -> String {
     }
 }
 
-/// `Start failed. FXServer has no launch settings yet.`
+/// `Start failed. FXServer could not start. The console says why.`
 pub fn failed(action: &str, code: Option<ErrorCode>) -> String {
     format!("{action} failed. {}", refusal(code))
 }
 
-/// A refusal, from its code. `None` is a failure of Observer itself.
-pub fn refusal(code: Option<ErrorCode>) -> String {
+/// A refusal, from its code, in the panel's words (`errors` in `en.ts`). `None` is a failure of
+/// Observer itself; a code the window does not expect gets the panel's fallback, never its name.
+pub fn refusal(code: Option<ErrorCode>) -> &'static str {
     match code {
-        Some(ErrorCode::LaunchNotConfigured) => NOT_CONFIGURED.to_owned(),
-        Some(ErrorCode::InvalidLaunchSettings) => INVALID.to_owned(),
-        Some(ErrorCode::LaunchFailed) => "FXServer could not start: the console says why.".to_owned(),
-        Some(ErrorCode::ServerRunning) => RUNNING.to_owned(),
-        Some(ErrorCode::ServerNotRunning) => NOT_RUNNING.to_owned(),
-        Some(ErrorCode::ServerStopping) => SERVER_STOPPING.to_owned(),
-        Some(ErrorCode::ShuttingDown) => OBSERVER_STOPPING.to_owned(),
-        other => {
-            let name = other
-                .and_then(|code| serde_json::to_value(code).ok())
-                .and_then(|value| value.as_str().map(str::to_owned))
-                .unwrap_or_else(|| "internal".to_owned());
-            format!("Something went wrong: {name}.")
-        }
+        Some(ErrorCode::LaunchNotConfigured) => LAUNCH_NOT_CONFIGURED,
+        Some(ErrorCode::InvalidLaunchSettings) => INVALID,
+        Some(ErrorCode::LaunchFailed) => LAUNCH_FAILED,
+        Some(ErrorCode::ServerRunning) => RUNNING,
+        Some(ErrorCode::ServerNotRunning) => NOT_RUNNING,
+        Some(ErrorCode::ServerStopping) => STOPPING_REFUSAL,
+        Some(ErrorCode::ShuttingDown) => SHUTTING_DOWN,
+        None | Some(ErrorCode::Internal) => INTERNAL,
+        Some(_) => UNKNOWN_FAILURE,
     }
 }
 
@@ -348,7 +350,7 @@ mod tests {
         let cases = [
             (
                 ErrorCode::LaunchNotConfigured,
-                "FXServer has no launch settings yet.",
+                "FXServer has no launch settings yet. The owner saves them on the Server page.",
             ),
             (
                 ErrorCode::InvalidLaunchSettings,
@@ -356,21 +358,34 @@ mod tests {
             ),
             (
                 ErrorCode::LaunchFailed,
-                "FXServer could not start: the console says why.",
+                "FXServer could not start. The console says why.",
             ),
             (ErrorCode::ServerRunning, "FXServer is already running."),
             (ErrorCode::ServerNotRunning, "FXServer is not running."),
-            (ErrorCode::ServerStopping, "FXServer is stopping."),
-            (ErrorCode::ShuttingDown, "Observer is stopping."),
-            (ErrorCode::NotFound, "Something went wrong: not_found."),
+            (
+                ErrorCode::ServerStopping,
+                "FXServer is stopping. Start it again once it has stopped.",
+            ),
+            (
+                ErrorCode::ShuttingDown,
+                "Observer is stopping, and FXServer with it.",
+            ),
+            (
+                ErrorCode::Internal,
+                "Observer hit an internal error. Its log has the details.",
+            ),
+            (ErrorCode::NotFound, "Something went wrong. Try again."),
         ];
         for (code, sentence) in cases {
             assert_eq!(refusal(Some(code)), sentence, "{code:?}");
         }
-        assert_eq!(refusal(None), "Something went wrong: internal.");
         assert_eq!(
-            failed(START, Some(ErrorCode::LaunchNotConfigured)),
-            "Start failed. FXServer has no launch settings yet."
+            refusal(None),
+            "Observer hit an internal error. Its log has the details."
+        );
+        assert_eq!(
+            failed(START, Some(ErrorCode::LaunchFailed)),
+            "Start failed. FXServer could not start. The console says why."
         );
     }
 
@@ -415,6 +430,12 @@ mod tests {
             RUNNING,
             NOT_RUNNING,
             SERVER_STOPPING,
+            LAUNCH_NOT_CONFIGURED,
+            LAUNCH_FAILED,
+            STOPPING_REFUSAL,
+            SHUTTING_DOWN,
+            INTERNAL,
+            UNKNOWN_FAILURE,
             RESTART_TITLE,
             STOP_TITLE,
             KEEP_STOPPED_TITLE,

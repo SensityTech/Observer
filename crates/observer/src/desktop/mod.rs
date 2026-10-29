@@ -295,7 +295,11 @@ impl Shared {
                 Action::Restart => supervision.restart_local().await,
             };
             let refused = result.err().map(|error| {
-                if error.code().is_none() {
+                // The window shows a generic sentence for these: the log keeps what happened.
+                if matches!(
+                    text::refusal(error.code()),
+                    text::INTERNAL | text::UNKNOWN_FAILURE
+                ) {
                     warn!(%error, ?action, "the status window's request failed");
                 }
                 Outcome {
