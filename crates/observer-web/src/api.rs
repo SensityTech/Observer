@@ -2,6 +2,7 @@
 //! else adds routes to the API: what the table says is what the server enforces. Clippy holds
 //! everyone to it: `Router::route` and its kin are disallowed outside `add` and the `/api` mount.
 
+mod about;
 mod account;
 mod audit;
 mod auth;
@@ -96,6 +97,8 @@ pub(crate) fn routes() -> Vec<Route> {
         route(M::PUT,    "/servers/default/schedule/once",  control,       schedule::restart_once),
         route(M::DELETE, "/servers/default/schedule/once",  control,       schedule::cancel_once),
         route(M::GET,    "/metrics/series",             dashboard,    metrics::series),
+        route(M::GET,    "/about",                      Session,      about::about),
+        route(M::GET,    "/about/licences",             Session,      about::licences),
     ]
 }
 

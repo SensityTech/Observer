@@ -1,6 +1,6 @@
 import { useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
-import { ChevronsUpDown, LogOut, UserRound } from 'lucide-react';
+import { ChevronsUpDown, Info, LogOut, UserRound } from 'lucide-react';
 
 import { signOut } from '../api/auth';
 import type { Me } from '../api/generated/Me';
@@ -28,6 +28,14 @@ export function UserMenu({ me, onNavigate }: { me: Me; onNavigate: () => void })
                     onSelect: () => {
                         onNavigate();
                         void navigate({ to: '/account' });
+                    },
+                },
+                {
+                    label: t.account.about,
+                    icon: Info,
+                    onSelect: () => {
+                        onNavigate();
+                        void navigate({ to: '/about' });
                     },
                 },
                 {

@@ -352,6 +352,48 @@ async fn health_reports_the_running_version() {
 }
 
 #[tokio::test]
+async fn about_reports_this_build() {
+    let server = Server::new().await;
+    let owner = server.owner().await;
+
+    let reply = server.call(Method::GET, "/api/about", Some(&owner), None).await;
+
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.text);
+    let about = reply.json();
+    assert_eq!(about["version"], "0.0.0-test");
+    assert_eq!(about["commit"], Value::Null);
+    assert_eq!(about["os"], std::env::consts::OS);
+    assert_eq!(about["profile"], "debug");
+}
+
+/// The list names every crate and version Observer runs: only a signed-in user reads it, through
+/// the API, whether or not this build carries one.
+#[tokio::test]
+async fn the_licence_list_is_never_a_public_panel_file() {
+    let server = Server::new().await;
+    let owner = server.owner().await;
+
+    for session in [None, Some(&owner)] {
+        let reply = server
+            .call(Method::GET, "/about/licences.json", session, None)
+            .await;
+        assert_eq!(reply.status, StatusCode::NOT_FOUND);
+    }
+    let listed = server
+        .call(Method::GET, "/api/about/licences", Some(&owner), None)
+        .await;
+    if listed.status == StatusCode::OK {
+        assert!(listed.json()["packages"].is_array());
+    } else {
+        assert_eq!(listed.code(), "not_found");
+    }
+    assert_eq!(
+        server.get("/api/about/licences").await.status,
+        StatusCode::UNAUTHORIZED
+    );
+}
+
+#[tokio::test]
 async fn unknown_api_paths_are_not_found_rather_than_the_panel() {
     let server = Server::new().await;
 

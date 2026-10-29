@@ -13,6 +13,9 @@ use rust_embed::RustEmbed;
 struct Assets;
 
 const INDEX: &str = "index.html";
+/// What only a signed-in user reads: `GET /api/about/licences` serves it.
+const PRIVATE: &str = "about/";
+const LICENCES: &str = "about/licences.json";
 
 /// Vite fingerprints everything under `assets/`, so those files never change under a given name.
 const IMMUTABLE: &str = "public, max-age=31536000, immutable";
@@ -22,6 +25,9 @@ pub(crate) async fn serve(uri: Uri, headers: HeaderMap) -> Response {
         "" => INDEX,
         path => path,
     };
+    if path.starts_with(PRIVATE) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
 
     if let Some(response) = asset(path, &headers) {
         return response;
@@ -31,6 +37,11 @@ pub(crate) async fn serve(uri: Uri, headers: HeaderMap) -> Response {
         return StatusCode::NOT_FOUND.into_response();
     }
     asset(INDEX, &headers).unwrap_or_else(not_built)
+}
+
+/// The third-party licence list, when this build carries one.
+pub(crate) fn licences(request: &HeaderMap) -> Option<Response> {
+    asset(LICENCES, request)
 }
 
 fn asset(path: &str, request: &HeaderMap) -> Option<Response> {

@@ -35,6 +35,7 @@ const ServerPage = lazyCode(() =>
 );
 const UsersPage = lazyCode(() => import('./pages/UsersPage').then((page) => ({ default: page.UsersPage })));
 const AuditPage = lazyCode(() => import('./pages/AuditPage').then((page) => ({ default: page.AuditPage })));
+const AboutPage = lazyCode(() => import('./pages/AboutPage').then((page) => ({ default: page.AboutPage })));
 
 type RouterContext = { queryClient: QueryClient };
 
@@ -178,6 +179,13 @@ const accountRoute = createRoute({
     component: AccountPage,
 });
 
+// Any signed-in account may read it: only strangers are kept from the list of what Observer runs.
+const aboutRoute = createRoute({
+    getParentRoute: () => panelRoute,
+    path: '/about',
+    component: AboutPage,
+});
+
 const routeTree = rootRoute.addChildren([
     setupRoute,
     loginRoute,
@@ -190,6 +198,7 @@ const routeTree = rootRoute.addChildren([
         usersRoute,
         auditRoute,
         accountRoute,
+        aboutRoute,
     ]),
 ]);
 
