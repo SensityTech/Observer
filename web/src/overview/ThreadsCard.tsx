@@ -63,7 +63,10 @@ export function ThreadsCard() {
                     </thead>
                     <tbody>
                         {rows.map((row, index) => (
-                            <tr key={row.name ?? ''} className={table.row}>
+                            <tr
+                                key={row.name === null ? 'others' : `thread:${row.name}`}
+                                className={table.row}
+                            >
                                 <td className={table.td}>
                                     {row.name === null ? (
                                         <span className="text-ink-3">{t.threads.others}</span>

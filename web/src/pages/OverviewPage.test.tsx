@@ -119,6 +119,15 @@ const startedHour = (started: number | null): MetricsSeries => ({
     series: [{ series: 'treeStarted', values: values((index) => (index === 600 ? started : null)) }],
 });
 
+/** The last hour's threads of a process using `process`% of one core, by name. */
+const shares = (process: number, threads: [string, number][]): ThreadShares => ({
+    from: NOW - 3595,
+    to: NOW + 5,
+    measured: 720,
+    process,
+    threads: threads.map(([name, cpu]) => ({ name, group: name === '' ? 'other' : 'main', cpu })),
+});
+
 /** The page with Observer's health and the last hour already read, and a socket the test speaks for. */
 const page = async (
     lastHour: MetricsSeries = hour(),
@@ -424,6 +433,34 @@ describe('OverviewPage', () => {
             `${en.threads.unnamed}13.3%12%`,
             'UV loop: svNetw10%9%',
             `${en.threads.others}12.2%11%`,
+        ]);
+        live.stop();
+    });
+
+    it('should keep the unnamed threads and Others apart when the hour is read again', async () => {
+        const { client, live } = await page(hour(), {
+            threads: shares(10, [
+                ['UV loop: svMain', 6],
+                ['', 2],
+            ]),
+        });
+
+        await act(async () => {
+            client.setQueryData(
+                threadsQuery.queryKey,
+                shares(9, [
+                    ['', 4],
+                    ['UV loop: svMain', 3],
+                ]),
+            );
+            await new Promise((resolve) => setTimeout(resolve, 0));
+        });
+
+        const rows = [...card(en.threads.title).getAllByRole('row')].slice(1);
+        expect(rows.map((row) => row.textContent)).toEqual([
+            `${en.threads.unnamed}44.4%4%`,
+            'UV loop: svMain33.3%3%',
+            `${en.threads.others}22.2%2%`,
         ]);
         live.stop();
     });
