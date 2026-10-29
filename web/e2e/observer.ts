@@ -8,6 +8,7 @@ import {
     existsSync,
     mkdirSync,
     mkdtempSync,
+    rmSync,
     writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -124,20 +125,27 @@ export default async function setup() {
     process.env.E2E_BUILD = build;
     process.env.E2E_SERVER_DATA = serverData;
 
+    // Windows holds the databases and the fake's copy a moment after the process ends.
+    const removeDir = () => rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+
     return async () => {
         if (ran.exit === null && windows) {
             // No signal to send: the graceful stop is the console's or the window's, tested apart.
             child.kill();
+            await until(() => ran.exit !== null, Date.now() + patience);
+            removeDir();
             return;
         }
         if (ran.exit === null) {
             child.kill('SIGTERM');
             await until(() => ran.exit !== null, Date.now() + patience);
         }
+        // A run that went wrong keeps its folder to look into.
         if (ran.exit !== 0 || !output.includes('Observer stopped')) {
             throw new Error(
-                `Observer did not stop gracefully (exit ${ran.exit}); see e2e/results/observer.err`,
+                `Observer did not stop gracefully (exit ${ran.exit}); its folder ${dir} is kept, see e2e/results/observer.err`,
             );
         }
+        removeDir();
     };
 }
