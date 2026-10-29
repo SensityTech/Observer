@@ -367,6 +367,27 @@ describe('ArtifactsPage', () => {
         expect(queryByText(en.artifacts.available.started('37950'))).toBeNull();
     });
 
+    it('should name the file a failed validation found wrong, and what is wrong with it', async () => {
+        const job = STATUS.job ?? FIXTURE.job!;
+        const failed = (failure: unknown) =>
+            page({
+                ...STATUS,
+                job: {
+                    ...job,
+                    step: 'validate',
+                    state: 'failed',
+                    finishedAt: '2026-10-28T02:31:00Z',
+                    failure,
+                } as ArtifactsStatus['job'],
+            });
+
+        const loader = await failed({ code: 'layout', path: 'run.sh', problem: 'notExecutable' });
+        expect(loader.getByText(/Failed while validating: run\.sh is not executable\./)).toBeTruthy();
+        cleanup();
+        const escaping = await failed({ code: 'unsafeEntry', refusal: 'linkEscapes' });
+        expect(escaping.getByText(/the archive holds an entry that links outside the build\./)).toBeTruthy();
+    });
+
     it('should say beside a build in use why it cannot be deleted', async () => {
         await page({ ...STATUS, job: null });
 

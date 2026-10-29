@@ -595,6 +595,10 @@ function BuildCard({
     );
 }
 
+/** A code the catalog has words for; a newer Observer may send one it does not. */
+const known = <T extends object>(words: T, code: string): code is Extract<keyof T, string> =>
+    Object.hasOwn(words, code);
+
 const failureText = (
     t: ReturnType<typeof useI18n>['t'],
     failure: InstallFailure,
@@ -609,6 +613,14 @@ const failureText = (
                 bytes(failure.neededMib * 1024 * 1024),
                 bytes(failure.availableMib * 1024 * 1024),
             );
+        case 'layout':
+            return failure.path !== '' && known(words.layout, failure.problem)
+                ? words.layout[failure.problem](failure.path)
+                : words.failures.layout;
+        case 'unsafeEntry':
+            return known(words.refusals, failure.refusal)
+                ? words.unsafeEntry(words.refusals[failure.refusal])
+                : words.failures.unsafeEntry;
         default:
             return words.failures[failure.code];
     }
