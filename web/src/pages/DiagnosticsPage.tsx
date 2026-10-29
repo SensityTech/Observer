@@ -613,7 +613,9 @@ function ProcessRow({ process }: { process: TreeProcess }) {
     const clamped = useRef<HTMLSpanElement>(null);
     const alert = process.kind === 'shell';
     const line = process.commandLine;
-    // Whether two lines hide part of the command depends on the column's width, not on its length.
+    // Whether two lines hide part of the command depends on the column's width and the font, not on
+    // its length. The monospace font may arrive after the first measure: it widens the text without
+    // resizing its two lines, so its arrival measures again.
     useLayoutEffect(() => {
         const span = clamped.current;
         if (span === null || line === null || whole) {
@@ -621,12 +623,14 @@ function ProcessRow({ process }: { process: TreeProcess }) {
         }
         const measure = () => setHidden(span.scrollHeight > span.clientHeight);
         measure();
-        if (typeof ResizeObserver === 'undefined') {
-            return;
-        }
-        const resized = new ResizeObserver(measure);
-        resized.observe(span);
-        return () => resized.disconnect();
+        const fonts = 'fonts' in document ? document.fonts : null;
+        fonts?.addEventListener('loadingdone', measure);
+        const resized = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(measure);
+        resized?.observe(span);
+        return () => {
+            fonts?.removeEventListener('loadingdone', measure);
+            resized?.disconnect();
+        };
     }, [line, whole]);
     return (
         <tr className={alert ? 'bg-warning-soft [&:last-child>td]:border-b-0' : table.row}>

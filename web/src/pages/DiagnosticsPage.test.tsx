@@ -336,6 +336,34 @@ describe('DiagnosticsPage', () => {
         live.stop();
     });
 
+    it('should measure a command line again once the monospace font arrives', async () => {
+        const fonts = new EventTarget();
+        Object.defineProperty(document, 'fonts', { configurable: true, value: fonts });
+        let arrived = false;
+        const scroll = vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockImplementation(function (
+            this: HTMLElement,
+        ) {
+            return arrived ? height(60, 20).call(this) : 20;
+        });
+        const client = vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockImplementation(() => 20);
+        const { queryByRole, live } = await page(false, {
+            ...SNAPSHOT,
+            processes: [{ ...SHELL, commandLine: 'cmd.exe /c ping -n 300 127.0.0.1' }],
+        });
+        expect(queryByRole('button', { name: en.diagnostics.processes.more })).toBeNull();
+
+        arrived = true;
+        act(() => {
+            fonts.dispatchEvent(new Event('loadingdone'));
+        });
+
+        expect(queryByRole('button', { name: en.diagnostics.processes.more })).not.toBeNull();
+        scroll.mockRestore();
+        client.mockRestore();
+        Reflect.deleteProperty(document, 'fonts');
+        live.stop();
+    });
+
     it('should mark a shell as a security alert and follow the records as they change', async () => {
         const { getByText, say, live } = await page(false);
 
