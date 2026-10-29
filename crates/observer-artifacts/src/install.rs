@@ -392,8 +392,20 @@ pub(crate) fn remove_tree(tree: &Path) -> io::Result<()> {
 }
 
 /// Removes what earlier jobs left in a holding folder, a tree a scanner held while it was being
-/// removed or the download of an install that crashed, once it is older than `stale`.
+/// removed or the download of an install that crashed, once it is older than `stale`. A holding
+/// folder that is a link, a junction included, is left alone: what it leads to is not Observer's.
 pub(crate) fn sweep(holding: &Path, stale: Duration) {
+    match fs::symlink_metadata(holding) {
+        Ok(metadata) if metadata.is_dir() => {}
+        Ok(_) => {
+            tracing::warn!(
+                path = %holding.display(),
+                "a holding folder of the artifacts folder is a link or a file: nothing in it is removed"
+            );
+            return;
+        }
+        Err(_) => return,
+    }
     let Ok(entries) = fs::read_dir(holding) else {
         return;
     };
@@ -446,7 +458,7 @@ pub(crate) fn hex(bytes: &[u8]) -> String {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use sha2::{Digest, Sha256};

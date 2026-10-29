@@ -332,6 +332,50 @@ mod tests {
         assert!(build.join("FXServer.exe").exists());
     }
 
+    /// A folder outside the artifacts folder, with a file and a folder a day old.
+    fn elsewhere(dir: &Path) -> PathBuf {
+        let folder = dir.join("photos");
+        fs::create_dir_all(folder.join("2026")).unwrap();
+        fs::write(folder.join("notes.txt"), b"keep me").unwrap();
+        let two_days_ago = std::time::SystemTime::now() - Duration::from_hours(48);
+        for old in [folder.join("notes.txt"), folder.join("2026")] {
+            crate::install::tests::set_modified(&old, two_days_ago);
+        }
+        folder
+    }
+
+    /// A link to a folder any account may make: a symbolic link on Unix, a junction on Windows.
+    fn link_folder(target: &Path, link: &Path) {
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(target, link).unwrap();
+        #[cfg(windows)]
+        {
+            let made = std::process::Command::new("cmd")
+                .args(["/C", "mklink", "/J"])
+                .arg(link)
+                .arg(target)
+                .output()
+                .unwrap();
+            assert!(made.status.success(), "{made:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn the_start_sweep_leaves_alone_what_a_trash_or_staging_link_leads_to() {
+        for holding in [TRASH, STAGING] {
+            let dir = tempfile::tempdir().unwrap();
+            let root = dir.path().join("artifacts");
+            fs::create_dir_all(&root).unwrap();
+            let target = elsewhere(dir.path());
+            link_folder(&target, &root.join(holding));
+
+            Installer::new(crate::Http::new().unwrap(), root).sweep().await;
+
+            assert!(target.join("notes.txt").exists(), "{holding}");
+            assert!(target.join("2026").exists(), "{holding}");
+        }
+    }
+
     #[cfg(unix)]
     #[test]
     fn a_link_in_place_of_a_build_is_broken_and_its_deletion_leaves_the_target() {
