@@ -37,6 +37,7 @@ export const TILE_SERIES = [
     'hitchesMain',
     'hitchMax',
     'fxsCpu',
+    'fxsKernel',
     'fxsPrivate',
     'hostCpu',
     'observerWorkingSet',
@@ -70,7 +71,7 @@ export function Tiles() {
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
             <PlayersTile latest={latest} trend={trend} />
             <TickTile latest={latest} trend={trend} hour={merged} />
-            <CpuTile latest={latest} />
+            <CpuTile latest={latest} trend={trend} />
             <MemoryTile latest={latest} trend={trend} growth={growth.data ?? null} />
             <HostTile latest={latest} trend={trend} />
             <ObserverTile latest={latest} trend={trend} />
@@ -240,14 +241,30 @@ function TickTile({ latest, trend, hour }: TileProps & { hour: MetricsSeries | n
     );
 }
 
-function CpuTile({ latest }: Pick<TileProps, 'latest'>) {
+/**
+ * The kernel's part of FXServer's CPU over the slots that measured both, `null` at 0. One slot is
+ * too short to split: Windows counts CPU in 15.6 ms ticks, a few of them at a low load.
+ */
+const kernelPart = (cpu: readonly (number | null)[], kernel: readonly (number | null)[]) => {
+    let used = 0;
+    let inKernel = 0;
+    cpu.forEach((value, index) => {
+        const part = kernel[index] ?? null;
+        if (value !== null && part !== null) {
+            used += value;
+            inKernel += part;
+        }
+    });
+    return used > 0 ? Math.min(1, inKernel / used) : null;
+};
+
+function CpuTile({ latest, trend }: TileProps) {
     const { t, format, value, shown } = useValues(latest);
     const cores = latest?.cores ?? null;
     const cpu = value('fxsCpu');
-    const kernel = value('fxsKernel');
     const share = (series: Series) => shown(series, format.percent);
-    // The split of the latest sample; nothing to split at 0.
-    const kernelShare = cpu === null || kernel === null || cpu <= 0 ? null : Math.min(1, kernel / cpu);
+    // Over the last hour, while the server runs.
+    const kernelShare = cpu === null ? null : kernelPart(trend('fxsCpu'), trend('fxsKernel'));
     return (
         <Tile
             icon={Cpu}

@@ -35,7 +35,7 @@ const NOW = Math.floor(Date.now() / 5000) * 5;
 
 const values = (at: (index: number) => number | null) => Array.from({ length: 720 }, (_, index) => at(index));
 
-/** An hour with players in its last slots and a hitch ten minutes ago. */
+/** An hour with players in its last slots, a hitch ten minutes ago and a quarter of the CPU in the kernel. */
 const hour = (): MetricsSeries => {
     return {
         range: '1h',
@@ -50,6 +50,7 @@ const hour = (): MetricsSeries => {
                 if (series === 'leaves') return index === 701 ? 9 : 0;
                 if (series === 'hitchesMain') return index > 500 ? Number(index === 600) : null;
                 if (series === 'hitchMax') return index === 600 ? 412 : null;
+                if (series === 'fxsKernel') return index > 700 ? (10 + (index % 3)) / 4 : null;
                 return index > 700 ? 10 + (index % 3) : null;
             }),
         })),
@@ -297,7 +298,13 @@ describe('OverviewPage', () => {
     });
 
     it('should leave the CPU split empty and its keys unknown without the kernel time', async () => {
-        const { say, live } = await page();
+        const unsplit = hour();
+        const { say, live } = await page({
+            ...unsplit,
+            series: unsplit.series.map((data) =>
+                data.series === 'fxsKernel' ? { ...data, values: values(() => null) } : data,
+            ),
+        });
         const { fxsKernel: _, ...withoutKernel } = SAMPLE.values;
         say({
             type: 'snapshot',
@@ -309,6 +316,28 @@ describe('OverviewPage', () => {
         expect(cpu.getByText('user n/a')).not.toBeNull();
         expect(cpu.getByText('kernel n/a')).not.toBeNull();
         expect(document.querySelector('.bg-surface-3.rounded-pill')).not.toBeNull();
+        live.stop();
+    });
+
+    it('should split the CPU over the hour, as one slot holds too few clock ticks to split', async () => {
+        const ticks: MetricsSeries = {
+            ...hour(),
+            series: TILE_SERIES.map((series) => ({
+                series,
+                values: values((index) => {
+                    if (series === 'fxsCpu') return index >= 710 ? 1 : null;
+                    if (series === 'fxsKernel') return index >= 710 ? Number(index < 714) : null;
+                    return null;
+                }),
+            })),
+        };
+        const { say, live } = await page(ticks);
+        const allKernel = { ...SAMPLE.values, fxsCpu: 1, fxsKernel: 1 };
+        say({ type: 'snapshot', topic: 'metrics.live', data: { latest: { ...SAMPLE, values: allKernel } } });
+
+        const cpu = tile(en.tiles.cpu.label);
+        expect(cpu.getByText('user 50%')).not.toBeNull();
+        expect(cpu.getByText('kernel 50%')).not.toBeNull();
         live.stop();
     });
 
