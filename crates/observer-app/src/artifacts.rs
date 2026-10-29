@@ -25,7 +25,7 @@ use observer_domain::artifacts::{
     ArtifactSettingsIssue, ArtifactSettingsProblem, ArtifactsStatus, BUILDS, BuildPlatform, CatalogView,
     CleanupBuild, CleanupPreview, CleanupResult, DiskSpace, DownloadProgress, EntryProgress, HealthyBuild,
     Job, JobKind, JobState, JobStep, JobWarning, KeptBuild, MAX_BRANCHES, MAX_KEEP_BUILDS, NoticeKind,
-    PendingBuild, Protection, SelectBuild, SkipReason, SkippedBuild,
+    NoticeReason, PendingBuild, Protection, SelectBuild, SkipReason, SkippedBuild,
 };
 use observer_domain::audit::{ActorKind, AuditAction, Outcome};
 use observer_domain::error::{ApiError, ErrorCode};
@@ -1209,74 +1209,88 @@ impl Driver {
                 .await
             }
             Verdict::Failed { build, from, reason } => {
-                let valid = from.is_some_and(|from| self.health(from) == Some(Ok(())));
-                let target = probation::rollback_target(
-                    self.settings.auto_rollback,
-                    from,
-                    valid,
-                    self.state.highest_run,
-                );
-                match target {
-                    Err(kept) => {
-                        warn!(
-                            build,
-                            ?reason,
-                            ?kept,
-                            "a build failed its probation and stays selected"
-                        );
-                        self.change(move |tx, state| {
-                            state.probation = None;
-                            state.notice = Some(ArtifactNotice {
-                                kind: NoticeKind::ProbationFailed,
-                                build,
-                                other: None,
-                                reason: kept.reason(),
-                                at: now,
-                            });
-                            system(AuditAction::ProbationFailed)
-                                .outcome(Outcome::Failure)
-                                .details(json!({ "build": build, "reason": reason.reason(), "why": kept.reason() }))
-                                .write(tx, now)?;
-                            Ok(())
-                        })
-                        .await
-                    }
+                self.probation_failed(build, from, reason, generation, still_running)
+                    .await
+            }
+        }
+    }
+
+    /// Goes back to the last healthy build when it may, and says why when it does not.
+    async fn probation_failed(
+        &mut self,
+        build: u32,
+        from: Option<u32>,
+        reason: probation::Failure,
+        generation: Option<u32>,
+        still_running: bool,
+    ) -> Result<(), Error> {
+        let now = self.clock.now();
+        let valid = from.is_some_and(|from| self.health(from) == Some(Ok(())));
+        let target =
+            probation::rollback_target(self.settings.auto_rollback, from, valid, self.state.highest_run);
+        let failure = self
+            .change(move |tx, state| {
+                state.probation = None;
+                let (kept, other) = match target {
+                    // Chosen while the build was on probation, so already handed over: the
+                    // supervisor's recovery starts it, and nothing goes back.
+                    _ if state.selected != Some(build) => (NoticeReason::Replaced, state.selected),
+                    Err(kept) => (kept.reason(), None),
                     Ok(to) => {
-                        warn!(
+                        state.selected = Some(to);
+                        state.notice = Some(ArtifactNotice {
+                            kind: NoticeKind::RolledBack,
                             build,
-                            ?reason,
-                            to,
-                            "a build failed its probation: going back to the last healthy one"
-                        );
-                        self.change(move |tx, state| {
-                            state.probation = None;
-                            state.selected = Some(to);
-                            state.pending = None;
-                            state.notice = Some(ArtifactNotice {
-                                kind: NoticeKind::RolledBack,
-                                build,
-                                other: Some(to),
-                                reason: reason.reason(),
-                                at: now,
-                            });
-                            system(AuditAction::BuildRolledBack)
-                                .outcome(Outcome::Failure)
-                                .details(json!({ "from": build, "to": to, "reason": reason.reason() }))
-                                .write(tx, now)?;
-                            Ok(())
-                        })
-                        .await?;
-                        self.servers.launch_changed();
-                        if still_running {
-                            self.rollback_after = generation;
-                        } else {
-                            self.start_last_healthy().await;
-                        }
-                        Ok(())
+                            other: Some(to),
+                            reason: reason.reason(),
+                            at: now,
+                        });
+                        system(AuditAction::BuildRolledBack)
+                            .outcome(Outcome::Failure)
+                            .details(json!({ "from": build, "to": to, "reason": reason.reason() }))
+                            .write(tx, now)?;
+                        return Ok(Fallback::RolledBack(to));
                     }
+                };
+                state.notice = Some(ArtifactNotice {
+                    kind: NoticeKind::ProbationFailed,
+                    build,
+                    other,
+                    reason: kept,
+                    at: now,
+                });
+                system(AuditAction::ProbationFailed)
+                    .outcome(Outcome::Failure)
+                    .details(json!({ "build": build, "reason": reason.reason(), "why": kept }))
+                    .write(tx, now)?;
+                Ok(Fallback::Kept(kept))
+            })
+            .await?;
+        match failure {
+            Fallback::Kept(why) => {
+                warn!(
+                    build,
+                    ?reason,
+                    ?why,
+                    "a build failed its probation: nothing goes back"
+                );
+            }
+            Fallback::RolledBack(to) => {
+                warn!(
+                    build,
+                    ?reason,
+                    to,
+                    "a build failed its probation: going back to the last healthy one"
+                );
+                self.servers.launch_changed();
+                if still_running {
+                    self.rollback_after = generation;
+                } else {
+                    self.start_last_healthy().await;
                 }
             }
         }
+        Ok(())
     }
 
     async fn start_last_healthy(&mut self) {
@@ -1507,6 +1521,14 @@ enum Removal {
     Failed(Error),
 }
 
+/// What a failed probation led to.
+enum Fallback {
+    /// Nothing went back, for this reason.
+    Kept(NoticeReason),
+    /// The last healthy build is selected again.
+    RolledBack(u32),
+}
+
 fn system(action: AuditAction) -> Record {
     Record::operator(ActorKind::System, action).target(Servers::DEFAULT)
 }
@@ -1685,9 +1707,9 @@ pub(crate) fn promote_pending(
         }
     } else {
         let reason = if std::fs::symlink_metadata(&folder).is_err() {
-            observer_domain::artifacts::NoticeReason::NotInstalled
+            NoticeReason::NotInstalled
         } else {
-            observer_domain::artifacts::NoticeReason::Broken
+            NoticeReason::Broken
         };
         next.notice = Some(ArtifactNotice {
             kind: NoticeKind::PendingDropped,

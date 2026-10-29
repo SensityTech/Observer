@@ -386,7 +386,7 @@ const noticeText = (t: ReturnType<typeof useI18n>['t'], notice: ArtifactNotice) 
         case 'rolledBack':
             return words.rolledBack(String(notice.other ?? ''), build, notice.reason);
         case 'probationFailed':
-            return words.probationFailed(build, notice.reason);
+            return words.probationFailed(build, notice.reason, String(notice.other ?? ''));
         case 'pendingDropped':
             return words.pendingDropped(build, notice.reason);
     }

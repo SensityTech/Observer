@@ -229,18 +229,20 @@ export const en = {
         notices: {
             rolledBack: (to: string, from: string, reason: NoticeReason) =>
                 `FXServer went back to build ${to}: ${from} ${reason === 'hung' ? 'stopped answering' : 'crashed'} during its probation.`,
-            probationFailed: (build: string, why: NoticeReason) =>
-                `Build ${build} failed its probation and FXServer kept it: ${
-                    {
-                        disabled: 'automatic return is off.',
-                        noHealthyBuild: 'no healthy build to go back to.',
-                        broken: 'the last healthy build is broken.',
-                        kvp: 'going back would cross build 6449.',
-                        crashed: 'it crashed.',
-                        hung: 'it stopped answering.',
-                        notInstalled: 'the last healthy build is gone.',
-                    }[why]
-                }`,
+            probationFailed: (build: string, why: NoticeReason, other: string) =>
+                why === 'replaced'
+                    ? `Build ${build} failed its probation. Build ${other}, chosen since, starts in its place.`
+                    : `Build ${build} failed its probation and FXServer kept it: ${
+                          {
+                              disabled: 'automatic return is off.',
+                              noHealthyBuild: 'no healthy build to go back to.',
+                              broken: 'the last healthy build is broken.',
+                              kvp: 'going back would cross build 6449.',
+                              crashed: 'it crashed.',
+                              hung: 'it stopped answering.',
+                              notInstalled: 'the last healthy build is gone.',
+                          }[why]
+                      }`,
             pendingDropped: (build: string, reason: NoticeReason) =>
                 `Build ${build} was not applied at the scheduled restart: ${reason === 'notInstalled' ? 'it was deleted.' : 'it is broken.'}`,
             legacy: 'FXServer ran from a folder of yours until this version. Observer now runs builds from its data folder: import it to keep using it.',
@@ -1275,6 +1277,7 @@ export const en = {
             broken: 'broken',
             kvp: 'would cross build 6449',
             notInstalled: 'deleted',
+            replaced: 'another build chosen since',
             unreachable: 'Cfx.re unreachable',
             httpStatus: 'HTTP error',
             archiveTooLarge: 'archive too large',

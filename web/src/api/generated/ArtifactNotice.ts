@@ -8,6 +8,6 @@ import type { NoticeReason } from "./NoticeReason";
  */
 export type ArtifactNotice = { kind: NoticeKind, build: number, 
 /**
- * The build FXServer went back to.
+ * The build FXServer went back to, or the one chosen since that starts next.
  */
 other: number | null, reason: NoticeReason, at: string, };

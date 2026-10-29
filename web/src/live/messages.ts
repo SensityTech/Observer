@@ -210,6 +210,7 @@ const NOTICE_REASONS = {
     broken: true,
     kvp: true,
     notInstalled: true,
+    replaced: true,
 } satisfies Record<NoticeReason, true>;
 
 const JOB_KINDS = { install: true, import: true } satisfies Record<JobKind, true>;

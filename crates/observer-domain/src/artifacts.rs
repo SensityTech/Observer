@@ -156,7 +156,7 @@ pub struct Probation {
 pub struct ArtifactNotice {
     pub kind: NoticeKind,
     pub build: u32,
-    /// The build FXServer went back to.
+    /// The build FXServer went back to, or the one chosen since that starts next.
     pub other: Option<u32>,
     pub reason: NoticeReason,
     pub at: Timestamp,
@@ -203,10 +203,12 @@ pub enum NoticeReason {
     /// Going back would cross the KVP build.
     Kvp,
     NotInstalled,
+    /// Another build was chosen while the failed one was on probation: that one starts next.
+    Replaced,
 }
 
 impl NoticeReason {
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 8] = [
         Self::Crashed,
         Self::Hung,
         Self::Disabled,
@@ -214,6 +216,7 @@ impl NoticeReason {
         Self::Broken,
         Self::Kvp,
         Self::NotInstalled,
+        Self::Replaced,
     ];
 
     pub const fn as_str(self) -> &'static str {
@@ -225,6 +228,7 @@ impl NoticeReason {
             Self::Broken => "broken",
             Self::Kvp => "kvp",
             Self::NotInstalled => "notInstalled",
+            Self::Replaced => "replaced",
         }
     }
 

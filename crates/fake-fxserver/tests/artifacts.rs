@@ -38,6 +38,8 @@ use tokio::time::timeout;
 const WAIT: Duration = Duration::from_secs(30);
 const HEALTHY: u32 = 35245;
 const NEW: u32 = 37900;
+/// A third build, chosen while 37900 is on probation.
+const OTHER: u32 = 37950;
 const SELECTION_ROUTE: (&str, &str) = ("PUT", "/api/servers/default/artifacts/selection");
 
 /// Ports of their own, apart from the other test binaries'.
@@ -436,6 +438,79 @@ async fn a_build_that_crashes_in_probation_is_rolled_back_and_the_last_healthy_o
     assert!(
         lab.root().join(NEW.to_string()).exists(),
         "a failed build is never deleted"
+    );
+    lab.stop().await;
+}
+
+/// Chosen for the next start while 37900 is on probation: that choice stands when 37900 crashes.
+#[tokio::test]
+async fn a_build_chosen_during_a_probation_starts_when_the_build_on_probation_crashes() {
+    let mut lab = Lab::new(Duration::from_mins(5), "set fake_crash_after_ms 4000").await;
+    install_fake(&lab.root(), OTHER, &format!("set fake_build {OTHER}\n"));
+    // Installed behind Observer's back: a look at the catalog scans the folder again.
+    lab.artifacts.catalog(false).await.unwrap();
+    lab.supervision.start_server(&lab.owner).await.unwrap();
+    lab.online_on(HEALTHY).await;
+    lab.select(NEW, ApplyMode::Now).await;
+    lab.online_on(NEW).await;
+
+    let chosen = lab.select(OTHER, ApplyMode::NextStart).await;
+    let after = lab.builds_until(|status| status.notice.is_some()).await;
+    let online = lab.online_on(OTHER).await;
+
+    assert_eq!(chosen.selected, Some(OTHER));
+    assert_eq!(after.selected, Some(OTHER));
+    assert_eq!(online.state, ServerState::Online);
+    let notice = after.notice.unwrap();
+    assert_eq!(
+        (notice.kind, notice.build, notice.other, notice.reason),
+        (
+            NoticeKind::ProbationFailed,
+            NEW,
+            Some(OTHER),
+            NoticeReason::Replaced
+        )
+    );
+    assert_eq!(lab.audited(AuditAction::BuildRolledBack).await.len(), 0);
+    let failed = lab.audited(AuditAction::ProbationFailed).await;
+    assert_eq!(
+        failed[0].details,
+        json!({ "build": NEW, "reason": "crashed", "why": "replaced" })
+    );
+    lab.stop().await;
+}
+
+/// A build waiting for the scheduled restart still waits once FXServer went back to the last
+/// healthy build.
+#[tokio::test]
+async fn a_pending_build_outlives_the_return_to_the_last_healthy_build() {
+    let mut lab = Lab::new(Duration::from_mins(5), "set fake_crash_after_ms 4000").await;
+    install_fake(&lab.root(), OTHER, &format!("set fake_build {OTHER}\n"));
+    // Installed behind Observer's back: a look at the catalog scans the folder again.
+    lab.artifacts.catalog(false).await.unwrap();
+    lab.supervision.start_server(&lab.owner).await.unwrap();
+    lab.online_on(HEALTHY).await;
+    lab.select(NEW, ApplyMode::Now).await;
+    lab.online_on(NEW).await;
+    let one_off = OneOffRequest {
+        in_minutes: Some(30),
+        at: None,
+    };
+    lab.schedule.restart_once(&lab.owner, one_off).await.unwrap();
+    // The artifacts task sees the restart ahead through the schedule's status.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    let pending = lab.select(OTHER, ApplyMode::ScheduledRestart).await;
+    let after = lab
+        .builds_until(|status| status.notice.is_some() && status.running == Some(HEALTHY))
+        .await;
+
+    assert_eq!(pending.pending.map(|pending| pending.build), Some(OTHER));
+    assert_eq!(after.selected, Some(HEALTHY));
+    assert_eq!(after.pending.map(|pending| pending.build), Some(OTHER));
+    assert_eq!(
+        after.notice.map(|notice| notice.kind),
+        Some(NoticeKind::RolledBack)
     );
     lab.stop().await;
 }

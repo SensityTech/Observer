@@ -623,10 +623,7 @@ async fn a_pending_build_deleted_since_is_dropped_at_the_scheduled_restart_with_
     assert_eq!(state.pending, None);
     let notice = state.notice.unwrap();
     assert_eq!(notice.kind, NoticeKind::PendingDropped);
-    assert_eq!(
-        notice.reason,
-        observer_domain::artifacts::NoticeReason::NotInstalled
-    );
+    assert_eq!(notice.reason, NoticeReason::NotInstalled);
     let dropped = lab.entries(AuditAction::PendingBuildDropped).await;
     assert_eq!(dropped[0].outcome, Outcome::Failure);
     assert_eq!(
