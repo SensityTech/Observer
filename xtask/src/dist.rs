@@ -142,8 +142,15 @@ fn arch(target: &str) -> &str {
 }
 
 /// The short commit, marked when tracked files differ from it, and its date: never the time of
-/// the build, so that one commit always builds the same strings.
+/// the build, so that one commit always builds the same strings. A tree without git, such as an
+/// exported archive, is named by `OBSERVER_COMMIT` and `OBSERVER_COMMIT_DATE`.
 fn source() -> anyhow::Result<Source> {
+    if let (Ok(commit), Ok(date)) = (
+        std::env::var("OBSERVER_COMMIT"),
+        std::env::var("OBSERVER_COMMIT_DATE"),
+    ) {
+        return Ok(Source { commit, date });
+    }
     let git = |args: &[&str]| -> anyhow::Result<String> {
         let output = Command::new("git")
             .args(args)
