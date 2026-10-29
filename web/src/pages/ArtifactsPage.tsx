@@ -182,12 +182,7 @@ export function ArtifactsPage() {
                             }}
                         />
                     )}
-                    <InstalledCard
-                        status={status}
-                        catalog={catalog.data ?? null}
-                        onOpen={setOpen}
-                        onOutcome={setOutcome}
-                    />
+                    <InstalledCard status={status} catalog={catalog.data ?? null} onOpen={setOpen} />
                     <AvailableCard
                         status={status}
                         catalog={catalog}
@@ -277,7 +272,10 @@ function Card({
     );
 }
 
-/** A control the account cannot use, or that does nothing now, stays visible and says why. */
+/**
+ * A control the account cannot use, or that does nothing now, stays visible and says why: in its
+ * title, and pressed, in a line beside it, which a phone shows where the finger is.
+ */
 function Action({
     label,
     icon,
@@ -286,7 +284,6 @@ function Action({
     size,
     pending,
     onPress,
-    onBlocked,
 }: {
     label: string;
     icon?: LucideIcon;
@@ -295,24 +292,39 @@ function Action({
     size?: 'md' | 'sm';
     pending?: boolean;
     onPress: () => void;
-    onBlocked: (reason: string) => void;
 }) {
+    const id = useId();
+    // The reason pressed for, so that a control blocked again later for another one starts quiet.
+    const [explained, setExplained] = useState<string | null>(null);
+    const shown = reason !== null && explained === reason;
     return (
-        <Button
-            icon={icon}
-            tone={tone}
-            size={size}
-            pending={pending}
-            aria-disabled={reason !== null || undefined}
-            title={reason ?? undefined}
-            className={cn(
-                'max-md:w-full',
-                reason !== null && 'cursor-not-allowed opacity-45 shadow-none active:translate-y-0',
-            )}
-            onClick={() => (reason === null ? onPress() : onBlocked(reason))}
-        >
-            {label}
-        </Button>
+        <span className="inline-flex flex-col items-end gap-1 max-md:w-full max-md:items-stretch">
+            <Button
+                icon={icon}
+                tone={tone}
+                size={size}
+                pending={pending}
+                aria-disabled={reason !== null || undefined}
+                aria-describedby={shown ? id : undefined}
+                title={reason ?? undefined}
+                className={cn(
+                    'max-md:w-full',
+                    reason !== null && 'cursor-not-allowed opacity-45 shadow-none active:translate-y-0',
+                )}
+                onClick={() => (reason === null ? onPress() : setExplained(reason))}
+            >
+                {label}
+            </Button>
+            <output
+                id={id}
+                className={cn(
+                    'max-w-64 text-right text-small text-ink-2 max-md:max-w-none max-md:text-left',
+                    !shown && 'sr-only',
+                )}
+            >
+                {shown ? reason : ''}
+            </output>
+        </span>
     );
 }
 
@@ -498,7 +510,6 @@ function BuildCard({
                                 pending={cancel.isPending}
                                 reason={canManage ? null : t.artifacts.installed.notPermitted}
                                 onPress={() => cancel.mutate()}
-                                onBlocked={(reason) => onOutcome({ tone: 'warning', message: reason })}
                             />
                         }
                     />
@@ -676,7 +687,6 @@ export function JobCard({
                                 pending={cancel.isPending || job.cancelRequested}
                                 reason={cancelReason}
                                 onPress={() => cancel.mutate()}
-                                onBlocked={(reason) => onOutcome({ tone: 'warning', message: reason })}
                             />
                         </div>
                     </>
@@ -737,19 +747,16 @@ function InstalledCard({
     status,
     catalog,
     onOpen,
-    onOutcome,
 }: {
     status: ArtifactsStatus;
     catalog: CatalogView | null;
     onOpen: (open: Open) => void;
-    onOutcome: (outcome: Outcome) => void;
 }) {
     const { t, format } = useI18n();
     const me = useMe();
     const id = useId();
     const words = t.artifacts.installed;
     const canManage = allows(me, Permission.ArtifactsManage);
-    const blocked = (reason: string) => onOutcome({ tone: 'warning', message: reason });
     return (
         <Card
             id={id}
@@ -764,7 +771,6 @@ function InstalledCard({
                     tone="ghost"
                     reason={me.isOwner ? null : words.ownerOnly}
                     onPress={() => onOpen({ kind: 'import' })}
-                    onBlocked={blocked}
                 />
             }
         >
@@ -854,7 +860,6 @@ function InstalledCard({
                                                     onPress={() =>
                                                         onOpen({ kind: 'use', build: build.build })
                                                     }
-                                                    onBlocked={blocked}
                                                 />
                                                 <Action
                                                     label={words.delete}
@@ -865,7 +870,6 @@ function InstalledCard({
                                                     onPress={() =>
                                                         onOpen({ kind: 'delete', build: build.build })
                                                     }
-                                                    onBlocked={blocked}
                                                 />
                                             </div>
                                         </td>
@@ -884,7 +888,6 @@ function InstalledCard({
                     icon={Trash2}
                     reason={canManage ? null : words.notPermitted}
                     onPress={() => onOpen({ kind: 'cleanup' })}
-                    onBlocked={blocked}
                 />
             </div>
         </Card>
@@ -1129,9 +1132,6 @@ function AvailableCard({
                                                     size="sm"
                                                     reason={reason}
                                                     onPress={() => onInstall(entry)}
-                                                    onBlocked={(blocked) =>
-                                                        onOutcome({ tone: 'warning', message: blocked })
-                                                    }
                                                 />
                                             )}
                                         </td>

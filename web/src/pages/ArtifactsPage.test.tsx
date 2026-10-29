@@ -273,19 +273,17 @@ describe('ArtifactsPage', () => {
         expect(confirm.disabled).toBe(false);
     });
 
-    it('should say why a build in use cannot be deleted', async () => {
-        const { getAllByRole } = await page({ ...STATUS, job: null });
+    it('should say beside a build in use why it cannot be deleted', async () => {
+        await page({ ...STATUS, job: null });
 
         const remove = within(row(37900)).getByRole('button', { name: en.artifacts.installed.delete });
+        expect(within(row(37900)).queryByText(en.artifacts.installed.protectedBy.selected)).toBeNull();
         fireEvent.click(remove);
 
         expect(remove.getAttribute('aria-disabled')).toBe('true');
         expect(remove.getAttribute('title')).toBe(en.artifacts.installed.protectedBy.selected);
-        expect(
-            getAllByRole('alert').some(
-                (alert) => alert.textContent === en.artifacts.installed.protectedBy.selected,
-            ),
-        ).toBe(true);
+        const reason = within(row(37900)).getByText(en.artifacts.installed.protectedBy.selected);
+        expect(remove.getAttribute('aria-describedby')).toBe(reason.id);
     });
 
     it('should list in the cleanup what it removes and what it frees', async () => {
