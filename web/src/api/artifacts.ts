@@ -76,9 +76,13 @@ export const protectionsOf = (status: ArtifactsStatus, build: number): Protectio
         .filter(([, protectedBuild]) => protectedBuild === build)
         .map(([reason]) => reason);
 
-/** Going back this far after a newer build ran needs the number typed. */
-export const needsKvpConfirmation = (status: ArtifactsStatus, build: number) =>
-    build < KVP_BUILD && (status.highestRun ?? 0) >= KVP_BUILD;
+/**
+ * Going back this far after a newer build ran needs the number typed. At the scheduled restart the
+ * selected build counts as run, as FXServer runs it first when it starts before then.
+ */
+export const needsKvpConfirmation = (status: ArtifactsStatus, build: number, mode: ApplyMode) =>
+    build < KVP_BUILD &&
+    Math.max(status.highestRun ?? 0, mode === 'scheduledRestart' ? (status.selected ?? 0) : 0) >= KVP_BUILD;
 
 /**
  * How the switch dialog applies a build unless the user picks otherwise: at the scheduled restart

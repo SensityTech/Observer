@@ -50,9 +50,13 @@ pub(crate) fn decide(request: SelectBuild, context: &Context) -> Result<Change, 
     if context.end_of_life && !request.allow_end_of_life {
         return Err(ErrorCode::EndOfLife.into());
     }
-    if let Some(highest) = context
-        .highest_run
-        .filter(|highest| build < KVP_BUILD && *highest >= KVP_BUILD)
+    // A build waiting for the scheduled restart comes after the selected one whenever FXServer
+    // starts before it, after a crash or by hand: the selected build counts as run.
+    let ran = match request.apply {
+        ApplyMode::ScheduledRestart => context.highest_run.max(context.selected),
+        ApplyMode::Now | ApplyMode::NextStart => context.highest_run,
+    };
+    if let Some(highest) = ran.filter(|highest| build < KVP_BUILD && *highest >= KVP_BUILD)
         && !request.confirm_kvp_rollback
     {
         return Err(ApiError::new(ErrorCode::KvpRollback).with("highestRun", highest));
@@ -249,6 +253,32 @@ mod tests {
         assert!(decide(request(6449, ApplyMode::NextStart), &after_6449).is_ok());
         assert!(decide(request(6448, ApplyMode::NextStart), &before).is_ok());
         assert!(decide(request(6448, ApplyMode::NextStart), &nothing_ran).is_ok());
+    }
+
+    #[test]
+    fn a_build_pending_below_6449_needs_the_confirmation_when_the_selected_one_is_past_it() {
+        let not_run_yet = Context {
+            selected: Some(7000),
+            running: None,
+            highest_run: None,
+            server: Server::Down,
+            ..context()
+        };
+
+        let refused = decide(request(6000, ApplyMode::ScheduledRestart), &not_run_yet).unwrap_err();
+        let confirmed = SelectBuild {
+            confirm_kvp_rollback: true,
+            ..request(6000, ApplyMode::ScheduledRestart)
+        };
+
+        assert_eq!(refused.code, ErrorCode::KvpRollback);
+        assert_eq!(refused.params["highestRun"], json!(7000));
+        assert_eq!(decide(confirmed, &not_run_yet), Ok(Change::Pend));
+        assert_eq!(
+            decide(request(6000, ApplyMode::NextStart), &not_run_yet),
+            Ok(Change::Select { restart: false }),
+            "the next start replaces 7000 before it ever runs"
+        );
     }
 
     #[test]

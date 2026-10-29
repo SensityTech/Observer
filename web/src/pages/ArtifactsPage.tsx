@@ -1416,7 +1416,7 @@ export function UseDialog({
     const [mode, setMode] = useState<ApplyMode>(() => defaultMode(running, next !== null));
     const [typed, setTyped] = useState('');
     const [allowed, setAllowed] = useState(false);
-    const kvp = needsKvpConfirmation(status, build);
+    const kvp = needsKvpConfirmation(status, build, mode);
     const endOfLife = catalog?.builds.find((entry) => entry.build === build)?.support === 'endOfLife';
     const nowReason = !allows(me, Permission.ServerControl)
         ? words.notPermitted

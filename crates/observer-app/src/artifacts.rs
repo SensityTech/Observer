@@ -1388,6 +1388,8 @@ impl Driver {
         self.change(move |tx, state| {
             state.selected = Some(build);
             state.last_healthy = Some(HealthyBuild { build, since: now });
+            // It ran on this server's data, which the KVP guard must know before its next spawn.
+            state.highest_run = state.highest_run.max(Some(build));
             state.legacy_build_path = None;
             system(AuditAction::BuildSelected)
                 .details(json!({ "build": build, "adopted": true }))

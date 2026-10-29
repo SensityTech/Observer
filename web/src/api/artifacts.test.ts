@@ -46,10 +46,17 @@ describe('protectionsOf', () => {
 
 describe('needsKvpConfirmation', () => {
     it('should ask for it only below 6449 once a build from 6449 ran', () => {
-        expect(needsKvpConfirmation(STATUS, 6448)).toBe(true);
-        expect(needsKvpConfirmation(STATUS, 6449)).toBe(false);
-        expect(needsKvpConfirmation({ ...STATUS, highestRun: 6448 }, 5848)).toBe(false);
-        expect(needsKvpConfirmation({ ...STATUS, highestRun: null }, 5848)).toBe(false);
+        expect(needsKvpConfirmation(STATUS, 6448, 'nextStart')).toBe(true);
+        expect(needsKvpConfirmation(STATUS, 6449, 'nextStart')).toBe(false);
+        expect(needsKvpConfirmation({ ...STATUS, highestRun: 6448 }, 5848, 'nextStart')).toBe(false);
+        expect(needsKvpConfirmation({ ...STATUS, highestRun: null }, 5848, 'nextStart')).toBe(false);
+    });
+
+    it('should count the selected build as run when the build waits for the scheduled restart', () => {
+        const notRunYet = { ...STATUS, highestRun: null, selected: 7000 };
+
+        expect(needsKvpConfirmation(notRunYet, 6000, 'scheduledRestart')).toBe(true);
+        expect(needsKvpConfirmation(notRunYet, 6000, 'nextStart')).toBe(false);
     });
 });
 

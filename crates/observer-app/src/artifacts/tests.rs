@@ -551,6 +551,11 @@ async fn a_legacy_folder_inside_the_artifacts_folder_is_adopted() {
     let status = lab.artifacts.status().borrow().clone();
     assert_eq!(status.selected, Some(35245));
     assert_eq!(status.last_healthy.map(|healthy| healthy.build), Some(35245));
+    assert_eq!(
+        status.highest_run,
+        Some(35245),
+        "it ran before, as the KVP guard must know"
+    );
     assert!(!status.legacy_folder);
     let adopted = lab.entries(AuditAction::BuildSelected).await;
     assert_eq!(adopted[0].details, json!({ "build": 35245, "adopted": true }));
