@@ -290,6 +290,20 @@ pub fn crashes_since(conn: &Connection, since: Timestamp, now: Timestamp) -> Res
         .collect()
 }
 
+/// The crashes whose analysis has not been stored yet.
+pub fn crashes_pending(conn: &Connection, now: Timestamp) -> Result<Vec<Crash>, StoreError> {
+    let mut statement = conn.prepare(&format!(
+        "SELECT {CRASH_COLUMNS} FROM crash WHERE analysis_state = 'pending' ORDER BY id"
+    ))?;
+    let crashes = statement
+        .query_map([], read_crash)?
+        .collect::<Result<Vec<_>, _>>()?;
+    crashes
+        .into_iter()
+        .map(|crash| with_group(conn, crash, now))
+        .collect()
+}
+
 /// The crashes one of whose files is called `name`.
 pub fn crashes_holding(conn: &Connection, name: &str, now: Timestamp) -> Result<Vec<Crash>, StoreError> {
     let mut statement = conn.prepare(&format!(

@@ -129,6 +129,11 @@ impl Diagnostics {
             .db
             .read(move |conn| store::connections_since(conn, now - DESTINATIONS_KEPT.0, DESTINATIONS_KEPT.1))
             .await?;
+        // Analyses an earlier Observer stopped before they were stored.
+        let pending = setup
+            .db
+            .read(move |conn| store::crashes_pending(conn, now))
+            .await?;
         let destinations = Destinations::restored(seen);
         let first = build_alerts(&setup.db, now).await?;
         let (alerts_tx, alerts) = watch::channel(first);
@@ -141,7 +146,7 @@ impl Diagnostics {
             feed: broadcast::channel(FEED).0,
             connections: Mutex::new((destinations.listed(now), Vec::new())),
         });
-        let driver = Driver {
+        let mut driver = Driver {
             inner: Arc::clone(&inner),
             supervision: setup.supervision,
             alerts: alerts_tx,
@@ -153,6 +158,17 @@ impl Diagnostics {
             builds: HashMap::new(),
             analyses: JoinSet::new(),
         };
+        for crash in pending {
+            if let Some(file) = crashes::readable(&crash.files) {
+                driver.analyse(crash.id, file);
+            } else {
+                // Its dumps were deleted since.
+                let id = crash.id;
+                driver
+                    .analyses
+                    .spawn(async move { (id, Err(AnalysisError::Unreadable)) });
+            }
+        }
         Ok((Self { inner }, driver, buses))
     }
 

@@ -556,3 +556,33 @@ async fn the_processes_an_earlier_observer_left_running_end_when_the_next_one_st
     assert_eq!(snapshot.processes.len(), 1);
     assert_eq!(snapshot.processes[0].ended_at, Some(lab.clock.now()));
 }
+
+#[tokio::test]
+async fn an_analysis_an_earlier_observer_did_not_finish_runs_at_the_next_start() {
+    let mut lab = lab().await;
+    let dump = lab.data_dir.join("crashes/livedump-1.dmp");
+    std::fs::create_dir_all(dump.parent().unwrap()).unwrap();
+    std::fs::write(&dump, b"MDMP").unwrap();
+    lab.event(
+        0,
+        EventKind::CrashDumps {
+            paths: vec![dump],
+            removed: Vec::new(),
+        },
+    )
+    .await;
+    assert_eq!(lab.crashes().await[0].analysis_state, AnalysisState::Pending);
+
+    let (_, mut driver, _) = Diagnostics::prepare(DiagnosticsSetup {
+        db: lab.db.clone(),
+        clock: lab.clock.clone(),
+        supervision: lab.supervision.clone(),
+        data_dir: lab.data_dir.clone(),
+    })
+    .await
+    .unwrap();
+    let (id, result) = driver.analyses.join_next().await.unwrap().unwrap();
+    driver.analysed(id, result).await;
+
+    assert_eq!(lab.crashes().await[0].analysis_state, AnalysisState::Unreadable);
+}
