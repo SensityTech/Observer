@@ -1,7 +1,9 @@
+pub(crate) mod files;
 pub mod leftovers;
 pub(crate) mod processes;
 pub(crate) mod sockets;
 pub mod threads;
+pub(crate) mod tree;
 pub(crate) mod usage;
 
 use std::fs::{self, File};
@@ -19,8 +21,8 @@ use rustix::io::{Errno, FdFlags};
 use rustix::pipe::PipeFlags;
 use rustix::process::{Pid, Signal};
 
-use crate::processes::TreeChanges;
 use crate::stream::{Output, Stdin};
+use crate::tree::TreeChanges;
 use crate::{Exit, ExitWatch, Launch, SpawnError, Spawned};
 
 /// The descriptor FXServer writes its structured traces to.
@@ -87,7 +89,7 @@ pub(crate) fn spawn(launch: &Launch) -> Result<Spawned, SpawnError> {
         stopped: Arc::new(AtomicBool::new(false)),
     };
     let (sender, changes) = TreeChanges::channel();
-    processes::watch(pid, &tree.marker, sender, Arc::clone(&tree.stopped)).map_err(SpawnError::Threads)?;
+    tree::watch(pid, &tree.marker, sender, Arc::clone(&tree.stopped)).map_err(SpawnError::Threads)?;
     let (Some(stdin), Some(stdout), Some(stderr)) =
         (child.stdin.take(), child.stdout.take(), child.stderr.take())
     else {

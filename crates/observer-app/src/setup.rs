@@ -1,4 +1,4 @@
-use jiff::SignedDuration;
+use jiff::{SignedDuration, Timestamp};
 use observer_domain::audit::{ActorKind, AuditAction};
 use observer_domain::error::ErrorCode;
 use observer_domain::permissions::Permissions;
@@ -13,6 +13,14 @@ use crate::{Error, passwords, secrets, throttle};
 const SETUP_TOKEN_LIFETIME: SignedDuration = SignedDuration::from_mins(30);
 const SETUP_TOKEN_BYTES: usize = 20;
 
+/// The secret of a link that creates the owner. Whoever holds it can take the server: it goes to
+/// the terminal and the host's window, never to a log.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SetupToken {
+    pub token: String,
+    pub expires_at: Timestamp,
+}
+
 impl Accounts {
     /// Whether the owner still has to be created.
     pub async fn setup_required(&self) -> Result<bool, Error> {
@@ -22,7 +30,7 @@ impl Accounts {
     /// A fresh setup token, for the link that creates the owner, or `None` once an owner exists.
     /// Only its hash is stored, and any valid stored token works, so the command line can make one
     /// for a running Observer.
-    pub async fn create_setup_token(&self, actor: ActorKind) -> Result<Option<String>, Error> {
+    pub async fn create_setup_token(&self, actor: ActorKind) -> Result<Option<SetupToken>, Error> {
         let token = secrets::random::<SETUP_TOKEN_BYTES>()?;
         let hash = secrets::sha256(&token);
         let now = self.clock.now();
@@ -38,7 +46,10 @@ impl Accounts {
                 Ok(true)
             })
             .await?;
-        Ok(created.then(|| secrets::base32(&token)))
+        Ok(created.then(|| SetupToken {
+            token: secrets::base32(&token),
+            expires_at: now + SETUP_TOKEN_LIFETIME,
+        }))
     }
 
     /// Creates the owner with a setup token and signs them in. The token is spent in the same

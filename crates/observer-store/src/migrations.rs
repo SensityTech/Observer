@@ -14,7 +14,8 @@ const MIGRATIONS: &[M<'static>] = &[
     M::up(include_str!("../migrations/0003_launch.sql")),
     M::up(include_str!("../migrations/0004_launch_version.sql")),
     M::up(include_str!("../migrations/0005_schedule.sql")),
-    M::up(include_str!("../migrations/0008_diagnostics.sql")),
+    M::up(include_str!("../migrations/0006_artifacts.sql")),
+    M::up(include_str!("../migrations/0007_diagnostics.sql")),
 ];
 
 /// The schema version this build migrates to.
@@ -74,5 +75,38 @@ mod tests {
     #[test]
     fn migrations_are_valid() {
         Migrations::from_slice(MIGRATIONS).validate().unwrap();
+    }
+
+    #[test]
+    fn a_0005_database_moves_its_build_folder_to_the_artifact_state() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        let migrations = Migrations::from_slice(MIGRATIONS);
+        migrations.to_version(&mut conn, 5).unwrap();
+        conn.execute(
+            "INSERT INTO launch_settings (server_id, build_path, data_path, cfg_file, onesync, auto_start,
+                 txadmin_events, extra_arguments, version, updated_at)
+             VALUES ('default', ?1, ?2, 'server.cfg', 'on',
+                 1, 0, '[]', 7, '2026-10-28T09:00:00.000Z')",
+            [r"C:\FXServer\build", r"C:\FXServer\server-data"],
+        )
+        .unwrap();
+
+        migrations.to_latest(&mut conn).unwrap();
+
+        let stored = crate::launch::get(&conn, "default").unwrap().unwrap();
+        assert_eq!(stored.version, 7);
+        assert_eq!(stored.settings.data_path, r"C:\FXServer\server-data");
+        assert_eq!(stored.legacy_build_path.as_deref(), Some(r"C:\FXServer\build"));
+        let state = crate::artifacts::state(&conn, "default").unwrap();
+        assert_eq!(state.legacy_build_path.as_deref(), Some(r"C:\FXServer\build"));
+        assert_eq!(state.selected, None);
+        let columns: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM pragma_table_info('launch_settings') WHERE name = 'build_path'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(columns, 0);
     }
 }

@@ -4,7 +4,9 @@
 //! `/players.json` and `/info.json` on the cfg's `endpoint_add_tcp`. With `+ensure observer` it
 //! also plays the bridge: `ready` and the started resources once, then a heartbeat and the heap.
 //!
-//! Failures on demand, through convars (`+set fake_x y`, or in the cfg) or console commands:
+//! Failures on demand, through convars (`+set fake_x y`, in the cfg, or in a `fake-build.cfg` next
+//! to the executable, read before the command line, so that one build can crash while another does
+//! not) or console commands:
 //! - `fake_quit_delay_ms` (500): time between `quit` and the end, which is what FXServer 35245 does:
 //!   exit code 1 on Windows, SIGSEGV on Linux;
 //! - `fake_ignore_quit 1`: `quit` does nothing;
@@ -13,6 +15,9 @@
 //! - `fake_players <n>`: `/dynamic.json` counts `n` clients and `/players.json` lists ids 1 to `n`
 //!   with a ping of `20 + 5 × id`, or the anonymised public list without the right token;
 //! - `fake_tick_ms <ms>` (0): how long each svMain tick is observed to take in `/perf/`;
+//! - `fake_build <n>` (35245): the build `/info.json` reports;
+//! - `fake_busy_percent <p>` (0): the thread named like FXServer's network loop,
+//!   `UV loop: svNetwork`, which wakes every 10 ms, spins `p` ms of every 100;
 //! - `fake_crash_after_ms`, `fake_hang_after_ms`: crash or hang the main loop on a timer;
 //! - `fake_bind_error 1`: report the port as taken, as when it really is;
 //! - `fake_license missing|invalid`: refuse to run for want of a valid licence key, with FXServer's
@@ -191,7 +196,9 @@ fn main() {
             connections: Vec::new(),
             datagrams: Vec::new(),
         };
-        fake.boot(&command_line(args.into_iter()));
+        let mut commands = build_cfg();
+        commands.extend(command_line(args.into_iter()));
+        fake.boot(&commands);
         fake.run()
     });
     // The main loop ends the process itself: it only comes back here if it panicked.
@@ -242,6 +249,7 @@ impl Fake {
 
     fn run(&mut self) -> ! {
         let commands = read_stdin(Arc::clone(&self.server));
+        network_loop(Arc::clone(&self.server));
         let crash_at = self.deadline("fake_crash_after_ms");
         let hang_at = self.deadline("fake_hang_after_ms");
         loop {
@@ -523,6 +531,27 @@ impl Fake {
     }
 }
 
+/// A thread by the name FXServer's network loop has, for the thread measures to find: Windows
+/// keeps the name as the thread's description, Linux cuts it to `UV loop: svNetw`.
+fn network_loop(server: Arc<Server>) {
+    const PERIOD: Duration = Duration::from_millis(100);
+    const WAKE: Duration = Duration::from_millis(10);
+    let _ = thread::Builder::new()
+        .name("UV loop: svNetwork".to_owned())
+        .spawn(move || {
+            loop {
+                let period = Instant::now();
+                let busy = Duration::from_millis(server.number("fake_busy_percent").unwrap_or(0).min(100));
+                while period.elapsed() < busy {
+                    std::hint::black_box(period.elapsed());
+                }
+                while period.elapsed() < PERIOD {
+                    thread::sleep(WAKE.min(PERIOD.saturating_sub(period.elapsed())));
+                }
+            }
+        });
+}
+
 fn spawn_child() {
     let Ok(program) = std::env::current_exe() else {
         return;
@@ -649,6 +678,20 @@ fn read_stdin(server: Arc<Server>) -> mpsc::Receiver<String> {
         }
     });
     commands
+}
+
+/// The commands of `fake-build.cfg` next to the executable, which stand for what a build does
+/// whatever the server's cfg says.
+fn build_cfg() -> Vec<Vec<String>> {
+    let Some(file) = std::env::current_exe()
+        .ok()
+        .and_then(|program| Some(program.parent()?.join("fake-build.cfg")))
+    else {
+        return Vec::new();
+    };
+    std::fs::read_to_string(file)
+        .map(|cfg| cfg.lines().flat_map(split_commands).collect())
+        .unwrap_or_default()
 }
 
 fn is_set(command: &[String]) -> bool {

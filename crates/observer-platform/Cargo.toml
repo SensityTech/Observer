@@ -14,8 +14,10 @@ rustix = { workspace = true, features = ["event", "param"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { workspace = true, features = [
+    "Wdk_System_SystemInformation",
     "Wdk_System_Threading",
     "Win32_Foundation",
+    "Win32_Graphics_Gdi",
     "Win32_NetworkManagement_IpHelper",
     "Win32_NetworkManagement_Ndis",
     "Win32_Networking_WinSock",
@@ -27,20 +29,28 @@ windows-sys = { workspace = true, features = [
     "Win32_Storage_FileSystem",
     "Win32_System_Console",
     "Win32_System_Diagnostics_Debug",
-    "Win32_System_Diagnostics_ToolHelp",
     "Win32_System_IO",
+    "Win32_System_Ioctl",
     "Win32_System_JobObjects",
     "Win32_System_Kernel",
+    "Win32_System_LibraryLoader",
     "Win32_System_Memory",
+    "Win32_System_Performance",
     "Win32_System_Pipes",
     "Win32_System_ProcessStatus",
+    "Win32_System_Shutdown",
     "Win32_System_SystemInformation",
     "Win32_System_Threading",
+    "Win32_System_WindowsProgramming",
+    "Win32_UI_WindowsAndMessaging",
 ] }
 
 [dev-dependencies]
 tempfile.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "time"] }
+
+[target.'cfg(unix)'.dev-dependencies]
+rustix = { workspace = true, features = ["thread"] }
 
 [lints]
 workspace = true

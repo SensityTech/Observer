@@ -1,7 +1,11 @@
 pub mod authenticode;
 pub mod console;
+pub(crate) mod files;
+pub mod message_loop;
 pub(crate) mod processes;
+mod session;
 pub(crate) mod sockets;
+pub(crate) mod tree;
 pub(crate) mod usage;
 
 use std::ffi::OsStr;
@@ -34,9 +38,9 @@ use windows_sys::Win32::System::Threading::{
     UpdateProcThreadAttribute, WaitForSingleObject,
 };
 
-use self::processes::Port;
-use crate::processes::TreeChanges;
+use self::tree::Port;
 use crate::stream::{Output, Stdin};
+use crate::tree::TreeChanges;
 use crate::{Exit, ExitWatch, Launch, SpawnError, Spawned};
 
 /// How the C runtime marks an inherited descriptor that is open and backed by a pipe.
@@ -73,7 +77,7 @@ pub(crate) fn spawn(launch: &Launch) -> Result<Spawned, SpawnError> {
     // The original goes to the thread that waits for the exit; the tree measures through a copy.
     let main = process.try_clone().map_err(SpawnError::Tree)?;
     let (sender, changes) = TreeChanges::channel();
-    processes::watch(Arc::clone(&port), Arc::downgrade(&job), pid, sender).map_err(SpawnError::Threads)?;
+    tree::watch(Arc::clone(&port), Arc::downgrade(&job), pid, sender).map_err(SpawnError::Threads)?;
     let tree = ProcessTree { job, port, main, pid };
     // SAFETY: `main_thread` is the open handle of the process's suspended main thread.
     if unsafe { ResumeThread(main_thread.as_raw_handle()) } == u32::MAX {

@@ -3,4 +3,4 @@
 /**
  * Whether the stored launch settings can start FXServer on this host.
  */
-export type LaunchReadiness = "ready" | "notConfigured" | "invalid";
+export type LaunchReadiness = "ready" | "notConfigured" | "invalid" | "noBuild";

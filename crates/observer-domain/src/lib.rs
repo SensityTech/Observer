@@ -4,8 +4,10 @@
 //! Every type the panel reads derives `TS`; `cargo xtask bindings` regenerates
 //! `web/src/api/generated` from them, along with the permission constants of the catalog.
 
+pub mod about;
 pub mod accounts;
 pub mod api;
+pub mod artifacts;
 pub mod audit;
 pub mod delegation;
 pub mod diagnostics;

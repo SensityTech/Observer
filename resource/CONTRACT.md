@@ -29,8 +29,9 @@ field renamed or removed, or a change of meaning, is version 2.
 ## Events
 
 Every event is a server event raised with `TriggerEvent`, with one table as its argument. Times are
-integer Unix milliseconds, UTC. `by` is the username of whoever acted in the panel, or `observer`
-for what Observer does by itself.
+integer Unix milliseconds, UTC. `by` is the username of whoever acted in the panel, `observer`
+for what Observer does by itself, or `local` for someone at the host's own status window (Windows),
+who signs in to nothing. No account can take either name.
 
 | Event | When |
 |---|---|
@@ -75,8 +76,8 @@ window.
 | Field | Type | Meaning |
 |---|---|---|
 | `delayMs` | integer | Milliseconds until Observer sends `quit` (5,000 by default, 0 when Windows closes Observer's console). |
-| `reason` | string | `stop`, `restart` (asked in the panel), `scheduled` (the schedule or a single restart someone planned), or `shutdown` (Observer itself is stopping). |
-| `by` | string | Who asked, or `observer`. |
+| `reason` | string | `stop`, `restart` (asked in the panel or the host's window), `scheduled` (the schedule or a single restart someone planned), or `shutdown` (Observer itself is stopping). |
+| `by` | string | Who asked, `local`, or `observer`. |
 
 ## Ordering and delivery
 

@@ -22,7 +22,7 @@ use observer_domain::diagnostics::{
 };
 use observer_domain::error::ErrorCode;
 use observer_domain::launch::{ExtraArgument, LaunchSettings, OneSync};
-use observer_domain::metrics::{LiveSample, MarkerKind, Range, Series};
+use observer_domain::metrics::{LiveSample, MarkerKind, Range, Series, ThreadGroup, ThreadShares};
 use observer_domain::schedule::{
     OneOffRequest, OneOffRestart, RestartSource, ScheduleChange, ScheduleSettings,
 };
@@ -33,6 +33,7 @@ use observer_fxserver::console::plain;
 use observer_fxserver::health::HealthLimits;
 use observer_fxserver::recovery::RecoveryPolicy;
 use observer_fxserver::supervisor::StopTimings;
+use observer_store::artifacts::{self, ArtifactState};
 use observer_store::{Database, StoreError};
 use serde_json::json;
 use tempfile::TempDir;
@@ -41,6 +42,8 @@ use tokio::task::JoinHandle;
 use tokio::time::timeout;
 
 const WAIT: Duration = Duration::from_secs(20);
+/// The build the fake stands in for, installed in Observer's artifacts folder and selected.
+const BUILD: u32 = 35245;
 const CONSOLE_ROUTE: (&str, &str) = ("POST", "/api/servers/default/console");
 /// A quick heartbeat, three players and ticks of 12 ms.
 const FAKE: [(&str, &str); 3] = [
@@ -135,6 +138,7 @@ impl Services {
             accounts: self.accounts.clone(),
             servers: self.servers.clone(),
             data_dir: dir.join("observer-data"),
+            artifacts: dir.join("observer-data/artifacts"),
             console_logs: dir.join("observer-data/logs/console"),
             log: None,
         };
@@ -196,9 +200,14 @@ impl Observer {
     }
 
     async fn with_longest_sleep(auto_start: bool, longest_sleep: Duration) -> Self {
+        Self::launched(auto_start, longest_sleep, &FAKE).await
+    }
+
+    /// The fake takes `arguments` instead of [`FAKE`]'s.
+    async fn launched(auto_start: bool, longest_sleep: Duration, arguments: &[(&str, &str)]) -> Self {
         let port = Port::lease().await;
         let dir = tempfile::tempdir().unwrap();
-        let build = dir.path().join("build");
+        let build = dir.path().join("observer-data/artifacts").join(BUILD.to_string());
         let program = fake_program(&build);
         fs::create_dir_all(program.parent().unwrap()).unwrap();
         fs::copy(env!("CARGO_BIN_EXE_fake-fxserver"), &program).unwrap();
@@ -220,7 +229,8 @@ impl Observer {
             .create_setup_token(ActorKind::System)
             .await
             .unwrap()
-            .unwrap();
+            .unwrap()
+            .token;
         let signed_in = accounts
             .complete_setup(&token, "ada", "correct horse battery staple".to_owned(), &client)
             .await
@@ -230,22 +240,31 @@ impl Observer {
             .await
             .unwrap();
         let launch = LaunchSettings {
-            build_path: build.to_str().unwrap().to_owned(),
             data_path: data.to_str().unwrap().to_owned(),
             cfg_file: "server.cfg".to_owned(),
             onesync: OneSync::On,
             auto_start,
             txadmin_events: false,
-            extra_arguments: FAKE
-                .map(|(name, value)| ExtraArgument {
+            extra_arguments: arguments
+                .iter()
+                .map(|&(name, value)| ExtraArgument {
                     name: name.to_owned(),
                     value: value.to_owned(),
                 })
-                .to_vec(),
+                .collect(),
         };
         services
             .servers
             .change_launch_settings(&owner, Servers::DEFAULT, launch, None)
+            .await
+            .unwrap();
+        let selected = ArtifactState {
+            selected: Some(BUILD),
+            ..ArtifactState::default()
+        };
+        services
+            .db
+            .write(move |tx| artifacts::save_state(tx, Servers::DEFAULT, &selected, Timestamp::now()))
             .await
             .unwrap();
 
@@ -529,6 +548,42 @@ async fn a_server_started_from_the_panel_runs_a_command_then_stops_gracefully() 
 }
 
 #[tokio::test]
+async fn a_start_from_the_host_window_is_audited_as_local() {
+    let mut observer = Observer::new(false).await;
+    let local = || "local".to_owned();
+
+    observer.supervision.start_local().await.unwrap();
+    let starting = observer.state(ServerState::Starting).await;
+    observer.state(ServerState::Online).await;
+    observer.supervision.restart_local().await.unwrap();
+    let restarting = observer.state(ServerState::Stopping).await;
+    observer.state(ServerState::Online).await;
+    observer.supervision.stop_local().await.unwrap();
+    let stopped = observer.state(ServerState::Stopped).await;
+
+    assert_eq!(starting.cause, Some(StateCause::Requested { by: local() }));
+    assert_eq!(restarting.cause, Some(StateCause::Restart { by: local() }));
+    assert_eq!(stopped.cause, Some(StateCause::Requested { by: local() }));
+    let notice = observer.console_until("observer:shuttingDown").await;
+    assert!(plain(&notice.5).contains(r#""by":"local""#), "{notice:?}");
+    for action in [
+        AuditAction::ServerStarted,
+        AuditAction::ServerRestarted,
+        AuditAction::ServerStopped,
+    ] {
+        let entries = observer.audited(action).await;
+        assert_eq!(entries.len(), 1, "{action:?}");
+        assert_eq!(
+            (entries[0].actor_kind, entries[0].actor_name.as_deref()),
+            (ActorKind::Local, None),
+            "{action:?}"
+        );
+        assert_eq!(entries[0].target.as_deref(), Some("default"));
+    }
+    observer.stop_observer().await;
+}
+
+#[tokio::test]
 async fn a_server_started_with_observer_stops_with_it() {
     let mut observer = Observer::new(true).await;
 
@@ -701,9 +756,41 @@ async fn sample_where(
     found.expect("no such sample came")
 }
 
+/// What the sample of a fake spinning half of its network loop, and the hour's thread shares, say
+/// of its threads and its tree.
+fn assert_threads_and_tree(running: &LiveSample, threads: &ThreadShares) {
+    let value = |series| running.values.get(&series).copied();
+    // The fake's network loop spins half of every 100 ms. A loaded machine gives it less, never
+    // more, so the floor only tells a measured thread from an idle one.
+    let network = value(Series::NetworkThreadCpu).unwrap();
+    assert!((10.0..=65.0).contains(&network), "{running:?}");
+    let cpu = value(Series::FxsCpu).unwrap();
+    assert!(
+        value(Series::FxsKernel).is_some_and(|kernel| kernel <= cpu),
+        "{running:?}"
+    );
+    // The tree's totals and the main process are read a moment apart.
+    assert!(
+        value(Series::TreeCpu).is_some_and(|tree| tree + 1.0 >= cpu),
+        "{running:?}"
+    );
+    if cfg!(windows) {
+        assert!(value(Series::HostDiskTransfers).is_some(), "{running:?}");
+    }
+    let named = threads
+        .threads
+        .iter()
+        .find(|thread| thread.name.starts_with("UV loop: svNetw"))
+        .unwrap_or_else(|| panic!("{threads:?}"));
+    assert_eq!(named.group, ThreadGroup::Network);
+    assert!(threads.measured >= 1);
+}
+
 #[tokio::test]
 async fn the_statistics_follow_a_run_from_before_its_start_to_after_its_stop() {
-    let mut observer = Observer::new(false).await;
+    let [heartbeat, players, tick] = FAKE;
+    let busy = [heartbeat, players, tick, ("fake_busy_percent", "50")];
+    let mut observer = Observer::launched(false, Duration::from_millis(50), &busy).await;
     let path = observer.dir.path().join("metrics.sqlite3");
     let metrics = Metrics::open(MetricsSetup {
         path: path.clone(),
@@ -726,7 +813,12 @@ async fn the_statistics_follow_a_run_from_before_its_start_to_after_its_stop() {
     let before = sample_where(&mut live, |_| true).await;
     observer.supervision.start_server(&observer.owner).await.unwrap();
     observer.state(ServerState::Online).await;
-    let running = sample_where(&mut live, |sample| sample.values.contains_key(&Series::PingAvg)).await;
+    // Thread shares need two listings of the same process.
+    let running = sample_where(&mut live, |sample| {
+        sample.values.contains_key(&Series::PingAvg) && sample.values.contains_key(&Series::NetworkThreadCpu)
+    })
+    .await;
+    let threads = metrics.threads().await.unwrap();
     observer.supervision.stop_server(&observer.owner).await.unwrap();
     observer.state(ServerState::Stopped).await;
     let after = sample_where(&mut live, |sample| sample.state == ServerState::Stopped).await;
@@ -755,11 +847,14 @@ async fn the_statistics_follow_a_run_from_before_its_start_to_after_its_stop() {
         Some(1.0),
         "the fake starts the bridge alone"
     );
+    assert_threads_and_tree(&running, &threads);
     for series in [
         Series::Players,
         Series::FxsCpu,
         Series::MainTick,
         Series::FxsWorkingSet,
+        Series::NetworkThreadCpu,
+        Series::TreeCpu,
     ] {
         assert!(
             !after.values.contains_key(&series),

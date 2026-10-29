@@ -1,3 +1,8 @@
+# The C runtime goes into the executable, which then runs on a host without the Visual C++
+# redistributable. Every Windows build takes it, so that the tests run what ships.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
+
 [alias]
 xtask = "run --quiet --package xtask --"
 

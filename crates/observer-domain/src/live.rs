@@ -6,6 +6,7 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
+use crate::artifacts::ArtifactsStatus;
 use crate::audit::AuditEntry;
 use crate::diagnostics::{AlertList, DiagnosticsEvent, DiagnosticsSnapshot};
 use crate::error::ErrorCode;
@@ -50,6 +51,10 @@ pub enum Topic {
     /// control permission.
     #[serde(rename = "server.schedule")]
     ServerSchedule,
+    /// FXServer's builds, the install job and the probation of a new build. Needs the dashboard
+    /// or the artifacts permission.
+    #[serde(rename = "server.artifacts")]
+    ServerArtifacts,
     /// What needs looking at: shells FXServer's tree started, crashes and hangs of the last 24
     /// hours, without command lines or paths. Needs the dashboard or the diagnostics permission.
     #[serde(rename = "server.alerts")]
@@ -61,13 +66,14 @@ pub enum Topic {
 }
 
 impl Topic {
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::Status,
         Self::Audit,
         Self::ServerStatus,
         Self::Console,
         Self::MetricsLive,
         Self::ServerSchedule,
+        Self::ServerArtifacts,
         Self::ServerAlerts,
         Self::ServerDiagnostics,
     ];
@@ -137,6 +143,8 @@ pub enum TopicSnapshot {
     MetricsLive(MetricsSnapshot),
     #[serde(rename = "server.schedule")]
     ServerSchedule(ScheduleStatus),
+    #[serde(rename = "server.artifacts")]
+    ServerArtifacts(Box<ArtifactsStatus>),
     #[serde(rename = "server.alerts")]
     ServerAlerts(AlertList),
     #[serde(rename = "server.diagnostics")]
@@ -157,6 +165,10 @@ pub enum TopicEvent {
     /// The whole schedule status again, whenever any of it changes.
     #[serde(rename = "server.schedule")]
     ServerSchedule(ScheduleStatus),
+    /// The whole artifacts status again, whenever any of it changes: during a job, at most
+    /// four times a second.
+    #[serde(rename = "server.artifacts")]
+    ServerArtifacts(Box<ArtifactsStatus>),
     /// The whole list again, whenever any of it changes.
     #[serde(rename = "server.alerts")]
     ServerAlerts(AlertList),

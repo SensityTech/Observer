@@ -42,6 +42,7 @@ async fn lab() -> Lab {
             clock: clock.clone(),
             accounts,
             data_dir: data_dir.clone(),
+            artifacts: data_dir.join("artifacts"),
             console_logs: data_dir.join("logs/console"),
             log: None,
         },
@@ -91,6 +92,7 @@ impl Lab {
             EventKind::Spawned {
                 pid: MAIN,
                 probe: "127.0.0.1:30120".parse().unwrap(),
+                build: "/srv/observer/artifacts/35245".into(),
             },
         )
         .await;
@@ -563,6 +565,7 @@ async fn the_processes_an_earlier_observer_left_running_end_when_the_next_one_st
             kind: EventKind::Spawned {
                 pid: MAIN,
                 probe: "127.0.0.1:30120".parse().unwrap(),
+                build: "/srv/observer/artifacts/35245".into(),
             },
         })
         .await;

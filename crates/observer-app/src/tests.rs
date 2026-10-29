@@ -1,7 +1,7 @@
 //! The services end to end, over a real database in a temporary directory.
 
 use jiff::{SignedDuration, Timestamp};
-use observer_domain::audit::{ActorKind, AuditAction, AuditEntry, AuditFilter, Outcome};
+use observer_domain::audit::{ActorKind, AuditAction, AuditEntry, AuditFilter, Outcome, StopSource};
 use observer_domain::error::ErrorCode;
 use observer_domain::launch::{ExtraArgument, LaunchSettings, OneSync, StoredLaunch};
 use observer_domain::permissions::Permissions as P;
@@ -61,7 +61,8 @@ impl Lab {
             .create_setup_token(ActorKind::System)
             .await
             .unwrap()
-            .unwrap();
+            .unwrap()
+            .token;
         let signed_in = self
             .accounts
             .complete_setup(&token, "ada", OWNER_PASSWORD.to_owned(), &home())
@@ -187,13 +188,15 @@ fn code<T>(result: Result<T, crate::Error>) -> ErrorCode {
 async fn the_setup_token_creates_the_owner_once() {
     let lab = Lab::new().await;
     assert!(lab.accounts.setup_required().await.unwrap());
-    let token = lab
+    let link = lab
         .accounts
         .create_setup_token(ActorKind::System)
         .await
         .unwrap()
         .unwrap();
+    let token = link.token;
     assert_eq!(token.len(), 32);
+    assert_eq!(link.expires_at, lab.clock.now() + SignedDuration::from_mins(30));
 
     let signed_in = lab
         .accounts
@@ -224,6 +227,36 @@ async fn the_setup_token_creates_the_owner_once() {
 }
 
 #[tokio::test]
+async fn a_stop_of_observer_is_audited_with_who_asked() {
+    let lab = Lab::new().await;
+
+    for from in [StopSource::Window, StopSource::Console, StopSource::Signal] {
+        lab.audit.record_stop(from).await.unwrap();
+    }
+
+    let stops = lab.entries(AuditAction::ObserverStopped).await;
+    let seen: Vec<_> = stops
+        .iter()
+        .rev()
+        .map(|entry| {
+            (
+                entry.actor_kind,
+                entry.actor_name.as_deref(),
+                entry.details.clone(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        seen,
+        [
+            (ActorKind::Local, None, json!({ "from": "window" })),
+            (ActorKind::Local, None, json!({ "from": "console" })),
+            (ActorKind::System, None, json!({ "from": "signal" })),
+        ]
+    );
+}
+
+#[tokio::test]
 async fn a_setup_token_expires_after_thirty_minutes_and_a_forged_one_never_works() {
     let lab = Lab::new().await;
     let token = lab
@@ -231,7 +264,8 @@ async fn a_setup_token_expires_after_thirty_minutes_and_a_forged_one_never_works
         .create_setup_token(ActorKind::Cli)
         .await
         .unwrap()
-        .unwrap();
+        .unwrap()
+        .token;
 
     let forged = lab
         .accounts
@@ -256,7 +290,8 @@ async fn setup_refuses_a_bad_username_or_a_short_password_without_spending_the_t
         .create_setup_token(ActorKind::System)
         .await
         .unwrap()
-        .unwrap();
+        .unwrap()
+        .token;
 
     let short = lab
         .accounts
@@ -1154,7 +1189,6 @@ fn folder(name: &str) -> String {
 
 fn launch_settings() -> LaunchSettings {
     LaunchSettings {
-        build_path: folder("build"),
         data_path: folder("server-data"),
         cfg_file: "server.cfg".to_owned(),
         onesync: OneSync::On,
@@ -1200,6 +1234,7 @@ async fn launch_settings_are_stored_once_checked_with_what_changed_in_the_audit_
         Some(StoredLaunch {
             settings: edited,
             version: 2,
+            legacy_build_path: None,
         })
     );
     let changes = lab.entries(AuditAction::LaunchSettingsChanged).await;
@@ -1216,7 +1251,6 @@ async fn launch_settings_are_stored_once_checked_with_what_changed_in_the_audit_
     assert_eq!(
         changes[1].details,
         json!({
-            "buildPath": true,
             "dataPath": true,
             "cfgFile": true,
             "onesync": { "before": null, "after": "on" },
@@ -1304,6 +1338,7 @@ async fn a_launch_change_made_from_settings_replaced_since_is_refused() {
         Some(StoredLaunch {
             settings: from_elsewhere,
             version: 2,
+            legacy_build_path: None,
         })
     );
     assert_eq!(lab.entries(AuditAction::LaunchSettingsChanged).await.len(), 2);

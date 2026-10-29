@@ -270,6 +270,7 @@ mod tests {
             EventKind::Spawned {
                 pid: 3312,
                 probe: "127.0.0.1:30120".parse().unwrap(),
+                build: "/srv/observer/artifacts/35245".into(),
             },
         )
     }

@@ -30,11 +30,15 @@ const ConsolePage = lazyCode(() =>
 const SchedulePage = lazyCode(() =>
     import('./pages/SchedulePage').then((page) => ({ default: page.SchedulePage })),
 );
+const ArtifactsPage = lazyCode(() =>
+    import('./pages/ArtifactsPage').then((page) => ({ default: page.ArtifactsPage })),
+);
 const ServerPage = lazyCode(() =>
     import('./pages/ServerPage').then((page) => ({ default: page.ServerPage })),
 );
 const UsersPage = lazyCode(() => import('./pages/UsersPage').then((page) => ({ default: page.UsersPage })));
 const AuditPage = lazyCode(() => import('./pages/AuditPage').then((page) => ({ default: page.AuditPage })));
+const AboutPage = lazyCode(() => import('./pages/AboutPage').then((page) => ({ default: page.AboutPage })));
 const DiagnosticsPage = lazyCode(() =>
     import('./pages/DiagnosticsPage').then((page) => ({ default: page.DiagnosticsPage })),
 );
@@ -145,6 +149,16 @@ const scheduleRoute = createRoute({
     ),
 });
 
+const artifactsRoute = createRoute({
+    getParentRoute: () => panelRoute,
+    path: '/artifacts',
+    component: () => (
+        <RequirePermission name="ArtifactsView">
+            <ArtifactsPage />
+        </RequirePermission>
+    ),
+});
+
 const diagnosticsRoute = createRoute({
     getParentRoute: () => panelRoute,
     path: '/diagnostics',
@@ -191,6 +205,13 @@ const accountRoute = createRoute({
     component: AccountPage,
 });
 
+// Any signed-in account may read it: only strangers are kept from the list of what Observer runs.
+const aboutRoute = createRoute({
+    getParentRoute: () => panelRoute,
+    path: '/about',
+    component: AboutPage,
+});
+
 const routeTree = rootRoute.addChildren([
     setupRoute,
     loginRoute,
@@ -199,11 +220,13 @@ const routeTree = rootRoute.addChildren([
         overviewRoute,
         consoleRoute,
         scheduleRoute,
+        artifactsRoute,
         diagnosticsRoute,
         serverRoute,
         usersRoute,
         auditRoute,
         accountRoute,
+        aboutRoute,
     ]),
 ]);
 

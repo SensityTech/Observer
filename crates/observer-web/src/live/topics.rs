@@ -51,6 +51,7 @@ pub(super) fn allows(topic: Topic, held: Permissions) -> bool {
             Permissions::SCHEDULE_MANAGE,
             Permissions::SERVER_CONTROL,
         ]),
+        Topic::ServerArtifacts => any(&[Permissions::DASHBOARD_VIEW, Permissions::ARTIFACTS_VIEW]),
         // The alert list names programs and modules, never a command line or a path.
         Topic::ServerAlerts => any(&[Permissions::DASHBOARD_VIEW, Permissions::DIAGNOSTICS_VIEW]),
         Topic::ServerDiagnostics => any(&[Permissions::DIAGNOSTICS_VIEW]),
@@ -63,7 +64,7 @@ pub(super) async fn open(topic: Topic, since: Option<u64>, state: &AppState) -> 
     match topic {
         Topic::Status => Ok(Feed {
             snapshot: TopicSnapshot::Status(ObserverStatus {
-                version: state.version.to_owned(),
+                version: state.build.version.to_owned(),
                 started_at: state.live.started_at,
             }),
             events: None,
@@ -90,6 +91,16 @@ pub(super) async fn open(topic: Topic, since: Option<u64>, state: &AppState) -> 
             Ok(Feed {
                 snapshot: TopicSnapshot::ServerSchedule(snapshot),
                 events: Some(status_events(status, TopicEvent::ServerSchedule)),
+            })
+        }
+        Topic::ServerArtifacts => {
+            let mut status = state.artifacts.status();
+            let snapshot = status.borrow_and_update().clone();
+            Ok(Feed {
+                snapshot: TopicSnapshot::ServerArtifacts(Box::new(snapshot)),
+                events: Some(status_events(status, |status| {
+                    TopicEvent::ServerArtifacts(Box::new(status))
+                })),
             })
         }
         Topic::Console => {

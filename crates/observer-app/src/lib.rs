@@ -1,9 +1,10 @@
 //! The services that own Observer's rules: accounts and sessions, first-run setup, login
-//! throttling, the audit log, how servers are launched, their supervision, their statistics, their
-//! restart schedule and their diagnostics. They know nothing of HTTP; the web layer and the command
-//! line both call them.
+//! throttling, the audit log, how servers are launched, their supervision, their statistics,
+//! their restart schedule, their FXServer builds and their diagnostics. They know nothing of HTTP;
+//! the web layer and the command line both call them.
 
 mod accounts;
+mod artifacts;
 mod audit;
 mod clock;
 mod diagnostics;
@@ -23,6 +24,7 @@ mod tickets;
 mod users;
 
 pub use accounts::Accounts;
+pub use artifacts::{ArtifactTimings, Artifacts, ArtifactsSetup, ArtifactsTask};
 pub use audit::AuditLog;
 pub use clock::Clock;
 pub use diagnostics::{Diagnostics, DiagnosticsSetup, DiagnosticsTask, MAX_DOWNLOAD};
@@ -32,4 +34,5 @@ pub use passwords::PasswordCost;
 pub use schedule::{Schedule, ScheduleSetup, ScheduleTask, ScheduleTimings};
 pub use servers::Servers;
 pub use sessions::{Caller, Client, SignedIn};
+pub use setup::SetupToken;
 pub use supervision::{ConsoleLines, LinesMissed, Running, Setup, Supervision};

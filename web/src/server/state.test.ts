@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
+import type { ArtifactsStatus } from '../api/generated/ArtifactsStatus';
 import type { ServerStatus } from '../api/generated/ServerStatus';
+import { ARTIFACTS } from '../artifacts/fixtures';
 import { en } from '../i18n/en';
-import { blocked, causeText, commandLine } from './state';
+import { blocked, buildFact, causeText, commandLine } from './state';
 
 const status = (overrides: Partial<ServerStatus>): ServerStatus => ({
     state: 'stopped',
@@ -88,6 +90,13 @@ describe('causeText', () => {
         expect(
             causeText(en, status({ state: 'starting', cause: { kind: 'requested', by: 'observer' } })),
         ).toBe('Started by Observer.');
+        // `local` is someone at the host's own status window, who signs in to nothing.
+        expect(causeText(en, status({ state: 'stopped', cause: { kind: 'requested', by: 'local' } }))).toBe(
+            'Stopped by someone at the host.',
+        );
+        expect(causeText(en, status({ state: 'stopping', cause: { kind: 'restart', by: 'local' } }))).toBe(
+            'Restarting, as someone at the host asked: resources are told first, then FXServer quits and starts again.',
+        );
         expect(
             causeText(
                 en,
@@ -120,5 +129,55 @@ describe('causeText', () => {
         expect(causeText(en, status({ state: 'starting', cause: planned }))).toBe(
             'Restarted as ada planned.',
         );
+    });
+});
+
+/** The hour and minute of a UTC instant, as the schedule's zone would show it in UTC. */
+const clock = (instant: string) => instant.slice(11, 16);
+
+describe('buildFact', () => {
+    const builds = structuredClone(ARTIFACTS) as unknown as ArtifactsStatus;
+    const online = status({ state: 'online', startedAt: '2026-10-28T02:00:00Z', build: 37900 });
+    const quiet: ArtifactsStatus = { ...builds, probation: null, pending: null, notice: null };
+
+    it('should say first that the build runs on probation, until when', () => {
+        expect(buildFact(en, online, builds, clock)).toBe(en.overview.buildProbation('37900', '02:38'));
+        expect(
+            buildFact(en, online, { ...builds, probation: { ...builds.probation!, passesAt: null } }, clock),
+        ).toBe(en.overview.buildProbationWaiting('37900'));
+    });
+
+    it('should then say a return to the last healthy build, what starts next, or what waits', () => {
+        const back: ArtifactsStatus = {
+            ...quiet,
+            running: 35245,
+            selected: 35245,
+            notice: {
+                kind: 'rolledBack',
+                build: 37900,
+                other: 35245,
+                reason: 'crashed',
+                at: '2026-10-28T02:31:00Z',
+            },
+        };
+
+        expect(buildFact(en, online, back, clock)).toBe(en.overview.buildBack('35245', '37900'));
+        expect(buildFact(en, online, { ...quiet, selected: 37950 }, clock)).toBe(
+            en.overview.buildNextStart('37900', '37950'),
+        );
+        expect(buildFact(en, online, { ...quiet, pending: builds.pending }, clock)).toBe(
+            en.overview.buildPending('37900', '37950'),
+        );
+    });
+
+    it('should say a probation passed only during the run that passed it', () => {
+        const passed: ArtifactsStatus = {
+            ...quiet,
+            lastHealthy: { build: 37900, since: '2026-10-28T02:28:00Z' },
+        };
+
+        expect(buildFact(en, online, passed, clock)).toBe(en.overview.buildPassed('37900', '02:28'));
+        expect(buildFact(en, { ...online, startedAt: '2026-10-28T03:00:00Z' }, passed, clock)).toBeNull();
+        expect(buildFact(en, online, null, clock)).toBeNull();
     });
 });

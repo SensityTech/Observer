@@ -103,6 +103,58 @@ async fn the_series_refuse_anything_but_a_fixed_range_and_one_to_sixteen_known_s
 }
 
 #[tokio::test]
+async fn thread_shares_and_growth_take_the_dashboard_permission() {
+    let server = Server::new().await;
+    let owner = server.owner().await;
+    let console = server.member(&owner, "grace", "2").await;
+    let viewer = server.member(&owner, "kenji", "1").await;
+
+    for path in ["/api/metrics/threads", "/api/metrics/growth"] {
+        let refused = server.call(Method::GET, path, Some(&console), None).await;
+        let signed_out = server.call(Method::GET, path, None, None).await;
+        assert_eq!(refused.status, StatusCode::FORBIDDEN, "{path}");
+        assert_eq!(signed_out.status, StatusCode::UNAUTHORIZED, "{path}");
+    }
+    let threads = server
+        .call(Method::GET, "/api/metrics/threads", Some(&viewer), None)
+        .await;
+    let growth = server
+        .call(Method::GET, "/api/metrics/growth", Some(&viewer), None)
+        .await;
+
+    assert_eq!(threads.status, StatusCode::OK, "{}", threads.text);
+    let end = (NOW / 5 + 1) * 5;
+    assert_eq!(
+        threads.json(),
+        json!({ "from": end - 3600, "to": end, "measured": 0, "process": null, "threads": [] })
+    );
+    assert_eq!(growth.status, StatusCode::OK, "{}", growth.text);
+    assert_eq!(growth.json(), Value::Null, "no run under way");
+}
+
+#[tokio::test]
+async fn the_series_say_how_many_samples_each_bucket_holds() {
+    let server = Server::new().await;
+    let owner = server.owner().await;
+
+    let reply = server
+        .call(
+            Method::GET,
+            "/api/metrics/series?range=6h&series=players",
+            Some(&owner),
+            None,
+        )
+        .await;
+
+    let body = reply.json();
+    for coverage in ["observed", "online"] {
+        let buckets = body[coverage].as_array().unwrap();
+        assert_eq!(buckets.len(), 720, "{coverage}");
+        assert!(buckets.iter().all(|count| count == 0), "{coverage}");
+    }
+}
+
+#[tokio::test]
 async fn the_live_topic_gives_the_newest_sample_then_each_one_taken() {
     let server = Server::new().await;
     let owner = server.owner().await;

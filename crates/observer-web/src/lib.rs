@@ -16,7 +16,8 @@ use std::sync::Arc;
 
 use axum::extract::Request;
 use axum::{Router, middleware};
-use observer_app::{Accounts, AuditLog, Diagnostics, Metrics, Schedule, Servers, Supervision};
+use observer_app::{Accounts, Artifacts, AuditLog, Diagnostics, Metrics, Schedule, Servers, Supervision};
+use observer_domain::about::Build;
 use tower_http::catch_panic::CatchPanicLayer;
 use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::trace::TraceLayer;
@@ -31,13 +32,14 @@ const MAX_BODY_BYTES: usize = 1024 * 1024;
 
 #[derive(Clone)]
 pub struct AppState {
-    pub version: &'static str,
+    pub build: Build,
     pub accounts: Accounts,
     pub audit: AuditLog,
     pub servers: Servers,
     pub supervision: Supervision,
     pub metrics: Metrics,
     pub schedule: Schedule,
+    pub artifacts: Artifacts,
     pub diagnostics: Diagnostics,
     pub live: Live,
     /// Cookies ignore ports, so the name carries the instance id: two Observers on one host never
@@ -55,11 +57,12 @@ pub struct Services {
     pub supervision: Supervision,
     pub metrics: Metrics,
     pub schedule: Schedule,
+    pub artifacts: Artifacts,
     pub diagnostics: Diagnostics,
 }
 
 impl AppState {
-    pub fn new(version: &'static str, services: Services, instance_id: &str, hosts: &[String]) -> Self {
+    pub fn new(build: Build, services: Services, instance_id: &str, hosts: &[String]) -> Self {
         let Services {
             accounts,
             audit,
@@ -67,16 +70,18 @@ impl AppState {
             supervision,
             metrics,
             schedule,
+            artifacts,
             diagnostics,
         } = services;
         Self {
-            version,
+            build,
             accounts,
             audit,
             servers,
             supervision,
             metrics,
             schedule,
+            artifacts,
             diagnostics,
             live: Live::new(),
             cookie: format!("observer_session_{instance_id}"),

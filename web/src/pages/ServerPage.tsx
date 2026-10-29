@@ -1,5 +1,15 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { FolderOpen, Plus, Power, RotateCw, SquareTerminal, X, type LucideIcon } from 'lucide-react';
+import { Link } from '@tanstack/react-router';
+import {
+    ArrowRight,
+    FolderOpen,
+    Plus,
+    Power,
+    RotateCw,
+    SquareTerminal,
+    X,
+    type LucideIcon,
+} from 'lucide-react';
 import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode, type Ref } from 'react';
 
 import { ApiError } from '../api/client';
@@ -9,6 +19,7 @@ import type { LaunchSettings } from '../api/generated/LaunchSettings';
 import type { OneSync } from '../api/generated/OneSync';
 import type { StoredLaunch } from '../api/generated/StoredLaunch';
 import { cleaned, countChanges, DEFAULT_LAUNCH, launchIssues, launchQuery, saveLaunch } from '../api/launch';
+import { useArtifacts } from '../artifacts/context';
 import { Button, buttonVariants } from '../components/Button';
 import { Checkbox } from '../components/Checkbox';
 import { FieldError, TextField, inputClass } from '../components/Field';
@@ -197,6 +208,12 @@ function LaunchForm({ saved }: { saved: StoredLaunch | null }) {
         <form ref={form} className="flex flex-col gap-3" onSubmit={submit} noValidate>
             {saved === null && <Notice tone="warning">{t.server.unsaved}</Notice>}
             {stale && outcome === null && <Notice tone="warning">{t.server.changedElsewhere}</Notice>}
+            {saved?.legacyBuildPath != null && (
+                <Notice tone="warning">
+                    {t.server.legacyBuild}{' '}
+                    <span className="font-mono break-all">{saved.legacyBuildPath}</span>
+                </Notice>
+            )}
             {outcome && (
                 <Notice ref={notice} tabIndex={-1} tone={outcome.tone}>
                     {outcome.message}
@@ -205,16 +222,7 @@ function LaunchForm({ saved }: { saved: StoredLaunch | null }) {
 
             <Card id="server-files" icon={FolderOpen} title={t.server.files}>
                 <div className="flex max-w-2xl flex-col gap-4">
-                    <PathField
-                        label={t.server.buildPath}
-                        hint={t.server.buildPathHint}
-                        value={fields.buildPath}
-                        error={issue('buildPath')}
-                        onChange={(value) => {
-                            edit('buildPath', value);
-                            forget('buildPath');
-                        }}
-                    />
+                    <SelectedBuild />
                     <PathField
                         label={t.server.dataPath}
                         hint={t.server.dataPathHint}
@@ -339,6 +347,35 @@ function LaunchForm({ saved }: { saved: StoredLaunch | null }) {
                 </div>
             )}
         </form>
+    );
+}
+
+/** Which build FXServer starts, chosen on the Artifacts page rather than here. */
+function SelectedBuild() {
+    const { t } = useI18n();
+    const { status, refused } = useArtifacts();
+    const text =
+        status === null
+            ? refused
+                ? null
+                : t.server.buildUnknown
+            : status.selected === null
+              ? t.server.buildNone
+              : t.server.buildSelected(String(status.selected));
+    return (
+        <div className="flex flex-col gap-1">
+            <p className="text-ui font-medium text-ink">{t.server.build}</p>
+            <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-body text-ink-2">
+                {text}
+                <Link
+                    to="/artifacts"
+                    className="inline-flex items-center gap-1.5 font-medium text-ink underline-offset-2 hover:underline"
+                >
+                    {t.server.openArtifacts}
+                    <ArrowRight size={14} strokeWidth={1.5} aria-hidden="true" />
+                </Link>
+            </p>
+        </div>
     );
 }
 

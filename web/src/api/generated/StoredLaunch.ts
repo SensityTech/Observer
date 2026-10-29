@@ -8,4 +8,9 @@ export type StoredLaunch = { settings: LaunchSettings,
 /**
  * Sent back with a change, which fails with `conflict` if the settings changed in between.
  */
-version: number, };
+version: number, 
+/**
+ * The build folder FXServer ran from before builds lived in Observer's data folder, until
+ * the owner imports it or selects a build.
+ */
+legacyBuildPath: string | null, };

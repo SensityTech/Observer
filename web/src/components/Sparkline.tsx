@@ -59,16 +59,21 @@ export const sparklinePath = (values: readonly (number | null)[], max?: number):
 
 const round = (value: number) => Math.round(value * 100) / 100;
 
-/** A tile's trend: 32 px high, the tile's width. A flat trend is grey and says nothing to a reader. */
+/**
+ * A tile's trend: 32 px high, the tile's width. A flat trend is grey and says nothing to a reader;
+ * one in `warning` takes the warning fill.
+ */
 export function Sparkline({
     values,
     label,
     max,
+    warning = false,
     className,
 }: {
     values: readonly (number | null)[];
     label: string;
     max?: number;
+    warning?: boolean;
     className?: string;
 }) {
     const path = sparklinePath(values, max);
@@ -77,7 +82,7 @@ export function Sparkline({
         <svg
             className={cn(
                 'block h-8 w-full overflow-visible',
-                flat ? 'text-chart-muted' : 'text-accent',
+                flat ? 'text-chart-muted' : warning ? 'text-warning-fill' : 'text-accent',
                 className,
             )}
             viewBox={`0 0 ${WIDTH} ${HEIGHT}`}

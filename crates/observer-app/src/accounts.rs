@@ -19,9 +19,9 @@ use crate::{Caller, Clock, Error};
 pub(crate) const TEMPORARY_PASSWORD_LIFETIME: SignedDuration = SignedDuration::from_hours(72);
 /// The longest username `check_username` accepts.
 pub(crate) const MAX_USERNAME_BYTES: usize = 32;
-/// The names Observer gives itself on the console, in the audit log and in the bridge's events:
-/// an account by one of them would pass for Observer.
-const RESERVED_USERNAMES: [&str; 4] = ["observer", "schedule", "supervisor", "system"];
+/// The names Observer gives itself on the console, in the audit log and in the bridge's events,
+/// `local` being someone at the host's own window: an account by one of them would pass for them.
+const RESERVED_USERNAMES: [&str; 5] = ["observer", "schedule", "supervisor", "system", "local"];
 /// A row of login failures with no lock and no failure for this long is forgotten.
 const FORGET_FAILURES_AFTER: SignedDuration = SignedDuration::from_hours(24);
 
@@ -206,7 +206,14 @@ mod tests {
 
     #[test]
     fn the_names_observer_gives_itself_are_taken_whatever_their_case() {
-        for reserved in ["observer", "Observer", "SCHEDULE", "Supervisor", "system"] {
+        for reserved in [
+            "observer",
+            "Observer",
+            "SCHEDULE",
+            "Supervisor",
+            "system",
+            "Local",
+        ] {
             assert_eq!(
                 check_username(reserved).unwrap_err().code(),
                 Some(ErrorCode::NameTaken),

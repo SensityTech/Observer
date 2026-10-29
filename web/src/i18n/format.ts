@@ -18,7 +18,7 @@ export const formatNumber = (locale: string, value: number, options?: Intl.Numbe
     new Intl.NumberFormat(locale, options).format(value);
 
 /** Three significant digits and one decimal at most: `6.8 ms`, `22.1 GB`, `412 ms`, `182%`. */
-const FIGURE = {
+export const FIGURE = {
     maximumSignificantDigits: 3,
     maximumFractionDigits: 1,
     roundingPriority: 'lessPrecision',
@@ -30,9 +30,11 @@ const BYTE_UNITS = ['KB', 'MB', 'GB', 'TB'] as const;
 
 /**
  * Memory and disk in multiples of 1024 labelled `KB` to `TB`, as Windows' Task Manager shows them,
- * so a host of 64 GiB reads `64 GB`. Whole bytes take Intl's long name: `512 bytes`.
+ * so a host of 64 GiB reads `64 GB`. Whole bytes take Intl's long name: `512 bytes`. A `signed`
+ * growth reads `+180 MB`, and `0 bytes` once it rounds to nothing either way.
  */
-export const formatBytes = (locale: string, bytes: number) => {
+export const formatBytes = (locale: string, bytes: number, { signed = false } = {}) => {
+    const signDisplay = signed ? 'exceptZero' : 'auto';
     // Rates come with decimals: 1023.6 bytes a second would read `1,024 bytes` once rounded.
     if (Math.round(Math.abs(bytes)) < 1024) {
         return new Intl.NumberFormat(locale, {
@@ -40,6 +42,7 @@ export const formatBytes = (locale: string, bytes: number) => {
             unit: 'byte',
             unitDisplay: 'long',
             maximumFractionDigits: 0,
+            signDisplay,
         }).format(bytes);
     }
     let value = bytes / 1024;
@@ -48,7 +51,7 @@ export const formatBytes = (locale: string, bytes: number) => {
         value /= 1024;
         unit += 1;
     }
-    return `${figure(locale, value)} ${BYTE_UNITS[unit]}`;
+    return `${formatNumber(locale, value, { ...FIGURE, signDisplay })} ${BYTE_UNITS[unit]}`;
 };
 
 const BIT_RATE_UNITS = ['bit/s', 'kbit/s', 'Mbit/s', 'Gbit/s'] as const;
@@ -68,7 +71,9 @@ export const formatBitRate = (locale: string, bytesPerSecond: number) => {
 export const formatPercent = (locale: string, percent: number) =>
     formatNumber(locale, percent / 100, { ...FIGURE, style: 'percent' });
 
-export const formatMilliseconds = (locale: string, ms: number) => `${figure(locale, ms)} ms`;
+/** Under a millisecond, two significant digits: a fast disk reads `0.04 ms`, not `0 ms`. */
+export const formatMilliseconds = (locale: string, ms: number) =>
+    `${Math.abs(ms) < 1 ? formatNumber(locale, ms, { maximumSignificantDigits: 2 }) : figure(locale, ms)} ms`;
 
 /**
  * A span of time as the panel words it: `12 s`, `15 min`, `2h 14m`, `3h`, `3d 4h`. Intl's own

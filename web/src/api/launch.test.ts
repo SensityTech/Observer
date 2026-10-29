@@ -7,6 +7,7 @@ describe('launchIssues', () => {
         expect(
             launchIssues({
                 issues: [
+                    { field: 'dataPath', index: null, problem: 'notAbsolute' },
                     { field: 'buildPath', index: null, problem: 'notAbsolute' },
                     { field: 'argumentName', index: 2, problem: 'secret' },
                     { field: 'monitorMode', index: null, problem: 'reserved' },
@@ -15,7 +16,7 @@ describe('launchIssues', () => {
                 ],
             }),
         ).toEqual([
-            { field: 'buildPath', index: null, problem: 'notAbsolute' },
+            { field: 'dataPath', index: null, problem: 'notAbsolute' },
             { field: 'argumentName', index: 2, problem: 'secret' },
         ]);
         expect(launchIssues({})).toEqual([]);
@@ -25,7 +26,7 @@ describe('launchIssues', () => {
 
 describe('countChanges', () => {
     it('should count each setting that differs, the arguments as one', () => {
-        const saved = { ...DEFAULT_LAUNCH, buildPath: 'C:/FXServer/build' };
+        const saved = { ...DEFAULT_LAUNCH, dataPath: 'C:/FXServer/server-data' };
 
         expect(countChanges(saved, saved)).toBe(0);
         expect(
@@ -46,13 +47,13 @@ describe('cleaned', () => {
         expect(
             cleaned({
                 ...DEFAULT_LAUNCH,
-                buildPath: '  C:/FXServer/build ',
+                dataPath: '  C:/FXServer/server-data ',
                 cfgFile: 'server.cfg\t',
                 extraArguments: [{ name: ' sv_hostname ', value: ' Lab ' }],
             }),
         ).toEqual({
             ...DEFAULT_LAUNCH,
-            buildPath: 'C:/FXServer/build',
+            dataPath: 'C:/FXServer/server-data',
             cfgFile: 'server.cfg',
             extraArguments: [{ name: 'sv_hostname', value: ' Lab ' }],
         });

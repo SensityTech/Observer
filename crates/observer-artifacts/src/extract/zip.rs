@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use zip::result::ZipError;
 use zip::{CompressionMethod, ZipArchive};
 
-use super::{Budget, Refusal, components, refuse, write_entry};
+use super::{Budget, Refusal, Track, components, refuse, write_entry};
 use crate::error::{Error, io};
 
 /// A `server.zip` whose every entry passed the checks, and what it will take on disk.
@@ -17,6 +17,12 @@ use crate::error::{Error, io};
 pub(crate) struct Plan {
     entries: Vec<Planned>,
     pub unpacked: u64,
+}
+
+impl Plan {
+    pub fn entries(&self) -> usize {
+        self.entries.len()
+    }
 }
 
 #[derive(Debug)]
@@ -92,10 +98,11 @@ pub(crate) fn plan(archive: &Path) -> Result<Plan, Error> {
 }
 
 /// Writes a planned archive into `into`, which must not exist yet.
-pub(crate) fn extract(archive: &Path, plan: &Plan, into: &Path) -> Result<(), Error> {
+pub(crate) fn extract(archive: &Path, plan: &Plan, into: &Path, track: &Track) -> Result<(), Error> {
     let mut zip = open(archive)?;
     fs::create_dir(into).map_err(io(into))?;
     for planned in &plan.entries {
+        track.entry()?;
         let path = into.join(&planned.path);
         let Some(size) = planned.size else {
             fs::create_dir_all(&path).map_err(io(&path))?;
@@ -183,7 +190,7 @@ mod tests {
         let into = dir.path().join("tree");
 
         let plan = plan(&archive).unwrap();
-        extract(&archive, &plan, &into).unwrap();
+        extract(&archive, &plan, &into, &Track::default()).unwrap();
 
         assert_eq!(plan.unpacked, 19);
         assert_eq!(fs::read(into.join("FXServer.exe")).unwrap(), b"MZ fake");
@@ -338,7 +345,7 @@ mod tests {
         let into = dir.path().join("tree");
 
         let plan = plan(&archive).unwrap();
-        let error = extract(&archive, &plan, &into).unwrap_err();
+        let error = extract(&archive, &plan, &into, &Track::default()).unwrap_err();
 
         assert!(matches!(error, Error::Damaged(_)), "{error}");
     }

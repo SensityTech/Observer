@@ -1,6 +1,7 @@
 //! How Observer launches FXServer. Only the owner changes these settings: a folder, a cfg or an
 //! argument amounts to choosing what the host runs. The checks here are pure, so the panel's form
-//! and the launch builder refuse exactly the same things.
+//! and the launch builder refuse exactly the same things. Which build runs is chosen apart, among
+//! the builds installed in Observer's data folder.
 
 use std::collections::HashSet;
 
@@ -57,8 +58,6 @@ const WINDOWS_DEVICES: &[&str] = &[
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[ts(export)]
 pub struct LaunchSettings {
-    /// The FXServer build: the folder of `FXServer.exe` on Windows, the one holding `alpine` on Linux.
-    pub build_path: String,
     /// The folder of the server's resources and cfg. FXServer runs from it.
     pub data_path: String,
     /// The cfg FXServer executes, relative to the data folder.
@@ -74,11 +73,15 @@ pub struct LaunchSettings {
 
 /// `GET /api/servers/default/launch` once the owner saved the settings, and what a change returns.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
 #[ts(export)]
 pub struct StoredLaunch {
     pub settings: LaunchSettings,
     /// Sent back with a change, which fails with `conflict` if the settings changed in between.
     pub version: i64,
+    /// The build folder FXServer ran from before builds lived in Observer's data folder, until
+    /// the owner imports it or selects a build.
+    pub legacy_build_path: Option<String>,
 }
 
 /// `PUT /api/servers/default/launch`.
@@ -152,7 +155,6 @@ pub struct LaunchIssue {
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
 pub enum LaunchField {
-    BuildPath,
     DataPath,
     CfgFile,
     ExtraArguments,
@@ -211,14 +213,9 @@ impl LaunchSettings {
         };
 
         note(
-            LaunchField::BuildPath,
-            None,
-            path_problem(&self.build_path, platform),
-        );
-        note(
             LaunchField::DataPath,
             None,
-            path_problem(&self.data_path, platform),
+            folder_problem(&self.data_path, platform),
         );
         note(LaunchField::CfgFile, None, cfg_problem(&self.cfg_file, platform));
         if self.extra_arguments.len() > MAX_EXTRA_ARGUMENTS {
@@ -256,9 +253,10 @@ fn text_problem(text: &str) -> Option<LaunchProblem> {
     }
 }
 
-/// The build and data folders. On Linux the build folder reaches FXServer's command line inside
-/// `+set citizen_dir`, so it follows the rules of an argument value too.
-fn path_problem(path: &str, platform: Platform) -> Option<LaunchProblem> {
+/// What keeps a folder from being given to FXServer: the server data folder, and the build folder,
+/// which reaches FXServer's command line inside `+set citizen_dir` on Linux and so follows the
+/// rules of an argument value too.
+pub fn folder_problem(path: &str, platform: Platform) -> Option<LaunchProblem> {
     if let Some(problem) = text_problem(path) {
         return Some(problem);
     }
@@ -395,7 +393,6 @@ mod tests {
 
     fn settings() -> LaunchSettings {
         LaunchSettings {
-            build_path: r"C:\FXServer\build".to_owned(),
             data_path: r"C:\FXServer\server-data".to_owned(),
             cfg_file: "server.cfg".to_owned(),
             onesync: OneSync::On,
@@ -408,7 +405,6 @@ mod tests {
     /// The same on Linux.
     fn linux() -> LaunchSettings {
         LaunchSettings {
-            build_path: "/opt/fxserver/build".to_owned(),
             data_path: "/srv/fivem/server-data".to_owned(),
             ..settings()
         }
@@ -437,15 +433,7 @@ mod tests {
     }
 
     fn build_path(path: &str, platform: Platform) -> Vec<LaunchProblem> {
-        let settings = LaunchSettings {
-            build_path: path.to_owned(),
-            ..on(platform)
-        };
-        settings
-            .issues(platform)
-            .into_iter()
-            .map(|issue| issue.problem)
-            .collect()
+        folder_problem(path, platform).into_iter().collect()
     }
 
     #[test]
@@ -777,7 +765,6 @@ mod tests {
     #[test]
     fn issues_name_their_field_and_the_argument_they_concern() {
         let broken = LaunchSettings {
-            build_path: "build".to_owned(),
             data_path: String::new(),
             cfg_file: "../server.cfg".to_owned(),
             extra_arguments: vec![argument("sv_hostname", "Lab"), argument("exec", "a;b")],
@@ -787,7 +774,6 @@ mod tests {
         assert_eq!(
             broken.issues(Platform::Windows),
             [
-                issue(LaunchField::BuildPath, None, LaunchProblem::NotAbsolute),
                 issue(LaunchField::DataPath, None, LaunchProblem::Required),
                 issue(LaunchField::CfgFile, None, LaunchProblem::InvalidCfgFile),
                 issue(LaunchField::ArgumentName, Some(1), LaunchProblem::Reserved),
@@ -799,7 +785,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            serde_json::to_value(broken.issues(Platform::Windows)[3]).unwrap(),
+            serde_json::to_value(broken.issues(Platform::Windows)[2]).unwrap(),
             serde_json::json!({ "field": "argumentName", "index": 1, "problem": "reserved" })
         );
     }
@@ -811,7 +797,6 @@ mod tests {
         assert_eq!(
             json,
             serde_json::json!({
-                "buildPath": r"C:\FXServer\build",
                 "dataPath": r"C:\FXServer\server-data",
                 "cfgFile": "server.cfg",
                 "onesync": "on",
@@ -824,9 +809,13 @@ mod tests {
             serde_json::from_value::<LaunchSettings>(json.clone()).unwrap(),
             settings()
         );
-        let mut extra = json;
+        let mut extra = json.clone();
         extra["monitorMode"] = serde_json::json!(true);
         assert!(serde_json::from_value::<LaunchSettings>(extra).is_err());
+        // Builds are chosen on their own page now: a body from before is refused, not half read.
+        let mut old = json;
+        old["buildPath"] = serde_json::json!(r"C:\FXServer\build");
+        assert!(serde_json::from_value::<LaunchSettings>(old).is_err());
         for mode in OneSync::ALL {
             assert_eq!(serde_json::to_value(mode).unwrap(), mode.as_str());
             assert_eq!(OneSync::from_name(mode.as_str()), Some(mode));

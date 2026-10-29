@@ -6,36 +6,47 @@ use anyhow::Context;
 use axum::Router;
 use jiff::tz::TimeZone;
 use observer_app::{
-    Accounts, AuditLog, Clock, DatabaseFiles, Diagnostics, DiagnosticsSetup, Metrics, MetricsSetup,
-    PasswordCost, Running, Schedule, ScheduleSetup, ScheduleTask, Servers, Setup, Sources, Supervision,
+    Accounts, Artifacts, ArtifactsSetup, ArtifactsTask, AuditLog, Clock, DatabaseFiles, Diagnostics,
+    DiagnosticsSetup, Metrics, MetricsSetup, PasswordCost, Running, Schedule, ScheduleSetup, ScheduleTask,
+    Servers, Setup, Sources, Supervision,
 };
+use observer_artifacts::Http;
+use observer_artifacts::catalog::Catalog;
 use observer_fxserver::console::{ConsoleLog, LogLimits};
 use observer_store::{BackupKind, Database};
 use tokio::net::TcpListener;
+use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
-use crate::config::Config;
-use crate::shutdown::{Shutdown, Signals};
-use crate::{lock, logging, setup};
+use crate::config::{Config, DataPaths};
+use crate::shutdown::{Signals, StopRequest};
+use crate::{BUILD, lock, logging, setup};
 
-const VERSION: &str = env!("CARGO_PKG_VERSION");
 const DAILY: Duration = Duration::from_hours(24);
 const BACKUP_CHECK_INTERVAL: Duration = Duration::from_hours(1);
 const UPKEEP_INTERVAL: Duration = Duration::from_mins(1);
 const AUDIT_FOLLOW_INTERVAL: Duration = Duration::from_secs(1);
 
+#[derive(Debug, Default, clap::Args)]
+pub struct RunArgs {
+    /// Show neither the status window nor the tray icon.
+    #[cfg(windows)]
+    #[arg(long)]
+    no_window: bool,
+}
+
 #[expect(
     clippy::too_many_lines,
-    reason = "every service starts and stops here, in an order that reads best in one place"
+    reason = "Observer's start, then its stop, each step in the order it must take"
 )]
-pub async fn run(config: Config) -> anyhow::Result<()> {
+pub async fn run(config: Config, args: RunArgs) -> anyhow::Result<()> {
     let paths = config.paths();
     let _lock = lock::acquire(&paths.root)?;
     let log_guard = logging::init(&config.log.level, &paths.logs)?;
     let mut signals = Signals::listen().context("cannot listen for stop requests")?;
 
-    info!(version = VERSION, data_dir = %paths.root.display(), "starting Observer");
+    info!(version = BUILD.version, commit = BUILD.commit, data_dir = %paths.root.display(), "starting Observer");
 
     let db = Database::open(&paths.database, &paths.backups)
         .await
@@ -55,6 +66,7 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
             accounts: accounts.clone(),
             servers: servers.clone(),
             data_dir: paths.root.clone(),
+            artifacts: paths.artifacts.clone(),
             console_logs,
             log: Some(&console_log),
         },
@@ -79,6 +91,8 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
         |_| {},
     )
     .await?;
+    let (artifacts, building) =
+        builds(&db, &clock, &accounts, &servers, &supervision, &schedule, &paths).await?;
     let metrics = Metrics::open(MetricsSetup {
         path: paths.metrics.clone(),
         clock: Clock::system(),
@@ -90,7 +104,7 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
         .await
         .with_context(|| format!("cannot listen on {}", config.http.listen))?;
     announce(config.http.listen);
-    setup::offer_link(&accounts, config.http.listen).await?;
+    let setup_token = setup::offer_link(&accounts, config.http.listen).await?;
 
     let stop = CancellationToken::new();
     let services = observer_web::Services {
@@ -99,10 +113,11 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
         servers,
         supervision: supervision.clone(),
         metrics: metrics.clone(),
-        schedule,
+        schedule: schedule.clone(),
+        artifacts,
         diagnostics,
     };
-    let state = observer_web::AppState::new(VERSION, services, &instance_id, &config.http.hosts);
+    let state = observer_web::AppState::new(BUILD, services, &instance_id, &config.http.hosts);
     let live = state.live.clone();
     // Before FXServer starts with Observer, so that the first samples show its start.
     let sampling = metrics.start(Sources {
@@ -116,13 +131,38 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
     });
     let server = tokio::spawn(serve(listener, observer_web::router(state), stop.clone()));
     let backups = tokio::spawn(daily_backups(db.clone(), stop.clone()));
-    let upkeep = tokio::spawn(upkeep(accounts, audit.clone(), stop.clone()));
-    let audit_feed = tokio::spawn(publish_audit(audit, stop.clone()));
+    let upkeep = tokio::spawn(upkeep(accounts.clone(), audit.clone(), stop.clone()));
+    let audit_feed = tokio::spawn(publish_audit(audit.clone(), stop.clone()));
+    let host = Host::start(HostSetup {
+        args,
+        supervision: &supervision,
+        schedule,
+        accounts,
+        listen: config.http.listen,
+        data_dir: &paths.root,
+        setup_token,
+        signals: &signals,
+    });
     if let Err(error) = supervision.boot().await {
         error!(%error, "cannot start FXServer with Observer");
     }
 
-    stop_fxserver(&supervision, scheduling, &mut supervised, &mut signals).await;
+    let first = signals.next().await;
+    info!(shortened = first.shortened, from = ?first.from, "stopping Observer");
+    host.stopping();
+    // Before FXServer stops, so that the log names who stopped it even if the stop goes wrong.
+    if let Err(error) = audit.record_stop(first.from).await {
+        warn!(%error, "cannot audit the stop of Observer");
+    }
+    stop_fxserver(
+        &supervision,
+        building,
+        scheduling,
+        &mut supervised,
+        &mut signals,
+        first,
+    )
+    .await;
     supervised.close().await;
     diagnosing.close().await;
     // After the supervision, so that FXServer's stop is in the statistics.
@@ -130,22 +170,135 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
     stop.cancel();
     live.shutdown().await;
 
-    if let Err(error) = server.await.context("the HTTP server task failed")? {
-        error!(%error, "the HTTP server stopped with an error");
-    }
-    backups.await.context("the backup task failed")?;
-    upkeep.await.context("the upkeep task failed")?;
-    audit_feed.await.context("the audit feed task failed")?;
+    join(server, [backups, upkeep, audit_feed]).await?;
     console_log.close().await;
     metrics
         .close()
         .await
         .context("cannot close the metrics database")?;
     db.close().await.context("cannot close the database")?;
+    // Before the release, so that the tray icon leaves the notification area while Windows lets
+    // the process run.
+    host.close().await;
 
     info!("Observer stopped");
     drop(log_guard);
     signals.release();
+    Ok(())
+}
+
+/// What the host shows of Observer besides its console: the status window and the tray icon on
+/// Windows, the state of the service to systemd on Linux.
+struct Host {
+    #[cfg(windows)]
+    desktop: Option<crate::desktop::Desktop>,
+    #[cfg(target_os = "linux")]
+    readiness: crate::systemd::Readiness,
+}
+
+#[cfg_attr(
+    not(windows),
+    expect(dead_code, reason = "the window takes what Linux leaves")
+)]
+struct HostSetup<'a> {
+    args: RunArgs,
+    supervision: &'a Supervision,
+    schedule: Schedule,
+    accounts: Accounts,
+    listen: SocketAddr,
+    data_dir: &'a std::path::Path,
+    setup_token: Option<observer_app::SetupToken>,
+    signals: &'a Signals,
+}
+
+impl Host {
+    /// Once the panel listens, before FXServer starts with Observer.
+    #[cfg_attr(
+        not(windows),
+        expect(clippy::needless_pass_by_value, reason = "the window takes what Linux leaves")
+    )]
+    fn start(setup: HostSetup<'_>) -> Self {
+        #[cfg(windows)]
+        {
+            let desktop = (!setup.args.no_window).then(|| {
+                crate::desktop::Desktop::start(crate::desktop::DesktopSetup {
+                    runtime: tokio::runtime::Handle::current(),
+                    supervision: setup.supervision.clone(),
+                    schedule: setup.schedule,
+                    accounts: setup.accounts,
+                    listen: setup.listen,
+                    data_dir: setup.data_dir.to_path_buf(),
+                    setup: setup.setup_token,
+                    stop: setup.signals.requests(),
+                    build: BUILD,
+                })
+            });
+            Self { desktop }
+        }
+        #[cfg(not(windows))]
+        {
+            Self {
+                #[cfg(target_os = "linux")]
+                readiness: crate::systemd::Readiness::start(setup.supervision, setup.listen.port()),
+            }
+        }
+    }
+
+    fn stopping(&self) {
+        #[cfg(windows)]
+        if let Some(desktop) = &self.desktop {
+            desktop.stopping();
+        }
+        #[cfg(target_os = "linux")]
+        self.readiness.stopping();
+    }
+
+    async fn close(self) {
+        #[cfg(windows)]
+        if let Some(desktop) = self.desktop {
+            desktop.close().await;
+        }
+        #[cfg(target_os = "linux")]
+        self.readiness.close().await;
+    }
+}
+
+/// FXServer's builds, listed and downloaded from Cfx.re. After the schedule, whose next restart a
+/// build can wait for.
+async fn builds(
+    db: &Database,
+    clock: &Clock,
+    accounts: &Accounts,
+    servers: &Servers,
+    supervision: &Supervision,
+    schedule: &Schedule,
+    paths: &DataPaths,
+) -> anyhow::Result<(Artifacts, ArtifactsTask)> {
+    let root = &paths.artifacts;
+    let setup = ArtifactsSetup {
+        db: db.clone(),
+        clock: clock.clone(),
+        root: root.clone(),
+        accounts: accounts.clone(),
+        servers: servers.clone(),
+        supervision: supervision.clone(),
+        schedule: schedule.status(),
+        catalog: Catalog::new(Http::new()?),
+        http: Http::new()?,
+    };
+    Artifacts::start(setup, |_| {})
+        .await
+        .with_context(|| format!("cannot use {} for FXServer builds", root.display()))
+}
+
+/// Waits for the tasks the stop token ends: the HTTP server, then the periodic ones.
+async fn join(server: JoinHandle<io::Result<()>>, periodic: [JoinHandle<()>; 3]) -> anyhow::Result<()> {
+    if let Err(error) = server.await.context("the HTTP server task failed")? {
+        error!(%error, "the HTTP server stopped with an error");
+    }
+    for (task, name) in periodic.into_iter().zip(["backup", "upkeep", "audit feed"]) {
+        task.await.with_context(|| format!("the {name} task failed"))?;
+    }
     Ok(())
 }
 
@@ -155,25 +308,28 @@ async fn serve(listener: TcpListener, app: Router, stop: CancellationToken) -> i
         .await
 }
 
-/// Waits for a stop request, then stops FXServer for good. The panel keeps serving meanwhile, so
-/// that it shows the stop as it happens.
+/// Stops FXServer for good, as `first` asked. The panel keeps serving meanwhile, so that it shows
+/// the stop as it happens.
 async fn stop_fxserver(
     supervision: &Supervision,
+    building: ArtifactsTask,
     scheduling: ScheduleTask,
     supervised: &mut Running,
     signals: &mut Signals,
+    first: StopRequest,
 ) {
-    let mut shortened = signals.next().await == Shutdown::Shortened;
-    info!(shortened, "stopping Observer");
-    // The schedule goes first: it must not restart a server Observer is stopping.
+    let mut shortened = first.shortened;
+    // A running job is cancelled first, then the schedule: it must not restart a server Observer
+    // is stopping.
+    building.close().await;
     scheduling.close().await;
     supervision.shutdown(shortened).await;
     loop {
         tokio::select! {
             () = supervised.stopped() => return,
             // A console closed during a graceful stop leaves Windows' few seconds only.
-            shutdown = signals.next(), if !shortened => {
-                if shutdown == Shutdown::Shortened {
+            request = signals.next(), if !shortened => {
+                if request.shortened {
                     shortened = true;
                     info!("the console is closing; shortening the stop");
                     supervision.shutdown(true).await;

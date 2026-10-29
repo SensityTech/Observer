@@ -8,7 +8,18 @@ import { REFETCH_EVERY } from '../api/metrics';
 const KEPT_SECONDS = REFETCH_EVERY / 1000 + 60;
 
 /** Series whose bucket holds the slot's total rather than an average. */
-const COUNTS = new Set<Series>(['joins', 'leaves', 'hitchesMain', 'hitchesNetwork', 'hitchesSync', 'barks']);
+const COUNTS = new Set<Series>([
+    'joins',
+    'leaves',
+    'hitchesMain',
+    'hitchesNetwork',
+    'hitchesSync',
+    'barks',
+    'fxsFaults',
+    'fxsHardFaults',
+    'treeStarted',
+    'hostDiskTransfers',
+]);
 
 /**
  * The live samples held once `sample` came, oldest first. A sample already held, a snapshot after
@@ -49,22 +60,29 @@ const merge = (page: MetricsSeries, sample: LiveSample): MetricsSeries => {
         const value = sample.values[data.series];
         return value === undefined ? moved : add(moved, index, value, page.range === '1h');
     });
-    return { ...page, from: page.from + shift * page.step, series, last: sample.ts };
+    // The sample is one more Observer took in its bucket, and one taken online or not.
+    const observed = along(page.observed, shift, 0);
+    const online = along(page.online, shift, 0);
+    observed[index] = (observed[index] ?? 0) + 1;
+    if (sample.state === 'online' || sample.state === 'degraded') {
+        online[index] = (online[index] ?? 0) + 1;
+    }
+    return { ...page, from: page.from + shift * page.step, series, last: sample.ts, observed, online };
 };
 
-const moveOn = (data: SeriesData, buckets: number): SeriesData => {
-    const along = <T>(values: T[], empty: T) => [
-        ...values.slice(buckets),
-        ...Array<T>(Math.min(buckets, values.length)).fill(empty),
-    ];
-    return {
-        ...data,
-        values: along(data.values, null),
-        ...(data.min && { min: along(data.min, null) }),
-        ...(data.max && { max: along(data.max, null) }),
-        ...(data.samples && { samples: along(data.samples, 0) }),
-    };
-};
+/** The buckets moved on by `buckets`, the new ones `empty`. */
+const along = <T>(values: readonly T[], buckets: number, empty: T): T[] => [
+    ...values.slice(buckets),
+    ...Array<T>(Math.min(buckets, values.length)).fill(empty),
+];
+
+const moveOn = (data: SeriesData, buckets: number): SeriesData => ({
+    ...data,
+    values: along(data.values, buckets, null),
+    ...(data.min && { min: along(data.min, buckets, null) }),
+    ...(data.max && { max: along(data.max, buckets, null) }),
+    ...(data.samples && { samples: along(data.samples, buckets, 0) }),
+});
 
 const add = (data: SeriesData, index: number, value: number, slots: boolean): SeriesData => {
     const values = [...data.values];

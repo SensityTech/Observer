@@ -1,6 +1,7 @@
-//! Turns launch settings into the exact process to start. The settings follow the rules of
-//! `observer_domain::launch`, which refuse anything that would hand FXServer a command Observer
-//! did not mean to give it; what is left here is the file system and the command line itself.
+//! Turns a build and launch settings into the exact process to start. The settings follow the
+//! rules of `observer_domain::launch`, which refuse anything that would hand FXServer a command
+//! Observer did not mean to give it; what is left here is the file system and the command line
+//! itself.
 
 use std::collections::HashSet;
 use std::fs;
@@ -8,7 +9,7 @@ use std::io;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 
-use observer_domain::launch::{LaunchIssue, LaunchSettings, Platform};
+use observer_domain::launch::{self as rules, LaunchIssue, LaunchProblem, LaunchSettings, Platform};
 use observer_domain::server::SpawnFailure;
 use observer_platform::Launch;
 use serde::Serialize;
@@ -47,6 +48,14 @@ pub enum CfgWarning {
     Unreadable { file: PathBuf },
 }
 
+/// What a spawn starts: a build folder, and how FXServer runs from it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ServerLaunch {
+    /// The folder of `FXServer.exe` on Windows, the one holding `alpine` on Linux.
+    pub build: PathBuf,
+    pub settings: LaunchSettings,
+}
+
 #[derive(Debug)]
 pub struct Prepared {
     pub launch: Launch,
@@ -60,6 +69,8 @@ pub struct Prepared {
 pub enum LaunchError {
     #[error("the launch settings are refused: {}", describe(.0))]
     Invalid(Vec<LaunchIssue>),
+    #[error("the build folder {} is refused: {}", path.display(), name(serde_json::to_value(problem)))]
+    BuildFolder { path: PathBuf, problem: LaunchProblem },
     #[error("cannot resolve {}: {source}", path.display())]
     Resolve {
         path: PathBuf,
@@ -82,7 +93,9 @@ impl LaunchError {
     /// Which step failed, without the folders the message names.
     pub fn failure(&self) -> SpawnFailure {
         match self {
-            Self::Invalid(_) | Self::Resolve { .. } => SpawnFailure::InvalidSettings,
+            Self::Invalid(_) | Self::BuildFolder { .. } | Self::Resolve { .. } => {
+                SpawnFailure::InvalidSettings
+            }
             Self::NotABuild { .. } => SpawnFailure::NotABuild,
             Self::MissingData(_) => SpawnFailure::MissingData,
             Self::Cfg { .. } => SpawnFailure::CfgUnreadable,
@@ -90,12 +103,15 @@ impl LaunchError {
     }
 }
 
-/// `buildPath notAbsolute, argumentName 2 reserved`: the issues as the API names them.
-fn describe(issues: &[LaunchIssue]) -> String {
-    let name = |value: serde_json::Result<serde_json::Value>| match value {
+fn name(value: serde_json::Result<serde_json::Value>) -> String {
+    match value {
         Ok(serde_json::Value::String(name)) => name,
         _ => String::new(),
-    };
+    }
+}
+
+/// `dataPath notAbsolute, argumentName 2 reserved`: the issues as the API names them.
+fn describe(issues: &[LaunchIssue]) -> String {
     issues
         .iter()
         .map(|issue| {
@@ -112,16 +128,25 @@ fn describe(issues: &[LaunchIssue]) -> String {
 
 /// Builds the launch: the flavour's program, then `+ensure observer`, `+exec <cfg>`, the extra
 /// arguments and Observer's convars last, so that they win over the cfg.
-pub fn prepare(settings: &LaunchSettings, flavour: Flavour) -> Result<Prepared, LaunchError> {
+pub fn prepare(launch: &ServerLaunch, flavour: Flavour) -> Result<Prepared, LaunchError> {
     let platform = match flavour {
         Flavour::Windows => Platform::Windows,
         Flavour::Linux => Platform::Unix,
     };
+    let settings = &launch.settings;
     let issues = settings.issues(platform);
     if !issues.is_empty() {
         return Err(LaunchError::Invalid(issues));
     }
-    let build = resolve(Path::new(&settings.build_path))?;
+    let build = resolve(&launch.build)?;
+    // On Linux the folder reaches FXServer's command line inside `+set citizen_dir`.
+    let problem = match build.to_str() {
+        Some(text) => rules::folder_problem(text, platform),
+        None => Some(LaunchProblem::ControlCharacter),
+    };
+    if let Some(problem) = problem {
+        return Err(LaunchError::BuildFolder { path: build, problem });
+    }
     let data = resolve(Path::new(&settings.data_path))?;
     if !data.is_dir() {
         return Err(LaunchError::MissingData(data));
@@ -295,9 +320,15 @@ mod tests {
             self.dir.path().join(name).to_str().unwrap().to_owned()
         }
 
+        fn launch(&self) -> ServerLaunch {
+            ServerLaunch {
+                build: self.dir.path().join("build"),
+                settings: self.settings(),
+            }
+        }
+
         fn settings(&self) -> LaunchSettings {
             LaunchSettings {
-                build_path: self.path("build"),
                 data_path: self.path("data"),
                 cfg_file: "server.cfg".to_owned(),
                 onesync: OneSync::Off,
@@ -325,8 +356,15 @@ mod tests {
             .collect()
     }
 
-    fn refused(settings: &LaunchSettings) -> Option<LaunchError> {
-        prepare(settings, Flavour::HOST).err()
+    fn refused(launch: &ServerLaunch) -> Option<LaunchError> {
+        prepare(launch, Flavour::HOST).err()
+    }
+
+    fn with(fixture: &Fixture, settings: LaunchSettings) -> ServerLaunch {
+        ServerLaunch {
+            settings,
+            ..fixture.launch()
+        }
     }
 
     #[test]
@@ -342,7 +380,7 @@ mod tests {
             ..fixture.settings()
         };
 
-        let prepared = prepare(&settings, Flavour::HOST).unwrap();
+        let prepared = prepare(&with(&fixture, settings), Flavour::HOST).unwrap();
 
         assert_eq!(
             server_args(&prepared),
@@ -373,7 +411,6 @@ mod tests {
     fn settings_the_rules_refuse_never_reach_the_command_line() {
         let fixture = Fixture::new("");
         let settings = LaunchSettings {
-            build_path: "build".to_owned(),
             cfg_file: "server.cfg;quit".to_owned(),
             extra_arguments: vec![
                 ExtraArgument {
@@ -388,7 +425,7 @@ mod tests {
             ..fixture.settings()
         };
 
-        let Some(LaunchError::Invalid(issues)) = refused(&settings) else {
+        let Some(LaunchError::Invalid(issues)) = refused(&with(&fixture, settings)) else {
             panic!("the settings were not refused as invalid");
         };
 
@@ -399,7 +436,6 @@ mod tests {
         assert_eq!(
             found,
             [
-                (LaunchField::BuildPath, None, LaunchProblem::NotAbsolute),
                 (LaunchField::CfgFile, None, LaunchProblem::InvalidCfgFile),
                 (LaunchField::ArgumentValue, Some(0), LaunchProblem::OptionLike),
                 (LaunchField::ArgumentName, Some(1), LaunchProblem::Secret),
@@ -407,20 +443,42 @@ mod tests {
         );
         assert_eq!(
             LaunchError::Invalid(issues).to_string(),
-            "the launch settings are refused: buildPath notAbsolute, cfgFile invalidCfgFile, \
-             argumentValue 1 optionLike, argumentName 2 secret"
+            "the launch settings are refused: cfgFile invalidCfgFile, argumentValue 1 optionLike, \
+             argumentName 2 secret"
         );
     }
 
     #[test]
     fn a_folder_without_fxserver_is_not_a_build() {
         let fixture = Fixture::new("");
-        let settings = LaunchSettings {
-            build_path: fixture.path("data"),
-            ..fixture.settings()
+        let launch = ServerLaunch {
+            build: fixture.data(),
+            ..fixture.launch()
         };
 
-        assert!(matches!(refused(&settings), Some(LaunchError::NotABuild { .. })));
+        assert!(matches!(refused(&launch), Some(LaunchError::NotABuild { .. })));
+    }
+
+    #[test]
+    fn a_build_folder_the_command_line_would_misread_is_refused() {
+        let fixture = Fixture::new("");
+        let launch = ServerLaunch {
+            build: fixture.dir.path().join("build;quit"),
+            ..fixture.launch()
+        };
+
+        let refusal = refused(&launch);
+
+        assert!(
+            matches!(
+                refusal,
+                Some(LaunchError::BuildFolder {
+                    problem: LaunchProblem::QuoteOrSemicolon | LaunchProblem::ForbiddenCharacter,
+                    ..
+                })
+            ),
+            "{refusal:?}"
+        );
     }
 
     #[test]
@@ -436,10 +494,13 @@ mod tests {
         };
 
         assert!(matches!(
-            refused(&missing_data),
+            refused(&with(&fixture, missing_data)),
             Some(LaunchError::MissingData(_))
         ));
-        assert!(matches!(refused(&missing_cfg), Some(LaunchError::Cfg { .. })));
+        assert!(matches!(
+            refused(&with(&fixture, missing_cfg)),
+            Some(LaunchError::Cfg { .. })
+        ));
     }
 
     #[test]
@@ -454,7 +515,7 @@ mod tests {
         );
         fixture.file("license.cfg", "sv_playersToken abc\n# start monitor\n");
 
-        let prepared = prepare(&fixture.settings(), Flavour::HOST).unwrap();
+        let prepared = prepare(&fixture.launch(), Flavour::HOST).unwrap();
 
         let cfg = fixture.data().join("server.cfg");
         assert_eq!(
@@ -494,7 +555,7 @@ mod tests {
     fn a_cfg_that_execs_itself_is_read_once() {
         let fixture = Fixture::new("exec server.cfg\nstart monitor\n");
 
-        let prepared = prepare(&fixture.settings(), Flavour::HOST).unwrap();
+        let prepared = prepare(&fixture.launch(), Flavour::HOST).unwrap();
 
         assert_eq!(prepared.warnings.len(), 1);
     }
@@ -507,7 +568,7 @@ mod tests {
              endpoint_add_tcp \"127.0.0.1:30149\"\n",
         );
 
-        let prepared = prepare(&fixture.settings(), Flavour::HOST).unwrap();
+        let prepared = prepare(&fixture.launch(), Flavour::HOST).unwrap();
 
         assert_eq!(prepared.endpoint, Some(SocketAddr::from(([127, 0, 0, 1], 30140))));
         assert_eq!(reachable("[::]:30140"), Some("[::1]:30140".parse().unwrap()));

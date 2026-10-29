@@ -1,6 +1,7 @@
 //! The API over HTTP: requests go through the router, its gates and the services, down to a real
 //! database in a temporary directory.
 
+mod artifacts;
 mod diagnostics;
 mod live;
 mod metrics;
@@ -16,9 +17,13 @@ use axum::http::{HeaderMap, Method, Request, StatusCode, header};
 use http_body_util::BodyExt;
 use jiff::SignedDuration;
 use observer_app::{
-    Accounts, AuditLog, Clock, Diagnostics, DiagnosticsSetup, DiagnosticsTask, Metrics, MetricsSetup,
-    PasswordCost, Running, Schedule, ScheduleSetup, ScheduleTask, Servers, Setup, Supervision,
+    Accounts, Artifacts, ArtifactsSetup, ArtifactsTask, AuditLog, Clock, Diagnostics, DiagnosticsSetup,
+    DiagnosticsTask, Metrics, MetricsSetup, PasswordCost, Running, Schedule, ScheduleSetup, ScheduleTask,
+    Servers, Setup, Supervision,
 };
+use observer_artifacts::Http;
+use observer_artifacts::catalog::{Catalog, Listing};
+use observer_domain::about::Build;
 use observer_domain::audit::ActorKind;
 use observer_store::Database;
 use serde_json::{Value, json};
@@ -32,6 +37,11 @@ use crate::{AppState, Live, SESSION_KEY_HEADER, Services, router};
 const HOST: &str = "observer.test:40125";
 const ORIGIN: &str = "http://observer.test:40125";
 const OWNER_PASSWORD: &str = "correct horse battery staple";
+const BUILD: Build = Build {
+    version: "0.0.0-test",
+    commit: None,
+    commit_date: None,
+};
 
 struct Server {
     dir: TempDir,
@@ -46,6 +56,7 @@ struct Server {
     metrics_clock: Clock,
     _supervised: Running,
     _scheduling: ScheduleTask,
+    _building: ArtifactsTask,
     _diagnosing: DiagnosticsTask,
     cookie_name: String,
 }
@@ -82,6 +93,15 @@ impl Reply {
     }
 }
 
+/// A catalog that lists nothing: no test here reaches Cfx.re.
+fn empty_catalog() -> Catalog {
+    Catalog::fixed(Ok(Listing {
+        platform: observer_artifacts::Platform::host(),
+        builds: Vec::new(),
+        warnings: Vec::new(),
+    }))
+}
+
 impl Server {
     async fn new() -> Self {
         let dir = tempfile::tempdir().unwrap();
@@ -101,6 +121,7 @@ impl Server {
                 accounts: accounts.clone(),
                 servers: servers.clone(),
                 data_dir: dir.path().join("data"),
+                artifacts: dir.path().join("data/artifacts"),
                 console_logs: dir.path().join("data/logs/console"),
                 log: None,
             },
@@ -113,6 +134,22 @@ impl Server {
                 db: db.clone(),
                 clock: clock.clone(),
                 supervision: supervision.clone(),
+            },
+            |_| {},
+        )
+        .await
+        .unwrap();
+        let (artifacts, building) = Artifacts::start(
+            ArtifactsSetup {
+                db: db.clone(),
+                clock: clock.clone(),
+                root: dir.path().join("data/artifacts"),
+                accounts: accounts.clone(),
+                servers: servers.clone(),
+                supervision: supervision.clone(),
+                schedule: schedule.status(),
+                catalog: empty_catalog(),
+                http: Http::new().unwrap(),
             },
             |_| {},
         )
@@ -142,14 +179,10 @@ impl Server {
             supervision: supervision.clone(),
             metrics: metrics.clone(),
             schedule,
+            artifacts,
             diagnostics,
         };
-        let state = AppState::new(
-            "0.0.0-test",
-            services,
-            &instance_id,
-            &["observer.test".to_owned()],
-        );
+        let state = AppState::new(BUILD, services, &instance_id, &["observer.test".to_owned()]);
         let live = state.live.clone();
         let app = router(state).layer(MockConnectInfo(SocketAddr::from(([203, 0, 113, 7], 50_000))));
         Self {
@@ -165,6 +198,7 @@ impl Server {
             metrics_clock,
             _supervised: supervised,
             _scheduling: scheduling,
+            _building: building,
             _diagnosing: diagnosing,
             cookie_name: format!("observer_session_{instance_id}"),
         }
@@ -216,7 +250,8 @@ impl Server {
             .create_setup_token(ActorKind::System)
             .await
             .unwrap()
-            .unwrap();
+            .unwrap()
+            .token;
         let body = json!({ "token": token, "username": "ada", "password": OWNER_PASSWORD });
         let reply = self.call(Method::POST, "/api/setup", None, Some(body)).await;
         assert_eq!(reply.status, StatusCode::CREATED, "{}", reply.text);
@@ -293,6 +328,7 @@ async fn every_gated_route_refuses_a_request_without_a_session() {
             route
                 .path
                 .replace("{id}", "1")
+                .replace("{build}", "37872")
                 .replace("{name}", "console-2026-10-28.log")
         );
         let reply = server
@@ -326,6 +362,7 @@ async fn no_method_on_an_api_path_skips_the_gate() {
             route
                 .path
                 .replace("{id}", "1")
+                .replace("{build}", "37872")
                 .replace("{name}", "console-2026-10-28.log")
         );
         for method in methods.clone() {
@@ -355,6 +392,66 @@ async fn health_reports_the_running_version() {
 
     assert_eq!(reply.status, StatusCode::OK);
     assert_eq!(reply.json(), json!({ "status": "ok", "version": "0.0.0-test" }));
+}
+
+#[tokio::test]
+async fn about_reports_this_build() {
+    let server = Server::new().await;
+    let owner = server.owner().await;
+
+    let reply = server.call(Method::GET, "/api/about", Some(&owner), None).await;
+
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.text);
+    let about = reply.json();
+    assert_eq!(about["version"], "0.0.0-test");
+    assert_eq!(about["commit"], Value::Null);
+    assert_eq!(about["os"], std::env::consts::OS);
+    assert_eq!(about["profile"], "debug");
+}
+
+/// The list names every crate and version Observer runs: only a signed-in user reads it, through
+/// the API. The panel's file lookup turns `\` into `/`, and on disk resolves `.` and `..`, so every
+/// spelling is tried. This only bites once `cargo xtask web` wrote a list: without one (CI's Rust
+/// job) every spelling is a 404 whatever the panel serves, and xtask's
+/// `the_list_is_written_beside_the_panel_never_in_it` keeps the list out of the panel's files.
+#[tokio::test]
+async fn the_licence_list_is_never_a_public_panel_file() {
+    let server = Server::new().await;
+    let owner = server.owner().await;
+
+    for path in [
+        "/about/licences.json",
+        r"/about\licences.json",
+        r"/about\licences.json.gz",
+        "/./about/licences.json",
+        "/ABOUT/licences.json",
+        "/licences.json",
+        "/licences.json.br",
+        "/../private/licences.json",
+        r"/..\private\licences.json",
+    ] {
+        for session in [None, Some(&owner)] {
+            let reply = server.call(Method::GET, path, session, None).await;
+            assert_eq!(
+                reply.status,
+                StatusCode::NOT_FOUND,
+                "{path} served {} bytes",
+                reply.text.len()
+            );
+        }
+    }
+    let listed = server
+        .call(Method::GET, "/api/about/licences", Some(&owner), None)
+        .await;
+    if listed.status == StatusCode::OK {
+        assert!(listed.json()["packages"].is_array());
+    } else {
+        assert_eq!(listed.code(), "not_found");
+    }
+    assert_eq!(
+        server.get("/api/about/licences").await.status,
+        StatusCode::UNAUTHORIZED
+    );
 }
 
 #[tokio::test]
@@ -401,7 +498,8 @@ async fn setup_signs_the_owner_in_with_a_strict_http_only_cookie() {
         .create_setup_token(ActorKind::System)
         .await
         .unwrap()
-        .unwrap();
+        .unwrap()
+        .token;
 
     let body = json!({ "token": token, "username": "ada", "password": OWNER_PASSWORD });
     let reply = server
@@ -935,7 +1033,6 @@ fn folder(name: &str) -> String {
 
 fn launch_settings() -> Value {
     json!({
-        "buildPath": folder("build"),
         "dataPath": folder("server-data"),
         "cfgFile": "server.cfg",
         "onesync": "on",
@@ -989,7 +1086,7 @@ async fn the_owner_reads_and_saves_the_launch_settings_with_their_password_again
     assert_eq!(saved.status, StatusCode::OK, "{}", saved.text);
     assert_eq!(
         saved.json(),
-        json!({ "settings": launch_settings(), "version": 1 })
+        json!({ "settings": launch_settings(), "version": 1, "legacyBuildPath": null })
     );
     assert_eq!(read.json(), saved.json());
     assert_eq!(outdated.status, StatusCode::CONFLICT);

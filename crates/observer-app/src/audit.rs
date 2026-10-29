@@ -2,7 +2,9 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use jiff::{SignedDuration, Timestamp};
-use observer_domain::audit::{ActorKind, AuditAction, AuditEntry, AuditFilter, AuditPage, Outcome};
+use observer_domain::audit::{
+    ActorKind, AuditAction, AuditEntry, AuditFilter, AuditPage, Outcome, StopSource,
+};
 use observer_domain::error::ErrorCode;
 use observer_store::audit::{self, NewAuditEntry};
 use observer_store::users::{self, UserRow};
@@ -321,6 +323,20 @@ impl AuditLog {
         check_filter(filter)?;
         let record = Record::by(caller, AuditAction::AuditExported)
             .details(serde_json::to_value(filter).unwrap_or_default());
+        let now = self.clock.now();
+        self.db
+            .write(move |tx| record.write(tx, now).map_err(Error::from))
+            .await
+    }
+
+    /// Records that Observer is stopping, before FXServer is: someone at the host asked, from the
+    /// window or the console, or a signal did.
+    pub async fn record_stop(&self, from: StopSource) -> Result<(), Error> {
+        let actor = match from {
+            StopSource::Window | StopSource::Console => ActorKind::Local,
+            StopSource::Signal => ActorKind::System,
+        };
+        let record = Record::operator(actor, AuditAction::ObserverStopped).details(json!({ "from": from }));
         let now = self.clock.now();
         self.db
             .write(move |tx| record.write(tx, now).map_err(Error::from))

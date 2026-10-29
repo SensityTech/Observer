@@ -9,7 +9,6 @@ use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant};
 
 use observer_domain::diagnostics::ProcessKind;
-use observer_domain::launch::LaunchSettings;
 use observer_domain::server::SpawnFailure;
 use observer_platform::{Exit, ExitWatch, Output, ProcessInfo, ProcessTree, TreeChange, TreeChanges};
 use serde::Serialize;
@@ -23,7 +22,7 @@ use crate::console::{ConsoleHub, LineAssembler, LineFlags, LineKind, plain, sani
 use crate::crashes::{self, Collected, DumpLimits, HangSnapshotLimits, SnapshotFailure};
 use crate::exit;
 use crate::health::{self, HangCause, Health, HealthLimits, PlayerList, Players, Probe, Problem, Verdict};
-use crate::launch::{self, CfgWarning};
+use crate::launch::{self, CfgWarning, ServerLaunch};
 use crate::layout::{Flavour, Layout};
 use crate::perf::TickReport;
 use crate::recovery::{Next, Recovery, RecoveryPolicy};
@@ -83,7 +82,7 @@ pub enum State {
 #[derive(Debug, Clone)]
 pub struct Settings {
     /// What the next spawn launches, none until [`Supervisor::configure`] gives it.
-    pub launch: Option<LaunchSettings>,
+    pub launch: Option<ServerLaunch>,
     pub flavour: Flavour,
     /// Where `/dynamic.json` and `/perf/` answer; by default the cfg's first TCP endpoint.
     pub probe: Option<SocketAddr>,
@@ -101,7 +100,7 @@ pub struct Settings {
 }
 
 impl Settings {
-    pub fn new(launch: Option<LaunchSettings>, data_dir: impl Into<PathBuf>) -> Self {
+    pub fn new(launch: Option<ServerLaunch>, data_dir: impl Into<PathBuf>) -> Self {
         Self {
             launch,
             flavour: Flavour::HOST,
@@ -160,6 +159,8 @@ pub enum EventKind {
     Spawned {
         pid: u32,
         probe: SocketAddr,
+        /// The build folder this run was started from.
+        build: PathBuf,
     },
     CfgWarning {
         warning: CfgWarning,
@@ -397,7 +398,7 @@ enum Request {
     Shutdown {
         shortened: bool,
     },
-    Configure(Box<LaunchSettings>),
+    Configure(Box<ServerLaunch>),
 }
 
 /// The handle to the supervisor task. Clones talk to the same task.
@@ -529,7 +530,7 @@ impl Supervisor {
 
     /// Sets what the next spawn launches, whether started by hand or after a failure. A running
     /// server keeps the launch it was started with.
-    pub async fn configure(&self, launch: LaunchSettings) {
+    pub async fn configure(&self, launch: ServerLaunch) {
         let _ = self.requests.send(Request::Configure(Box::new(launch))).await;
     }
 
@@ -1374,6 +1375,7 @@ impl Actor {
         match self.launch().await {
             Ok((run, probe, warnings)) => {
                 let pid = run.pid;
+                let build = run.layout.build().to_path_buf();
                 self.readings.send_replace(Readings {
                     run: Some(RunReadings {
                         generation: run.generation,
@@ -1390,7 +1392,7 @@ impl Actor {
                 self.last_tick = Instant::now();
                 self.set_state(State::Starting, cause);
                 self.note(&format!("FXServer started (pid {pid})"));
-                self.emit(EventKind::Spawned { pid, probe });
+                self.emit(EventKind::Spawned { pid, probe, build });
                 for warning in warnings {
                     warn!(?warning, "the server cfg works against Observer");
                     self.emit(EventKind::CfgWarning { warning });
@@ -1417,13 +1419,13 @@ impl Actor {
     }
 
     async fn launch(&mut self) -> Result<(Run, SocketAddr, Vec<CfgWarning>), SpawnError> {
-        let Some(settings) = &self.settings.launch else {
+        let Some(server) = &self.settings.launch else {
             return Err(SpawnError::new(
                 SpawnFailure::NotConfigured,
                 "no launch settings are configured",
             ));
         };
-        let prepared = launch::prepare(settings, self.settings.flavour)?;
+        let prepared = launch::prepare(server, self.settings.flavour)?;
         let layout = prepared.layout.clone();
         self.install(&layout).await?;
         let credentials = Credentials::generate().map_err(|error| {

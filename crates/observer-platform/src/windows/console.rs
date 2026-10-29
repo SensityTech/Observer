@@ -31,9 +31,10 @@ static RELEASED: Mutex<bool> = Mutex::new(false);
 static RELEASE: Condvar = Condvar::new();
 
 impl ConsoleEvents {
-    /// Takes over Ctrl+C, Ctrl+Break and the close, logoff and shutdown events. A later call
-    /// replaces the earlier listener.
+    /// Takes over Ctrl+C, Ctrl+Break and the close, logoff and shutdown events, and starts the
+    /// window that hears the end of the session. A later call replaces the earlier listener.
     pub fn listen() -> io::Result<Self> {
+        super::session::listen()?;
         if !REGISTERED.swap(true, Ordering::SeqCst) {
             // SAFETY: the handler is a plain function that lives as long as the process.
             if unsafe { SetConsoleCtrlHandler(Some(on_console_event), TRUE) } == 0 {
@@ -77,6 +78,12 @@ fn handle(kind: u32) -> bool {
         CTRL_CLOSE_EVENT | CTRL_LOGOFF_EVENT | CTRL_SHUTDOWN_EVENT => ConsoleEvent::Close,
         _ => return false,
     };
+    deliver(event)
+}
+
+/// Hands `event` to the listener, if any. A close does not return before
+/// [`ConsoleEvents::release`]: Windows ends the process as soon as it does.
+pub(crate) fn deliver(event: ConsoleEvent) -> bool {
     let delivered = lock(&LISTENER)
         .as_ref()
         .is_some_and(|listener| listener.send(event).is_ok());
@@ -98,9 +105,13 @@ mod tests {
     use std::thread;
     use std::time::Duration;
 
-    use super::*;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{SendMessageW, WM_ENDSESSION, WM_QUERYENDSESSION};
 
-    // One test only: the handler state is process-wide, like the console it serves.
+    use super::*;
+    use crate::windows::session;
+
+    // One test only: the handler state is process-wide, like the console it serves and the
+    // session window that stands in for it.
     #[tokio::test]
     async fn a_close_event_holds_the_process_until_the_stop_is_released() {
         let mut events = ConsoleEvents::listen().unwrap();
@@ -117,6 +128,28 @@ mod tests {
         );
         events.release();
         assert!(closing.join().unwrap());
+
+        // The end of the session, as Windows tells a process that loads user32.dll.
+        drop(events);
+        let mut events = ConsoleEvents::listen().unwrap();
+        let window = session::window() as usize;
+        // SAFETY: the session window lives as long as the process.
+        let answer = thread::spawn(move || unsafe { SendMessageW(window as _, WM_QUERYENDSESSION, 0, 0) });
+        assert_eq!(
+            answer.join().unwrap(),
+            1,
+            "Observer never vetoes the end of a session"
+        );
+        // SAFETY: as above.
+        let ending = thread::spawn(move || unsafe { SendMessageW(window as _, WM_ENDSESSION, 1, 0) });
+        assert_eq!(events.next().await, Some(ConsoleEvent::Close));
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert!(
+            !ending.is_finished(),
+            "the session window let Windows go before the stop was released"
+        );
+        events.release();
+        assert_eq!(ending.join().unwrap(), 0);
 
         drop(events);
         assert!(

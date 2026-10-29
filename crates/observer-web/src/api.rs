@@ -2,7 +2,9 @@
 //! else adds routes to the API: what the table says is what the server enforces. Clippy holds
 //! everyone to it: `Router::route` and its kin are disallowed outside `add` and the `/api` mount.
 
+mod about;
 mod account;
+mod artifacts;
 mod audit;
 mod auth;
 mod diagnostics;
@@ -60,6 +62,13 @@ pub(crate) fn routes() -> Vec<Route> {
     let plan = Permission(P::SCHEDULE_MANAGE);
     let edit_schedule = Reauthenticated(P::SCHEDULE_MANAGE);
     let dashboard = Permission(P::DASHBOARD_VIEW);
+    // Builds are chosen among those Cfx.re signed or the owner imported; installing, choosing,
+    // deleting and the settings take the password again, cancelling only goes back. Bringing a
+    // folder of the host in is the owner's alone. `now` also takes SERVER_CONTROL, which the
+    // handler checks: it restarts the server.
+    let builds = Permission(P::ARTIFACTS_VIEW);
+    let manage_builds = Permission(P::ARTIFACTS_MANAGE);
+    let change_builds = Reauthenticated(P::ARTIFACTS_MANAGE);
     // A crash's files hold FXServer's memory: the owner's alone, with the password again.
     let dumps = ReauthenticatedOwner;
     vec![
@@ -99,6 +108,20 @@ pub(crate) fn routes() -> Vec<Route> {
         route(M::PUT,    "/servers/default/schedule/once",  control,       schedule::restart_once),
         route(M::DELETE, "/servers/default/schedule/once",  control,       schedule::cancel_once),
         route(M::GET,    "/metrics/series",             dashboard,    metrics::series),
+        route(M::GET,    "/servers/default/artifacts/catalog",        builds,        artifacts::catalog),
+        route(M::POST,   "/servers/default/artifacts/install",        change_builds, artifacts::install),
+        route(M::POST,   "/servers/default/artifacts/import",         edit_launch,   artifacts::import),
+        route(M::DELETE, "/servers/default/artifacts/job",            manage_builds, artifacts::cancel_job),
+        route(M::PUT,    "/servers/default/artifacts/selection",      change_builds, artifacts::select),
+        route(M::DELETE, "/servers/default/artifacts/pending",        manage_builds, artifacts::cancel_pending),
+        route(M::DELETE, "/servers/default/artifacts/builds/{build}", change_builds, artifacts::delete),
+        route(M::GET,    "/servers/default/artifacts/cleanup",        manage_builds, artifacts::cleanup_preview),
+        route(M::POST,   "/servers/default/artifacts/cleanup",        change_builds, artifacts::cleanup),
+        route(M::PUT,    "/servers/default/artifacts/settings",       change_builds, artifacts::change_settings),
+        route(M::GET,    "/metrics/threads",            dashboard,    metrics::threads),
+        route(M::GET,    "/metrics/growth",             dashboard,    metrics::growth),
+        route(M::GET,    "/about",                      Session,      about::about),
+        route(M::GET,    "/about/licences",             Session,      about::licences),
         route(M::GET,    "/servers/default/crashes/{id}/files/{name}", dumps, diagnostics::download_file),
         route(M::DELETE, "/servers/default/crashes/{id}/files",        dumps, diagnostics::delete_files),
     ]
@@ -146,6 +169,6 @@ fn add(router: Router<AppState>, route: Route, state: &AppState) -> Router<AppSt
 async fn health(State(state): State<AppState>) -> Json<Health> {
     Json(Health {
         status: HealthStatus::Ok,
-        version: state.version.to_owned(),
+        version: state.build.version.to_owned(),
     })
 }

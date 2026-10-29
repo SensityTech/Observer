@@ -9,13 +9,17 @@ use tracing_subscriber::fmt;
 use tracing_subscriber::prelude::*;
 
 const KEPT_LOG_FILES: usize = 14;
+/// The status window's graphics stack reports every adapter and driver layer it meets; only its
+/// failures concern whoever reads Observer's log.
+const GRAPHICS: &str = "wgpu_hal=error,wgpu_core=warn,naga=warn,egui_wgpu=warn,eframe=warn";
 
 /// Logs to the terminal and to a daily file under `logs`. The returned guards flush both on drop,
 /// so they must live until the end of `main`.
 pub fn init(level: &str, logs: &Path) -> anyhow::Result<[WorkerGuard; 2]> {
     let filter = match EnvFilter::try_from_env("OBSERVER_LOG") {
         Ok(filter) => filter,
-        Err(_) => EnvFilter::try_new(level).with_context(|| format!("invalid log level `{level}`"))?,
+        Err(_) => EnvFilter::try_new(format!("{GRAPHICS},{level}"))
+            .with_context(|| format!("invalid log level `{level}`"))?,
     };
 
     // The appender prunes old files before it creates its first one, and complains on stderr when

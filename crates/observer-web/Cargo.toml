@@ -21,6 +21,7 @@ tracing.workspace = true
 
 [dev-dependencies]
 http-body-util.workspace = true
+observer-artifacts = { workspace = true, features = ["test-support"] }
 hyper = { workspace = true, features = ["http1", "server"] }
 hyper-util = { workspace = true, features = ["service", "tokio"] }
 observer-store.workspace = true

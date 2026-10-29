@@ -9,6 +9,7 @@ publish.workspace = true
 argon2.workspace = true
 getrandom.workspace = true
 jiff.workspace = true
+observer-artifacts.workspace = true
 observer-domain.workspace = true
 observer-fxserver.workspace = true
 observer-platform.workspace = true
@@ -21,6 +22,7 @@ tokio-util.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+observer-artifacts = { workspace = true, features = ["test-support"] }
 tempfile.workspace = true
 tokio = { workspace = true, features = ["macros", "rt"] }
 
