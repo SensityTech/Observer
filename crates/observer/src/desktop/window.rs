@@ -337,78 +337,39 @@ impl StatusWindow {
         let status = &shown.status;
         let online = status.players.map_or(0, |players| players.online);
         let running = is_running(status.state);
-        let (title, body, yes, kind) = match confirm {
-            Confirm::Restart => (
-                text::RESTART_TITLE,
-                format!("{} {}", text::connected(online), text::NOTICE_FIRST),
-                text::CONFIRM_RESTART,
-                Kind::Ink,
-            ),
-            Confirm::Stop => (
-                text::STOP_TITLE,
-                format!("{} {}", text::connected(online), text::NOTICE_FIRST),
-                text::CONFIRM_STOP,
-                Kind::Danger,
-            ),
-            Confirm::KeepStopped => (
-                text::KEEP_STOPPED_TITLE,
-                text::KEEP_STOPPED.to_owned(),
-                text::CONFIRM_KEEP_STOPPED,
-                Kind::Plain,
-            ),
-            Confirm::Quit if running => (
-                text::QUIT_TITLE,
-                text::quit_body(Some(online)),
-                text::CONFIRM_QUIT_RUNNING,
-                Kind::Danger,
-            ),
-            Confirm::Quit => (
-                text::QUIT_TITLE,
-                text::quit_body(None),
-                text::CONFIRM_QUIT,
-                Kind::Ink,
-            ),
+        let question = match confirm {
+            Confirm::Restart => Question {
+                title: text::RESTART_TITLE,
+                body: format!("{} {}", text::connected(online), text::NOTICE_FIRST),
+                yes: text::CONFIRM_RESTART,
+                kind: Kind::Ink,
+            },
+            Confirm::Stop => Question {
+                title: text::STOP_TITLE,
+                body: format!("{} {}", text::connected(online), text::NOTICE_FIRST),
+                yes: text::CONFIRM_STOP,
+                kind: Kind::Danger,
+            },
+            Confirm::KeepStopped => Question {
+                title: text::KEEP_STOPPED_TITLE,
+                body: text::KEEP_STOPPED.to_owned(),
+                yes: text::CONFIRM_KEEP_STOPPED,
+                kind: Kind::Plain,
+            },
+            Confirm::Quit if running => Question {
+                title: text::QUIT_TITLE,
+                body: text::quit_body(Some(online)),
+                yes: text::CONFIRM_QUIT_RUNNING,
+                kind: Kind::Danger,
+            },
+            Confirm::Quit => Question {
+                title: text::QUIT_TITLE,
+                body: text::quit_body(None),
+                yes: text::CONFIRM_QUIT,
+                kind: Kind::Ink,
+            },
         };
-        let mut answer = None;
-        let shadow = egui::Shadow {
-            offset: [0, 18],
-            blur: 48,
-            spread: 0,
-            color: Color32::from_black_alpha(90),
-        };
-        let modal = egui::Modal::new(Id::unique("confirm"))
-            .backdrop_color(palette.overlay)
-            .frame(
-                Frame::new()
-                    .fill(palette.surface)
-                    .stroke(Stroke::new(1.0, palette.line))
-                    .corner_radius(CornerRadius::same(CARD_RADIUS))
-                    .inner_margin(Margin::same(18))
-                    .shadow(shadow),
-            )
-            .show(context, |ui| {
-                ui.set_width(WIDTH - 80.0);
-                ui.spacing_mut().item_spacing = Vec2::new(8.0, 10.0);
-                ui.label(RichText::new(title).size(16.0).color(palette.ink));
-                ui.label(RichText::new(body).color(palette.ink_2));
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if button(ui, palette, yes, kind, None).clicked() {
-                        answer = Some(true);
-                    }
-                    let cancel = button(ui, palette, text::CANCEL, Kind::Plain, None);
-                    if self.focus_cancel {
-                        cancel.request_focus();
-                        self.focus_cancel = false;
-                    }
-                    if cancel.clicked() {
-                        answer = Some(false);
-                    }
-                });
-            });
-        if modal.should_close() && answer.is_none() {
-            answer = Some(false);
-        }
-        let Some(confirmed) = answer else {
+        let Some(confirmed) = confirmation(context, palette, &question, &mut self.focus_cancel) else {
             return;
         };
         self.confirm = None;
@@ -421,6 +382,66 @@ impl StatusWindow {
             Confirm::Quit => self.shared.stop.request(),
         }
     }
+}
+
+/// What a confirmation asks, and the button that says yes.
+struct Question {
+    title: &'static str,
+    body: String,
+    yes: &'static str,
+    kind: Kind,
+}
+
+/// The confirmation's dialog, named by its title for screen readers. `Some(true)` once confirmed,
+/// `Some(false)` once cancelled (Cancel, Esc, a click outside), `None` while it waits.
+fn confirmation(
+    context: &egui::Context,
+    palette: &Palette,
+    question: &Question,
+    focus_cancel: &mut bool,
+) -> Option<bool> {
+    let mut answer = None;
+    let shadow = egui::Shadow {
+        offset: [0, 18],
+        blur: 48,
+        spread: 0,
+        color: Color32::from_black_alpha(90),
+    };
+    let id = Id::unique("confirm");
+    let modal = egui::Modal::new(id)
+        .area(egui::Modal::default_area(id).accessible_name(question.title))
+        .backdrop_color(palette.overlay)
+        .frame(
+            Frame::new()
+                .fill(palette.surface)
+                .stroke(Stroke::new(1.0, palette.line))
+                .corner_radius(CornerRadius::same(CARD_RADIUS))
+                .inner_margin(Margin::same(18))
+                .shadow(shadow),
+        )
+        .show(context, |ui| {
+            ui.set_width(WIDTH - 80.0);
+            ui.spacing_mut().item_spacing = Vec2::new(8.0, 10.0);
+            ui.label(RichText::new(question.title).size(16.0).color(palette.ink));
+            ui.label(RichText::new(&question.body).color(palette.ink_2));
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                if button(ui, palette, question.yes, question.kind, None).clicked() {
+                    answer = Some(true);
+                }
+                let cancel = button(ui, palette, text::CANCEL, Kind::Plain, None);
+                if *focus_cancel {
+                    cancel.request_focus();
+                    *focus_cancel = false;
+                }
+                if cancel.clicked() {
+                    answer = Some(false);
+                }
+            });
+        });
+    if modal.should_close() && answer.is_none() {
+        answer = Some(false);
+    }
+    answer
 }
 
 /// `Players 12 / 64   Build 37872   Next restart 04:00 (in 3h 12m)`, on as many lines as the width
@@ -569,33 +590,38 @@ fn paint_led(ui: &mut Ui, palette: &Palette, led: Led) {
 
 #[cfg(test)]
 mod tests {
-    use eframe::egui::accesskit::Node;
+    use eframe::egui::accesskit::{Node, Role};
     use eframe::egui::{Pos2, RawInput};
 
     use super::*;
     use crate::desktop::palette::DARK;
 
-    /// One pass of `draw` inside the window's padding, and the accessibility tree it built.
+    /// `draw` inside the window's padding, and the accessibility tree it built. Two passes: an
+    /// area such as a dialog only shows from its second.
     fn drawn(mut draw: impl FnMut(&mut Ui)) -> Vec<Node> {
         let context = egui::Context::default();
         context.enable_accesskit();
-        let input = RawInput {
-            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(WIDTH, 600.0))),
-            ..RawInput::default()
-        };
-        let mut output = context.run_ui(input, |ui| {
-            Frame::new().inner_margin(Margin::same(PADDING)).show(ui, |ui| {
-                ui.set_width(WIDTH - 2.0 * f32::from(PADDING));
-                draw(ui);
+        let mut nodes = Vec::new();
+        for _ in 0..2 {
+            let input = RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(WIDTH, 600.0))),
+                ..RawInput::default()
+            };
+            let mut output = context.run_ui(input, |ui| {
+                Frame::new().inner_margin(Margin::same(PADDING)).show(ui, |ui| {
+                    ui.set_width(WIDTH - 2.0 * f32::from(PADDING));
+                    draw(ui);
+                });
             });
-        });
-        // Nothing renders: the font atlas the pass made goes nowhere.
-        output.textures_delta.clear();
-        output
-            .platform_output
-            .accesskit_update
-            .map(|update| update.nodes.into_iter().map(|(_, node)| node).collect())
-            .unwrap_or_default()
+            // Nothing renders: the font atlas the pass made goes nowhere.
+            output.textures_delta.clear();
+            nodes = output
+                .platform_output
+                .accesskit_update
+                .map(|update| update.nodes.into_iter().map(|(_, node)| node).collect())
+                .unwrap_or_default();
+        }
+        nodes
     }
 
     /// The node a screen reader reads as `text`.
@@ -630,6 +656,27 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn a_confirmation_is_a_dialog_its_title_names() {
+        let question = Question {
+            title: text::STOP_TITLE,
+            body: format!("{} {}", text::connected(12), text::NOTICE_FIRST),
+            yes: text::CONFIRM_STOP,
+            kind: Kind::Danger,
+        };
+        let mut focus_cancel = true;
+
+        let nodes = drawn(|ui| {
+            confirmation(ui.ctx(), &DARK, &question, &mut focus_cancel);
+        });
+
+        let dialog = nodes
+            .iter()
+            .find(|node| node.role() == Role::Dialog)
+            .expect("the confirmation is a dialog");
+        assert_eq!(dialog.label(), Some(text::STOP_TITLE));
     }
 
     #[test]
