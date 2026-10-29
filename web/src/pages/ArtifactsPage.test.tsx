@@ -133,7 +133,7 @@ const page = async (status: ArtifactsStatus = STATUS, permissions = 'fff') => {
     say({ type: 'snapshot', topic: 'server.status', data: ONLINE });
     say({ type: 'snapshot', topic: 'server.schedule', data: SCHEDULE });
     say({ type: 'snapshot', topic: 'server.artifacts', data: status });
-    return { ...view, client, say };
+    return { ...view, client, say, drop: () => act(() => socket?.close(1006)) };
 };
 
 const row = (build: number) => {
@@ -319,6 +319,20 @@ describe('ArtifactsPage', () => {
 
         await waitFor(() => within(dialog).getByText(en.server.problems.notAbsolute));
         expect(within(dialog).queryByText(en.errors.invalid_request)).toBeNull();
+    });
+
+    it('should keep the times in the server zone, and say which, while the live link is down', async () => {
+        const { container, getByText, drop } = await page({ ...STATUS, job: null });
+        const head = container.querySelector('.page-head');
+
+        // 02:28 UTC is 03:28 in Paris on 27 October.
+        expect(head?.textContent).toContain('Times in Europe/Paris');
+        expect(getByText(/since 27 Oct 03:28/)).toBeTruthy();
+        drop();
+
+        expect(getByText(en.artifacts.outOfDate)).toBeTruthy();
+        expect(head?.textContent).toContain('Times in Europe/Paris');
+        expect(getByText(/since 27 Oct 03:28/)).toBeTruthy();
     });
 
     it('should add the probation to the build in the status bar', async () => {

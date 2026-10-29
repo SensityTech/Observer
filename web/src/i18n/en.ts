@@ -216,13 +216,15 @@ export const en = {
         buildPending: (build: string, pending: string) =>
             `Build ${build}, ${pending} at the next scheduled restart`,
         buildPassed: (build: string, at: string) => `Build ${build}, probation passed ${at}`,
+        utcClock: (clock: string) => `${clock} UTC`,
         resources: (started: number) => `${count(started, { one: 'resource', other: 'resources' })} started`,
         nextRestart: (time: string, left: string) => `Next restart ${time} (in ${left})`,
     },
     artifacts: {
         title: 'Artifacts',
         gloss: 'The FXServer builds Observer installs and runs.',
-        utc: 'Dates in UTC',
+        zone: (times: string) => `${times} · dates in UTC`,
+        utcTimes: 'Times in UTC',
         loading: 'Reading the builds',
         unknown: 'The builds are not known while the live link is down.',
         outOfDate: 'The live link is down: what follows may be out of date.',

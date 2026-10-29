@@ -65,10 +65,11 @@ import { FieldError, TextField, inputClass } from '../components/Field';
 import { Notice } from '../components/Notice';
 import { table } from '../components/table';
 import { errorMessage } from '../i18n/errors';
-import { formatClock, formatDay } from '../i18n/format';
+import { formatClock, formatDay, knownZone, zoneOffset } from '../i18n/format';
 import { useI18n } from '../i18n/I18nProvider';
 import { useLinkState } from '../live/context';
 import { cn } from '../lib/cn';
+import { useNow } from '../lib/useNow';
 import { useSchedule } from '../schedule/context';
 import { useServerStatus } from '../server/context';
 import { isRunning } from '../server/state';
@@ -100,11 +101,13 @@ const readHidden = (): string[] => {
     }
 };
 
-/** The clock and day of server times, in the schedule's zone as every server time is. */
+/**
+ * The clock and day of server times, in the schedule's zone as every server time is: the last one
+ * known while the link is down, UTC only before any, which the page head then says.
+ */
 const useZone = () => {
     const { locale, t } = useI18n();
-    const { schedule } = useSchedule();
-    const zone = schedule?.zone ?? 'UTC';
+    const zone = useSchedule().zone ?? 'UTC';
     return {
         clock: (instant: string) => formatClock(locale, instant, zone),
         when: (instant: string) =>
@@ -140,10 +143,7 @@ export function ArtifactsPage() {
                 <h1 className="page-title">
                     {t.artifacts.title} <span className="gloss">{t.artifacts.gloss}</span>
                 </h1>
-                <span className="inline-flex items-center gap-1.5 text-ui text-ink-3">
-                    <Clock size={14} strokeWidth={1.5} aria-hidden="true" />
-                    {t.artifacts.utc}
-                </span>
+                <ZoneNote />
             </div>
             {status !== null && live === null && <Notice tone="warning">{t.artifacts.outOfDate}</Notice>}
             {outcome !== null && <Notice tone={outcome.tone}>{outcome.message}</Notice>}
@@ -221,6 +221,25 @@ export function ArtifactsPage() {
                 </>
             )}
         </div>
+    );
+}
+
+/** Which zone the times of the page read in, and that its days are UTC. */
+function ZoneNote() {
+    const { t, locale } = useI18n();
+    const { zone } = useSchedule();
+    const now = useNow(60_000);
+    const times =
+        zone === null
+            ? t.artifacts.utcTimes
+            : knownZone(zone) === zone
+              ? t.schedule.zone(zone, zoneOffset(locale, zone, now))
+              : t.schedule.zoneUnknown(zone);
+    return (
+        <span className="inline-flex items-center gap-1.5 text-ui text-ink-3">
+            <Clock size={14} strokeWidth={1.5} aria-hidden="true" />
+            {t.artifacts.zone(times)}
+        </span>
     );
 }
 

@@ -141,7 +141,7 @@ function ServerState({ status }: { status: ServerStatus }) {
     const me = useMe();
     const now = useNow();
     const { latest } = useLiveMetrics();
-    const { schedule } = useSchedule();
+    const { schedule, zone } = useSchedule();
     const { status: builds } = useArtifacts();
     const cause = causeText(t, status);
     const running = isRunning(status.state);
@@ -154,8 +154,11 @@ function ServerState({ status }: { status: ServerStatus }) {
                   format.duration(secondsSince(status.startedAt, now)),
               )
             : null,
-        buildFact(t, status, builds, (instant) => formatClock(locale, instant, schedule?.zone ?? 'UTC')) ??
-            (status.build === null ? null : t.overview.build(String(status.build))),
+        buildFact(t, status, builds, (instant) =>
+            zone === null
+                ? t.overview.utcClock(formatClock(locale, instant, 'UTC'))
+                : formatClock(locale, instant, zone),
+        ) ?? (status.build === null ? null : t.overview.build(String(status.build))),
         status.players === null
             ? null
             : t.overview.players(
