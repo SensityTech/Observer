@@ -25,6 +25,17 @@ const MAX_REPORT_BYTES: u64 = 1024 * 1024;
 const SV_MAIN: &str = "svMain";
 /// svMain at this share of a core or more was busy on the processor rather than waiting.
 const BUSY_PERCENT: f64 = 90.0;
+/// Where any thread waits or allocates on Windows: a hang in them says nothing of FXServer.
+const SYSTEM_MODULES: [&str; 8] = [
+    "ntdll.dll",
+    "kernelbase.dll",
+    "kernel32.dll",
+    "win32u.dll",
+    "user32.dll",
+    "ucrtbase.dll",
+    "msvcp140.dll",
+    "vcruntime140.dll",
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum AnalysisError {
@@ -114,16 +125,31 @@ pub fn analyse(path: &Path) -> Result<Analysis, AnalysisError> {
         name: name_of(thread.raw.thread_id),
     });
     let signature = signature(crash.as_ref(), analysed.as_ref(), &frames);
+    let module = module(crash.is_some(), &frames);
     Ok(Analysis {
         analysis: CrashAnalysis {
             exception: crash,
             thread: analysed,
             frames,
+            module,
             threads: Vec::new(),
             syscalls_readable: None,
         },
         signature,
     })
+}
+
+/// The module a crash faulted in; for a hang, the first outside the system libraries, or the
+/// first at all when every frame is in them.
+fn module(crashed: bool, frames: &[Frame]) -> Option<String> {
+    let mut modules = frames.iter().filter_map(|frame| frame.module.as_deref());
+    let first = modules.clone().next();
+    let own = modules.find(|module| {
+        !SYSTEM_MODULES
+            .iter()
+            .any(|system| system.eq_ignore_ascii_case(module))
+    });
+    if crashed { first } else { own.or(first) }.map(str::to_owned)
 }
 
 /// Reads one of Observer's Linux hang reports: svMain and the five busiest threads. A file over
@@ -163,6 +189,7 @@ pub fn analyse_report(path: &Path) -> Result<Analysis, AnalysisError> {
             exception: None,
             thread,
             frames: Vec::new(),
+            module: None,
             threads: main.into_iter().chain(others.into_iter().take(5)).collect(),
             syscalls_readable: Some(report.syscalls_readable),
         },
@@ -386,6 +413,41 @@ mod tests {
         assert_eq!(analysis.exception, None);
         assert_eq!(analysis.thread.unwrap().id, SV_MAIN_ID);
         assert_eq!(signature, "hang UV loop: svMain citizen-scripting-lua.dll");
+    }
+
+    #[test]
+    fn a_hang_waiting_in_the_system_is_placed_in_the_first_module_of_fxserver_s_own() {
+        let stack = Section::with_endian(Endian::Little)
+            .D64(NTDLL + 0x4410)
+            .D64(LUA + 0x8000);
+        let (_dir, path) = Fixture {
+            rip: NTDLL + 0x16_1dd4,
+            stack,
+            exception: None,
+            ..Fixture::crash_in_lua()
+        }
+        .write();
+
+        let analysis = analyse(&path).unwrap().analysis;
+
+        assert_eq!(analysis.frames[0].module.as_deref(), Some("ntdll.dll"));
+        assert_eq!(analysis.module.as_deref(), Some("citizen-scripting-lua.dll"));
+    }
+
+    #[test]
+    fn a_crash_is_placed_where_it_faulted_even_in_the_system() {
+        let stack = Section::with_endian(Endian::Little).D64(LUA + 0x8000);
+        let (_dir, path) = Fixture {
+            rip: NTDLL + 0x9f0,
+            stack,
+            ..Fixture::crash_in_lua()
+        }
+        .write();
+
+        assert_eq!(
+            analyse(&path).unwrap().analysis.module.as_deref(),
+            Some("ntdll.dll")
+        );
     }
 
     #[test]

@@ -327,6 +327,10 @@ pub struct CrashAnalysis {
     /// The thread's instruction pointer, then return addresses found by scanning its stack:
     /// approximate without symbols.
     pub frames: Vec<Frame>,
+    /// The module FXServer was in: a crash's where it faulted, a hang's the first frame's outside
+    /// the system libraries a thread waits in.
+    #[serde(default)]
+    pub module: Option<String>,
     /// A Linux hang report's threads.
     pub threads: Vec<ThreadState>,
     /// `false` when Linux would not show the system calls the threads wait in.

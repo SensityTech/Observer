@@ -14,6 +14,11 @@ export type CrashAnalysis = { exception: CrashException | null, thread: Analysed
  */
 frames: Array<Frame>, 
 /**
+ * The module FXServer was in: a crash's where it faulted, a hang's the first frame's outside
+ * the system libraries a thread waits in.
+ */
+module: string | null, 
+/**
  * A Linux hang report's threads.
  */
 threads: Array<ThreadState>, 

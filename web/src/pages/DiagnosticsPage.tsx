@@ -146,7 +146,7 @@ const folderMeta = (t: Messages, format: ReturnType<typeof useI18n>['format'], f
 /** What a record says happened, in one sentence. */
 const crashSentence = (t: Messages, crash: Crash): ReactNode => {
     const analysis = crash.analysis;
-    const module = analysis?.frames.find((frame) => frame.module !== null)?.module ?? null;
+    const module = analysis?.module ?? null;
     if (crash.kind === 'found') {
         return t.diagnostics.crashes.found;
     }

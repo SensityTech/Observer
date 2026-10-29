@@ -4,7 +4,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { DiagnosticsSnapshot } from '../api/generated/DiagnosticsSnapshot';
 import { MeContext } from '../auth/me';
 import { ReauthDialog } from '../auth/ReauthDialog';
-import { CRASH, SHELL, SNAPSHOT } from '../diagnostics/fixtures';
+import { CRASH, HANG, SHELL, SNAPSHOT } from '../diagnostics/fixtures';
 import { en } from '../i18n/en';
 import { I18nProvider } from '../i18n/I18nProvider';
 import { LiveContext } from '../live/context';
@@ -265,6 +265,31 @@ describe('DiagnosticsPage', () => {
             expect(cell).toContain(sentences[index]);
             expect(cell).not.toContain('what the server side wrote');
         });
+        live.stop();
+    });
+
+    it("should place a hang in FXServer's own module rather than in the system's wait", async () => {
+        const hang = {
+            ...HANG,
+            analysis: {
+                ...HANG.analysis!,
+                frames: [
+                    { module: 'ntdll.dll', offset: '0x161dd4', scanned: false },
+                    { module: 'KERNELBASE.dll', offset: '0x1be9f', scanned: true },
+                    { module: 'FXServer.exe', offset: '0x1034c8', scanned: true },
+                ],
+                module: 'FXServer.exe',
+                threads: [],
+                syscallsReadable: null,
+            },
+        };
+
+        const { live } = await page(false, { ...SNAPSHOT, crashes: [hang] });
+
+        const cell = document.querySelector(
+            'section[aria-labelledby="diagnostics-crashes"] tbody td:nth-child(2)',
+        );
+        expect(cell?.textContent).toContain('svMain was stuck in FXServer.exe');
         live.stop();
     });
 

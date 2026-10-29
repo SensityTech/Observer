@@ -505,6 +505,7 @@ const isAnalysis = (value: unknown) =>
         (isRecord(value.thread) && isCount(value.thread.id) && orNull(isText)(value.thread.name))) &&
     Array.isArray(value.frames) &&
     value.frames.every(isFrame) &&
+    orNull(isText)(value.module) &&
     Array.isArray(value.threads) &&
     value.threads.every(isThreadState) &&
     orNull(isFlag)(value.syscallsReadable);

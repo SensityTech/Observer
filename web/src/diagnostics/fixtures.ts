@@ -58,6 +58,7 @@ export const CRASH: Crash = {
             { module: 'citizen-scripting-lua.dll', offset: '0x1a2b3', scanned: false },
             { module: null, offset: '0x7ff6a1b2c3d4', scanned: true },
         ],
+        module: 'citizen-scripting-lua.dll',
         threads: [],
         syscallsReadable: null,
     },
@@ -84,6 +85,7 @@ export const HANG: Crash = {
         exception: null,
         thread: { id: 812, name: 'UV loop: svMain' },
         frames: [],
+        module: null,
         threads: [
             {
                 tid: 812,

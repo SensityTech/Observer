@@ -1032,8 +1032,7 @@ fn crash_alert(crash: &Crash) -> Alert {
                     code: exception.code.clone(),
                     name: exception.name.clone(),
                 }),
-            module: analysis
-                .and_then(|analysis| analysis.frames.iter().find_map(|frame| frame.module.clone())),
+            module: analysis.and_then(|analysis| analysis.module.clone()),
             thread: analysis.and_then(|analysis| analysis.thread.as_ref()?.name.clone()),
             exit_code: crash.exit_code.clone().filter(|_| without_dump),
             signal: crash.signal.filter(|_| without_dump),

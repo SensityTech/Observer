@@ -209,6 +209,7 @@ const CRASH = {
         exception: { code: '0xC0000005', name: 'EXCEPTION_ACCESS_VIOLATION_WRITE', address: '0x10' },
         thread: { id: 812, name: 'UV loop: svMain' },
         frames: [{ module: 'citizen-scripting-lua.dll', offset: '0x1a2b3', scanned: false }],
+        module: 'citizen-scripting-lua.dll',
         threads: [],
         syscallsReadable: null,
     },
