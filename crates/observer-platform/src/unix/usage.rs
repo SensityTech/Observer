@@ -819,25 +819,65 @@ mod tests {
         spawned.exit.wait().await;
     }
 
+    /// What `/proc` says of a process, for a test that waited on it in vain.
+    fn described(pid: u32) -> String {
+        let Ok(text) = fs::read_to_string(format!("/proc/{pid}/stat")) else {
+            return format!("{pid} is gone");
+        };
+        let fields: Vec<&str> = text
+            .rsplit_once(") ")
+            .map(|(_, rest)| rest.split_whitespace().take(3).collect())
+            .unwrap_or_default();
+        let field = |index: usize| fields.get(index).copied().unwrap_or("?");
+        let cpu = parse_stat(&text).map_or_else(
+            || "?".to_owned(),
+            |stat| format!("{:?}", ticks(stat.user + stat.system)),
+        );
+        format!(
+            "{pid} in state {}, child of {}, group {}, {cpu} of CPU",
+            field(0),
+            field(1),
+            field(2)
+        )
+    }
+
     #[tokio::test]
     async fn the_tree_totals_keep_a_busy_child_that_ended_before_its_parent_waits_for_it() {
         let busy = "i=0; while [ $i -lt 300000 ]; do i=$((i+1)); done";
         // `sleep` never waits for the child it inherits, which stays a zombie until the end.
-        let mut spawned = spawn(&shell(&format!("sh -c '{busy}' & exec sleep 30"))).unwrap();
-        let zombie = |pid: &u32| {
-            fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|stat| {
+        let mut spawned = spawn(&shell(&format!("sh -c '{busy}' & echo $!; exec sleep 30"))).unwrap();
+        let started = spawned.stdout.next().await.expect("sh starts the child");
+        let ended: u32 = String::from_utf8(started).unwrap().trim().parse().unwrap();
+        let zombie = || {
+            fs::read_to_string(format!("/proc/{ended}/stat")).is_ok_and(|stat| {
                 stat.rsplit_once(") ")
                     .is_some_and(|(_, rest)| rest.starts_with('Z'))
             })
         };
         let deadline = Instant::now() + Duration::from_secs(10);
-        let ended = loop {
-            if let Some(pid) = spawned.tree.members().unwrap().into_iter().find(zombie) {
-                break pid;
+        while !zombie() {
+            if Instant::now() > deadline {
+                let group: Vec<String> = spawned
+                    .tree
+                    .members()
+                    .unwrap()
+                    .into_iter()
+                    .map(described)
+                    .collect();
+                panic!(
+                    "the child never ended. Child {}. Leader {}. Group: {}",
+                    described(ended),
+                    described(spawned.pid),
+                    group.join("; ")
+                );
             }
-            assert!(Instant::now() < deadline, "the child never ended");
             tokio::time::sleep(Duration::from_millis(20)).await;
-        };
+        }
+        assert!(
+            spawned.tree.members().unwrap().contains(&ended),
+            "{} left the group",
+            described(ended)
+        );
 
         let usage = spawned.tree.usage().unwrap();
 
