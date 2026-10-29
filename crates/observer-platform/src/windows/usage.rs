@@ -638,8 +638,28 @@ mod tests {
     use std::sync::mpsc;
     use std::time::Instant;
 
+    use windows_sys::Win32::System::Threading::GetCurrentThread;
+
     use super::*;
     use crate::{Launch, spawn};
+
+    /// The calling thread's own CPU time, as Windows counts it.
+    fn own_thread_cpu() -> Duration {
+        let (mut created, mut exited, mut kernel, mut user) = Default::default();
+        // SAFETY: GetCurrentThread returns a pseudo-handle valid on this thread, and the four
+        // outputs are writable locals.
+        check(unsafe {
+            GetThreadTimes(
+                GetCurrentThread(),
+                &raw mut created,
+                &raw mut exited,
+                &raw mut kernel,
+                &raw mut user,
+            )
+        })
+        .unwrap();
+        hundreds_of_ns(filetime(kernel) + filetime(user))
+    }
 
     fn cmd(script: &str) -> Launch {
         Launch {
@@ -749,11 +769,16 @@ mod tests {
     #[test]
     fn user_and_kernel_time_are_measured_apart() {
         let before = own_usage().unwrap();
+        // Spin until Windows has counted the time rather than for a stretch of wall time, which a
+        // busy machine shares out among more threads than it has CPUs.
         let started = Instant::now();
-        while started.elapsed() < Duration::from_millis(200) {
+        let mut spun = before;
+        while spun.user < before.user + Duration::from_millis(100)
+            && started.elapsed() < Duration::from_secs(10)
+        {
             std::hint::black_box(started.elapsed());
+            spun = own_usage().unwrap();
         }
-        let spun = own_usage().unwrap();
         // File system calls spend their time in the kernel.
         let dir = std::env::temp_dir();
         let deadline = Instant::now() + Duration::from_secs(5);
@@ -800,8 +825,12 @@ mod tests {
         let worker = std::thread::Builder::new()
             .name("UV loop: svNetwork".to_owned())
             .spawn(move || {
+                // Spin until Windows has counted the thread's own time rather than for a stretch
+                // of wall time, which a busy machine shares out among more threads than it has CPUs.
                 let started = Instant::now();
-                while started.elapsed() < Duration::from_millis(100) {
+                while own_thread_cpu() < Duration::from_millis(60)
+                    && started.elapsed() < Duration::from_secs(10)
+                {
                     std::hint::black_box(started.elapsed());
                 }
                 spun.send(()).unwrap();

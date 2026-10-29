@@ -961,8 +961,16 @@ mod tests {
         let worker = std::thread::Builder::new()
             .name("UV loop: svNetwork".to_owned())
             .spawn(move || {
+                // Spin until the kernel has counted the thread's own time rather than for a stretch
+                // of wall time, which a busy machine shares out among more threads than it has CPUs.
+                let own = || {
+                    fs::read_to_string("/proc/thread-self/stat")
+                        .ok()
+                        .and_then(|text| parse_stat(&text))
+                        .map_or(Duration::ZERO, |stat| ticks(stat.user + stat.system))
+                };
                 let started = Instant::now();
-                while started.elapsed() < Duration::from_millis(100) {
+                while own() < Duration::from_millis(60) && started.elapsed() < Duration::from_secs(10) {
                     std::hint::black_box(started.elapsed());
                 }
                 spun.send(()).unwrap();
