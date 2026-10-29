@@ -1,5 +1,6 @@
 // The Observer the browser tests run against: the debug binary on a data folder of its own, with
-// the fake FXServer laid out as a build. Global setup starts it; the function it returns stops it.
+// the fake FXServer installed as a build no one has selected yet. Global setup starts it; the
+// function it returns stops it.
 import { spawn } from 'node:child_process';
 import {
     chmodSync,
@@ -9,10 +10,11 @@ import {
     mkdirSync,
     mkdtempSync,
     rmSync,
+    statSync,
     writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 
 const windows = process.platform === 'win32';
@@ -22,6 +24,8 @@ const web = resolve(import.meta.dirname, '..');
 const results = join(import.meta.dirname, 'results');
 const patience = 30_000;
 const SETUP_LINK = /http:\/\/\S+\/setup#\S+/;
+/** The build the fake stands for: the one it reports in `/info.json`. */
+const BUILD = 35245;
 
 export const panelUrl = `http://127.0.0.1:${port}`;
 
@@ -36,14 +40,38 @@ const binary = (variable: string, name: string) => {
     return path;
 };
 
-/** The fake where Observer looks for FXServer in a build folder. */
-const layOutFake = (build: string, fake: string) => {
-    const program = windows
-        ? join(build, 'FXServer.exe')
-        : join(build, 'alpine/opt/cfx-server/ld-musl-x86_64.so.1');
-    mkdirSync(resolve(program, '..'), { recursive: true });
+const executable = (path: string, text: string) => {
+    writeFileSync(path, text);
+    chmodSync(path, 0o755);
+};
+
+/**
+ * The fake as build `BUILD` of Observer's artifacts folder: the layout Observer checks, and the
+ * manifest an import writes. Windows only takes a signed FXServer.exe through an import, so the
+ * build is put in place rather than imported.
+ */
+const installFake = (artifacts: string, fake: string) => {
+    const build = join(artifacts, String(BUILD));
+    const server = windows ? build : join(build, 'alpine/opt/cfx-server');
+    const program = join(server, windows ? 'FXServer.exe' : 'ld-musl-x86_64.so.1');
+    mkdirSync(join(server, 'citizen'), { recursive: true });
     copyFileSync(fake, program);
     chmodSync(program, 0o755);
+    if (!windows) {
+        executable(join(build, 'run.sh'), '#!/bin/sh\n');
+        executable(join(server, 'FXServer'), '#!/bin/sh\n');
+    }
+    const manifest = {
+        format: 2,
+        build: BUILD,
+        platform: windows ? 'windows' : 'linux',
+        installedAt: new Date().toISOString(),
+        installedBy: null,
+        files: 1,
+        bytes: statSync(fake).size,
+        origin: { kind: 'import', folder: dirname(fake) },
+    };
+    writeFileSync(join(build, '.observer-build.json'), JSON.stringify(manifest, null, 2));
 };
 
 /** Whether `done` held before `deadline`, asked every 100 ms. */
@@ -75,9 +103,8 @@ export default async function setup() {
     }
 
     const dir = mkdtempSync(join(tmpdir(), 'observer-e2e-'));
-    const build = join(dir, 'build');
     const serverData = join(dir, 'server-data');
-    layOutFake(build, fake);
+    installFake(join(dir, 'data', 'artifacts'), fake);
     mkdirSync(serverData, { recursive: true });
     writeFileSync(
         join(serverData, 'server.cfg'),
@@ -122,7 +149,7 @@ export default async function setup() {
 
     process.env.E2E_URL = panelUrl;
     process.env.E2E_SETUP_LINK = link;
-    process.env.E2E_BUILD = build;
+    process.env.E2E_BUILD = String(BUILD);
     process.env.E2E_SERVER_DATA = serverData;
 
     // Windows holds the databases and the fake's copy a moment after the process ends.

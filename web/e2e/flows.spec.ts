@@ -52,7 +52,6 @@ test.describe.serial('Observer in a browser', () => {
         await expect(page.getByRole('heading', { level: 1 })).toContainText(en.overview.title);
 
         await page.getByRole('link', { name: en.nav.server, exact: true }).click();
-        await page.getByLabel(en.server.buildPath).fill(env('E2E_BUILD'));
         await page.getByLabel(en.server.dataPath).fill(env('E2E_SERVER_DATA'));
         await page.getByLabel(en.server.cfgFile).fill('server.cfg');
         await page.getByRole('button', { name: en.server.save }).click();
@@ -65,6 +64,31 @@ test.describe.serial('Observer in a browser', () => {
             await reauth.getByRole('button', { name: en.reauth.submit }).click();
         }
         await expect(saved).toBeVisible();
+    });
+
+    test('FXServer waits for a build, then starts the one the owner picks', async () => {
+        await overview();
+        const start = controls().getByRole('button', { name: en.controls.start, exact: true });
+        await expect(start).toHaveAttribute('title', en.controls.noBuild);
+        // Off, yet pressable: pressing it says why, as it does for a keyboard.
+        await start.click({ force: true });
+        await expect(
+            page.getByText(en.controls.unavailable(en.controls.start, en.controls.noBuild)),
+        ).toBeVisible();
+
+        const build = env('E2E_BUILD');
+        await page.getByRole('link', { name: en.nav.artifacts, exact: true }).click();
+        await page
+            .getByRole('row')
+            .filter({ hasText: build })
+            .getByRole('button', { name: en.artifacts.installed.use, exact: true })
+            .click();
+        const dialog = page.getByRole('dialog', { name: en.artifacts.use.title(build) });
+        await expect(
+            dialog.getByRole('radio', { name: new RegExp(en.artifacts.use.nextStart) }),
+        ).toBeChecked();
+        await dialog.getByRole('button', { name: en.artifacts.use.confirm, exact: true }).click();
+        await expect(page.getByText(en.artifacts.use.done.nextStart(build))).toBeVisible();
     });
 
     test('FXServer starts, restarts and stops from the top bar', async () => {
