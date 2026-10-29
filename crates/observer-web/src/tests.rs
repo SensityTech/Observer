@@ -1,6 +1,7 @@
 //! The API over HTTP: requests go through the router, its gates and the services, down to a real
 //! database in a temporary directory.
 
+mod diagnostics;
 mod live;
 mod metrics;
 mod schedule;

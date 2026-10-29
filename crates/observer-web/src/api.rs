@@ -5,6 +5,7 @@
 mod account;
 mod audit;
 mod auth;
+mod diagnostics;
 mod metrics;
 mod schedule;
 mod servers;
@@ -59,6 +60,8 @@ pub(crate) fn routes() -> Vec<Route> {
     let plan = Permission(P::SCHEDULE_MANAGE);
     let edit_schedule = Reauthenticated(P::SCHEDULE_MANAGE);
     let dashboard = Permission(P::DASHBOARD_VIEW);
+    // A crash's files hold FXServer's memory: the owner's alone, with the password again.
+    let dumps = ReauthenticatedOwner;
     vec![
         route(M::GET,    "/health",                     Public,       health),
         route(M::GET,    "/setup",                      Public,       setup::status),
@@ -96,6 +99,8 @@ pub(crate) fn routes() -> Vec<Route> {
         route(M::PUT,    "/servers/default/schedule/once",  control,       schedule::restart_once),
         route(M::DELETE, "/servers/default/schedule/once",  control,       schedule::cancel_once),
         route(M::GET,    "/metrics/series",             dashboard,    metrics::series),
+        route(M::GET,    "/servers/default/crashes/{id}/files/{name}", dumps, diagnostics::download_file),
+        route(M::DELETE, "/servers/default/crashes/{id}/files",        dumps, diagnostics::delete_files),
     ]
 }
 
