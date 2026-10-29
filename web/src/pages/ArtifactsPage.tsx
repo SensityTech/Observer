@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient, type UseQueryResult } from '@tanstack/react-query';
 import {
+    Check,
     Circle,
     CircleCheck,
     CircleX,
@@ -469,14 +470,47 @@ function Mono({ build }: { build: number }) {
     return <span className="font-mono">{build}</span>;
 }
 
-/** Copies a commit where the browser allows it; its full text stays in the title otherwise. */
-const copyText = async (text: string) => {
-    try {
-        await navigator.clipboard.writeText(text);
-    } catch {
-        // No clipboard outside a secure context: the title still shows it.
-    }
-};
+/** A commit's first characters, copied whole where the browser allows it, and said so either way. */
+function CopyCommit({ commit }: { commit: string }) {
+    const { t } = useI18n();
+    const id = useId();
+    const [state, setState] = useState<'idle' | 'copied' | 'blocked'>('idle');
+    const copy = async () => {
+        try {
+            await navigator.clipboard.writeText(commit);
+            setState('copied');
+        } catch {
+            // No clipboard outside a secure context (plain HTTP on a LAN address).
+            setState('blocked');
+        }
+    };
+    return (
+        <>
+            <button
+                type="button"
+                title={commit}
+                aria-label={t.artifacts.installed.copyCommit(commit)}
+                aria-describedby={id}
+                className="inline-flex items-center gap-1 font-mono hover:text-ink max-md:min-h-11"
+                onClick={() => void copy()}
+            >
+                {commit.slice(0, 7)}
+                {state === 'copied' ? (
+                    <Check size={11} strokeWidth={1.75} aria-hidden="true" />
+                ) : (
+                    <Copy size={11} strokeWidth={1.75} aria-hidden="true" />
+                )}
+            </button>
+            <output id={id} className={cn('block', state === 'idle' && 'sr-only')}>
+                {state === 'copied'
+                    ? t.common.copied
+                    : state === 'blocked'
+                      ? t.artifacts.installed.copyBlocked(commit)
+                      : ''}
+            </output>
+        </>
+    );
+}
 
 function Fact({ label, value, after }: { label: string; value: ReactNode; after?: ReactNode }) {
     return (
@@ -873,20 +907,7 @@ function InstalledCard({
                                                         words.imported
                                                     ) : null
                                                 ) : (
-                                                    <button
-                                                        type="button"
-                                                        title={build.commit}
-                                                        aria-label={words.copyCommit(build.commit)}
-                                                        className="inline-flex items-center gap-1 font-mono hover:text-ink max-md:min-h-11"
-                                                        onClick={() => void copyText(build.commit ?? '')}
-                                                    >
-                                                        {build.commit.slice(0, 7)}
-                                                        <Copy
-                                                            size={11}
-                                                            strokeWidth={1.75}
-                                                            aria-hidden="true"
-                                                        />
-                                                    </button>
+                                                    <CopyCommit commit={build.commit} />
                                                 )}
                                             </div>
                                         </td>

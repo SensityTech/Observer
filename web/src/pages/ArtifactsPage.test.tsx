@@ -388,6 +388,24 @@ describe('ArtifactsPage', () => {
         expect(escaping.getByText(/the archive holds an entry that links outside the build\./)).toBeTruthy();
     });
 
+    it('should say whether a commit was copied', async () => {
+        const writeText = vi.fn(async () => {});
+        vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } });
+        await page({ ...STATUS, job: null });
+        const commit = BUILD.commit!;
+        const button = within(row(BUILD.build)).getByRole('button', {
+            name: en.artifacts.installed.copyCommit(commit),
+        });
+
+        fireEvent.click(button);
+        await waitFor(() => within(row(BUILD.build)).getByText(en.common.copied));
+        expect(writeText).toHaveBeenCalledWith(commit);
+
+        writeText.mockRejectedValueOnce(new Error('not a secure context'));
+        fireEvent.click(button);
+        await waitFor(() => within(row(BUILD.build)).getByText(en.artifacts.installed.copyBlocked(commit)));
+    });
+
     it('should say beside a build in use why it cannot be deleted', async () => {
         await page({ ...STATUS, job: null });
 

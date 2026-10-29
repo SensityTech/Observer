@@ -390,6 +390,7 @@ export const en = {
             imported: 'Imported',
             commandLine: 'command line',
             copyCommit: (commit: string) => `Copy commit ${commit}`,
+            copyBlocked: (commit: string) => `Copying is blocked here. The commit is ${commit}.`,
             chips: {
                 running: 'Running',
                 nextStart: 'Next start',
