@@ -90,6 +90,13 @@ describe('causeText', () => {
         expect(
             causeText(en, status({ state: 'starting', cause: { kind: 'requested', by: 'observer' } })),
         ).toBe('Started by Observer.');
+        // `local` is someone at the host's own status window, who signs in to nothing.
+        expect(causeText(en, status({ state: 'stopped', cause: { kind: 'requested', by: 'local' } }))).toBe(
+            'Stopped by someone at the host.',
+        );
+        expect(causeText(en, status({ state: 'stopping', cause: { kind: 'restart', by: 'local' } }))).toBe(
+            'Restarting, as someone at the host asked: resources are told first, then FXServer quits and starts again.',
+        );
         expect(
             causeText(
                 en,

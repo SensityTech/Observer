@@ -22,7 +22,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
 use crate::config::Config;
-use crate::shutdown::{Shutdown, Signals};
+use crate::shutdown::Signals;
 use crate::{lock, logging};
 
 /// Who the console shows for commands typed here.
@@ -125,8 +125,8 @@ pub async fn run(config: Config, args: RunArgs) -> anyhow::Result<()> {
     let mut shortened = false;
     while started.is_ok() {
         tokio::select! {
-            shutdown = signals.next() => {
-                shortened = shutdown == Shutdown::Shortened;
+            request = signals.next() => {
+                shortened = request.shortened;
                 info!(shortened, "stopping the server");
                 break;
             }
@@ -148,8 +148,8 @@ pub async fn run(config: Config, args: RunArgs) -> anyhow::Result<()> {
                 break;
             }
             // A console closed during a graceful stop leaves Windows' few seconds only.
-            shutdown = signals.next(), if !shortened => {
-                if shutdown == Shutdown::Shortened {
+            request = signals.next(), if !shortened => {
+                if request.shortened {
                     shortened = true;
                     info!("the console is closing; shortening the stop");
                     supervisor.shutdown(true).await;

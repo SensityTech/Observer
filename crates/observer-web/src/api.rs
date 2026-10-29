@@ -2,6 +2,7 @@
 //! else adds routes to the API: what the table says is what the server enforces. Clippy holds
 //! everyone to it: `Router::route` and its kin are disallowed outside `add` and the `/api` mount.
 
+mod about;
 mod account;
 mod artifacts;
 mod audit;
@@ -116,6 +117,8 @@ pub(crate) fn routes() -> Vec<Route> {
         route(M::PUT,    "/servers/default/artifacts/settings",       change_builds, artifacts::change_settings),
         route(M::GET,    "/metrics/threads",            dashboard,    metrics::threads),
         route(M::GET,    "/metrics/growth",             dashboard,    metrics::growth),
+        route(M::GET,    "/about",                      Session,      about::about),
+        route(M::GET,    "/about/licences",             Session,      about::licences),
     ]
 }
 
@@ -161,6 +164,6 @@ fn add(router: Router<AppState>, route: Route, state: &AppState) -> Router<AppSt
 async fn health(State(state): State<AppState>) -> Json<Health> {
     Json(Health {
         status: HealthStatus::Ok,
-        version: state.version.to_owned(),
+        version: state.build.version.to_owned(),
     })
 }

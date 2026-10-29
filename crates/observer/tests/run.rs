@@ -123,6 +123,8 @@ impl Observer {
         .unwrap();
         let mut process = Command::new(env!("CARGO_BIN_EXE_observer"))
             .args(["--config", config.to_str().unwrap(), "run"])
+            // A test has no one at the host to show a window to.
+            .args(cfg!(windows).then_some("--no-window"))
             .env_remove("INVOCATION_ID")
             .env_remove("NOTIFY_SOCKET")
             .stdin(Stdio::null())

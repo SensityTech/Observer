@@ -21,6 +21,7 @@ use observer_app::{
 };
 use observer_artifacts::Http;
 use observer_artifacts::catalog::{Catalog, Listing};
+use observer_domain::about::Build;
 use observer_domain::audit::ActorKind;
 use observer_store::Database;
 use serde_json::{Value, json};
@@ -34,6 +35,11 @@ use crate::{AppState, Live, SESSION_KEY_HEADER, Services, router};
 const HOST: &str = "observer.test:40125";
 const ORIGIN: &str = "http://observer.test:40125";
 const OWNER_PASSWORD: &str = "correct horse battery staple";
+const BUILD: Build = Build {
+    version: "0.0.0-test",
+    commit: None,
+    commit_date: None,
+};
 
 struct Server {
     dir: TempDir,
@@ -161,12 +167,7 @@ impl Server {
             schedule,
             artifacts,
         };
-        let state = AppState::new(
-            "0.0.0-test",
-            services,
-            &instance_id,
-            &["observer.test".to_owned()],
-        );
+        let state = AppState::new(BUILD, services, &instance_id, &["observer.test".to_owned()]);
         let live = state.live.clone();
         let app = router(state).layer(MockConnectInfo(SocketAddr::from(([203, 0, 113, 7], 50_000))));
         Self {
@@ -233,7 +234,8 @@ impl Server {
             .create_setup_token(ActorKind::System)
             .await
             .unwrap()
-            .unwrap();
+            .unwrap()
+            .token;
         let body = json!({ "token": token, "username": "ada", "password": OWNER_PASSWORD });
         let reply = self.call(Method::POST, "/api/setup", None, Some(body)).await;
         assert_eq!(reply.status, StatusCode::CREATED, "{}", reply.text);
@@ -377,6 +379,66 @@ async fn health_reports_the_running_version() {
 }
 
 #[tokio::test]
+async fn about_reports_this_build() {
+    let server = Server::new().await;
+    let owner = server.owner().await;
+
+    let reply = server.call(Method::GET, "/api/about", Some(&owner), None).await;
+
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.text);
+    let about = reply.json();
+    assert_eq!(about["version"], "0.0.0-test");
+    assert_eq!(about["commit"], Value::Null);
+    assert_eq!(about["os"], std::env::consts::OS);
+    assert_eq!(about["profile"], "debug");
+}
+
+/// The list names every crate and version Observer runs: only a signed-in user reads it, through
+/// the API. The panel's file lookup turns `\` into `/`, and on disk resolves `.` and `..`, so every
+/// spelling is tried. This only bites once `cargo xtask web` wrote a list: without one (CI's Rust
+/// job) every spelling is a 404 whatever the panel serves, and xtask's
+/// `the_list_is_written_beside_the_panel_never_in_it` keeps the list out of the panel's files.
+#[tokio::test]
+async fn the_licence_list_is_never_a_public_panel_file() {
+    let server = Server::new().await;
+    let owner = server.owner().await;
+
+    for path in [
+        "/about/licences.json",
+        r"/about\licences.json",
+        r"/about\licences.json.gz",
+        "/./about/licences.json",
+        "/ABOUT/licences.json",
+        "/licences.json",
+        "/licences.json.br",
+        "/../private/licences.json",
+        r"/..\private\licences.json",
+    ] {
+        for session in [None, Some(&owner)] {
+            let reply = server.call(Method::GET, path, session, None).await;
+            assert_eq!(
+                reply.status,
+                StatusCode::NOT_FOUND,
+                "{path} served {} bytes",
+                reply.text.len()
+            );
+        }
+    }
+    let listed = server
+        .call(Method::GET, "/api/about/licences", Some(&owner), None)
+        .await;
+    if listed.status == StatusCode::OK {
+        assert!(listed.json()["packages"].is_array());
+    } else {
+        assert_eq!(listed.code(), "not_found");
+    }
+    assert_eq!(
+        server.get("/api/about/licences").await.status,
+        StatusCode::UNAUTHORIZED
+    );
+}
+
+#[tokio::test]
 async fn unknown_api_paths_are_not_found_rather_than_the_panel() {
     let server = Server::new().await;
 
@@ -420,7 +482,8 @@ async fn setup_signs_the_owner_in_with_a_strict_http_only_cookie() {
         .create_setup_token(ActorKind::System)
         .await
         .unwrap()
-        .unwrap();
+        .unwrap()
+        .token;
 
     let body = json!({ "token": token, "username": "ada", "password": OWNER_PASSWORD });
     let reply = server

@@ -24,6 +24,7 @@ import type { ScheduleMode } from '../api/generated/ScheduleMode';
 import type { ScheduleProblem } from '../api/generated/ScheduleProblem';
 import type { ServerState } from '../api/generated/ServerState';
 import type { SpawnFailure } from '../api/generated/SpawnFailure';
+import type { StopSource } from '../api/generated/StopSource';
 import type { SupportLevel } from '../api/generated/SupportLevel';
 import { parsePermissions, permissionKeys, type PermissionKey } from '../auth/permissions';
 import type { LinkState } from '../live/realtime';
@@ -188,6 +189,7 @@ export const en = {
         permissions: (value: number) => count(value, { one: 'permission', other: 'permissions' }),
         myAccount: 'My account',
         signOut: 'Sign out',
+        about: 'About Observer',
     },
     overview: {
         title: 'Overview',
@@ -885,6 +887,8 @@ export const en = {
             `Restarting, as ${by} planned: resources are told first, then FXServer quits and starts again.`,
         restartedAsPlanned: (by: string) => `Restarted as ${by} planned.`,
         observer: 'Observer',
+        // Someone at the host's own status window, who signs in to nothing.
+        local: 'someone at the host',
         recovery: 'Started again after a failure.',
         ready: 'Ready: its HTTP endpoint answers and the observer bridge reports in.',
         recovered: 'Healthy again.',
@@ -1354,6 +1358,7 @@ export const en = {
             build_rolled_back: 'Went back to the last healthy build',
             build_deleted: 'Build deleted',
             artifact_settings_changed: 'Artifact settings changed',
+            observer_stopped: 'Observer stopped',
         } satisfies Record<AuditAction, string>,
         outcomes: {
             success: 'Success',
@@ -1500,6 +1505,12 @@ export const en = {
             schedule: 'the schedule',
             oneOff: 'a single restart',
         },
+        // Where the request to stop Observer came from.
+        stopSources: {
+            window: 'the host window',
+            console: "Observer's console",
+            signal: 'a signal',
+        } satisfies Record<StopSource, string>,
         missReasons: {
             late: 'Observer saw the time pass too late',
             serverBusy: 'FXServer was busy',
@@ -1526,6 +1537,34 @@ export const en = {
             hierarchy: 'An account holding more than they do',
             self_edit: 'Their own account',
         },
+    },
+    about: {
+        title: 'About',
+        gloss: 'This build of Observer, and the software it is made with.',
+        build: 'This build',
+        version: 'Version',
+        commit: 'Commit',
+        development: 'Development build',
+        commitDate: 'Commit date',
+        platform: 'Platform',
+        profile: 'Profile',
+        profiles: { release: 'Release', debug: 'Debug' },
+        systems: { windows: 'Windows', linux: 'Linux' },
+        thirdParty: 'Third-party software',
+        counts: (crates: number, npm: number) =>
+            `${count(crates, { one: 'crate', other: 'crates' })} · ${count(npm, { one: 'npm package', other: 'npm packages' })}`,
+        search: 'Search by name or licence',
+        ecosystems: { crate: 'Crates', npm: 'npm packages' },
+        name: 'Name',
+        licence: 'Licence',
+        noLicence: 'None declared',
+        licenceText: 'Licence text',
+        textOf: (name: string, version: string) => `Licence text of ${name} ${version}`,
+        repository: 'Repository',
+        fromSpdx: 'Text from the SPDX licence list: the package ships none.',
+        noMatch: 'No package matches the search.',
+        missing: 'This build carries no licence list. cargo xtask web and cargo xtask dist write it.',
+        loadFailed: 'The licence list could not be loaded.',
     },
     permissions,
     permissionAreas: {

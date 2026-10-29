@@ -60,7 +60,7 @@ pub(super) async fn open(topic: Topic, since: Option<u64>, state: &AppState) -> 
     match topic {
         Topic::Status => Ok(Feed {
             snapshot: TopicSnapshot::Status(ObserverStatus {
-                version: state.version.to_owned(),
+                version: state.build.version.to_owned(),
                 started_at: state.live.started_at,
             }),
             events: None,

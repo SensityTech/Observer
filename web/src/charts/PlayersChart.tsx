@@ -32,7 +32,7 @@ import { scaleTop } from './scale';
 import { chartOptions, tokenColor, withAlpha } from './theme';
 
 const SERIES = ['players', 'slots'] as const;
-const ATTRIBUTION = 'https://www.tradingview.com/';
+export const ATTRIBUTION = 'https://www.tradingview.com/';
 /** Players and slots are whole: the scale steps and reads in whole numbers. */
 const WHOLE = { type: 'price', precision: 0, minMove: 1 } as const;
 /** The min–max band's fill: the accent, lighter than the area under the line. */

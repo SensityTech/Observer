@@ -1,18 +1,26 @@
-//! What asks Observer to stop: Ctrl+C everywhere; closing the console, logging off and shutting
-//! down on Windows; SIGTERM (service managers) and SIGHUP (a closed SSH session) on Unix.
+//! What asks Observer to stop: Ctrl+C everywhere; closing the console, logging off, shutting
+//! down and Quit in the status window on Windows; SIGTERM (service managers) and SIGHUP (a closed
+//! SSH session) on Unix.
 
 use std::io;
 
+use observer_domain::audit::StopSource;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Shutdown {
-    Graceful,
-    /// Windows is closing the console and ends the process about five seconds later.
-    Shortened,
+pub struct StopRequest {
+    /// Windows is closing the console or ending the session, and ends the process about five
+    /// seconds later.
+    pub shortened: bool,
+    pub from: StopSource,
 }
 
 pub struct Signals {
     #[cfg(windows)]
     console: observer_platform::ConsoleEvents,
+    #[cfg(windows)]
+    window: tokio::sync::mpsc::UnboundedReceiver<()>,
+    #[cfg(windows)]
+    requests: StopRequests,
     #[cfg(unix)]
     interrupt: tokio::signal::unix::Signal,
     #[cfg(unix)]
@@ -21,14 +29,29 @@ pub struct Signals {
     hangup: tokio::signal::unix::Signal,
 }
 
+/// Asks for the graceful stop, as Quit in the status window does.
+#[cfg(windows)]
+#[derive(Clone)]
+pub struct StopRequests(tokio::sync::mpsc::UnboundedSender<()>);
+
+#[cfg(windows)]
+impl StopRequests {
+    pub fn request(&self) {
+        let _ = self.0.send(());
+    }
+}
+
 impl Signals {
     /// Listens from now on: a request that comes before the first [`Signals::next`] waits for it,
     /// rather than end the process at once.
     pub fn listen() -> io::Result<Self> {
         #[cfg(windows)]
         {
+            let (requests, window) = tokio::sync::mpsc::unbounded_channel();
             Ok(Self {
                 console: observer_platform::ConsoleEvents::listen()?,
+                window,
+                requests: StopRequests(requests),
             })
         }
         #[cfg(unix)]
@@ -43,15 +66,30 @@ impl Signals {
         }
     }
 
-    pub async fn next(&mut self) -> Shutdown {
+    #[cfg(windows)]
+    pub fn requests(&self) -> StopRequests {
+        self.requests.clone()
+    }
+
+    pub async fn next(&mut self) -> StopRequest {
         #[cfg(windows)]
         {
             use observer_platform::ConsoleEvent;
 
-            match self.console.next().await {
-                Some(ConsoleEvent::Interrupt) => Shutdown::Graceful,
-                Some(ConsoleEvent::Close) => Shutdown::Shortened,
-                None => std::future::pending().await,
+            let from_console = |shortened| StopRequest {
+                shortened,
+                from: StopSource::Console,
+            };
+            tokio::select! {
+                event = self.console.next() => match event {
+                    Some(ConsoleEvent::Interrupt) => from_console(false),
+                    Some(ConsoleEvent::Close) => from_console(true),
+                    None => std::future::pending().await,
+                },
+                Some(()) = self.window.recv() => StopRequest {
+                    shortened: false,
+                    from: StopSource::Window,
+                },
             }
         }
         #[cfg(unix)]
@@ -61,7 +99,10 @@ impl Signals {
                 _ = self.terminate.recv() => {}
                 _ = self.hangup.recv() => {}
             }
-            Shutdown::Graceful
+            StopRequest {
+                shortened: false,
+                from: StopSource::Signal,
+            }
         }
     }
 
@@ -74,5 +115,25 @@ impl Signals {
     pub fn release(&self) {
         #[cfg(windows)]
         self.console.release();
+    }
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn a_request_from_the_window_is_a_graceful_stop_from_the_window() {
+        let mut signals = Signals::listen().unwrap();
+
+        signals.requests().request();
+
+        assert_eq!(
+            signals.next().await,
+            StopRequest {
+                shortened: false,
+                from: StopSource::Window,
+            }
+        );
     }
 }

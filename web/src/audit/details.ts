@@ -127,6 +127,10 @@ const word = (t: Messages, format: Format, key: string, value: unknown): string 
         );
         return names.length > 0 ? names.join(', ') : t.audit.noPermission;
     }
+    // `from` is a time in a filter, and where a stop of Observer came from.
+    if (key === 'from' && has(t.audit.stopSources, value)) {
+        return t.audit.stopSources[value];
+    }
     if (TIMES.has(key)) {
         return format.timestamp(value);
     }

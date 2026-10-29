@@ -163,6 +163,7 @@ const AUDIT_ACTIONS = {
     build_rolled_back: true,
     build_deleted: true,
     artifact_settings_changed: true,
+    observer_stopped: true,
 } satisfies Record<AuditAction, true>;
 
 const OUTCOMES = { success: true, failure: true, denied: true } satisfies Record<Outcome, true>;

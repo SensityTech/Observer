@@ -141,6 +141,11 @@ describe('auditDetails', () => {
         );
     });
 
+    it('should say where a stop of Observer came from', () => {
+        expect(auditDetails(en, format, { from: 'window' })).toBe('From: the host window');
+        expect(auditDetails(en, format, { from: 'signal' })).toBe('From: a signal');
+    });
+
     it('should show what it does not know as the log stores it', () => {
         expect(auditDetails(en, format, { trigger: 'manual', refusal: 'unheard_of', extra: { a: 1 } })).toBe(
             'trigger: manual · Reason: unheard_of · extra: {"a":1}',

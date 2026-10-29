@@ -85,10 +85,13 @@ pub enum AuditAction {
     BuildDeleted,
     /// `details` holds each changed setting with its value before and after.
     ArtifactSettingsChanged,
+    /// Observer began to stop, and FXServer with it. `details` says where the request came
+    /// `from`: someone at the host (its window or its console) or a signal.
+    ObserverStopped,
 }
 
 impl AuditAction {
-    pub const ALL: [Self; 42] = [
+    pub const ALL: [Self; 43] = [
         Self::SetupCompleted,
         Self::SetupLinkCreated,
         Self::LoginSucceeded,
@@ -131,6 +134,7 @@ impl AuditAction {
         Self::BuildRolledBack,
         Self::BuildDeleted,
         Self::ArtifactSettingsChanged,
+        Self::ObserverStopped,
     ];
 
     pub const fn as_str(self) -> &'static str {
@@ -177,6 +181,7 @@ impl AuditAction {
             Self::BuildRolledBack => "build_rolled_back",
             Self::BuildDeleted => "build_deleted",
             Self::ArtifactSettingsChanged => "artifact_settings_changed",
+            Self::ObserverStopped => "observer_stopped",
         }
     }
 
@@ -214,6 +219,19 @@ impl ActorKind {
     pub fn from_name(name: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|kind| kind.as_str() == name)
     }
+}
+
+/// Where the request to stop Observer came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum StopSource {
+    /// Quit, in the status window on the host.
+    Window,
+    /// Ctrl+C or a closed console window, on the host.
+    Console,
+    /// A signal from a service manager or a closed terminal session.
+    Signal,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
