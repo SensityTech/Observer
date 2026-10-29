@@ -418,6 +418,10 @@ mod tests {
             "Start is not available. FXServer has no launch settings yet."
         );
         assert_eq!(
+            unavailable(START, NO_BUILD),
+            "Start is not available. No build is selected: install or import one on the Artifacts page."
+        );
+        assert_eq!(
             unavailable(QUIT, OBSERVER_STOPPING),
             "Quit Observer is not available. Observer is stopping."
         );
