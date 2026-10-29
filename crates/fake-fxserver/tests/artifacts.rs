@@ -367,7 +367,8 @@ fn executable(_path: &Path) {}
 
 #[tokio::test]
 async fn a_switch_at_the_next_start_runs_the_new_build_and_passes_probation() {
-    let mut lab = Lab::new(Duration::from_secs(2), "").await;
+    // Long enough for the test to see the probation open before it passes, on a loaded machine too.
+    let mut lab = Lab::new(Duration::from_secs(10), "").await;
     lab.supervision.start_server(&lab.owner).await.unwrap();
     lab.online_on(HEALTHY).await;
 
