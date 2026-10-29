@@ -2,11 +2,12 @@
 //! Windows asks an executable for, without a rasteriser.
 
 use std::fs;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::Path;
 
 use anyhow::{Context, bail};
 use flate2::Compression;
+use flate2::read::ZlibDecoder;
 use flate2::write::ZlibEncoder;
 
 /// The sizes Windows picks from for the shell, the taskbar and the notification area, at every
@@ -31,7 +32,14 @@ pub fn run(root: &Path, check: bool) -> anyhow::Result<()> {
     for (path, drawn) in files {
         let path = root.join(path);
         if check {
-            if fs::read(&path).ok().as_deref() != Some(drawn.as_slice()) {
+            let committed = fs::read(&path).unwrap_or_default();
+            // Deflate's output depends on the zlib backend: an ICO is compared by what it shows.
+            let same = if path.extension().is_some_and(|extension| extension == "ico") {
+                shown(&committed).is_some_and(|images| Some(images) == shown(&drawn))
+            } else {
+                committed == drawn
+            };
+            if !same {
                 stale.push(path.display().to_string());
             }
         } else {
@@ -167,6 +175,40 @@ fn png(size: u32, rgba: &[u8]) -> anyhow::Result<Vec<u8>> {
     Ok(png)
 }
 
+/// What an ICO of ours shows: each entry's side, then its PNG header and its rows inflated.
+fn shown(ico: &[u8]) -> Option<Vec<(u8, Vec<u8>)>> {
+    let count = u16::from_le_bytes(ico.get(4..6)?.try_into().ok()?);
+    (0..usize::from(count))
+        .map(|index| {
+            let entry = ico.get(6 + 16 * index..6 + 16 * (index + 1))?;
+            let length = usize::try_from(u32::from_le_bytes(entry[8..12].try_into().ok()?)).ok()?;
+            let offset = usize::try_from(u32::from_le_bytes(entry[12..16].try_into().ok()?)).ok()?;
+            let png = ico.get(offset..offset.checked_add(length)?)?;
+            Some((entry[0], decoded(png)?))
+        })
+        .collect()
+}
+
+fn decoded(png: &[u8]) -> Option<Vec<u8>> {
+    let mut header = Vec::new();
+    let mut compressed = Vec::new();
+    let mut at = 8;
+    while at + 8 <= png.len() {
+        let length = usize::try_from(u32::from_be_bytes(png[at..at + 4].try_into().ok()?)).ok()?;
+        let data = png.get(at + 8..at + 8 + length)?;
+        match &png[at + 4..at + 8] {
+            b"IHDR" => header.extend_from_slice(data),
+            b"IDAT" => compressed.extend_from_slice(data),
+            _ => {}
+        }
+        at += 12 + length;
+    }
+    ZlibDecoder::new(compressed.as_slice())
+        .read_to_end(&mut header)
+        .ok()?;
+    Some(header)
+}
+
 fn chunk(png: &mut Vec<u8>, kind: [u8; 4], data: &[u8]) {
     let length = u32::try_from(data.len()).unwrap_or(u32::MAX);
     png.extend_from_slice(&length.to_be_bytes());
@@ -196,6 +238,32 @@ mod tests {
         assert_eq!(pixel(&image, 64, 32, 15), [255, 255, 255, 255]);
         assert_eq!(pixel(&image, 64, 32, 4), [0x1C, 0x1D, 0x1F, 255]);
         assert_eq!(pixel(&image, 64, 0, 0)[3], 0);
+    }
+
+    /// What the check compares is the pixels, never the deflate stream, which another zlib
+    /// backend writes differently.
+    #[test]
+    fn an_ico_is_compared_by_the_pixels_it_holds() {
+        let expected: Vec<(u8, Vec<u8>)> = ICO_SIZES
+            .iter()
+            .map(|&size| {
+                let mut image = size.to_be_bytes().to_vec();
+                image.extend(size.to_be_bytes());
+                image.extend([8, 6, 0, 0, 0]);
+                for row in mark(size).chunks(size as usize * 4) {
+                    image.push(0);
+                    image.extend_from_slice(row);
+                }
+                (u8::try_from(size).unwrap_or(0), image)
+            })
+            .collect();
+
+        assert_eq!(shown(&ico(&ICO_SIZES).unwrap()), Some(expected));
+        assert_ne!(
+            shown(&ico(&ICO_SIZES).unwrap()),
+            shown(&ico(&ICO_SIZES[1..]).unwrap())
+        );
+        assert_eq!(shown(b"not an icon"), None);
     }
 
     #[test]
