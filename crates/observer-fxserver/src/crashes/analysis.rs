@@ -124,8 +124,8 @@ pub fn analyse(path: &Path) -> Result<Analysis, AnalysisError> {
         id: thread.raw.thread_id,
         name: name_of(thread.raw.thread_id),
     });
-    let signature = signature(crash.as_ref(), analysed.as_ref(), &frames);
     let module = module(crash.is_some(), &frames);
+    let signature = signature(crash.as_ref(), analysed.as_ref(), &frames, module.as_deref());
     Ok(Analysis {
         analysis: CrashAnalysis {
             exception: crash,
@@ -243,12 +243,13 @@ fn file_name(path: &str) -> String {
 }
 
 /// A crash by its code and the first frame inside a module; a hang or a live dump by its thread and
-/// module only, since a busy loop's offset moves every time; the code or the thread alone when no
-/// frame is inside a module.
+/// the module it is placed in, as its sentence names them, since a busy loop's offset moves every
+/// time; the code or the thread alone when no frame is inside a module.
 fn signature(
     exception: Option<&CrashException>,
     thread: Option<&AnalysedThread>,
     frames: &[Frame],
+    module: Option<&str>,
 ) -> String {
     let thread = thread.and_then(|thread| thread.name.clone());
     let first = frames
@@ -260,13 +261,13 @@ fn signature(
             Some(thread) => format!("{} {thread}", exception.code),
             None => exception.code.clone(),
         },
-        (None, first) => {
+        (None, _) => {
             let mut signature = String::from("hang");
             if let Some(thread) = thread {
                 signature.push(' ');
                 signature.push_str(&thread);
             }
-            if let Some((module, _)) = first {
+            if let Some(module) = module {
                 signature.push(' ');
                 signature.push_str(module);
             }
@@ -416,7 +417,7 @@ mod tests {
     }
 
     #[test]
-    fn a_hang_waiting_in_the_system_is_placed_in_the_first_module_of_fxserver_s_own() {
+    fn a_hang_waiting_in_the_system_is_placed_and_grouped_in_the_first_module_of_fxserver_s_own() {
         let stack = Section::with_endian(Endian::Little)
             .D64(NTDLL + 0x4410)
             .D64(LUA + 0x8000);
@@ -428,10 +429,30 @@ mod tests {
         }
         .write();
 
-        let analysis = analyse(&path).unwrap().analysis;
+        let Analysis { analysis, signature } = analyse(&path).unwrap();
 
         assert_eq!(analysis.frames[0].module.as_deref(), Some("ntdll.dll"));
         assert_eq!(analysis.module.as_deref(), Some("citizen-scripting-lua.dll"));
+        assert_eq!(
+            signature, "hang UV loop: svMain citizen-scripting-lua.dll",
+            "the busy hang in Lua's group"
+        );
+    }
+
+    #[test]
+    fn a_hang_waiting_in_the_system_with_nothing_of_fxserver_s_on_the_stack_is_grouped_there() {
+        let (_dir, path) = Fixture {
+            rip: NTDLL + 0x16_1dd4,
+            stack: Section::with_endian(Endian::Little).D64(NTDLL + 0x4410),
+            exception: None,
+            ..Fixture::crash_in_lua()
+        }
+        .write();
+
+        let Analysis { analysis, signature } = analyse(&path).unwrap();
+
+        assert_eq!(analysis.module.as_deref(), Some("ntdll.dll"));
+        assert_eq!(signature, "hang UV loop: svMain ntdll.dll");
     }
 
     #[test]
@@ -565,7 +586,7 @@ mod tests {
             name: Some("é".repeat(200)),
         };
 
-        let signature = signature(None, Some(&thread), &[]);
+        let signature = signature(None, Some(&thread), &[], None);
 
         assert!(signature.len() <= MAX_SIGNATURE);
         assert!(signature.starts_with("hang é"));
