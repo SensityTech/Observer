@@ -4,7 +4,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { DiagnosticsSnapshot } from '../api/generated/DiagnosticsSnapshot';
 import { MeContext } from '../auth/me';
 import { ReauthDialog } from '../auth/ReauthDialog';
-import { CRASH, SNAPSHOT } from '../diagnostics/fixtures';
+import { CRASH, SHELL, SNAPSHOT } from '../diagnostics/fixtures';
 import { en } from '../i18n/en';
 import { I18nProvider } from '../i18n/I18nProvider';
 import { LiveContext } from '../live/context';
@@ -63,6 +63,13 @@ const answer = (status: number, body?: unknown) =>
         status,
         headers: { 'content-type': 'application/json' },
     });
+
+/** Heights as the browser lays them out, which jsdom does not: the line of a `ping` clamped to two
+ * lines is taller than them, everything else fits. */
+const height = (clamped: number, fits: number) =>
+    function (this: HTMLElement) {
+        return this.classList.contains('line-clamp-2') && this.textContent?.includes('ping') ? clamped : fits;
+    };
 
 describe('DiagnosticsPage', () => {
     beforeAll(() => {
@@ -173,6 +180,31 @@ describe('DiagnosticsPage', () => {
         expect(getByText(en.diagnostics.processes.emptyTitle)).not.toBeNull();
         expect(getByText(en.diagnostics.connections.none)).not.toBeNull();
         expect(getByText(en.diagnostics.connections.noListener)).not.toBeNull();
+        live.stop();
+    });
+
+    it('should let a command line two lines cut short be read whole, whatever its length', async () => {
+        const scroll = vi
+            .spyOn(HTMLElement.prototype, 'scrollHeight', 'get')
+            .mockImplementation(height(60, 20));
+        const client = vi
+            .spyOn(HTMLElement.prototype, 'clientHeight', 'get')
+            .mockImplementation(height(40, 20));
+        const line = String.raw`"cmd.exe" /c ping -n 300 -w 1000 127.0.0.1 C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`;
+        const { getAllByRole, getByRole, getByText, live } = await page(false, {
+            ...SNAPSHOT,
+            processes: [{ ...SHELL, commandLine: line }, SNAPSHOT.processes[1]!],
+        });
+
+        expect(line.length).toBeLessThan(120);
+        expect(getAllByRole('button', { name: en.diagnostics.processes.more })).toHaveLength(1);
+        fireEvent.click(getByRole('button', { name: en.diagnostics.processes.more }));
+        expect(getByText(line).classList.contains('line-clamp-2')).toBe(false);
+        expect(
+            getByRole('button', { name: en.diagnostics.processes.less }).getAttribute('aria-expanded'),
+        ).toBe('true');
+        scroll.mockRestore();
+        client.mockRestore();
         live.stop();
     });
 

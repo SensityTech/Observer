@@ -1,5 +1,5 @@
 import { Cpu, Download, Network, OctagonX, Trash2, TriangleAlert, type LucideIcon } from 'lucide-react';
-import { useState, type ReactNode } from 'react';
+import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 
 import { deleteCrashFiles, downloadCrashFile, MAX_DOWNLOAD } from '../api/diagnostics';
 import type { Crash } from '../api/generated/Crash';
@@ -588,9 +588,25 @@ function ProcessesCard({ processes }: { processes: TreeProcess[] }) {
 function ProcessRow({ process }: { process: TreeProcess }) {
     const { t, format } = useI18n();
     const [whole, setWhole] = useState(false);
+    const [hidden, setHidden] = useState(false);
+    const clamped = useRef<HTMLSpanElement>(null);
     const alert = process.kind === 'shell';
     const line = process.commandLine;
-    const long = line !== null && line.length > 120;
+    // Whether two lines hide part of the command depends on the column's width, not on its length.
+    useLayoutEffect(() => {
+        const span = clamped.current;
+        if (span === null || line === null || whole) {
+            return;
+        }
+        const measure = () => setHidden(span.scrollHeight > span.clientHeight);
+        measure();
+        if (typeof ResizeObserver === 'undefined') {
+            return;
+        }
+        const resized = new ResizeObserver(measure);
+        resized.observe(span);
+        return () => resized.disconnect();
+    }, [line, whole]);
     return (
         <tr className={alert ? 'bg-warning-soft [&:last-child>td]:border-b-0' : table.row}>
             <td
@@ -612,13 +628,14 @@ function ProcessRow({ process }: { process: TreeProcess }) {
                 {line !== null && (
                     <div className={cn(table.sub, 'block')}>
                         <span
+                            ref={clamped}
                             className={cn('font-mono [overflow-wrap:anywhere]', !whole && 'line-clamp-2')}
                             title={whole ? undefined : line}
                         >
                             {line}
                         </span>
                         {process.truncated && <span> · {t.diagnostics.processes.cut}</span>}
-                        {long && (
+                        {(hidden || whole) && (
                             <button
                                 type="button"
                                 className="mt-0.5 block font-medium text-ink-2 underline-offset-2 hover:underline max-md:min-h-11"
