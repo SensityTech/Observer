@@ -118,7 +118,9 @@ pub(super) fn console_note(finding: &CfgFinding) -> String {
         }
         FindingKind::EndpointDuplicate => format!("adds {endpoint} again"),
         FindingKind::EndpointReserved => format!("adds {endpoint} among txAdmin's ports, 40120 to 40150"),
-        FindingKind::PortInUse => format!("adds {endpoint}, which another program holds"),
+        FindingKind::PortInUse => format!(
+            "adds {endpoint} on a port FXServer cannot listen on: another program holds it, or the system reserves it"
+        ),
         FindingKind::StartsMonitor => format!("starts txAdmin's {} resource", text(&params.name)),
         FindingKind::SetsServerMode => {
             "sets txAdminServerMode: FXServer starts txAdmin's monitor resource by itself".to_owned()
@@ -531,6 +533,20 @@ mod tests {
                 }
             ),
             "server.cfg:1 adds TCP endpoint 0.0.0.0:30140 without its UDP twin: players cannot connect"
+        );
+        assert_eq!(
+            note(
+                FindingKind::PortInUse,
+                Some(2),
+                FindingParams {
+                    protocol: Some(EndpointProtocol::Udp),
+                    address: Some("0.0.0.0:30140".to_owned()),
+                    ..FindingParams::default()
+                }
+            ),
+            "server.cfg:2 adds UDP endpoint 0.0.0.0:30140 on a port FXServer cannot listen on: \
+             another program holds it, or the system reserves it",
+            "binding it may be denied with no other program in sight"
         );
     }
 }

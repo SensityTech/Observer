@@ -589,8 +589,10 @@ impl Scanner<'_> {
                         EndpointProtocol::Tcp => TcpListener::bind(address).map(drop),
                         EndpointProtocol::Udp => UdpSocket::bind(address).map(drop),
                     };
-                    // Windows refuses a port held exclusively, or kept for the system, as denied.
-                    // An address this host does not have says nothing of who holds the port.
+                    // Denied is how Windows refuses a port held exclusively or kept for the system,
+                    // and how Unix refuses a port below 1024 to a user without the right, which
+                    // FXServer runs as too. An address this host does not have says nothing of
+                    // who holds the port.
                     bound.is_err_and(|error| {
                         matches!(
                             error.kind(),

@@ -158,7 +158,7 @@ const cfgFindings = {
     endpointReserved: (params) =>
         `Adds ${endpointOf(params)} among txAdmin's ports, 40120 to 40150: fine under Observer, but a txAdmin running on this host takes them.`,
     portInUse: (params) =>
-        `Adds ${endpointOf(params)}, which another program holds: FXServer cannot listen there until it lets go.`,
+        `Adds ${endpointOf(params)} on a port FXServer cannot listen on now: another program holds it, or the system reserves it.`,
     startsMonitor: (params) =>
         `Starts txAdmin's ${params.name ?? ''} resource, which only runs under txAdmin.`,
     setsServerMode: () => "Sets txAdminServerMode: FXServer starts txAdmin's monitor resource by itself.",
