@@ -7,7 +7,7 @@ use std::fs::{self, File};
 use std::io::{self, Read};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpListener, UdpSocket};
 use std::ops::RangeInclusive;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 use observer_domain::launch::{MAX_TEXT_CHARS, OneSync};
 use observer_domain::server_data::{
@@ -361,7 +361,7 @@ impl Scanner<'_> {
         self.report_at(FindingKind::EndpointInvalid, place, params);
     }
 
-    /// Follows `exec <target>`, where FXServer looks for it: in the data folder.
+    /// Follows `exec <target>`, where FXServer looks for it: from the data folder.
     fn exec(&mut self, place: &Place, target: &str, depth: usize) {
         let written = quote(target, MAX_TEXT_CHARS);
         let params = FindingParams {
@@ -374,31 +374,30 @@ impl Scanner<'_> {
             self.report_at(FindingKind::ExecResource, place, params);
             return;
         }
-        let Some(relative) = inside(target) else {
+        if depth >= EXEC_DEPTH {
+            self.unchecked = true;
+            self.list(written, CfgFileState::TooDeep);
+            self.report_at(FindingKind::ExecTooDeep, place, params);
+            return;
+        }
+        let Ok(resolved) = fs::canonicalize(self.data.join(target)) else {
+            self.list(written, CfgFileState::Missing);
+            self.report_at(FindingKind::ExecMissing, place, params);
+            return;
+        };
+        // Only the resolved path tells: `..`, a full path or a link may lead out of the data folder
+        // or back into it.
+        let Some(name) = self
+            .root
+            .as_ref()
+            .and_then(|root| resolved.strip_prefix(root).ok())
+            .map(slashed)
+        else {
             self.unchecked = true;
             self.list(written, CfgFileState::Outside);
             self.report_at(FindingKind::ExecOutside, place, params);
             return;
         };
-        let name = slashed(&relative);
-        if depth >= EXEC_DEPTH {
-            self.unchecked = true;
-            self.list(name, CfgFileState::TooDeep);
-            self.report_at(FindingKind::ExecTooDeep, place, params);
-            return;
-        }
-        let Ok(resolved) = fs::canonicalize(self.data.join(&relative)) else {
-            self.list(name, CfgFileState::Missing);
-            self.report_at(FindingKind::ExecMissing, place, params);
-            return;
-        };
-        // A link may lead out of the data folder, which the check never reads.
-        if !self.root.as_ref().is_some_and(|root| resolved.starts_with(root)) {
-            self.unchecked = true;
-            self.list(name, CfgFileState::Outside);
-            self.report_at(FindingKind::ExecOutside, place, params);
-            return;
-        }
         if self.read.contains(&resolved) {
             self.list(name, CfgFileState::Repeated);
             self.report_at(FindingKind::ExecRepeated, place, params);
@@ -706,22 +705,6 @@ fn licence_state(key: &str) -> LicenceState {
     }
 }
 
-/// The target relative to the data folder, when it stays inside it as written.
-fn inside(target: &str) -> Option<PathBuf> {
-    let mut parts = Vec::new();
-    for component in Path::new(target).components() {
-        match component {
-            Component::Normal(part) => parts.push(part),
-            Component::CurDir => {}
-            Component::ParentDir => {
-                parts.pop()?;
-            }
-            Component::RootDir | Component::Prefix(_) => return None,
-        }
-    }
-    (!parts.is_empty()).then(|| parts.into_iter().collect())
-}
-
 fn slashed(relative: &Path) -> String {
     relative
         .components()
@@ -898,7 +881,10 @@ mod tests {
                 (QUIET.to_owned(), "resources/[local]/observer")
             }
             FindingKind::ExecMissing => (quiet("exec missing.cfg\n"), "server.cfg:4"),
-            FindingKind::ExecOutside => (quiet("exec ../shared.cfg\n"), "server.cfg:4"),
+            FindingKind::ExecOutside => {
+                fs::write(folder.dir.path().join("shared.cfg"), "").unwrap();
+                (quiet("exec ../shared.cfg\n"), "server.cfg:4")
+            }
             FindingKind::ExecResource => (quiet("exec @chat/extra.cfg\n"), "server.cfg:4"),
             FindingKind::ExecTooDeep => {
                 for depth in 1..=6 {
@@ -1209,6 +1195,33 @@ mod tests {
             places(&scan, FindingKind::ExecOutside),
             ["server.cfg:6", "server.cfg:7"]
         );
+    }
+
+    #[test]
+    fn a_target_written_in_full_or_through_its_parent_is_followed_when_it_resolves_inside() {
+        let folder = Folder::new();
+        folder.file(
+            "configs/net.cfg",
+            "endpoint_add_tcp \"0.0.0.0:30140\"\nendpoint_add_udp \"0.0.0.0:30140\"\n",
+        );
+        folder.file("configs/keys.cfg", "sv_licenseKey cfxk_ObserverLabFixture_k3y\n");
+        let absolute = folder.data().join("configs").join("net.cfg");
+
+        let scan = folder.scan(&format!(
+            "exec \"{}\"\nexec ../data/configs/keys.cfg\n",
+            absolute.display().to_string().replace('\\', "\\\\")
+        ));
+
+        assert_eq!(
+            states(&scan),
+            [
+                ("server.cfg", CfgFileState::Read),
+                ("configs/net.cfg", CfgFileState::Read),
+                ("configs/keys.cfg", CfgFileState::Read),
+            ]
+        );
+        assert_eq!(scan.findings, []);
+        assert_eq!(scan.endpoint, Some(SocketAddr::from(([127, 0, 0, 1], 30140))));
     }
 
     #[test]
