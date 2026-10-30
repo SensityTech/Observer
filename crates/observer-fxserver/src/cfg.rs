@@ -34,6 +34,9 @@ const MAX_ENDPOINTS: usize = 16;
 const MAX_COMPARED_ENDPOINTS: usize = 64;
 /// Findings of one kind past this are left out; missing resources past it are counted instead.
 const MAX_PER_KIND: usize = 20;
+/// The missing names told apart; past them, a cfg starts more than any server holds, and the
+/// count of the rest is a floor.
+const MAX_MISSING_NAMES: usize = 5000;
 const MAX_HOSTNAME_CHARS: usize = 128;
 /// The longest word of the cfg a finding quotes.
 const MAX_WORD_CHARS: usize = 64;
@@ -121,6 +124,12 @@ pub fn scan(data: &Path, cfg_file: &str, text: &str, resources: &Resources, cont
         data,
         root: fs::canonicalize(data).ok(),
         context,
+        resources,
+        system: context
+            .system_resources
+            .as_deref()
+            .map(system_resources)
+            .unwrap_or_default(),
         files: Vec::new(),
         read: HashSet::new(),
         looked_up: 0,
@@ -130,7 +139,7 @@ pub fn scan(data: &Path, cfg_file: &str, text: &str, resources: &Resources, cont
         endpoints: Vec::new(),
         endpoints_written: 0,
         health: None,
-        started: Vec::new(),
+        missing: HashSet::new(),
         licence: None,
         max_clients: None,
         game: None,
@@ -142,7 +151,7 @@ pub fn scan(data: &Path, cfg_file: &str, text: &str, resources: &Resources, cont
     }
     scanner.list(cfg_file.to_owned(), CfgFileState::Read);
     scanner.file(cfg_file, text, 0);
-    scanner.finish(cfg_file, resources)
+    scanner.finish(cfg_file)
 }
 
 /// FXServer listens on the address it is given; a wildcard is reached through loopback.
@@ -180,6 +189,9 @@ struct Scanner<'a> {
     /// The data folder as the file system resolves it, which every file read must stay inside.
     root: Option<PathBuf>,
     context: &'a Context,
+    resources: &'a Resources,
+    /// The selected build's system resources, in lower case.
+    system: HashSet<String>,
     files: Vec<CfgFile>,
     read: HashSet<PathBuf>,
     looked_up: usize,
@@ -190,7 +202,8 @@ struct Scanner<'a> {
     endpoints: Vec<Written>,
     endpoints_written: usize,
     health: Option<SocketAddr>,
-    started: Vec<(String, Place)>,
+    /// The names started that neither the folder nor the build holds, in lower case.
+    missing: HashSet<String>,
     licence: Option<(LicenceState, Place)>,
     max_clients: Option<(String, Place)>,
     game: Option<(String, Place)>,
@@ -305,8 +318,21 @@ impl Scanner<'_> {
                 ..FindingParams::default()
             };
             self.report_at(FindingKind::StartsMonitor, place, params);
-        } else {
-            self.started.push((resource, place.clone()));
+            return;
+        }
+        let lower = resource.to_ascii_lowercase();
+        // Each name is reported once, where it is first started.
+        let missing = !self.resources.holds(&lower)
+            && !self.system.contains(&lower)
+            && lower != bridge::NAME
+            && self.missing.len() < MAX_MISSING_NAMES
+            && self.missing.insert(lower);
+        if missing {
+            let params = FindingParams {
+                name: Some(resource),
+                ..FindingParams::default()
+            };
+            self.report_at(FindingKind::ResourceMissing, place, params);
         }
     }
 
@@ -475,7 +501,7 @@ impl Scanner<'_> {
     }
 
     /// What the whole chain says, once every file is read.
-    fn finish(mut self, cfg_file: &str, resources: &Resources) -> Scan {
+    fn finish(mut self, cfg_file: &str) -> Scan {
         if self.endpoints_written == 0 {
             self.report(FindingKind::NoEndpoint, cfg_file, None, FindingParams::default());
             if self.unchecked
@@ -491,8 +517,8 @@ impl Scanner<'_> {
         let licence = self.licence(cfg_file);
         let max_clients = self.max_clients();
         let game = self.game();
-        self.missing_resources(cfg_file, resources);
-        for folder in resources.named_observer() {
+        self.missing_more(cfg_file);
+        for folder in self.resources.named_observer() {
             self.report(
                 FindingKind::ResourceNamedObserver,
                 folder,
@@ -637,36 +663,12 @@ impl Scanner<'_> {
         }
     }
 
-    /// Each name started that neither the folder nor the build holds, once, the first 20 by name
-    /// and the rest counted.
-    fn missing_resources(&mut self, cfg_file: &str, resources: &Resources) {
-        let system = self
-            .context
-            .system_resources
-            .as_deref()
-            .map(system_resources)
-            .unwrap_or_default();
-        let mut seen = HashSet::new();
-        let missing: Vec<_> = std::mem::take(&mut self.started)
-            .into_iter()
-            .filter(|(name, _)| {
-                let lower = name.to_ascii_lowercase();
-                !resources.holds(name)
-                    && !system.contains(&lower)
-                    && lower != bridge::NAME
-                    && seen.insert(lower)
-            })
-            .collect();
-        for (name, place) in missing.iter().take(MAX_PER_KIND) {
+    /// The missing resources past the 20 named, counted.
+    fn missing_more(&mut self, cfg_file: &str) {
+        let missing = self.missing.len();
+        if missing > MAX_PER_KIND {
             let params = FindingParams {
-                name: Some(name.clone()),
-                ..FindingParams::default()
-            };
-            self.report_at(FindingKind::ResourceMissing, place, params);
-        }
-        if missing.len() > MAX_PER_KIND {
-            let params = FindingParams {
-                count: u32::try_from(missing.len() - MAX_PER_KIND).ok(),
+                count: u32::try_from(missing - MAX_PER_KIND).ok(),
                 ..FindingParams::default()
             };
             self.report(FindingKind::ResourceMissingMore, cfg_file, None, params);
@@ -1655,6 +1657,27 @@ mod tests {
             .find(|finding| finding.kind == FindingKind::ResourceMissingMore)
             .unwrap();
         assert_eq!(more.params.count, Some(5));
+    }
+
+    #[test]
+    fn missing_names_are_counted_once_each_up_to_5000() {
+        let folder = Folder::new();
+        let mut starts = String::new();
+        for index in 0..MAX_MISSING_NAMES + 100 {
+            writeln!(starts, "ensure gone_{index}").unwrap();
+        }
+
+        let scan = folder.scan(&format!("{QUIET}{starts}{starts}"));
+
+        let more = scan
+            .findings
+            .iter()
+            .find(|finding| finding.kind == FindingKind::ResourceMissingMore)
+            .unwrap();
+        assert_eq!(
+            more.params.count,
+            u32::try_from(MAX_MISSING_NAMES - MAX_PER_KIND).ok()
+        );
     }
 
     #[test]
