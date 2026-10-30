@@ -27,6 +27,9 @@ const MAX_FILES: usize = 32;
 /// The most files a report names, read or not.
 const MAX_LISTED: usize = 64;
 const MAX_ENDPOINTS: usize = 16;
+/// The endpoint commands checked, each against those before it; past them, a cfg adds more than
+/// any server listens on, and the rest only count as written.
+const MAX_CHECKED_ENDPOINTS: usize = 64;
 /// Findings of one kind past this are left out; missing resources past it are counted instead.
 const MAX_PER_KIND: usize = 20;
 const MAX_HOSTNAME_CHARS: usize = 128;
@@ -118,7 +121,7 @@ pub fn scan(data: &Path, cfg_file: &str, text: &str, resources: &Resources, cont
         findings: Vec::new(),
         found: HashMap::new(),
         endpoints: Vec::new(),
-        endpoint_written: false,
+        endpoints_written: 0,
         health: None,
         started: Vec::new(),
         licence: None,
@@ -177,7 +180,7 @@ struct Scanner<'a> {
     findings: Vec<CfgFinding>,
     found: HashMap<FindingKind, usize>,
     endpoints: Vec<Written>,
-    endpoint_written: bool,
+    endpoints_written: usize,
     health: Option<SocketAddr>,
     started: Vec<(String, Place)>,
     licence: Option<(LicenceState, Place)>,
@@ -300,10 +303,13 @@ impl Scanner<'_> {
     }
 
     fn endpoint(&mut self, place: &Place, protocol: EndpointProtocol, args: &[String]) {
-        self.endpoint_written = true;
+        self.endpoints_written += 1;
         // The probe's address, as before endpoints were checked: a cfg that ran keeps its health.
         if protocol == EndpointProtocol::Tcp && self.health.is_none() {
             self.health = args.first().and_then(|address| reachable(address));
+        }
+        if self.endpoints_written > MAX_CHECKED_ENDPOINTS {
+            return;
         }
         let (address, port) = match args {
             [address] => match endpoint_port(address) {
@@ -447,7 +453,7 @@ impl Scanner<'_> {
 
     /// What the whole chain says, once every file is read.
     fn finish(mut self, cfg_file: &str, resources: &Resources) -> Scan {
-        if !self.endpoint_written {
+        if self.endpoints_written == 0 {
             self.report(FindingKind::NoEndpoint, cfg_file, None, FindingParams::default());
             if self.unchecked
                 && let Some(finding) = self.findings.last_mut()
@@ -495,8 +501,12 @@ impl Scanner<'_> {
         }
     }
 
-    /// Players connect over both: a TCP address needs its UDP twin, and the reverse.
+    /// Players connect over both: a TCP address needs its UDP twin, and the reverse. Past the
+    /// endpoints checked, a twin may be among those that were not.
     fn pair_endpoints(&mut self) {
+        if self.endpoints_written > MAX_CHECKED_ENDPOINTS {
+            return;
+        }
         let unpaired: Vec<_> = self
             .endpoints
             .iter()
@@ -1376,6 +1386,26 @@ mod tests {
         );
         assert_eq!(scan.facts.endpoints.len(), 5);
         assert_eq!(scan.endpoint, Some(SocketAddr::from(([127, 0, 0, 1], 30140))));
+    }
+
+    #[test]
+    fn endpoints_past_the_64th_are_counted_but_not_checked() {
+        let folder = Folder::new();
+        let mut cfg = "sv_licenseKey cfxk_ObserverLabFixture_k3y\n".to_owned();
+        for port in 30200..30265 {
+            writeln!(cfg, "endpoint_add_tcp \"127.0.0.1:{port}\"").unwrap();
+        }
+        cfg.push_str("endpoint_add_tcp \"127.0.0.1:30200\"\n");
+
+        let scan = folder.scan(&cfg);
+
+        assert_eq!(
+            scan.findings,
+            [],
+            "neither paired, a twin may be past them, nor compared"
+        );
+        assert_eq!(scan.facts.endpoints.len(), MAX_ENDPOINTS);
+        assert_eq!(scan.endpoint, Some(SocketAddr::from(([127, 0, 0, 1], 30200))));
     }
 
     #[test]
