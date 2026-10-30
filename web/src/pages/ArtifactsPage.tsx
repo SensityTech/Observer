@@ -77,7 +77,7 @@ import { isRunning } from '../server/state';
  * `focus`: the control it answers goes away with it, so the keyboard moves to the notice. `until`:
  * the live status that overtakes it, after which the page shows what came of it instead.
  */
-type Outcome = {
+export type Outcome = {
     tone: 'success' | 'warning' | 'danger';
     message: string;
     focus?: boolean;
