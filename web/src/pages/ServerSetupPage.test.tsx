@@ -62,7 +62,7 @@ const stored = (version: number): StoredLaunch => ({
     legacyBuildPath: null,
 });
 
-type Answer = (body: unknown) => Response;
+type Answer = (body: unknown) => Response | Promise<Response>;
 
 /**
  * Answers the API from `routes`, by method and path; a list answers its calls in turn, its last
@@ -401,6 +401,39 @@ describe('ServerSetupPage', () => {
 
         expect(api.of(CFG_ROUTE).map((body) => (body as { onesync: string }).onesync)).toEqual(['on', 'off']);
         getByText(words.start.findingCount(3, 2));
+    });
+
+    it('should keep the report of the OneSync picked last when an earlier check answers after it', async () => {
+        const needsOnesync: CfgReport = {
+            ...CFG,
+            findings: [...CFG.findings, finding('maxClientsNeedOneSync', 'warning', 3, { count: 48 })],
+        };
+        let answerOff: ((response: Response) => void) | undefined;
+        serve({
+            [FOLDER_ROUTE]: json(FOLDER),
+            [CFG_ROUTE]: (body) =>
+                (body as { onesync: string }).onesync === 'off'
+                    ? new Promise((resolve) => {
+                          answerOff = resolve;
+                      })
+                    : Response.json(CFG),
+        });
+        const { getByRole, getByText, press, toCfg } = await page();
+        await toCfg();
+        await press(words.continue);
+        await press(words.continue);
+
+        fireEvent.click(getByRole('radio', { name: en.server.onesyncModes.off }));
+        await settle();
+        fireEvent.click(getByRole('radio', { name: en.server.onesyncModes.legacy }));
+        await settle();
+        answerOff?.(Response.json(needsOnesync));
+        await settle();
+
+        expect(
+            (getByRole('radio', { name: en.server.onesyncModes.legacy }) as HTMLInputElement).checked,
+        ).toBe(true);
+        getByText(words.start.findingCount(2, 2));
     });
 
     it('should only save once the build step is skipped, and say why', async () => {

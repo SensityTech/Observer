@@ -127,9 +127,17 @@ function Setup({ saved }: { saved: StoredLaunch | null }) {
         onError: (error) => setOutcome({ tone: 'danger', message: errorMessage(t, error) }),
     });
 
+    // Checks sent one after the other may be answered in any order: only the last one sent counts.
+    const lastCfgCheck = useRef<CfgCheck | null>(null);
     const cfgCheck = useMutation({
         mutationFn: checkCfg,
+        onMutate: (request) => {
+            lastCfgCheck.current = request;
+        },
         onSuccess: (report, request) => {
+            if (request !== lastCfgCheck.current) {
+                return;
+            }
             setCfg({ request, report });
             if (onesyncPicked) {
                 return;
@@ -144,7 +152,11 @@ function Setup({ saved }: { saved: StoredLaunch | null }) {
                 cfgCheck.mutate({ ...request, onesync });
             }
         },
-        onError: (error) => setOutcome({ tone: 'danger', message: errorMessage(t, error) }),
+        onError: (error, request) => {
+            if (request === lastCfgCheck.current) {
+                setOutcome({ tone: 'danger', message: errorMessage(t, error) });
+            }
+        },
     });
     const enterCfg = () => {
         go('cfg');
