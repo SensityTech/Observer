@@ -3,8 +3,8 @@
 //! Observer did not mean to give it; what is left here is the file system and the command line
 //! itself.
 
-use std::fs;
-use std::io;
+use std::fs::File;
+use std::io::{self, Read};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
@@ -151,12 +151,15 @@ pub fn prepare(launch: &ServerLaunch, flavour: Flavour) -> Result<Prepared, Laun
         if settings.txadmin_events { "1" } else { "0" }.into(),
     ]);
 
-    let text = fs::read(&cfg_file)
-        .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+    // FXServer runs the whole cfg; the scan reads its first MiB, as it reads every file it runs.
+    let mut bytes = Vec::new();
+    File::open(&cfg_file)
+        .and_then(|file| file.take(cfg::MAX_BYTES).read_to_end(&mut bytes))
         .map_err(|source| LaunchError::Cfg {
             path: cfg_file.clone(),
             source,
         })?;
+    let text = String::from_utf8_lossy(&bytes);
     let context = cfg::Context {
         panel: None,
         onesync: settings.onesync,
@@ -194,6 +197,8 @@ fn resolve(path: &Path) -> Result<PathBuf, LaunchError> {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use observer_domain::launch::{ExtraArgument, LaunchField, LaunchProblem, OneSync};
     use observer_domain::server_data::FindingKind;
     use tempfile::TempDir;
@@ -468,6 +473,19 @@ mod tests {
 
         let kinds: Vec<_> = prepared.warnings.iter().map(|finding| finding.kind).collect();
         assert_eq!(kinds, [FindingKind::StartsMonitor]);
+    }
+
+    #[test]
+    fn a_cfg_is_scanned_up_to_its_first_mib() {
+        let fixture = Fixture::new(&format!(
+            "{QUIET}{}ensure monitor\n",
+            "# padding\n".repeat(110_000)
+        ));
+
+        let prepared = prepare(&fixture.launch(), Flavour::HOST).unwrap();
+
+        assert_eq!(prepared.warnings, []);
+        assert_eq!(prepared.endpoint, Some(SocketAddr::from(([127, 0, 0, 1], 30140))));
     }
 
     #[test]
