@@ -482,6 +482,7 @@ mod tests {
             onesync: launch::OneSync::On,
             probe_ports: false,
             system_resources: None,
+            follow_outside: false,
         }
     }
 

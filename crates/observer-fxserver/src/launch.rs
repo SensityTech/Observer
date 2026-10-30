@@ -162,6 +162,7 @@ pub fn prepare(launch: &ServerLaunch, flavour: Flavour) -> Result<Prepared, Laun
         onesync: settings.onesync,
         probe_ports: false,
         system_resources: Some(layout.system_resources()),
+        follow_outside: true,
     };
     let resources = server_data::walk(&data);
     let scan = cfg::scan(&data, &settings.cfg_file, &text, &resources, &context);
@@ -479,6 +480,26 @@ mod tests {
 
         let prepared = prepare(&fixture.launch(), Flavour::HOST).unwrap();
 
+        assert_eq!(prepared.endpoint, Some(SocketAddr::from(([127, 0, 0, 1], 30140))));
+    }
+
+    #[test]
+    fn the_endpoint_and_warnings_come_from_files_outside_the_data_folder_too() {
+        let fixture = Fixture::new("exec ../shared.cfg\n");
+        fs::write(
+            fixture.dir.path().join("shared.cfg"),
+            format!("{QUIET}ensure monitor\n"),
+        )
+        .unwrap();
+
+        let prepared = prepare(&fixture.launch(), Flavour::HOST).unwrap();
+
+        let warnings: Vec<_> = prepared
+            .warnings
+            .iter()
+            .map(|finding| (finding.kind, finding.file.as_str(), finding.line))
+            .collect();
+        assert_eq!(warnings, [(FindingKind::StartsMonitor, "../shared.cfg", Some(4))]);
         assert_eq!(prepared.endpoint, Some(SocketAddr::from(([127, 0, 0, 1], 30140))));
     }
 }

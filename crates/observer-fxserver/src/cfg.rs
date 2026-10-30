@@ -1,6 +1,6 @@
 //! The server's cfg as FXServer runs it: the files `exec` reaches, what they set, and what in them
 //! works against Observer. The setup's report and the warnings of each launch come from this one
-//! scan. It reads files inside the data folder only, and writes none: the cfg is the owner's.
+//! scan. The setup's reads stay inside the data folder, and no scan writes: the cfg is the owner's.
 
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
@@ -68,6 +68,10 @@ pub struct Context {
     pub probe_ports: bool,
     /// The selected build's `system_resources`, which the cfg may start too.
     pub system_resources: Option<PathBuf>,
+    /// Reads the files `exec` reaches outside the data folder too, as FXServer runs them: at launch,
+    /// where they may add the endpoint health is probed on. The setup's checks leave them unread:
+    /// the folder they check comes from a request.
+    pub follow_outside: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -387,12 +391,12 @@ impl Scanner<'_> {
         };
         // Only the resolved path tells: `..`, a full path or a link may lead out of the data folder
         // or back into it.
-        let Some(name) = self
+        let inside = self
             .root
             .as_ref()
             .and_then(|root| resolved.strip_prefix(root).ok())
-            .map(slashed)
-        else {
+            .map(slashed);
+        let Some(name) = inside.or_else(|| self.context.follow_outside.then(|| written.clone())) else {
             self.unchecked = true;
             self.list(written, CfgFileState::Outside);
             self.report_at(FindingKind::ExecOutside, place, params);
@@ -778,6 +782,7 @@ mod tests {
             onesync: OneSync::On,
             probe_ports: false,
             system_resources: None,
+            follow_outside: false,
         }
     }
 

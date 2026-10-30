@@ -80,6 +80,7 @@ impl Supervision {
             onesync,
             probe_ports: self.inner.supervisor.status().borrow().pid.is_none(),
             system_resources,
+            follow_outside: false,
         })
     }
 }
