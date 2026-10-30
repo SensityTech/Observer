@@ -61,7 +61,7 @@ pub struct ResourceSummary {
     pub categories: u32,
     /// At most 20 resources with neither `fxmanifest.lua` nor `__resource.lua`.
     pub without_manifest: Vec<String>,
-    /// The walk stopped at 250 categories or 5,000 folders: the counts are lower bounds.
+    /// The walk stopped at 250 categories or 5,000 entries: the counts are lower bounds.
     pub truncated: bool,
 }
 

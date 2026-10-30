@@ -13,7 +13,8 @@ use observer_domain::server_data::{CfgFileProblem, CfgReport, FolderProblem, Fol
 use crate::cfg::{self, Context, ReadError};
 
 const MAX_CATEGORIES: u32 = 250;
-const MAX_FOLDERS: usize = 5000;
+/// Entries the walk reads, files included: telling a folder from a file costs a look at each.
+const MAX_WALKED: usize = 5000;
 /// Resources without a manifest named in a summary.
 const MAX_UNMANIFESTED: usize = 20;
 /// Folders FXServer's walk passes over, as txAdmin's does.
@@ -56,25 +57,25 @@ impl Resources {
 }
 
 /// Walks `resources/` of `data` the way FXServer does: a folder named `[x]` is a category, read in
-/// turn, and any other folder a resource. It stops at 250 categories or 5,000 folders; a folder it
+/// turn, and any other folder a resource. It stops at 250 categories or 5,000 entries; a folder it
 /// cannot read holds nothing.
 pub fn walk(data: &Path) -> Resources {
     let mut resources = Resources::default();
     let mut queue = VecDeque::from([(data.join("resources"), "resources".to_owned())]);
-    let mut folders = 0;
+    let mut walked = 0;
     'walk: while let Some((folder, relative)) = queue.pop_front() {
         let Ok(entries) = fs::read_dir(&folder) else {
             continue;
         };
         for entry in entries.flatten() {
+            walked += 1;
+            if walked > MAX_WALKED {
+                resources.summary.truncated = true;
+                break 'walk;
+            }
             let path = entry.path();
             if !path.is_dir() {
                 continue;
-            }
-            folders += 1;
-            if folders > MAX_FOLDERS {
-                resources.summary.truncated = true;
-                break 'walk;
             }
             let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
                 continue;
@@ -440,13 +441,26 @@ mod tests {
 
     #[test]
     fn the_walk_stops_at_5000_folders() {
-        let folders: Vec<String> = (0..=MAX_FOLDERS).map(|index| format!("r{index}!")).collect();
+        let folders: Vec<String> = (0..=MAX_WALKED).map(|index| format!("r{index}!")).collect();
         let dir = data(&folders.iter().map(String::as_str).collect::<Vec<_>>());
 
         let resources = walk(dir.path());
 
         assert_eq!(resources.summary.resources, 5000);
         assert_eq!(resources.summary.without_manifest.len(), 20);
+        assert!(resources.summary.truncated);
+    }
+
+    #[test]
+    fn loose_files_count_toward_the_walks_limit_too() {
+        let dir = data(&[]);
+        for index in 0..=MAX_WALKED {
+            fs::write(dir.path().join(format!("resources/notes-{index}.txt")), "").unwrap();
+        }
+
+        let resources = walk(dir.path());
+
+        assert_eq!(resources.summary.resources, 0);
         assert!(resources.summary.truncated);
     }
 

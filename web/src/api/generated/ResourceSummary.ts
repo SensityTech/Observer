@@ -9,6 +9,6 @@ export type ResourceSummary = { resources: number, categories: number,
  */
 withoutManifest: Array<string>, 
 /**
- * The walk stopped at 250 categories or 5,000 folders: the counts are lower bounds.
+ * The walk stopped at 250 categories or 5,000 entries: the counts are lower bounds.
  */
 truncated: boolean, };

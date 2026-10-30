@@ -1497,7 +1497,7 @@ export const en = {
             useSuggestion: 'Use this folder',
             accepted: 'FXServer can run from this folder.',
             resources: (resources: number, categories: number, truncated: boolean) =>
-                `${truncated ? 'At least ' : ''}${count(resources, { one: 'resource', other: 'resources' })} in ${count(categories, { one: 'category', other: 'categories' })}${truncated ? ': the count stopped at 5,000 folders' : ''}.`,
+                `${truncated ? 'At least ' : ''}${count(resources, { one: 'resource', other: 'resources' })} in ${count(categories, { one: 'category', other: 'categories' })}${truncated ? ': the count stopped after 5,000 files and folders' : ''}.`,
             withoutManifest: (names: string[]) =>
                 `Without fxmanifest.lua or __resource.lua, FXServer does not start ${list(names)}.`,
             cfgFiles: 'Config files found',
