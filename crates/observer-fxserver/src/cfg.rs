@@ -541,9 +541,19 @@ impl Scanner<'_> {
             .endpoints
             .iter()
             .filter(|written| {
-                written.parsed.is_some_and(|address| match written.protocol {
-                    EndpointProtocol::Tcp => TcpListener::bind(address).is_err(),
-                    EndpointProtocol::Udp => UdpSocket::bind(address).is_err(),
+                written.parsed.is_some_and(|address| {
+                    let bound = match written.protocol {
+                        EndpointProtocol::Tcp => TcpListener::bind(address).map(drop),
+                        EndpointProtocol::Udp => UdpSocket::bind(address).map(drop),
+                    };
+                    // Windows refuses a port held exclusively, or kept for the system, as denied.
+                    // An address this host does not have says nothing of who holds the port.
+                    bound.is_err_and(|error| {
+                        matches!(
+                            error.kind(),
+                            io::ErrorKind::AddrInUse | io::ErrorKind::PermissionDenied
+                        )
+                    })
                 })
             })
             .map(|written| (written.place.clone(), endpoint_params(written)))
@@ -1483,6 +1493,23 @@ mod tests {
 
         assert_eq!(free.findings, []);
         assert_eq!(running.findings, [], "FXServer may hold its own ports");
+    }
+
+    #[test]
+    fn an_address_this_host_does_not_have_is_not_reported_in_use() {
+        let folder = Folder::new();
+        let probing = Context {
+            probe_ports: true,
+            ..context()
+        };
+
+        let scan = folder.scan_with(
+            "endpoint_add_tcp \"192.0.2.10:30150\"\nendpoint_add_udp \"192.0.2.10:30150\"\n\
+             sv_licenseKey cfxk_ObserverLabFixture_k3y\n",
+            &probing,
+        );
+
+        assert_eq!(scan.findings, []);
     }
 
     #[test]
