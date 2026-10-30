@@ -29,6 +29,11 @@ updates:
     groups:
       panel:
         update-types: [minor, patch]
+    ignore:
+      # The Node types follow the Node major that CI and the release build run on, and move with it by
+      # hand: newer types would let code that only runs on a newer Node pass the typecheck.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: github-actions
     directory: /
