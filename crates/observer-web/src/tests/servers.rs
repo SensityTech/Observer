@@ -74,7 +74,7 @@ impl Server {
         .await
     }
 
-    async fn audited(&self, action: &str) -> Vec<Value> {
+    pub(super) async fn audited(&self, action: &str) -> Vec<Value> {
         self.audit.publish_new().await.unwrap();
         let path = format!("/api/audit?action={action}");
         let owner = self.login("ada", super::OWNER_PASSWORD).await.session();

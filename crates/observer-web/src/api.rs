@@ -49,7 +49,7 @@ pub(crate) fn routes() -> Vec<Route> {
     let change_users = Reauthenticated(P::USERS_MANAGE);
     let read_audit = Permission(P::AUDIT_VIEW);
     // Launch settings choose what the host runs: the owner's alone, and their password again to
-    // change them.
+    // change them. The setup's checks read the host's folders, which is the owner's alone too.
     let read_launch = Owner;
     let edit_launch = ReauthenticatedOwner;
     let control = Permission(P::SERVER_CONTROL);
@@ -95,6 +95,9 @@ pub(crate) fn routes() -> Vec<Route> {
         route(M::GET,    "/audit/export.csv",           read_audit,   audit::export),
         route(M::GET,    "/servers/default/launch",     read_launch,  servers::launch_settings),
         route(M::PUT,    "/servers/default/launch",     edit_launch,  servers::change_launch_settings),
+        route(M::POST,   "/servers/default/setup/folder", read_launch, servers::check_folder),
+        route(M::POST,   "/servers/default/setup/cfg",    read_launch, servers::check_cfg),
+        route(M::PUT,    "/servers/default/setup",        edit_launch, servers::save_setup),
         route(M::POST,   "/servers/default/start",      control,      servers::start),
         route(M::POST,   "/servers/default/stop",       control,      servers::stop),
         route(M::POST,   "/servers/default/restart",    control,      servers::restart),

@@ -6,6 +6,7 @@ use axum::{Extension, Json};
 use observer_app::{Caller, Servers};
 use observer_domain::launch::{LaunchChange, StoredLaunch};
 use observer_domain::server::{CommandAck, ConsoleCommand, LogFile};
+use observer_domain::server_data::{CfgCheck, CfgReport, FolderCheck, FolderReport};
 use tokio_util::io::ReaderStream;
 
 use crate::AppState;
@@ -32,6 +33,31 @@ pub(crate) async fn change_launch_settings(
         .change_launch_settings(&caller, Servers::DEFAULT, change.settings, change.version)
         .await?;
     Ok(Json(saved))
+}
+
+/// A refused folder is what the report says, not a failed request. A path never goes in a URL, so
+/// the checks are posted; they change nothing.
+pub(crate) async fn check_folder(
+    State(state): State<AppState>,
+    JsonBody(check): JsonBody<FolderCheck>,
+) -> Result<Json<FolderReport>, Failure> {
+    Ok(Json(state.supervision.check_folder(check).await?))
+}
+
+pub(crate) async fn check_cfg(
+    State(state): State<AppState>,
+    JsonBody(check): JsonBody<CfgCheck>,
+) -> Result<Json<CfgReport>, Failure> {
+    Ok(Json(state.supervision.check_cfg(check).await?))
+}
+
+/// The setup's save checks the folder and its cfg again before it stores the settings.
+pub(crate) async fn save_setup(
+    State(state): State<AppState>,
+    Extension(caller): Extension<Caller>,
+    JsonBody(change): JsonBody<LaunchChange>,
+) -> Result<Json<StoredLaunch>, Failure> {
+    Ok(Json(state.supervision.save_setup(&caller, change).await?))
 }
 
 /// Start, stop and restart answer once the supervisor took the request on; the `server.status`

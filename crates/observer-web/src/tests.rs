@@ -7,6 +7,7 @@ mod live;
 mod metrics;
 mod schedule;
 mod servers;
+mod setup;
 
 use std::net::SocketAddr;
 
