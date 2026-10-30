@@ -388,8 +388,10 @@ impl Scanner<'_> {
             self.report_at(FindingKind::ExecTooDeep, place, params);
             return;
         }
-        // Resolving a path on another host reaches out to it, with Observer's credentials.
-        if remote(target) {
+        // Resolving a path on another host reaches out to it, with Observer's credentials. A drive
+        // without its root, `C:net.cfg`, resolves from the folder each process is in on that
+        // drive, where FXServer and Observer are not.
+        if remote(target) || drive_relative(target) {
             self.unchecked = true;
             self.list(written, CfgFileState::Outside);
             self.report_at(FindingKind::ExecOutside, place, params);
@@ -742,6 +744,12 @@ fn remote(target: &str) -> bool {
         Path::new(target).components().next(),
         Some(Component::Prefix(prefix)) if !matches!(prefix.kind(), Prefix::Disk(_) | Prefix::VerbatimDisk(_))
     )
+}
+
+/// Whether `target` names a drive but not its root, as `C:net.cfg` does.
+fn drive_relative(target: &str) -> bool {
+    let path = Path::new(target);
+    matches!(path.components().next(), Some(Component::Prefix(_))) && !path.has_root()
 }
 
 fn slashed(relative: &Path) -> String {
@@ -1288,6 +1296,38 @@ mod tests {
                 (r"\\localhost\observer-lab\net.cfg", CfgFileState::Outside),
                 ("//localhost/observer-lab/keys.cfg", CfgFileState::Outside),
             ]
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_target_on_a_drive_without_its_root_is_left_unresolved() {
+        let folder = Folder::new();
+        folder.file("net.cfg", "endpoint_add_tcp \"0.0.0.0:30150\"\n");
+        let data = folder.data();
+        let Some(Component::Prefix(drive)) = data.components().next() else {
+            panic!("{} is on no drive", data.display());
+        };
+        let drive = drive.as_os_str().to_str().unwrap();
+        let launch = Context {
+            follow_outside: true,
+            ..context()
+        };
+
+        let scan = folder.scan_with(
+            &format!("{QUIET}exec {drive}net.cfg\nexec \"{drive}\\net.cfg\"\n"),
+            &launch,
+        );
+
+        let written = format!("{drive}net.cfg");
+        assert_eq!(
+            states(&scan),
+            [
+                ("server.cfg", CfgFileState::Read),
+                (written.as_str(), CfgFileState::Outside),
+                (written.as_str(), CfgFileState::Outside),
+            ],
+            "the quotes drop the backslash"
         );
     }
 
