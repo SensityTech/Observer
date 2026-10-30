@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { ArrowRight, Download, FolderInput, Package } from 'lucide-react';
-import { useId, useState, type Ref } from 'react';
+import { useEffect, useId, useRef, useState, type Ref } from 'react';
 
 import { catalogQuery } from '../api/artifacts';
 import type { CatalogEntry } from '../api/generated/CatalogEntry';
@@ -37,6 +37,7 @@ export function BuildStep({
     const catalog = useQuery(catalogQuery);
     const [open, setOpen] = useState<Open | null>(null);
     const [outcome, setOutcome] = useState<Outcome | null>(null);
+    const notice = useRef<HTMLDivElement>(null);
     // A job that ended before the step opened is the Artifacts page's to show, not this setup's.
     const [earlierJob] = useState(() =>
         status?.job?.state === 'running' ? null : (status?.job?.id ?? null),
@@ -44,6 +45,13 @@ export function BuildStep({
     if (outcome?.until !== undefined && status !== null && outcome.until(status)) {
         setOutcome(null);
     }
+    // A dialog closed by its own button leaves the keyboard nowhere, its trigger gone with the
+    // choice it offered: the keyboard goes to the notice saying what came of it.
+    useEffect(() => {
+        if (outcome !== null && document.activeElement === document.body) {
+            notice.current?.focus();
+        }
+    }, [outcome]);
     const close = () => setOpen(null);
     const done = (message: string, until?: Outcome['until']) => {
         setOpen(null);
@@ -71,7 +79,11 @@ export function BuildStep({
             <Card id={id} icon={Package} title={t.serverSetup.stepNames.build} titleRef={titleRef}>
                 <div className="flex flex-col gap-5">
                     <p className="max-w-2xl text-body text-ink-2">{words.lead}</p>
-                    {outcome !== null && <Notice tone={outcome.tone}>{outcome.message}</Notice>}
+                    {outcome !== null && (
+                        <Notice ref={notice} tabIndex={-1} tone={outcome.tone}>
+                            {outcome.message}
+                        </Notice>
+                    )}
                     {status === null ? (
                         <p
                             className="text-body text-ink-3"
