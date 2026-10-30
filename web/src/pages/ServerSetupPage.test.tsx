@@ -422,6 +422,36 @@ describe('ServerSetupPage', () => {
         getByText(en.server_state.bindError('0.0.0.0:30120'));
     });
 
+    it('should fail the first launch at its start when FXServer was tried and did not start', async () => {
+        serve({
+            [FOLDER_ROUTE]: json(FOLDER),
+            [CFG_ROUTE]: json(CFG),
+            [SAVE_ROUTE]: json(stored(1)),
+            'POST /servers/default/start': () =>
+                Response.json({ code: 'launch_failed', params: { reason: 'missingData' } }, { status: 422 }),
+        });
+        const { getByRole, press, say, toCfg } = await page();
+        await toCfg();
+        await press(words.continue);
+        await press(words.continue);
+
+        await press(words.start.saveAndStart);
+        await waitFor(() => getByRole('list', { name: words.launch.title }));
+        say({
+            type: 'event',
+            topic: 'server.status',
+            data: {
+                ...STOPPED,
+                since: '2026-10-30T14:00:05Z',
+                cause: { kind: 'spawnFailed', reason: 'missingData' },
+            },
+        });
+
+        const started = within(getByRole('list', { name: words.launch.title })).getAllByRole('listitem')[0];
+        expect(started?.textContent).toContain(words.said.failed);
+        getByRole('link', { name: words.launch.openConsole });
+    });
+
     it('should go back to the cfg, checked again, when the save finds it now blocks', async () => {
         const api = serve({
             [FOLDER_ROUTE]: json(FOLDER),

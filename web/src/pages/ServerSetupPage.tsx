@@ -167,6 +167,10 @@ function Setup({ saved }: { saved: StoredLaunch | null }) {
                     tone: 'danger',
                     message: t.serverSetup.start.startFailed(errorMessage(t, failure)),
                 });
+                // FXServer was tried and did not start: the first launch's own step says why.
+                if (failure instanceof ApiError && failure.code === 'launch_failed') {
+                    setLaunched({ before });
+                }
             } else {
                 setOutcome({ tone: 'success', message: t.serverSetup.start.starting });
                 setLaunched({ before });
