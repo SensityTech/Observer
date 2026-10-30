@@ -424,9 +424,9 @@ impl Scanner<'_> {
             self.report_at(FindingKind::ExecOutside, place, params);
             return;
         }
+        // Each lookup lists its target, so the files a report names ran out long before.
         if self.looked_up == MAX_LOOKUPS {
             self.unchecked = true;
-            self.list(written, CfgFileState::TooMany);
             return;
         }
         self.looked_up += 1;
@@ -1459,6 +1459,7 @@ mod tests {
         ));
 
         assert_eq!(places(&scan, FindingKind::ExecRepeated).len(), MAX_PER_KIND);
+        assert_eq!(scan.files.len(), MAX_LISTED);
         assert_eq!(
             scan.facts.licence,
             LicenceState::Unknown,
