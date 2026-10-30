@@ -8,6 +8,7 @@ import {
 } from '@tanstack/react-router';
 import { meQuery, setupQuery } from './api/auth';
 import { Permission } from './api/generated/Permission';
+import { launchQuery } from './api/launch';
 import { allows, landing } from './auth/me';
 import { ReauthDialog } from './auth/ReauthDialog';
 import { RequireOwner, RequirePermission } from './auth/RequirePermission';
@@ -124,9 +125,14 @@ const panelRoute = createRoute({
 const overviewRoute = createRoute({
     getParentRoute: () => panelRoute,
     path: '/',
-    beforeLoad: ({ context: { me } }) => {
+    beforeLoad: async ({ context: { me, queryClient } }) => {
         if (!allows(me, Permission.DashboardView)) {
             throw redirect({ to: landing(me) });
+        }
+        // Until the server is set up, the owner lands on its setup. Settings that cannot be read
+        // leave the Overview to say so.
+        if (me.isOwner && (await queryClient.ensureQueryData(launchQuery).catch(() => undefined)) === null) {
+            throw redirect({ to: '/server/setup' });
         }
     },
     component: OverviewPage,

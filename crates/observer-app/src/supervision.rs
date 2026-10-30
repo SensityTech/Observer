@@ -292,7 +292,7 @@ impl Supervision {
     pub async fn boot(&self) -> Result<(), Error> {
         let (stored, state) = read_launch(&self.inner.db).await?;
         let Some(stored) = stored else {
-            info!("FXServer has no launch settings yet: the owner saves them on the Server page");
+            info!("FXServer has no launch settings yet: the owner saves them in the server setup");
             return Ok(());
         };
         if !stored.settings.auto_start {

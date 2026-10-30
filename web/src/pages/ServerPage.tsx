@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
-import { ArrowRight, FolderOpen, Plus, Power, RotateCw, SquareTerminal, X } from 'lucide-react';
+import { ArrowRight, FolderOpen, FolderSearch, Plus, Power, RotateCw, SquareTerminal, X } from 'lucide-react';
 import { useEffect, useId, useRef, useState, type FormEvent, type Ref } from 'react';
 
 import { ApiError } from '../api/client';
@@ -40,10 +40,16 @@ export function ServerPage() {
                 <h1 className="page-title">
                     {t.server.title} <span className="gloss">{t.server.gloss}</span>
                 </h1>
-                <span className="inline-flex items-center gap-1.5 text-ui text-ink-3">
-                    <RotateCw size={14} strokeWidth={1.5} aria-hidden="true" />
-                    {t.server.nextStart}
-                </span>
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+                    <span className="inline-flex items-center gap-1.5 text-ui text-ink-3">
+                        <RotateCw size={14} strokeWidth={1.5} aria-hidden="true" />
+                        {t.server.nextStart}
+                    </span>
+                    <Link to="/server/setup" className={buttonVariants({ size: 'sm' })}>
+                        <FolderSearch size={14} strokeWidth={1.5} aria-hidden="true" />
+                        {t.server.runSetup}
+                    </Link>
+                </div>
             </div>
             {launch.isPending && (
                 <div className="card flex flex-col gap-3 p-5">
@@ -197,7 +203,14 @@ function LaunchForm({ saved }: { saved: StoredLaunch | null }) {
 
     return (
         <form ref={form} className="flex flex-col gap-3" onSubmit={submit} noValidate>
-            {saved === null && <Notice tone="warning">{t.server.unsaved}</Notice>}
+            {saved === null && (
+                <Notice tone="warning">
+                    {t.server.unsaved}{' '}
+                    <Link to="/server/setup" className="font-medium underline underline-offset-3">
+                        {t.server.runSetup}
+                    </Link>
+                </Notice>
+            )}
             {stale && outcome === null && <Notice tone="warning">{t.server.changedElsewhere}</Notice>}
             {saved?.legacyBuildPath != null && (
                 <Notice tone="warning">

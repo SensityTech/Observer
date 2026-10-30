@@ -281,14 +281,15 @@ export const en = {
         build: (build: string) => `Build ${build}`,
         players: (players: string) => `${players} players`,
         notConfigured: 'FXServer has no launch settings yet.',
-        notConfiguredOwner: 'Set the data folder and the cfg on the Server page to start it.',
-        notConfiguredOther: 'The owner sets them on the Server page.',
+        notConfiguredOwner: 'The server setup points Observer at your server folder and its cfg.',
+        notConfiguredOther: 'The owner saves them in the server setup.',
         invalid: 'This host refuses the stored launch settings.',
         invalidOwner: 'Fix them on the Server page before the next start.',
         invalidOther: 'The owner fixes them on the Server page.',
         noBuild: 'No build is selected yet.',
         noBuildHint: 'Install or import one on the Artifacts page.',
         openServer: 'Open the Server page',
+        openSetup: 'Set up the server',
         openArtifacts: 'Open the Artifacts page',
         buildProbation: (build: string, until: string) => `Build ${build}, on probation until ${until}`,
         buildProbationWaiting: (build: string) => `Build ${build}, on probation`,
@@ -1398,6 +1399,7 @@ export const en = {
         nextStart: 'Changes apply at the next start of FXServer',
         loadFailed: 'The launch settings could not be loaded.',
         unsaved: 'Nothing is saved yet: Observer needs these settings to start FXServer.',
+        runSetup: 'Run the setup',
         changedElsewhere:
             'These settings were changed in another session since you opened them. Discard your changes to see theirs, then make yours again.',
         files: 'Files',
@@ -2078,7 +2080,7 @@ export const en = {
         unknown_permissions: 'This Observer does not know some of these permissions. Reload the page.',
         invalid_launch_settings: 'Some settings need fixing. Each one says why below its field.',
         launch_not_configured:
-            'FXServer has no launch settings yet. The owner saves them on the Server page.',
+            'FXServer has no launch settings yet. The owner saves them in the server setup.',
         launch_failed: (params) => {
             const reason = stringParam(params, 'reason');
             return isSpawnFailure(reason)

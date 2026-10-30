@@ -76,7 +76,8 @@ export function SetupPage() {
             } satisfies SetupRequest);
             signIn(queryClient, response);
             queryClient.setQueryData(setupQuery.queryKey, { required: false });
-            await navigate({ to: '/' });
+            // The owner goes on with the server: Observer has nothing to supervise until it is set up.
+            await navigate({ to: '/server/setup' });
         } catch (error) {
             setPending(false);
             const code = error instanceof ApiError ? error.code : null;
