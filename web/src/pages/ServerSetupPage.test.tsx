@@ -205,6 +205,21 @@ describe('ServerSetupPage', () => {
         expect(steps[0]?.textContent).toContain(words.said.passed);
     });
 
+    it('should take the cfg detected in the folder checked last, not one detected before', async () => {
+        const other: FolderReport = { ...FOLDER, cfgFiles: ['main.cfg'], detectedCfg: 'main.cfg' };
+        const api = serve({ [FOLDER_ROUTE]: [json(other), json(FOLDER)], [CFG_ROUTE]: json(CFG) });
+        const { getByRole, press } = await page();
+        const field = getByRole('textbox', { name: words.folder.label });
+
+        fireEvent.change(field, { target: { value: 'D:\\FXServer\\other-data' } });
+        await press(words.folder.check);
+        fireEvent.change(field, { target: { value: DATA_PATH } });
+        await press(words.folder.check);
+        await press(words.continue);
+
+        expect(api.of(CFG_ROUTE)).toEqual([{ dataPath: DATA_PATH, cfgFile: 'server.cfg', onesync: 'on' }]);
+    });
+
     it('should say why a folder is refused and offer the one nearby that fits', async () => {
         const resources = `${DATA_PATH}\\resources`;
         const refused: FolderReport = {

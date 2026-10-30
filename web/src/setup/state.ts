@@ -46,11 +46,13 @@ export const cfgPasses = (checked: Checked<CfgCheck, CfgReport> | null, draft: L
 };
 
 /**
- * The cfg once a folder is accepted: the one Observer detected there, unless the draft names
- * another than the default, which only the owner chose.
+ * The cfg once a folder is accepted: the one Observer detected there, unless the draft names one
+ * the owner chose, neither the default nor `taken`, the cfg detected in a folder checked before.
  */
-export const cfgAfterFolder = (report: FolderReport, cfgFile: string) =>
-    report.detectedCfg !== null && cfgFile === DEFAULT_LAUNCH.cfgFile && !report.cfgFiles.includes(cfgFile)
+export const cfgAfterFolder = (report: FolderReport, cfgFile: string, taken: string | null) =>
+    report.detectedCfg !== null &&
+    (cfgFile === DEFAULT_LAUNCH.cfgFile || cfgFile === taken) &&
+    !report.cfgFiles.includes(cfgFile)
         ? report.detectedCfg
         : cfgFile;
 

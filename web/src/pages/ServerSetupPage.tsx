@@ -78,6 +78,8 @@ function Setup({ saved }: { saved: StoredLaunch | null }) {
     const [onesyncPicked, setOnesyncPicked] = useState(false);
     const [outcome, setOutcome] = useState<Outcome | null>(null);
     const [launched, setLaunched] = useState<{ before: ServerStatus | null } | null>(null);
+    // The cfg a folder's detection put in the draft, which the next folder checked may replace.
+    const taken = useRef<string | null>(null);
     const title = useRef<HTMLHeadingElement>(null);
     const moved = useRef(false);
 
@@ -104,7 +106,11 @@ function Setup({ saved }: { saved: StoredLaunch | null }) {
         onSuccess: (report, request) => {
             setFolder({ request, report });
             if (report.problem === null) {
-                setDraft((current) => ({ ...current, cfgFile: cfgAfterFolder(report, current.cfgFile) }));
+                const cfgFile = cfgAfterFolder(report, draft.cfgFile, taken.current);
+                if (cfgFile !== draft.cfgFile) {
+                    taken.current = cfgFile;
+                }
+                setDraft((current) => ({ ...current, cfgFile }));
             }
         },
         onError: (error) => setOutcome({ tone: 'danger', message: errorMessage(t, error) }),
@@ -190,6 +196,7 @@ function Setup({ saved }: { saved: StoredLaunch | null }) {
         setDraft(saved?.settings ?? DEFAULT_LAUNCH);
         setFolder(null);
         setCfg(null);
+        taken.current = null;
         setOnesyncPicked(false);
         setLaunched(null);
         go('folder');

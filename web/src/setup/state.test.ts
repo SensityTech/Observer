@@ -99,15 +99,19 @@ describe('cfgAfterFolder', () => {
     it('should take the detected cfg in place of a default the folder does not hold', () => {
         const live = { ...FOLDER, cfgFiles: ['configs/live.cfg'], detectedCfg: 'configs/live.cfg' };
 
-        expect(cfgAfterFolder(live, 'server.cfg')).toBe('configs/live.cfg');
-        expect(cfgAfterFolder(FOLDER, 'server.cfg')).toBe('server.cfg');
+        expect(cfgAfterFolder(live, 'server.cfg', null)).toBe('configs/live.cfg');
+        expect(cfgAfterFolder(FOLDER, 'server.cfg', null)).toBe('server.cfg');
+    });
+
+    it('should replace the cfg detected in a folder checked before, which the owner did not choose', () => {
+        expect(cfgAfterFolder(FOLDER, 'main.cfg', 'main.cfg')).toBe('server.cfg');
     });
 
     it('should keep a cfg the owner chose, and the default when nothing was detected', () => {
         const live = { ...FOLDER, cfgFiles: ['configs/live.cfg'], detectedCfg: 'configs/live.cfg' };
 
-        expect(cfgAfterFolder(live, 'deploy/prod/server.cfg')).toBe('deploy/prod/server.cfg');
-        expect(cfgAfterFolder({ ...FOLDER, cfgFiles: [], detectedCfg: null }, 'server.cfg')).toBe(
+        expect(cfgAfterFolder(live, 'deploy/prod/server.cfg', 'main.cfg')).toBe('deploy/prod/server.cfg');
+        expect(cfgAfterFolder({ ...FOLDER, cfgFiles: [], detectedCfg: null }, 'server.cfg', null)).toBe(
             'server.cfg',
         );
     });
