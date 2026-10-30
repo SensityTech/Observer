@@ -36,7 +36,7 @@ import {
 } from '../setup/state';
 
 /** The settings the setup keeps as saved, and does not show. */
-const ARGUMENT_FIELDS: LaunchField[] = ['extraArguments', 'argumentName', 'argumentValue'];
+const ARGUMENT_FIELDS = new Set<LaunchField>(['extraArguments', 'argumentName', 'argumentValue']);
 
 type Outcome = {
     tone: 'success' | 'warning' | 'danger';
@@ -199,7 +199,7 @@ function Setup({ saved }: { saved: StoredLaunch | null }) {
                 error instanceof ApiError && error.code === 'invalid_launch_settings'
                     ? launchIssues(error.params)
                     : [];
-            if (issues.length > 0 && issues.every((issue) => ARGUMENT_FIELDS.includes(issue.field))) {
+            if (issues.length > 0 && issues.every((issue) => ARGUMENT_FIELDS.has(issue.field))) {
                 setOutcome({ tone: 'danger', message: t.serverSetup.start.argumentsRefused, toServer: true });
                 return;
             }

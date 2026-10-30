@@ -35,6 +35,10 @@ const settle = () => act(() => new Promise((resolve) => setTimeout(resolve, 0)))
 
 const words = en.serverSetup;
 
+/** What a field says below it: its error, in place of its hint. */
+const described = (field: HTMLElement) =>
+    document.getElementById(field.getAttribute('aria-describedby') ?? '')?.textContent;
+
 const STOPPED: ServerStatus = {
     state: 'stopped',
     cause: null,
@@ -252,8 +256,6 @@ describe('ServerSetupPage', () => {
     });
 
     it('should say a path is needed when a field is checked empty', async () => {
-        const required = (field: HTMLElement) =>
-            document.getElementById(field.getAttribute('aria-describedby') ?? '')?.textContent;
         const unread: CfgReport = {
             ...CFG,
             problem: 'invalidPath',
@@ -273,7 +275,7 @@ describe('ServerSetupPage', () => {
 
         await press(words.folder.check);
         expect(api.of(FOLDER_ROUTE)).toEqual([{ dataPath: '' }]);
-        expect(required(getByRole('textbox', { name: words.folder.label }))).toBe(
+        expect(described(getByRole('textbox', { name: words.folder.label }))).toBe(
             en.server.problems.required,
         );
 
@@ -282,7 +284,7 @@ describe('ServerSetupPage', () => {
         fireEvent.change(cfg, { target: { value: '' } });
         await press(words.cfg.checkAgain);
         expect(api.of(CFG_ROUTE).at(-1)).toEqual({ dataPath: DATA_PATH, cfgFile: '', onesync: 'on' });
-        expect(required(cfg)).toBe(en.server.problems.required);
+        expect(described(cfg)).toBe(en.server.problems.required);
     });
 
     it('should keep Continue off while a finding blocks, each with its file and line', async () => {
