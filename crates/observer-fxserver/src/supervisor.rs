@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 
 use observer_domain::diagnostics::ProcessKind;
 use observer_domain::server::SpawnFailure;
+use observer_domain::server_data::CfgFinding;
 use observer_platform::{Exit, ExitWatch, Output, ProcessInfo, ProcessTree, TreeChange, TreeChanges};
 use serde::Serialize;
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
@@ -22,7 +23,7 @@ use crate::console::{ConsoleHub, LineAssembler, LineFlags, LineKind, plain, sani
 use crate::crashes::{self, Collected, DumpLimits, HangSnapshotLimits, SnapshotFailure};
 use crate::exit;
 use crate::health::{self, HangCause, Health, HealthLimits, PlayerList, Players, Probe, Problem, Verdict};
-use crate::launch::{self, CfgWarning, ServerLaunch};
+use crate::launch::{self, ServerLaunch};
 use crate::layout::{Flavour, Layout};
 use crate::perf::TickReport;
 use crate::recovery::{Next, Recovery, RecoveryPolicy};
@@ -162,8 +163,9 @@ pub enum EventKind {
         /// The build folder this run was started from.
         build: PathBuf,
     },
+    /// A finding of the cfg of the run that just started, of severity warning or blocking.
     CfgWarning {
-        warning: CfgWarning,
+        finding: CfgFinding,
     },
     Exited {
         code: Option<u32>,
@@ -1393,9 +1395,9 @@ impl Actor {
                 self.set_state(State::Starting, cause);
                 self.note(&format!("FXServer started (pid {pid})"));
                 self.emit(EventKind::Spawned { pid, probe, build });
-                for warning in warnings {
-                    warn!(?warning, "the server cfg works against Observer");
-                    self.emit(EventKind::CfgWarning { warning });
+                for finding in warnings {
+                    warn!(kind = ?finding.kind, file = finding.file, line = finding.line, "the server cfg works against Observer");
+                    self.emit(EventKind::CfgWarning { finding });
                 }
                 Ok(())
             }
@@ -1418,14 +1420,14 @@ impl Actor {
         }
     }
 
-    async fn launch(&mut self) -> Result<(Run, SocketAddr, Vec<CfgWarning>), SpawnError> {
-        let Some(server) = &self.settings.launch else {
+    async fn launch(&mut self) -> Result<(Run, SocketAddr, Vec<CfgFinding>), SpawnError> {
+        let Some(server) = self.settings.launch.clone() else {
             return Err(SpawnError::new(
                 SpawnFailure::NotConfigured,
                 "no launch settings are configured",
             ));
         };
-        let prepared = launch::prepare(server, self.settings.flavour)?;
+        let prepared = prepare(server, self.settings.flavour).await?;
         let layout = prepared.layout.clone();
         self.install(&layout).await?;
         let credentials = Credentials::generate().map_err(|error| {
@@ -1773,6 +1775,14 @@ async fn exit_of(run: &mut Option<Run>) -> Exit {
         Some(run) => run.exit.wait().await,
         None => std::future::pending().await,
     }
+}
+
+/// Prepares a launch off the runtime: the cfg's scan reads files and walks the resources.
+async fn prepare(server: ServerLaunch, flavour: Flavour) -> Result<launch::Prepared, SpawnError> {
+    tokio::task::spawn_blocking(move || launch::prepare(&server, flavour))
+        .await
+        .map_err(|error| SpawnError::new(SpawnFailure::Spawn, error.to_string()))?
+        .map_err(SpawnError::from)
 }
 
 /// Reads one of FXServer's console streams into the console, line by line, and passes on what

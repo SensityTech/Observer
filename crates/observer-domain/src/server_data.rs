@@ -53,7 +53,7 @@ pub enum FolderProblem {
 }
 
 /// `resources/` as FXServer walks it: a folder named `[x]` is a category, any other a resource.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
 pub struct ResourceSummary {
@@ -244,7 +244,7 @@ pub enum Severity {
     Note,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
 pub enum FindingKind {
