@@ -239,6 +239,17 @@ export function FactRows({ facts }: { facts: CfgFacts }) {
     );
 }
 
+/** Each finding with a key of its own: two commands on one line may give the same finding twice. */
+const keyed = (findings: CfgFinding[]) => {
+    const seen = new Map<string, number>();
+    return findings.map((finding) => {
+        const text = JSON.stringify(finding);
+        const nth = (seen.get(text) ?? 0) + 1;
+        seen.set(text, nth);
+        return { finding, key: `${text}#${nth}` };
+    });
+};
+
 /** The findings grouped blocking, warning, note: each its severity, its sentence and where it is written. */
 function Findings({ findings }: { findings: CfgFinding[] }) {
     const { t, format } = useI18n();
@@ -258,9 +269,9 @@ function Findings({ findings }: { findings: CfgFinding[] }) {
                 <section key={severity} className="flex flex-col gap-1.5">
                     <h3 className="text-ui font-medium text-ink">{words.groups[severity](group.length)}</h3>
                     <ul className="flex flex-col">
-                        {group.map((finding) => (
+                        {keyed(group).map(({ finding, key }) => (
                             <li
-                                key={JSON.stringify(finding)}
+                                key={key}
                                 className="flex flex-wrap items-baseline gap-x-3 gap-y-1 border-b border-line py-2 last:border-b-0"
                             >
                                 <Chip tone={SEVERITY[severity].tone} icon={SEVERITY[severity].icon}>

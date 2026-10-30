@@ -184,6 +184,7 @@ describe('ServerSetupPage', () => {
     afterEach(() => {
         cleanup();
         vi.unstubAllGlobals();
+        vi.restoreAllMocks();
     });
 
     it('should check the folder, take the cfg found there, and check it on entering its step', async () => {
@@ -331,6 +332,28 @@ describe('ServerSetupPage', () => {
         await press(words.cfg.checkAgain);
 
         expect(button(words.continue).disabled).toBe(false);
+    });
+
+    it('should list a finding written twice on one line twice, and as often as the next check says', async () => {
+        const monitor = finding('startsMonitor', 'warning', 9, { name: 'monitor' });
+        const twice: CfgReport = { ...CFG, findings: [monitor, monitor] };
+        const once: CfgReport = { ...CFG, findings: [monitor] };
+        const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+        serve({ [FOLDER_ROUTE]: json(FOLDER), [CFG_ROUTE]: [json(twice), json(once)] });
+        const { getByRole, press, toCfg } = await page();
+        const rows = (count: number) =>
+            within(
+                getByRole('heading', { name: words.cfg.groups.warning(count) }).closest(
+                    'section',
+                ) as HTMLElement,
+            ).getAllByRole('listitem');
+
+        await toCfg();
+        expect(rows(2)).toHaveLength(2);
+        await press(words.cfg.checkAgain);
+
+        expect(rows(1)).toHaveLength(1);
+        expect(errors).not.toHaveBeenCalled();
     });
 
     it("should follow the cfg's OneSync until the owner picks one, checking the cfg again with it", async () => {
