@@ -441,7 +441,14 @@ impl Scanner<'_> {
             .root
             .as_ref()
             .and_then(|root| resolved.strip_prefix(root).ok())
-            .map(slashed);
+            // The data folder itself has no name inside it.
+            .map(|relative| {
+                if relative.as_os_str().is_empty() {
+                    written.clone()
+                } else {
+                    slashed(relative)
+                }
+            });
         let Some(name) = inside.or_else(|| self.context.follow_outside.then(|| written.clone())) else {
             self.unchecked = true;
             self.list(written, CfgFileState::Outside);
@@ -1273,6 +1280,26 @@ mod tests {
         );
         assert_eq!(scan.findings, []);
         assert_eq!(scan.endpoint, Some(SocketAddr::from(([127, 0, 0, 1], 30140))));
+    }
+
+    #[test]
+    fn the_data_folder_itself_is_named_as_written() {
+        let folder = Folder::new();
+
+        let scan = folder.scan(&format!("{QUIET}exec .\nexec ../data\n"));
+
+        assert_eq!(
+            states(&scan),
+            [
+                ("server.cfg", CfgFileState::Read),
+                (".", CfgFileState::Missing),
+                ("../data", CfgFileState::Missing),
+            ]
+        );
+        assert_eq!(
+            places(&scan, FindingKind::ExecMissing),
+            ["server.cfg:4", "server.cfg:5"]
+        );
     }
 
     #[cfg(windows)]
