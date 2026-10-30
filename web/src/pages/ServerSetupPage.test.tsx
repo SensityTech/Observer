@@ -224,6 +224,24 @@ describe('ServerSetupPage', () => {
         expect(api.of(CFG_ROUTE)).toEqual([{ dataPath: DATA_PATH, cfgFile: 'server.cfg', onesync: 'on' }]);
     });
 
+    it('should give the resources counted as a floor when the walk stopped at either of its limits', async () => {
+        const many: FolderReport = {
+            ...FOLDER,
+            resources: { resources: 1800, categories: 250, withoutManifest: [], truncated: true },
+        };
+        serve({ [FOLDER_ROUTE]: json(many) });
+        const { getByRole, getByText, press } = await page();
+
+        fireEvent.change(getByRole('textbox', { name: words.folder.label }), {
+            target: { value: DATA_PATH },
+        });
+        await press(words.folder.check);
+
+        getByText(
+            'At least 1,800 resources in 250 categories: the count stopped at 250 categories or 5,000 files and folders.',
+        );
+    });
+
     it('should say why a folder is refused and offer the one nearby that fits', async () => {
         const resources = `${DATA_PATH}\\resources`;
         const refused: FolderReport = {
