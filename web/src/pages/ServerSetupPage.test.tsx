@@ -509,6 +509,30 @@ describe('ServerSetupPage', () => {
         expect(api.of('POST /servers/default/start')).toEqual([]);
     });
 
+    it('should send the owner to the Server page when the saved extra arguments are refused', async () => {
+        serve({
+            [FOLDER_ROUTE]: json(FOLDER),
+            [CFG_ROUTE]: json(CFG),
+            [SAVE_ROUTE]: () =>
+                Response.json(
+                    {
+                        code: 'invalid_launch_settings',
+                        params: { issues: [{ field: 'argumentName', index: 0, problem: 'reserved' }] },
+                    },
+                    { status: 422 },
+                ),
+        });
+        const { getByRole, getByText, press, toCfg } = await page({ saved: stored(3) });
+        await toCfg();
+        await press(words.continue);
+        await press(words.continue);
+
+        await press(words.start.saveAndStart);
+
+        await waitFor(() => getByText(words.start.argumentsRefused));
+        expect(getByRole('link', { name: words.start.openServer }).getAttribute('href')).toBe('/server');
+    });
+
     it('should start again from the settings saved elsewhere when its version is stale', async () => {
         serve({
             [FOLDER_ROUTE]: json(FOLDER),

@@ -1,4 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Link } from '@tanstack/react-router';
+import { ArrowRight } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 
 import { ApiError } from '../api/client';
@@ -6,10 +8,11 @@ import type { CfgCheck } from '../api/generated/CfgCheck';
 import type { CfgReport } from '../api/generated/CfgReport';
 import type { FolderCheck } from '../api/generated/FolderCheck';
 import type { FolderReport } from '../api/generated/FolderReport';
+import type { LaunchField } from '../api/generated/LaunchField';
 import type { LaunchSettings } from '../api/generated/LaunchSettings';
 import type { ServerStatus } from '../api/generated/ServerStatus';
 import type { StoredLaunch } from '../api/generated/StoredLaunch';
-import { DEFAULT_LAUNCH, cleaned, launchQuery } from '../api/launch';
+import { DEFAULT_LAUNCH, cleaned, launchIssues, launchQuery } from '../api/launch';
 import { restartServer, startServer } from '../api/server';
 import { checkCfg, checkFolder, saveSetup } from '../api/serverSetup';
 import { Button } from '../components/Button';
@@ -32,7 +35,15 @@ import {
     type SetupStep,
 } from '../setup/state';
 
-type Outcome = { tone: 'success' | 'warning' | 'danger'; message: string; startAgain?: boolean };
+/** The settings the setup keeps as saved, and does not show. */
+const ARGUMENT_FIELDS: LaunchField[] = ['extraArguments', 'argumentName', 'argumentValue'];
+
+type Outcome = {
+    tone: 'success' | 'warning' | 'danger';
+    message: string;
+    startAgain?: boolean;
+    toServer?: boolean;
+};
 
 /** Points Observer at an existing server: its folder, its cfg, a build, then the first start. */
 export function ServerSetupPage() {
@@ -182,6 +193,16 @@ function Setup({ saved }: { saved: StoredLaunch | null }) {
                 setOutcome({ tone: 'warning', message: t.serverSetup.changedElsewhere, startAgain: true });
                 return;
             }
+            // The setup keeps the extra arguments as saved, with no field of theirs to say what is
+            // wrong: the Server page has them.
+            const issues =
+                error instanceof ApiError && error.code === 'invalid_launch_settings'
+                    ? launchIssues(error.params)
+                    : [];
+            if (issues.length > 0 && issues.every((issue) => ARGUMENT_FIELDS.includes(issue.field))) {
+                setOutcome({ tone: 'danger', message: t.serverSetup.start.argumentsRefused, toServer: true });
+                return;
+            }
             // The server checked again and found what blocks: its step checks again too, and says what.
             if (error instanceof ApiError && error.code === 'setup_blocked') {
                 if (typeof error.params.folder === 'string') {
@@ -235,6 +256,15 @@ function Setup({ saved }: { saved: StoredLaunch | null }) {
                             <Button size="sm" className="max-md:w-full" onClick={startAgain}>
                                 {t.serverSetup.startAgain}
                             </Button>
+                        )}
+                        {outcome.toServer && (
+                            <Link
+                                to="/server"
+                                className="inline-flex items-center gap-1.5 font-medium text-ink underline-offset-2 hover:underline max-md:min-h-11"
+                            >
+                                {t.serverSetup.start.openServer}
+                                <ArrowRight size={14} strokeWidth={1.5} aria-hidden="true" />
+                            </Link>
                         )}
                     </div>
                 </Notice>

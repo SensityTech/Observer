@@ -1608,6 +1608,9 @@ export const en = {
                 'No build is selected, so FXServer cannot start yet: save now, then start it once a build is selected.',
             starting: 'Saved. FXServer is starting: its first launch is followed below.',
             startFailed: (reason: string) => `Saved, but FXServer did not start. ${reason}`,
+            argumentsRefused:
+                'This host refuses the extra arguments saved with the launch settings, which the setup keeps as they are. Fix them on the Server page, then save here again.',
+            openServer: 'Open the Server page',
         },
         launch: {
             title: 'First launch',
