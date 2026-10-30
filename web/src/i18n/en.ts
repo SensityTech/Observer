@@ -1919,6 +1919,8 @@ export const en = {
         crash_file_not_found: 'This file is no longer on the host.',
         crash_file_too_large: (params) =>
             `This file is over ${formatBytes('en', numberParam(params, 'maxBytes'))}: it stays on the host, in Observer's data folder.`,
+        setup_blocked:
+            'The server folder or its cfg keeps FXServer from starting under Observer. Check them again, fix what blocks, then save.',
     } satisfies Record<ErrorCode, ErrorMessage>,
     failure: {
         unknown: 'Something went wrong. Try again.',
