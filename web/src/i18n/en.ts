@@ -1918,6 +1918,7 @@ export const en = {
             autoStart: 'Start with Observer',
             txadminEvents: 'txAdmin events',
             extraArguments: 'Extra arguments',
+            setup: 'From the server setup',
             command: 'Command',
             automatic: 'With Observer',
             reason: 'Reason',
