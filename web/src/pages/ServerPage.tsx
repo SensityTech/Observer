@@ -1,34 +1,25 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
-import {
-    ArrowRight,
-    FolderOpen,
-    Plus,
-    Power,
-    RotateCw,
-    SquareTerminal,
-    X,
-    type LucideIcon,
-} from 'lucide-react';
-import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode, type Ref } from 'react';
+import { ArrowRight, FolderOpen, Plus, Power, RotateCw, SquareTerminal, X } from 'lucide-react';
+import { useEffect, useId, useRef, useState, type FormEvent, type Ref } from 'react';
 
 import { ApiError } from '../api/client';
 import type { LaunchField } from '../api/generated/LaunchField';
 import type { LaunchIssue } from '../api/generated/LaunchIssue';
 import type { LaunchSettings } from '../api/generated/LaunchSettings';
-import type { OneSync } from '../api/generated/OneSync';
 import type { StoredLaunch } from '../api/generated/StoredLaunch';
 import { cleaned, countChanges, DEFAULT_LAUNCH, launchIssues, launchQuery, saveLaunch } from '../api/launch';
 import { useArtifacts } from '../artifacts/context';
 import { Button, buttonVariants } from '../components/Button';
-import { Checkbox } from '../components/Checkbox';
-import { FieldError, TextField, inputClass } from '../components/Field';
+import { Card } from '../components/Card';
+import { CheckRow } from '../components/CheckRow';
+import { FieldError, inputClass } from '../components/Field';
 import { Notice } from '../components/Notice';
+import { OneSyncChoice } from '../components/OneSyncChoice';
+import { PathField } from '../components/PathField';
 import { errorMessage } from '../i18n/errors';
 import { useI18n } from '../i18n/I18nProvider';
 import { cn } from '../lib/cn';
-
-const ONESYNC_MODES: OneSync[] = ['off', 'on', 'legacy'];
 
 /** An extra argument as the form edits it: the id keeps a row's fields when one above is removed. */
 type Row = { id: number; name: string; value: string };
@@ -376,130 +367,6 @@ function SelectedBuild() {
                 </Link>
             </p>
         </div>
-    );
-}
-
-function Card({
-    id,
-    icon: Icon,
-    title,
-    meta,
-    children,
-}: {
-    id: string;
-    icon: LucideIcon;
-    title: string;
-    meta?: string;
-    children: ReactNode;
-}) {
-    return (
-        <section className="card" aria-labelledby={id}>
-            <div className="card-head">
-                <span className="grid size-6 place-items-center rounded-[6px] border border-line bg-surface-2 text-ink-2">
-                    <Icon size={14} strokeWidth={1.5} aria-hidden="true" />
-                </span>
-                <h2 id={id} className="text-card text-ink">
-                    {title}
-                </h2>
-                {meta && <p className="text-meta text-ink-3">{meta}</p>}
-            </div>
-            <div className="p-5 max-md:p-4">{children}</div>
-        </section>
-    );
-}
-
-function PathField({
-    label,
-    hint,
-    value,
-    error,
-    onChange,
-}: {
-    label: string;
-    hint: string;
-    value: string;
-    error: string | undefined;
-    onChange: (value: string) => void;
-}) {
-    return (
-        <TextField
-            label={label}
-            hint={hint}
-            value={value}
-            error={error}
-            spellCheck={false}
-            autoCapitalize="none"
-            autoComplete="off"
-            inputClassName="font-mono text-ui"
-            onChange={(event) => onChange(event.target.value)}
-        />
-    );
-}
-
-function OneSyncChoice({ value, onChange }: { value: OneSync; onChange: (mode: OneSync) => void }) {
-    const { t } = useI18n();
-    const hint = useId();
-    return (
-        <fieldset className="flex min-w-0 flex-col gap-1.5" aria-describedby={hint}>
-            <legend className="mb-1.5 text-ui font-medium text-ink">{t.server.onesync}</legend>
-            <div className="inline-flex max-w-full gap-0.5 self-start rounded-control border border-line bg-surface-2 p-0.75">
-                {ONESYNC_MODES.map((mode) => (
-                    <label
-                        key={mode}
-                        className="inline-flex h-6.5 cursor-pointer items-center justify-center rounded-[7px] px-2.5 text-small font-medium text-ink-3 transition-colors hover:text-ink has-checked:bg-raise has-checked:text-ink has-checked:shadow-[var(--elev-sm),0_0_0_1px_var(--line)] has-focus-visible:outline-2 has-focus-visible:outline-offset-1 has-focus-visible:outline-accent max-md:h-11 max-md:min-w-16"
-                    >
-                        <input
-                            type="radio"
-                            name="onesync"
-                            value={mode}
-                            className="sr-only"
-                            checked={value === mode}
-                            onChange={() => onChange(mode)}
-                        />
-                        {t.server.onesyncModes[mode]}
-                    </label>
-                ))}
-            </div>
-            <p id={hint} className="text-small text-ink-3">
-                {t.server.onesyncHint}
-            </p>
-        </fieldset>
-    );
-}
-
-function CheckRow({
-    label,
-    description,
-    checked,
-    onChange,
-}: {
-    label: string;
-    description: string;
-    checked: boolean;
-    onChange: (checked: boolean) => void;
-}) {
-    const id = useId();
-    return (
-        <label
-            htmlFor={`${id}-box`}
-            className="flex cursor-pointer items-start gap-3 rounded-sm px-2 py-2 hover:bg-hover"
-        >
-            <Checkbox
-                id={`${id}-box`}
-                checked={checked}
-                aria-labelledby={`${id}-name`}
-                aria-describedby={`${id}-about`}
-                onChange={(event) => onChange(event.target.checked)}
-            />
-            <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-                <span id={`${id}-name`} className="text-body font-medium text-ink">
-                    {label}
-                </span>
-                <span id={`${id}-about`} className="text-small text-ink-2">
-                    {description}
-                </span>
-            </span>
-        </label>
     );
 }
 
