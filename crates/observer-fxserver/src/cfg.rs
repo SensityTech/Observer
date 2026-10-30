@@ -29,9 +29,9 @@ const MAX_LOOKUPS: usize = 256;
 /// The most files a report names, read or not.
 const MAX_LISTED: usize = 64;
 const MAX_ENDPOINTS: usize = 16;
-/// The endpoint commands checked, each against those before it; past them, a cfg adds more than
-/// any server listens on, and the rest only count as written.
-const MAX_CHECKED_ENDPOINTS: usize = 64;
+/// The endpoint commands compared, each with those before it, and paired; past them, a cfg adds
+/// more than any server listens on, and the rest are only checked alone.
+const MAX_COMPARED_ENDPOINTS: usize = 64;
 /// Findings of one kind past this are left out; missing resources past it are counted instead.
 const MAX_PER_KIND: usize = 20;
 const MAX_HOSTNAME_CHARS: usize = 128;
@@ -316,9 +316,7 @@ impl Scanner<'_> {
         if protocol == EndpointProtocol::Tcp && self.health.is_none() {
             self.health = args.first().and_then(|address| reachable(address));
         }
-        if self.endpoints_written > MAX_CHECKED_ENDPOINTS {
-            return;
-        }
+        let compared = self.endpoints_written <= MAX_COMPARED_ENDPOINTS;
         let (address, port) = match args {
             [address] => match endpoint_port(address) {
                 Some(port) => (address, port),
@@ -333,10 +331,11 @@ impl Scanner<'_> {
             address: Some(quote(address, MAX_WORD_CHARS)),
             ..FindingParams::default()
         };
-        if self
-            .endpoints
-            .iter()
-            .any(|written| written.protocol == protocol && written.key == key)
+        if compared
+            && self
+                .endpoints
+                .iter()
+                .any(|written| written.protocol == protocol && written.key == key)
         {
             self.report_at(FindingKind::EndpointDuplicate, place, params);
             return;
@@ -351,13 +350,15 @@ impl Scanner<'_> {
         if on_panel {
             self.report_at(FindingKind::EndpointOnPanel, place, params);
         }
-        self.endpoints.push(Written {
-            protocol,
-            address: address.clone(),
-            parsed,
-            key,
-            place: place.clone(),
-        });
+        if compared {
+            self.endpoints.push(Written {
+                protocol,
+                address: address.clone(),
+                parsed,
+                key,
+                place: place.clone(),
+            });
+        }
     }
 
     fn invalid_endpoint(&mut self, place: &Place, protocol: EndpointProtocol, address: Option<&String>) {
@@ -526,7 +527,7 @@ impl Scanner<'_> {
     /// Players connect over both: a TCP address needs its UDP twin, and the reverse. Past the
     /// endpoints checked, a twin may be among those that were not.
     fn pair_endpoints(&mut self) {
-        if self.endpoints_written > MAX_CHECKED_ENDPOINTS {
+        if self.endpoints_written > MAX_COMPARED_ENDPOINTS {
             return;
         }
         let unpaired: Vec<_> = self
@@ -1528,19 +1529,35 @@ mod tests {
     }
 
     #[test]
-    fn endpoints_past_the_64th_are_counted_but_not_checked() {
+    fn endpoints_past_the_64th_are_checked_alone_but_not_against_each_other() {
         let folder = Folder::new();
+        let context = Context {
+            panel: Some(SocketAddr::from(([127, 0, 0, 1], 30300))),
+            ..context()
+        };
         let mut cfg = "sv_licenseKey cfxk_ObserverLabFixture_k3y\n".to_owned();
         for port in 30200..30265 {
             writeln!(cfg, "endpoint_add_tcp \"127.0.0.1:{port}\"").unwrap();
         }
-        cfg.push_str("endpoint_add_tcp \"127.0.0.1:30200\"\n");
+        cfg.push_str(
+            "endpoint_add_tcp \"127.0.0.1:30200\"\n\
+             endpoint_add_tcp \"0.0.0.0:30300\"\n\
+             endpoint_add_udp \"not an address\"\n",
+        );
 
-        let scan = folder.scan(&cfg);
+        let scan = folder.scan_with(&cfg, &context);
 
+        let found: Vec<_> = scan
+            .findings
+            .iter()
+            .map(|finding| (finding.kind, finding.line))
+            .collect();
         assert_eq!(
-            scan.findings,
-            [],
+            found,
+            [
+                (FindingKind::EndpointOnPanel, Some(68)),
+                (FindingKind::EndpointInvalid, Some(69)),
+            ],
             "neither paired, a twin may be past them, nor compared"
         );
         assert_eq!(scan.facts.endpoints.len(), MAX_ENDPOINTS);
