@@ -265,6 +265,8 @@ function Setup({ saved }: { saved: StoredLaunch | null }) {
                         onChange={(change) => {
                             if (change.onesync !== undefined) {
                                 setOnesyncPicked(true);
+                                // The summary counts what the cfg allows with it, players included.
+                                cfgCheck.mutate(cfgCheckOf({ ...draft, onesync: change.onesync }));
                             }
                             edit(change);
                         }}

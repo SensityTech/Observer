@@ -288,6 +288,29 @@ describe('ServerSetupPage', () => {
         ).toBe(true);
     });
 
+    it('should check the cfg again when the owner picks another OneSync, and count what it finds', async () => {
+        const needsOnesync: CfgReport = {
+            ...CFG,
+            findings: [...CFG.findings, finding('maxClientsNeedOneSync', 'warning', 3, { count: 48 })],
+        };
+        const api = serve({
+            [FOLDER_ROUTE]: json(FOLDER),
+            [CFG_ROUTE]: (body) =>
+                Response.json((body as { onesync: string }).onesync === 'off' ? needsOnesync : CFG),
+        });
+        const { getByRole, getByText, press, toCfg } = await page();
+        await toCfg();
+        await press(words.continue);
+        await press(words.continue);
+        getByText(words.start.findingCount(2, 2));
+
+        fireEvent.click(getByRole('radio', { name: en.server.onesyncModes.off }));
+        await settle();
+
+        expect(api.of(CFG_ROUTE).map((body) => (body as { onesync: string }).onesync)).toEqual(['on', 'off']);
+        getByText(words.start.findingCount(3, 2));
+    });
+
     it('should only save once the build step is skipped, and say why', async () => {
         const api = serve({
             [FOLDER_ROUTE]: json(FOLDER),
