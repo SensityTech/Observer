@@ -105,6 +105,9 @@ describe('cfgAfterFolder', () => {
 
     it('should replace the cfg detected in a folder checked before, which the owner did not choose', () => {
         expect(cfgAfterFolder(FOLDER, 'main.cfg', 'main.cfg')).toBe('server.cfg');
+        expect(
+            cfgAfterFolder({ ...FOLDER, cfgFiles: ['server.cfg', 'main.cfg'] }, 'main.cfg', 'main.cfg'),
+        ).toBe('server.cfg');
     });
 
     it('should keep a cfg the owner chose, and the default when nothing was detected', () => {
