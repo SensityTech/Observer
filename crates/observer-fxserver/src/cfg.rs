@@ -1380,9 +1380,13 @@ mod tests {
 
     #[test]
     fn a_free_port_is_not_reported_and_ports_are_left_alone_unless_asked() {
-        let free = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
-        let address = free.local_addr().unwrap();
-        drop(free);
+        // The system hands out a TCP port without looking at UDP: the pair must be free for both.
+        let address = std::iter::repeat_with(|| {
+            let free = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+            free.local_addr().unwrap()
+        })
+        .find(|address| UdpSocket::bind(address).is_ok())
+        .unwrap();
         let held = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
         let taken = held.local_addr().unwrap();
         let folder = Folder::new();
