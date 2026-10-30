@@ -66,8 +66,9 @@ export function CfgStep({
               ? t.server.problems[report.pathProblem]
               : words.problems[report.problem];
     const passes = cfgPasses(checked, draft);
+    // An empty field is checked too: the report says what the field needs.
     const check = (cfgFile: string) => {
-        if (!checking && cfgFile.trim() !== '') {
+        if (!checking) {
             onCheck(cfgFile.trim());
         }
     };

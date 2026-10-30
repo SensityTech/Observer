@@ -251,6 +251,40 @@ describe('ServerSetupPage', () => {
         expect(button(words.continue).disabled).toBe(false);
     });
 
+    it('should say a path is needed when a field is checked empty', async () => {
+        const required = (field: HTMLElement) =>
+            document.getElementById(field.getAttribute('aria-describedby') ?? '')?.textContent;
+        const unread: CfgReport = {
+            ...CFG,
+            problem: 'invalidPath',
+            pathProblem: 'required',
+            files: [],
+            facts: null,
+            findings: [],
+        };
+        const api = serve({
+            [FOLDER_ROUTE]: [
+                json({ ...FOLDER, problem: 'invalidPath', pathProblem: 'required', resources: null }),
+                json(FOLDER),
+            ],
+            [CFG_ROUTE]: [json(CFG), json(unread)],
+        });
+        const { getByRole, press, toCfg } = await page();
+
+        await press(words.folder.check);
+        expect(api.of(FOLDER_ROUTE)).toEqual([{ dataPath: '' }]);
+        expect(required(getByRole('textbox', { name: words.folder.label }))).toBe(
+            en.server.problems.required,
+        );
+
+        await toCfg();
+        const cfg = getByRole('textbox', { name: words.cfg.label });
+        fireEvent.change(cfg, { target: { value: '' } });
+        await press(words.cfg.checkAgain);
+        expect(api.of(CFG_ROUTE).at(-1)).toEqual({ dataPath: DATA_PATH, cfgFile: '', onesync: 'on' });
+        expect(required(cfg)).toBe(en.server.problems.required);
+    });
+
     it('should keep Continue off while a finding blocks, each with its file and line', async () => {
         const blocked: CfgReport = {
             ...CFG,

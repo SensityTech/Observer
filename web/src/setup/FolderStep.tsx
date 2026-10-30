@@ -42,8 +42,9 @@ export function FolderStep({
               ? t.server.problems[report.pathProblem]
               : words.problems[problem];
     const passes = folderPasses(checked, draft);
+    // An empty field is checked too: the report says what the field needs.
     const check = (dataPath: string) => {
-        if (!checking && dataPath.trim() !== '') {
+        if (!checking) {
             onCheck(dataPath.trim());
         }
     };
