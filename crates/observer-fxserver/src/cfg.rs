@@ -985,6 +985,9 @@ mod tests {
                 "onesync legacy",
                 "txAdminServerMode true",
                 "monitorMode true",
+                "observer_txadmin_events 1",
+                "sv_prometheusBasicAuthUser observer",
+                "sv_prometheusBasicAuthPassword secret",
                 "sv_playersToken abc",
             ]
             .map(|line| match line.split_once(' ') {
@@ -1016,13 +1019,22 @@ mod tests {
                 },
                 "{form:?}"
             );
+            let found: Vec<_> = scan
+                .findings
+                .iter()
+                .map(|finding| (finding.kind, finding.params.name.as_deref()))
+                .collect();
+            let observer = |name| (FindingKind::SetsObserverConvar, Some(name));
             assert_eq!(
-                kinds(&scan),
+                found,
                 [
-                    FindingKind::SetsObserverConvar,
-                    FindingKind::SetsServerMode,
-                    FindingKind::SetsMonitorMode,
-                    FindingKind::SetsObserverConvar,
+                    observer("onesync"),
+                    (FindingKind::SetsServerMode, None),
+                    (FindingKind::SetsMonitorMode, None),
+                    observer("observer_txadmin_events"),
+                    observer("sv_prometheusBasicAuthUser"),
+                    observer("sv_prometheusBasicAuthPassword"),
+                    observer("sv_playersToken"),
                 ],
                 "{form:?}"
             );
