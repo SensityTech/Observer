@@ -297,10 +297,22 @@ fn cfg_files(folder: &Path) -> (Vec<String>, Option<String>) {
     }
     root.sort();
     nested.sort();
+    // Windows finds `server.cfg` as `Server.cfg` too: the folder's own spelling names it.
+    let same = |name: &str, guess: &str| {
+        if cfg!(windows) {
+            name.eq_ignore_ascii_case(guess)
+        } else {
+            name == guess
+        }
+    };
     let detected = CFG_GUESSES
         .into_iter()
         .find(|guess| folder.join(guess).is_file())
-        .map(str::to_owned)
+        .map(|guess| {
+            root.iter()
+                .find(|name| same(name, guess))
+                .map_or_else(|| guess.to_owned(), Clone::clone)
+        })
         .or_else(|| match &root[..] {
             [only] => Some(only.clone()),
             _ => None,
@@ -613,6 +625,19 @@ mod tests {
         assert_eq!(detected(&["live.cfg", "test.cfg"]), None);
         assert_eq!(detected(&["my live.cfg"]), None, "a name the cfg rules refuse");
         assert_eq!(detected(&[]), None);
+    }
+
+    #[test]
+    fn a_cfg_is_listed_once_under_the_name_the_folder_gives_it() {
+        let dir = tempfile::tempdir().unwrap();
+        server(dir.path());
+        fs::remove_file(dir.path().join("server.cfg")).unwrap();
+        fs::write(dir.path().join("Server.cfg"), "").unwrap();
+
+        let (files, detected) = cfg_files(dir.path());
+
+        assert_eq!(files, ["Server.cfg"]);
+        assert_eq!(detected.as_deref(), Some("Server.cfg"));
     }
 
     #[test]
