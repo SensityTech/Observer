@@ -1396,7 +1396,12 @@ impl Actor {
                 self.note(&format!("FXServer started (pid {pid})"));
                 self.emit(EventKind::Spawned { pid, probe, build });
                 for finding in warnings {
-                    warn!(kind = ?finding.kind, file = finding.file, line = finding.line, "the server cfg works against Observer");
+                    warn!(
+                        kind = ?finding.kind,
+                        file = finding.file,
+                        line = finding.line,
+                        "the server cfg works against Observer"
+                    );
                     self.emit(EventKind::CfgWarning { finding });
                 }
                 Ok(())
