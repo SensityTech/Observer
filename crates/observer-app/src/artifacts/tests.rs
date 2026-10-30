@@ -2,7 +2,7 @@
 //! of Cfx.re and a catalog that lists what each test needs.
 
 use std::fs;
-use std::net::{IpAddr, Ipv4Addr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -82,6 +82,7 @@ impl Lab {
                 accounts: accounts.clone(),
                 servers: servers.clone(),
                 data_dir: dir.path().join("data"),
+                panel: SocketAddr::from(([127, 0, 0, 1], 41975)),
                 artifacts: dir.path().join("data/artifacts"),
                 console_logs: dir.path().join("data/logs/console"),
                 log: None,

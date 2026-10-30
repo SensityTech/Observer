@@ -6,7 +6,7 @@
 #![allow(clippy::unwrap_used)]
 
 use std::fs;
-use std::net::{IpAddr, Ipv4Addr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex, PoisonError};
 use std::time::Duration;
@@ -266,6 +266,7 @@ async fn supervise(
             accounts: accounts.clone(),
             servers: servers.clone(),
             data_dir: dir.join("observer-data"),
+            panel: SocketAddr::from(([127, 0, 0, 1], 41975)),
             artifacts: dir.join("observer-data/artifacts"),
             console_logs: dir.join("observer-data/logs/console"),
             log: None,

@@ -58,13 +58,30 @@ impl Servers {
         settings: LaunchSettings,
         version: Option<i64>,
     ) -> Result<StoredLaunch, Error> {
-        let issues = settings.issues(Platform::host());
-        if !issues.is_empty() {
-            return Err(ApiError::new(ErrorCode::InvalidLaunchSettings)
-                .with("issues", serde_json::to_value(issues).unwrap_or_default())
-                .into());
-        }
+        self.save_launch(caller, server, settings, version, false).await
+    }
 
+    /// [`Servers::change_launch_settings`] for the server setup, which checked the folder and its
+    /// cfg first: the audit entry says so.
+    pub(crate) async fn save_from_setup(
+        &self,
+        caller: &Caller,
+        settings: LaunchSettings,
+        version: Option<i64>,
+    ) -> Result<StoredLaunch, Error> {
+        self.save_launch(caller, Self::DEFAULT, settings, version, true)
+            .await
+    }
+
+    async fn save_launch(
+        &self,
+        caller: &Caller,
+        server: &str,
+        settings: LaunchSettings,
+        version: Option<i64>,
+        setup: bool,
+    ) -> Result<StoredLaunch, Error> {
+        follow_rules(&settings)?;
         let record = Record::by(caller, AuditAction::LaunchSettingsChanged).target(server);
         let server = server.to_owned();
         let now = self.clock.now();
@@ -87,13 +104,28 @@ impl Servers {
                 };
                 launch::save(tx, &server, &stored, now)?;
                 let old = before.as_ref().map(|before| &before.settings);
-                record.details(changes(old, &stored.settings)).write(tx, now)?;
+                let mut details = changes(old, &stored.settings);
+                if setup && let Value::Object(fields) = &mut details {
+                    fields.insert("setup".to_owned(), Value::Bool(true));
+                }
+                record.details(details).write(tx, now)?;
                 Ok(stored)
             })
             .await?;
         self.changes.send_replace(());
         Ok(saved)
     }
+}
+
+/// Refuses settings the rules in force on this host refuse, naming each issue.
+pub(crate) fn follow_rules(settings: &LaunchSettings) -> Result<(), Error> {
+    let issues = settings.issues(Platform::host());
+    if issues.is_empty() {
+        return Ok(());
+    }
+    Err(ApiError::new(ErrorCode::InvalidLaunchSettings)
+        .with("issues", serde_json::to_value(issues).unwrap_or_default())
+        .into())
 }
 
 /// The settings whose values anyone reading the log may see. Only the owner reads the others,
