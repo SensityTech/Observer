@@ -1,7 +1,7 @@
 //! The server setup over HTTP: the checks of a folder and its cfg, and the save that follows them.
 
 use std::fs;
-use std::net::{Ipv4Addr, TcpListener};
+use std::net::{Ipv4Addr, TcpListener, UdpSocket};
 
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode, header};
@@ -29,10 +29,17 @@ impl Server {
     }
 }
 
-/// A loopback address whose port was free a moment ago: the checks bind what the cfg adds.
+/// A loopback TCP listener on a port whose UDP twin is free: the checks bind both, and the system
+/// hands out a TCP port without looking at UDP.
+fn listener() -> TcpListener {
+    std::iter::repeat_with(|| TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap())
+        .find(|listener| UdpSocket::bind(listener.local_addr().unwrap()).is_ok())
+        .unwrap()
+}
+
+/// A loopback address whose port was free for TCP and UDP a moment ago.
 fn free_address() -> String {
-    let free = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
-    free.local_addr().unwrap().to_string()
+    listener().local_addr().unwrap().to_string()
 }
 
 fn endpoints(address: &str) -> String {
@@ -223,7 +230,7 @@ async fn the_setup_saves_only_what_lets_fxserver_start_and_audits_it() {
 async fn a_port_held_on_this_host_warns_without_blocking_the_save() {
     let server = Server::new().await;
     let owner = server.owner().await;
-    let held = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let held = listener();
     let address = held.local_addr().unwrap().to_string();
     let live = server.server_folder("live", &endpoints(&address));
     let check = json!({ "dataPath": live, "cfgFile": "server.cfg", "onesync": "on" });
