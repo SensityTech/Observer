@@ -24,6 +24,8 @@ pub const MAX_BYTES: u64 = 1024 * 1024;
 const EXEC_DEPTH: usize = 5;
 /// The most files one scan reads, the cfg included.
 const MAX_FILES: usize = 32;
+/// The most `exec` targets one scan looks up on disk, files read again or missing included.
+const MAX_LOOKUPS: usize = 256;
 /// The most files a report names, read or not.
 const MAX_LISTED: usize = 64;
 const MAX_ENDPOINTS: usize = 16;
@@ -121,6 +123,7 @@ pub fn scan(data: &Path, cfg_file: &str, text: &str, resources: &Resources, cont
         context,
         files: Vec::new(),
         read: HashSet::new(),
+        looked_up: 0,
         unchecked: false,
         findings: Vec::new(),
         found: HashMap::new(),
@@ -179,6 +182,7 @@ struct Scanner<'a> {
     context: &'a Context,
     files: Vec<CfgFile>,
     read: HashSet<PathBuf>,
+    looked_up: usize,
     /// A file FXServer may run was not read: what the chain seems to lack may be in it.
     unchecked: bool,
     findings: Vec<CfgFinding>,
@@ -384,6 +388,12 @@ impl Scanner<'_> {
             self.report_at(FindingKind::ExecTooDeep, place, params);
             return;
         }
+        if self.looked_up == MAX_LOOKUPS {
+            self.unchecked = true;
+            self.list(written, CfgFileState::TooMany);
+            return;
+        }
+        self.looked_up += 1;
         let Ok(resolved) = fs::canonicalize(self.data.join(target)) else {
             self.list(written, CfgFileState::Missing);
             self.report_at(FindingKind::ExecMissing, place, params);
@@ -1313,6 +1323,25 @@ mod tests {
             read(&large.data().join("large.cfg")),
             Err(ReadError::TooLarge)
         ));
+    }
+
+    #[test]
+    fn exec_targets_are_looked_up_256_times_at_most() {
+        let folder = Folder::new();
+        folder.file("keys.cfg", "sv_licenseKey cfxk_ObserverLabFixture_k3y\n");
+        let endpoints = QUIET.lines().take(2).collect::<Vec<_>>().join("\n");
+
+        let scan = folder.scan(&format!(
+            "{endpoints}\n{}exec keys.cfg\n",
+            "exec server.cfg\n".repeat(MAX_LOOKUPS)
+        ));
+
+        assert_eq!(places(&scan, FindingKind::ExecRepeated).len(), MAX_PER_KIND);
+        assert_eq!(
+            scan.facts.licence,
+            LicenceState::Unknown,
+            "the target past them may set it"
+        );
     }
 
     #[test]
