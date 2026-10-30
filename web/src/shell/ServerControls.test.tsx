@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, cleanup, fireEvent, render } from '@testing-library/react';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 
+import type { LaunchReadiness } from '../api/generated/LaunchReadiness';
 import type { ServerState } from '../api/generated/ServerState';
 import { MeContext } from '../auth/me';
 import { en } from '../i18n/en';
@@ -13,7 +14,7 @@ import { ServerControls } from './ServerControls';
 
 const settle = () => act(() => new Promise((resolve) => setTimeout(resolve, 0)));
 
-const status = (state: ServerState) => ({
+const status = (state: ServerState, launch: LaunchReadiness = 'ready') => ({
     state,
     cause: null,
     since: '2026-10-28T14:00:00Z',
@@ -23,11 +24,11 @@ const status = (state: ServerState) => ({
     build: null,
     players: null,
     restartAt: null,
-    launch: 'ready',
+    launch,
 });
 
 /** The controls of an operator who may start and stop FXServer, in `state`. */
-const controls = async (state: ServerState) => {
+const controls = async (state: ServerState, launch?: LaunchReadiness) => {
     let socket: SocketEvents | undefined;
     const live = new Realtime({
         ticket: async () => 'ticket',
@@ -62,7 +63,9 @@ const controls = async (state: ServerState) => {
     await settle();
     act(() => {
         socket?.message(JSON.stringify({ type: 'hello', connectionId: 1, contract: 1 }));
-        socket?.message(JSON.stringify({ type: 'snapshot', topic: 'server.status', data: status(state) }));
+        socket?.message(
+            JSON.stringify({ type: 'snapshot', topic: 'server.status', data: status(state, launch) }),
+        );
     });
     const changeTo = (next: ServerState) =>
         act(() =>
@@ -90,6 +93,17 @@ describe('ServerControls', () => {
         fireEvent.click(getByRole('button', { name: en.controls.start }));
 
         expect(getByText(en.controls.unavailable(en.controls.start, en.controls.running))).not.toBeNull();
+        live.stop();
+    });
+
+    it('should say Start waits for a build while none is selected, before and once it is pressed', async () => {
+        const { getByRole, getByText, live } = await controls('stopped', 'noBuild');
+        const start = getByRole('button', { name: en.controls.start });
+
+        expect(start.getAttribute('title')).toBe(en.controls.noBuild);
+        fireEvent.click(start);
+
+        expect(getByText(en.controls.unavailable(en.controls.start, en.controls.noBuild))).not.toBeNull();
         live.stop();
     });
 

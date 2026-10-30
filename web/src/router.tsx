@@ -8,6 +8,7 @@ import {
 } from '@tanstack/react-router';
 import { meQuery, setupQuery } from './api/auth';
 import { Permission } from './api/generated/Permission';
+import { launchQuery } from './api/launch';
 import { allows, landing } from './auth/me';
 import { ReauthDialog } from './auth/ReauthDialog';
 import { RequireOwner, RequirePermission } from './auth/RequirePermission';
@@ -22,8 +23,8 @@ import { SetupPage } from './pages/SetupPage';
 import { AppShell } from './shell/AppShell';
 
 // Pages beyond the Overview load when someone opens them: the console's virtual list and colour
-// parser, the restart schedule, the diagnostics, the owner's launch settings, the accounts and the audit
-// log are no one's landing page.
+// parser, the restart schedule, the diagnostics, the owner's launch settings and server setup, the
+// accounts and the audit log are no one's landing page.
 const ConsolePage = lazyCode(() =>
     import('./pages/ConsolePage').then((page) => ({ default: page.ConsolePage })),
 );
@@ -35,6 +36,9 @@ const ArtifactsPage = lazyCode(() =>
 );
 const ServerPage = lazyCode(() =>
     import('./pages/ServerPage').then((page) => ({ default: page.ServerPage })),
+);
+const ServerSetupPage = lazyCode(() =>
+    import('./pages/ServerSetupPage').then((page) => ({ default: page.ServerSetupPage })),
 );
 const UsersPage = lazyCode(() => import('./pages/UsersPage').then((page) => ({ default: page.UsersPage })));
 const AuditPage = lazyCode(() => import('./pages/AuditPage').then((page) => ({ default: page.AuditPage })));
@@ -121,9 +125,14 @@ const panelRoute = createRoute({
 const overviewRoute = createRoute({
     getParentRoute: () => panelRoute,
     path: '/',
-    beforeLoad: ({ context: { me } }) => {
+    beforeLoad: async ({ context: { me, queryClient } }) => {
         if (!allows(me, Permission.DashboardView)) {
             throw redirect({ to: landing(me) });
+        }
+        // Until the server is set up, the owner lands on its setup. Settings that cannot be read
+        // leave the Overview to say so.
+        if (me.isOwner && (await queryClient.ensureQueryData(launchQuery).catch(() => undefined)) === null) {
+            throw redirect({ to: '/server/setup' });
         }
     },
     component: OverviewPage,
@@ -179,6 +188,16 @@ const serverRoute = createRoute({
     ),
 });
 
+const serverSetupRoute = createRoute({
+    getParentRoute: () => panelRoute,
+    path: '/server/setup',
+    component: () => (
+        <RequireOwner>
+            <ServerSetupPage />
+        </RequireOwner>
+    ),
+});
+
 const usersRoute = createRoute({
     getParentRoute: () => panelRoute,
     path: '/users',
@@ -223,6 +242,7 @@ const routeTree = rootRoute.addChildren([
         artifactsRoute,
         diagnosticsRoute,
         serverRoute,
+        serverSetupRoute,
         usersRoute,
         auditRoute,
         accountRoute,

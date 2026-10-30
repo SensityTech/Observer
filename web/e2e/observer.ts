@@ -105,10 +105,13 @@ export default async function setup() {
     const dir = mkdtempSync(join(tmpdir(), 'observer-e2e-'));
     const serverData = join(dir, 'server-data');
     installFake(join(dir, 'data', 'artifacts'), fake);
-    mkdirSync(serverData, { recursive: true });
+    // The server setup takes a folder only once its resources folder holds a resource.
+    const resource = join(serverData, 'resources', '[local]', 'hello');
+    mkdirSync(resource, { recursive: true });
+    writeFileSync(join(resource, 'fxmanifest.lua'), "fx_version 'cerulean'\ngame 'gta5'\n");
     writeFileSync(
         join(serverData, 'server.cfg'),
-        `endpoint_add_tcp "127.0.0.1:${fxserverPort}"\nendpoint_add_udp "127.0.0.1:${fxserverPort}"\nsv_maxclients 32\n`,
+        `endpoint_add_tcp "127.0.0.1:${fxserverPort}"\nendpoint_add_udp "127.0.0.1:${fxserverPort}"\nsv_maxclients 32\nensure hello\n`,
     );
     const config = join(dir, 'observer.toml');
     writeFileSync(config, `data_dir = "data"\n\n[http]\nlisten = "127.0.0.1:${port}"\n`);

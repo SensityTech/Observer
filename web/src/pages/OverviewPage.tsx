@@ -246,10 +246,10 @@ function ServerState({ status }: { status: ServerStatus }) {
                     )}
                     {me.isOwner && status.launch !== 'noBuild' && (
                         <Link
-                            to="/server"
+                            to={status.launch === 'notConfigured' ? '/server/setup' : '/server'}
                             className="inline-flex items-center gap-1.5 font-medium text-ink underline-offset-2 hover:underline"
                         >
-                            {t.overview.openServer}
+                            {status.launch === 'notConfigured' ? t.overview.openSetup : t.overview.openServer}
                             <ArrowRight size={14} strokeWidth={1.5} aria-hidden="true" />
                         </Link>
                     )}

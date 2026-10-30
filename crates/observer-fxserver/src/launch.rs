@@ -3,50 +3,19 @@
 //! Observer did not mean to give it; what is left here is the file system and the command line
 //! itself.
 
-use std::collections::HashSet;
-use std::fs;
-use std::io;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::fs::File;
+use std::io::{self, Read};
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
 use observer_domain::launch::{self as rules, LaunchIssue, LaunchProblem, LaunchSettings, Platform};
 use observer_domain::server::SpawnFailure;
+use observer_domain::server_data::{CfgFinding, Severity};
 use observer_platform::Launch;
-use serde::Serialize;
 
-use crate::command;
+use crate::cfg;
 use crate::layout::{Flavour, Layout};
-
-/// The convars Observer sets on every launch, through argv or stdin.
-const OBSERVER_CONVARS: [&str; 5] = [
-    "onesync",
-    "observer_txadmin_events",
-    "sv_prometheusBasicAuthUser",
-    "sv_prometheusBasicAuthPassword",
-    "sv_playersToken",
-];
-
-/// How deep `exec` lines are followed when the cfg is scanned for warnings.
-const EXEC_DEPTH: usize = 5;
-
-/// What the cfg does that works against Observer. The cfg is the user's file: Observer reads it
-/// and says so, it never rewrites it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum CfgWarning {
-    /// Starts txAdmin's `monitor` resource, which expects txAdmin to run the server.
-    StartsMonitor { file: PathBuf, line: usize },
-    /// Sets `txAdminServerMode`, which makes FXServer start `monitor` by itself.
-    SetsServerMode { file: PathBuf, line: usize },
-    /// Sets a convar Observer sets too; Observer's value wins.
-    SetsObserverConvar {
-        name: String,
-        file: PathBuf,
-        line: usize,
-    },
-    /// A file named by `exec` could not be read, so it was not checked.
-    Unreadable { file: PathBuf },
-}
+use crate::server_data;
 
 /// What a spawn starts: a build folder, and how FXServer runs from it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -60,7 +29,9 @@ pub struct ServerLaunch {
 pub struct Prepared {
     pub launch: Launch,
     pub layout: Layout,
-    pub warnings: Vec<CfgWarning>,
+    /// What the cfg does that works against Observer, notes left out. The setup refused what
+    /// blocks when it saved; a cfg edited since still starts, as FXServer will say.
+    pub warnings: Vec<CfgFinding>,
     /// The first `endpoint_add_tcp` of the cfg, made reachable from this host.
     pub endpoint: Option<SocketAddr>,
 }
@@ -180,18 +151,30 @@ pub fn prepare(launch: &ServerLaunch, flavour: Flavour) -> Result<Prepared, Laun
         if settings.txadmin_events { "1" } else { "0" }.into(),
     ]);
 
-    let text = fs::read_to_string(&cfg_file).map_err(|source| LaunchError::Cfg {
-        path: cfg_file.clone(),
-        source,
-    })?;
-    let mut scan = Scan {
-        data: &data,
-        warnings: Vec::new(),
-        endpoint: None,
-        seen: HashSet::new(),
+    // FXServer runs the whole cfg; the scan reads its first MiB, as it reads every file it runs.
+    let mut bytes = Vec::new();
+    File::open(&cfg_file)
+        .and_then(|file| file.take(cfg::MAX_BYTES).read_to_end(&mut bytes))
+        .map_err(|source| LaunchError::Cfg {
+            path: cfg_file.clone(),
+            source,
+        })?;
+    let text = String::from_utf8_lossy(&bytes);
+    let context = cfg::Context {
+        panel: None,
+        onesync: settings.onesync,
+        probe_ports: false,
+        system_resources: Some(layout.system_resources()),
+        follow_outside: true,
     };
-    scan.file(&cfg_file, &text, 0);
-    let (warnings, endpoint) = (scan.warnings, scan.endpoint);
+    let resources = server_data::walk(&data);
+    let scan = cfg::scan(&data, &settings.cfg_file, &text, &resources, &context);
+    let warnings = scan
+        .findings
+        .into_iter()
+        .filter(|finding| finding.severity != Severity::Note)
+        .collect();
+    let endpoint = scan.endpoint;
 
     Ok(Prepared {
         launch: Launch {
@@ -212,94 +195,20 @@ fn resolve(path: &Path) -> Result<PathBuf, LaunchError> {
     })
 }
 
-struct Scan<'a> {
-    data: &'a Path,
-    warnings: Vec<CfgWarning>,
-    endpoint: Option<SocketAddr>,
-    seen: HashSet<PathBuf>,
-}
-
-impl Scan<'_> {
-    fn file(&mut self, path: &Path, text: &str, depth: usize) {
-        if !self.seen.insert(path.to_path_buf()) {
-            return;
-        }
-        for (index, line) in text.lines().enumerate() {
-            for command in command::split(line) {
-                self.command(path, index + 1, &command::words(command), depth);
-            }
-        }
-    }
-
-    fn command(&mut self, file: &Path, line: usize, words: &[String], depth: usize) {
-        let Some((name, args)) = words.split_first() else {
-            return;
-        };
-        let name = name.to_ascii_lowercase();
-        let first = args.first().map(String::as_str);
-        // A convar is set by `set` and its variants, or by typing its name with a value.
-        let set = match name.as_str() {
-            "set" | "sets" | "setr" | "seta" => first,
-            _ if first.is_some() => Some(words[0].as_str()),
-            _ => None,
-        };
-        match (name.as_str(), first) {
-            ("start" | "ensure" | "restart", Some(resource)) if resource.eq_ignore_ascii_case("monitor") => {
-                self.warnings.push(CfgWarning::StartsMonitor {
-                    file: file.to_path_buf(),
-                    line,
-                });
-            }
-            ("endpoint_add_tcp", Some(address)) if self.endpoint.is_none() => {
-                self.endpoint = reachable(address);
-            }
-            ("exec", Some(target)) if depth < EXEC_DEPTH && !target.starts_with('@') => {
-                let path = self.data.join(target);
-                match fs::read_to_string(&path) {
-                    Ok(text) => self.file(&path, &text, depth + 1),
-                    Err(_) => self.warnings.push(CfgWarning::Unreadable { file: path }),
-                }
-            }
-            _ => {}
-        }
-        let Some(convar) = set else {
-            return;
-        };
-        if convar.eq_ignore_ascii_case("txAdminServerMode") {
-            self.warnings.push(CfgWarning::SetsServerMode {
-                file: file.to_path_buf(),
-                line,
-            });
-        } else if let Some(name) = OBSERVER_CONVARS
-            .iter()
-            .find(|name| name.eq_ignore_ascii_case(convar))
-        {
-            self.warnings.push(CfgWarning::SetsObserverConvar {
-                name: (*name).to_owned(),
-                file: file.to_path_buf(),
-                line,
-            });
-        }
-    }
-}
-
-/// FXServer listens on the address it is given; a wildcard is reached through loopback.
-fn reachable(address: &str) -> Option<SocketAddr> {
-    let mut address: SocketAddr = address.parse().ok()?;
-    match address.ip() {
-        IpAddr::V4(ip) if ip.is_unspecified() => address.set_ip(Ipv4Addr::LOCALHOST.into()),
-        IpAddr::V6(ip) if ip.is_unspecified() => address.set_ip(Ipv6Addr::LOCALHOST.into()),
-        _ => {}
-    }
-    Some(address)
-}
-
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use observer_domain::launch::{ExtraArgument, LaunchField, LaunchProblem, OneSync};
+    use observer_domain::server_data::FindingKind;
     use tempfile::TempDir;
 
     use super::*;
+
+    /// Two endpoints and a key: a cfg the scan has nothing to say about.
+    const QUIET: &str = "endpoint_add_tcp \"0.0.0.0:30140\"\n\
+                         endpoint_add_udp \"0.0.0.0:30140\"\n\
+                         sv_licenseKey cfxk_ObserverLabFixture_k3y\n";
 
     struct Fixture {
         dir: TempDir,
@@ -369,7 +278,7 @@ mod tests {
 
     #[test]
     fn the_bridge_and_the_cfg_come_first_and_observer_convars_last() {
-        let fixture = Fixture::new("sv_hostname \"Observer lab\"\n");
+        let fixture = Fixture::new(&format!("{QUIET}sv_hostname \"Observer lab\"\n"));
         let settings = LaunchSettings {
             onesync: OneSync::Legacy,
             txadmin_events: true,
@@ -517,47 +426,66 @@ mod tests {
 
         let prepared = prepare(&fixture.launch(), Flavour::HOST).unwrap();
 
-        let cfg = fixture.data().join("server.cfg");
+        let warnings: Vec<_> = prepared
+            .warnings
+            .iter()
+            .map(|finding| (finding.kind, finding.file.as_str(), finding.line))
+            .collect();
+        // Setting Observer's own convars is a note now, which the launch leaves out; the file a
+        // resource holds may add the endpoints, so their absence only warns.
         assert_eq!(
-            prepared.warnings,
+            warnings,
             [
-                CfgWarning::SetsObserverConvar {
-                    name: "sv_playersToken".to_owned(),
-                    file: fixture.data().join("license.cfg"),
-                    line: 1
-                },
-                CfgWarning::StartsMonitor {
-                    file: cfg.clone(),
-                    line: 2
-                },
-                CfgWarning::SetsServerMode {
-                    file: cfg.clone(),
-                    line: 3
-                },
-                CfgWarning::SetsObserverConvar {
-                    name: "sv_prometheusBasicAuthPassword".to_owned(),
-                    file: cfg.clone(),
-                    line: 4
-                },
-                CfgWarning::SetsObserverConvar {
-                    name: "onesync".to_owned(),
-                    file: cfg,
-                    line: 4
-                },
-                CfgWarning::Unreadable {
-                    file: fixture.data().join("missing.cfg")
-                },
+                (FindingKind::StartsMonitor, "server.cfg", Some(2)),
+                (FindingKind::SetsServerMode, "server.cfg", Some(3)),
+                (FindingKind::ExecMissing, "server.cfg", Some(5)),
+                (FindingKind::NoEndpoint, "server.cfg", None),
             ]
+        );
+        assert!(
+            prepared
+                .warnings
+                .iter()
+                .all(|finding| finding.severity == Severity::Warning)
         );
     }
 
     #[test]
     fn a_cfg_that_execs_itself_is_read_once() {
-        let fixture = Fixture::new("exec server.cfg\nstart monitor\n");
+        let fixture = Fixture::new(&format!("{QUIET}exec server.cfg\nstart monitor\n"));
 
         let prepared = prepare(&fixture.launch(), Flavour::HOST).unwrap();
 
-        assert_eq!(prepared.warnings.len(), 1);
+        let kinds: Vec<_> = prepared.warnings.iter().map(|finding| finding.kind).collect();
+        assert_eq!(kinds, [FindingKind::ExecRepeated, FindingKind::StartsMonitor]);
+    }
+
+    #[test]
+    fn a_cfg_named_by_the_settings_is_read_even_when_it_is_not_utf8() {
+        let fixture = Fixture::new("");
+        fs::write(
+            fixture.data().join("server.cfg"),
+            [QUIET.as_bytes(), b"sv_hostname \"Caf\xe9\"\nensure monitor\n"].concat(),
+        )
+        .unwrap();
+
+        let prepared = prepare(&fixture.launch(), Flavour::HOST).unwrap();
+
+        let kinds: Vec<_> = prepared.warnings.iter().map(|finding| finding.kind).collect();
+        assert_eq!(kinds, [FindingKind::StartsMonitor]);
+    }
+
+    #[test]
+    fn a_cfg_is_scanned_up_to_its_first_mib() {
+        let fixture = Fixture::new(&format!(
+            "{QUIET}{}ensure monitor\n",
+            "# padding\n".repeat(110_000)
+        ));
+
+        let prepared = prepare(&fixture.launch(), Flavour::HOST).unwrap();
+
+        assert_eq!(prepared.warnings, []);
+        assert_eq!(prepared.endpoint, Some(SocketAddr::from(([127, 0, 0, 1], 30140))));
     }
 
     #[test]
@@ -571,7 +499,25 @@ mod tests {
         let prepared = prepare(&fixture.launch(), Flavour::HOST).unwrap();
 
         assert_eq!(prepared.endpoint, Some(SocketAddr::from(([127, 0, 0, 1], 30140))));
-        assert_eq!(reachable("[::]:30140"), Some("[::1]:30140".parse().unwrap()));
-        assert_eq!(reachable("not an address"), None);
+    }
+
+    #[test]
+    fn the_endpoint_and_warnings_come_from_files_outside_the_data_folder_too() {
+        let fixture = Fixture::new("exec ../shared.cfg\n");
+        fs::write(
+            fixture.dir.path().join("shared.cfg"),
+            format!("{QUIET}ensure monitor\n"),
+        )
+        .unwrap();
+
+        let prepared = prepare(&fixture.launch(), Flavour::HOST).unwrap();
+
+        let warnings: Vec<_> = prepared
+            .warnings
+            .iter()
+            .map(|finding| (finding.kind, finding.file.as_str(), finding.line))
+            .collect();
+        assert_eq!(warnings, [(FindingKind::StartsMonitor, "../shared.cfg", Some(4))]);
+        assert_eq!(prepared.endpoint, Some(SocketAddr::from(([127, 0, 0, 1], 30140))));
     }
 }

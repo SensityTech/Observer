@@ -18,3 +18,4 @@ pub mod metrics;
 pub mod permissions;
 pub mod schedule;
 pub mod server;
+pub mod server_data;

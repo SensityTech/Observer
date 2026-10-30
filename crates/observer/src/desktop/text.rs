@@ -67,7 +67,7 @@ pub const SERVER_STOPPING: &str = "FXServer is stopping.";
 pub const OBSERVER_STOPPING: &str = "Observer is stopping.";
 
 pub const LAUNCH_NOT_CONFIGURED: &str =
-    "FXServer has no launch settings yet. The owner saves them on the Server page.";
+    "FXServer has no launch settings yet. The owner saves them in the server setup.";
 pub const LAUNCH_FAILED: &str = "FXServer could not start. The console says why.";
 pub const NO_BUILD_SELECTED: &str = "No build is selected yet. Install or import one on the Artifacts page.";
 pub const STOPPING_REFUSAL: &str = "FXServer is stopping. Start it again once it has stopped.";
@@ -368,7 +368,7 @@ mod tests {
         let cases = [
             (
                 ErrorCode::LaunchNotConfigured,
-                "FXServer has no launch settings yet. The owner saves them on the Server page.",
+                "FXServer has no launch settings yet. The owner saves them in the server setup.",
             ),
             (
                 ErrorCode::InvalidLaunchSettings,

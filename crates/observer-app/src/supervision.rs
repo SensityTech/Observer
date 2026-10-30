@@ -1,9 +1,12 @@
 //! FXServer as Observer runs it: the supervisor, started from the stored launch settings and the
 //! selected build, the status the panel shows of it, the console it fills, the commands operators
-//! send it, and the console log files.
+//! send it, the console log files, and the server setup's checks of a folder and its cfg.
+
+mod setup;
 
 use std::collections::{HashMap, VecDeque};
 use std::io;
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
@@ -63,8 +66,11 @@ pub struct Setup<'a> {
     pub clock: Clock,
     pub accounts: Accounts,
     pub servers: Servers,
-    /// Observer's data folder: FXServer's crash dumps and pid file go there.
+    /// Observer's data folder: FXServer's crash dumps and pid file go there, and no server folder
+    /// may lie inside it.
     pub data_dir: PathBuf,
+    /// Where the panel listens, whose port FXServer must leave alone.
+    pub panel: SocketAddr,
     /// Where the builds are installed, one folder per build number.
     pub artifacts: PathBuf,
     /// The folder `log` writes to, which the log routes list.
@@ -81,6 +87,8 @@ pub struct Supervision {
 struct Inner {
     db: Database,
     clock: Clock,
+    data_dir: PathBuf,
+    panel: SocketAddr,
     artifacts: PathBuf,
     accounts: Accounts,
     servers: Servers,
@@ -247,6 +255,7 @@ impl Supervision {
             setup.servers.clone(),
             setup.db.clone(),
             setup.clock.clone(),
+            Arc::clone(&console),
             status_tx,
             readiness,
             stop.clone(),
@@ -256,6 +265,8 @@ impl Supervision {
             inner: Arc::new(Inner {
                 db: setup.db,
                 clock: setup.clock,
+                data_dir: setup.data_dir,
+                panel: setup.panel,
                 artifacts: setup.artifacts,
                 accounts: setup.accounts,
                 servers: setup.servers,
@@ -281,7 +292,7 @@ impl Supervision {
     pub async fn boot(&self) -> Result<(), Error> {
         let (stored, state) = read_launch(&self.inner.db).await?;
         let Some(stored) = stored else {
-            info!("FXServer has no launch settings yet: the owner saves them on the Server page");
+            info!("FXServer has no launch settings yet: the owner saves them in the server setup");
             return Ok(());
         };
         if !stored.settings.auto_start {
@@ -681,12 +692,18 @@ impl Supervision {
 
 /// Keeps the panel's status in step with the supervisor's, the cause of its last change of state
 /// and the stored launch settings, which it hands to the supervisor as they change. A tripped
-/// crash loop breaker goes to the audit log: the server stays down until someone acts.
+/// crash loop breaker goes to the audit log: the server stays down until someone acts. What the
+/// cfg of a run that starts does against Observer goes to the console.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "what the follower works with, each handed over once as it starts"
+)]
 async fn follow(
     launches: Launches,
     servers: Servers,
     db: Database,
     clock: Clock,
+    console: Arc<ConsoleHub>,
     status: watch::Sender<ServerStatus>,
     mut launch: LaunchReadiness,
     stop: CancellationToken,
@@ -726,6 +743,16 @@ async fn follow(
                         if to != State::Crashed {
                             restart_at = None;
                         }
+                    }
+                    EventKind::CfgWarning { finding } => {
+                        console.push(
+                            event.generation,
+                            fx_console::LineKind::Observer,
+                            Some(OBSERVER.to_owned()),
+                            setup::console_note(&finding),
+                            LineFlags::default(),
+                        );
+                        continue;
                     }
                     EventKind::RestartScheduled { delay_ms } => {
                         let delay = SignedDuration::from_millis(i64::try_from(delay_ms).unwrap_or(i64::MAX));
@@ -939,6 +966,7 @@ mod tests {
             clock,
             accounts,
             data_dir: dir.path().join("data"),
+            panel: SocketAddr::from(([127, 0, 0, 1], 41975)),
             artifacts: dir.path().join("data/artifacts"),
             console_logs: dir.path().join("data/logs/console"),
             log: None,

@@ -333,7 +333,7 @@ fn unix_path_problem(path: &str) -> Option<LaunchProblem> {
 }
 
 /// The cfg becomes `+exec <cfg>`, read from the data folder: a plain relative path is all it needs.
-fn cfg_problem(cfg: &str, platform: Platform) -> Option<LaunchProblem> {
+pub fn cfg_problem(cfg: &str, platform: Platform) -> Option<LaunchProblem> {
     if let Some(problem) = text_problem(cfg) {
         return Some(problem);
     }

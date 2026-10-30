@@ -7,6 +7,7 @@ mod live;
 mod metrics;
 mod schedule;
 mod servers;
+mod setup;
 
 use std::net::SocketAddr;
 
@@ -121,6 +122,7 @@ impl Server {
                 accounts: accounts.clone(),
                 servers: servers.clone(),
                 data_dir: dir.path().join("data"),
+                panel: SocketAddr::from(([127, 0, 0, 1], 41975)),
                 artifacts: dir.path().join("data/artifacts"),
                 console_logs: dir.path().join("data/logs/console"),
                 log: None,

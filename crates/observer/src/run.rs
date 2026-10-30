@@ -66,6 +66,7 @@ pub async fn run(config: Config, args: RunArgs) -> anyhow::Result<()> {
             accounts: accounts.clone(),
             servers: servers.clone(),
             data_dir: paths.root.clone(),
+            panel: config.http.listen,
             artifacts: paths.artifacts.clone(),
             console_logs,
             log: Some(&console_log),

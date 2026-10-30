@@ -1217,6 +1217,7 @@ async fn a_write_that_outlasts_the_next_slot_does_not_cost_that_slot() {
             clock: services,
             accounts,
             data_dir: dir.path().join("data"),
+            panel: std::net::SocketAddr::from(([127, 0, 0, 1], 41975)),
             artifacts: dir.path().join("data/artifacts"),
             console_logs: dir.path().join("data/logs/console"),
             log: None,

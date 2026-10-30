@@ -6,13 +6,21 @@ import type { ApplyMode } from '../api/generated/ApplyMode';
 import type { ArtifactSettingsProblem } from '../api/generated/ArtifactSettingsProblem';
 import type { AuditAction } from '../api/generated/AuditAction';
 import type { BuildPlatform } from '../api/generated/BuildPlatform';
+import type { CfgFileProblem } from '../api/generated/CfgFileProblem';
+import type { CfgFileState } from '../api/generated/CfgFileState';
 import type { CommandRefusal } from '../api/generated/CommandRefusal';
+import type { EndpointProtocol } from '../api/generated/EndpointProtocol';
 import type { ErrorCode } from '../api/generated/ErrorCode';
+import type { FindingKind } from '../api/generated/FindingKind';
+import type { FindingParams } from '../api/generated/FindingParams';
+import type { FolderProblem } from '../api/generated/FolderProblem';
+import type { Game } from '../api/generated/Game';
 import type { HealthProblem } from '../api/generated/HealthProblem';
 import type { InstallFailure } from '../api/generated/InstallFailure';
 import type { JobKind } from '../api/generated/JobKind';
 import type { JobStep } from '../api/generated/JobStep';
 import type { LaunchProblem } from '../api/generated/LaunchProblem';
+import type { LicenceState } from '../api/generated/LicenceState';
 import type { LineKind } from '../api/generated/LineKind';
 import type { NoticeReason } from '../api/generated/NoticeReason';
 import type { OneSync } from '../api/generated/OneSync';
@@ -23,11 +31,13 @@ import type { Range } from '../api/generated/Range';
 import type { ScheduleMode } from '../api/generated/ScheduleMode';
 import type { ScheduleProblem } from '../api/generated/ScheduleProblem';
 import type { ServerState } from '../api/generated/ServerState';
+import type { Severity } from '../api/generated/Severity';
 import type { SpawnFailure } from '../api/generated/SpawnFailure';
 import type { StopSource } from '../api/generated/StopSource';
 import type { SupportLevel } from '../api/generated/SupportLevel';
 import { parsePermissions, permissionKeys, type PermissionKey } from '../auth/permissions';
 import type { LinkState } from '../live/realtime';
+import type { LaunchStep, SetupStep } from '../setup/state';
 import { formatBytes, formatDuration, formatNumber, plural } from './format';
 import { numberParam, stringParam } from './params';
 
@@ -129,6 +139,62 @@ const ranges = {
     '30d': '30d',
 } satisfies Record<Range, string>;
 
+/** An endpoint a finding names: `the TCP endpoint 0.0.0.0:30120`. */
+const endpointOf = ({ protocol, address }: FindingParams) => {
+    const name = protocol === 'udp' ? 'UDP' : 'TCP';
+    return address === undefined ? `a ${name} endpoint` : `the ${name} endpoint ${address}`;
+};
+
+// What a finding of the cfg says; the panel shows its file and line beside it.
+const cfgFindings = {
+    noEndpoint: () =>
+        'Adds no endpoint: FXServer would listen nowhere, so neither players nor Observer could reach it.',
+    endpointInvalid: (params) => `Adds ${endpointOf(params)}, which is not one ip:port address.`,
+    endpointOnPanel: (params) =>
+        `Adds ${endpointOf(params)} on the panel's port: FXServer and Observer cannot both listen there.`,
+    endpointUnpaired: (params) =>
+        `Adds ${endpointOf(params)} without its ${params.protocol === 'udp' ? 'TCP' : 'UDP'} twin: players cannot connect.`,
+    endpointDuplicate: (params) => `Adds ${endpointOf(params)} again.`,
+    endpointReserved: (params) =>
+        `Adds ${endpointOf(params)} among txAdmin's ports, 40120 to 40150: fine under Observer, but a txAdmin running on this host takes them.`,
+    portInUse: (params) =>
+        `Adds ${endpointOf(params)} on a port FXServer cannot listen on now: another program holds it, or the system reserves it.`,
+    startsMonitor: (params) =>
+        `Starts txAdmin's ${params.name ?? ''} resource, which only runs under txAdmin.`,
+    setsServerMode: () => "Sets txAdminServerMode: FXServer starts txAdmin's monitor resource by itself.",
+    setsMonitorMode: () => 'Sets monitorMode, which only txAdmin reads.',
+    setsObserverConvar: (params) =>
+        `Sets ${params.name ?? ''}, which Observer sets at each launch: Observer's value wins.`,
+    plusCommand: (params) => `Writes ${params.name ?? ''}, which FXServer only reads on its command line.`,
+    licenceMissing: () => 'Sets no licence key: FXServer stops at start.',
+    licenceUnusable: (params) =>
+        params.licence === 'placeholder'
+            ? 'Sets a placeholder for the licence key: FXServer stops at start.'
+            : 'Sets a licence key that does not look like one Cfx.re gives.',
+    maxClientsInvalid: (params) => `Sets sv_maxclients to ${params.value ?? ''}, outside 1 to 2048.`,
+    maxClientsNeedOneSync: (params) =>
+        `Allows ${count(params.count ?? 0, { one: 'player', other: 'players' })}: more than 32 needs OneSync on.`,
+    gameInvalid: (params) => `Sets gamename to ${params.value ?? ''}, neither gta5 nor rdr3.`,
+    gameTwice: (params) => `Sets gamename again, to ${params.value ?? ''}.`,
+    resourceMissing: (params) =>
+        `Starts ${params.name ?? ''}, which is no resource of the server folder or of the build.`,
+    resourceMissingMore: (params) =>
+        `Starts ${count(params.count ?? 0, { one: 'more resource that is', other: 'more resources that are' })} missing.`,
+    resourceNamedObserver: () =>
+        'Takes the name of the observer bridge, which Observer adds at each launch: rename this resource.',
+    execMissing: (params) => `Runs ${params.target ?? ''}, which cannot be read.`,
+    execOutside: (params) =>
+        `Runs ${params.target ?? ''}, outside the server folder: FXServer runs it, Observer did not check it.`,
+    execResource: (params) =>
+        `Runs ${params.target ?? ''} from a resource: FXServer runs it, Observer did not check it.`,
+    execTooDeep: (params) =>
+        `Runs ${params.target ?? ''}, more than 5 files deep: FXServer runs it, Observer did not check it.`,
+    execRepeated: (params) =>
+        `Runs ${params.target ?? ''} again: FXServer runs it each time, and a loop never ends.`,
+    editedByTxAdmin: (params) =>
+        `Holds ${count(params.count ?? 0, { one: 'line', other: 'lines' })} txAdmin commented out: Observer leaves them as they are.`,
+} satisfies Record<FindingKind, (params: FindingParams) => string>;
+
 export const en = {
     app: {
         name: 'Observer',
@@ -215,14 +281,15 @@ export const en = {
         build: (build: string) => `Build ${build}`,
         players: (players: string) => `${players} players`,
         notConfigured: 'FXServer has no launch settings yet.',
-        notConfiguredOwner: 'Set the data folder and the cfg on the Server page to start it.',
-        notConfiguredOther: 'The owner sets them on the Server page.',
+        notConfiguredOwner: 'The server setup points Observer at your server folder and its cfg.',
+        notConfiguredOther: 'The owner saves them in the server setup.',
         invalid: 'This host refuses the stored launch settings.',
         invalidOwner: 'Fix them on the Server page before the next start.',
         invalidOther: 'The owner fixes them on the Server page.',
         noBuild: 'No build is selected yet.',
         noBuildHint: 'Install or import one on the Artifacts page.',
         openServer: 'Open the Server page',
+        openSetup: 'Set up the server',
         openArtifacts: 'Open the Artifacts page',
         buildProbation: (build: string, until: string) => `Build ${build}, on probation until ${until}`,
         buildProbationWaiting: (build: string) => `Build ${build}, on probation`,
@@ -1332,6 +1399,7 @@ export const en = {
         nextStart: 'Changes apply at the next start of FXServer',
         loadFailed: 'The launch settings could not be loaded.',
         unsaved: 'Nothing is saved yet: Observer needs these settings to start FXServer.',
+        runSetup: 'Run the setup',
         changedElsewhere:
             'These settings were changed in another session since you opened them. Discard your changes to see theirs, then make yours again.',
         files: 'Files',
@@ -1390,6 +1458,174 @@ export const en = {
             duplicate: 'An argument above already sets this name.',
             tooMany: 'At most 64 extra arguments.',
         } satisfies Record<LaunchProblem, string>,
+    },
+    serverSetup: {
+        title: 'Server setup',
+        gloss: 'Point Observer at your server.',
+        steps: 'Setup steps',
+        stepNames: {
+            folder: 'Server folder',
+            cfg: 'Config file',
+            build: 'Build',
+            start: 'Start',
+        } satisfies Record<SetupStep, string>,
+        stepOf: (step: number, total: number, name: string) =>
+            `Step ${formatNumber('en', step)} of ${formatNumber('en', total)} · ${name}`,
+        said: { passed: 'done', failed: 'failed' },
+        back: 'Back',
+        continue: 'Continue',
+        changedElsewhere:
+            'The launch settings were changed in another session since the setup opened. Start again from them, then make your changes again.',
+        startAgain: 'Start again from the saved settings',
+        folder: {
+            lead: 'The folder of your existing server, with its resources folder and its cfg. FXServer runs from it in place: Observer copies nothing and writes nothing into it.',
+            label: 'Server folder',
+            hint: 'A full path on this host, such as C:\\FXServer\\server-data or /srv/fxserver/server-data.',
+            check: 'Check folder',
+            notChecked: 'Check the folder to go on.',
+            problems: {
+                invalidPath: 'This path cannot be used.',
+                missing: 'Nothing is at this path.',
+                notAFolder: 'This is a file, not a folder.',
+                unreadable: 'Observer cannot list this folder: check its permissions.',
+                insideObserver: "This is Observer's data folder, or inside it: use your server's folder.",
+                isResources: 'This is the resources folder: use the folder that holds it.',
+                noResources: 'This folder holds no resources folder.',
+                emptyResources: 'Its resources folder holds no resource.',
+            } satisfies Record<FolderProblem, string>,
+            suggestion: 'A folder nearby holds a server:',
+            useSuggestion: 'Use this folder',
+            accepted: 'FXServer can run from this folder.',
+            resources: (resources: number, categories: number, truncated: boolean) =>
+                `${truncated ? 'At least ' : ''}${count(resources, { one: 'resource', other: 'resources' })} in ${count(categories, { one: 'category', other: 'categories' })}${truncated ? ': the count stopped at 250 categories or 5,000 files and folders' : ''}.`,
+            withoutManifest: (names: string[]) =>
+                `Without fxmanifest.lua or __resource.lua, FXServer does not start ${list(names)}.`,
+            cfgFiles: 'Config files found',
+            noCfgFile: 'No cfg was found at the root or one folder down: name yours in the next step.',
+        },
+        cfg: {
+            lead: 'The cfg FXServer runs, and the files it runs in turn. Observer only reads them: fix what it finds in your files, then check again.',
+            found: 'Found in the folder',
+            detected: 'detected',
+            label: 'Config file',
+            hint: 'Relative to the server folder, such as server.cfg or configs/live.cfg.',
+            checkAgain: 'Check again',
+            checking: 'Reading the cfg',
+            notChecked: 'Check the cfg to go on.',
+            blocked: 'Fix what blocks in the cfg, then check again.',
+            problems: {
+                invalidPath: 'This path cannot be used.',
+                missing: 'No file is at this path in the server folder.',
+                notAFile: 'This is a folder, not a file.',
+                unreadable: 'Observer cannot read this file: check its permissions.',
+                tooLarge: 'This file is over 1 MB, more than a cfg ever holds.',
+            } satisfies Record<CfgFileProblem, string>,
+            folderRefused: 'The server folder no longer passes its check: go back to it.',
+            files: 'Files',
+            fileStates: {
+                read: 'Read',
+                missing: 'Missing',
+                outside: 'Outside the folder, not checked',
+                resource: 'In a resource, not checked',
+                tooDeep: 'Too deep, not checked',
+                repeated: 'Run again',
+                tooLarge: 'Over 1 MB, not checked',
+                tooMany: 'Past 32 files, not checked',
+            } satisfies Record<CfgFileState, string>,
+            facts: 'What the cfg sets',
+            game: 'Game',
+            games: { gta5: 'GTA V', rdr3: 'RedM' } satisfies Record<Game, string>,
+            defaultGame: 'GTA V, as FXServer runs without gamename',
+            endpoints: 'Endpoints',
+            protocols: { tcp: 'TCP', udp: 'UDP' } satisfies Record<EndpointProtocol, string>,
+            slots: 'Slots',
+            onesync: 'OneSync',
+            hostname: 'Hostname',
+            licence: 'Licence key',
+            licences: {
+                set: 'Set',
+                missing: 'Missing',
+                placeholder: 'Placeholder',
+                malformed: 'Not a Cfx.re key',
+                unknown: 'Not found: it may be in a cfg Observer did not check',
+            } satisfies Record<LicenceState, string>,
+            notSet: 'Not set',
+            none: 'None',
+            findings: 'Findings',
+            severities: { blocking: 'Blocking', warning: 'Warning', note: 'Note' } satisfies Record<
+                Severity,
+                string
+            >,
+            groups: {
+                blocking: (value: number) => `Blocking · ${formatNumber('en', value)}`,
+                warning: (value: number) =>
+                    `${plural('en', value, { one: 'Warning', other: 'Warnings' })} · ${formatNumber('en', value)}`,
+                note: (value: number) =>
+                    `${plural('en', value, { one: 'Note', other: 'Notes' })} · ${formatNumber('en', value)}`,
+            } satisfies Record<Severity, (value: number) => string>,
+            clean: 'Nothing in the cfg works against Observer.',
+            kinds: cfgFindings,
+        },
+        build: {
+            lead: 'The FXServer build Observer starts. Install the one Cfx.re recommends, or import a folder of FXServer you already have.',
+            selected: (build: string) => `FXServer starts build ${build}.`,
+            none: 'No build is selected yet.',
+            unknown: 'The builds are not known while the live link is down.',
+            install: 'Install the recommended build',
+            catalogLoading: 'Reading the builds Cfx.re lists.',
+            catalogFailed:
+                'The builds Cfx.re lists could not be read: import a folder instead, or try again later.',
+            noRecommended: 'Cfx.re recommends no build for this system right now: import a folder instead.',
+            recommendedInstalled: (build: string) =>
+                `The build Cfx.re recommends, ${build}, is installed already: use it below.`,
+            importFolder: 'Import a folder',
+            installed: 'Installed builds',
+            use: (build: string) => `Use build ${build}`,
+            skip: 'Skip for now',
+            openArtifacts: 'Open the Artifacts page',
+        },
+        start: {
+            lead: 'How FXServer starts, then what it starts from.',
+            summary: 'Summary',
+            folder: 'Server folder',
+            cfg: 'Config file',
+            build: 'Build',
+            noBuild: 'None yet',
+            findings: 'Findings',
+            findingCount: (warnings: number, notes: number) =>
+                warnings + notes === 0
+                    ? 'None'
+                    : list(
+                          [
+                              warnings > 0 ? count(warnings, { one: 'warning', other: 'warnings' }) : null,
+                              notes > 0 ? count(notes, { one: 'note', other: 'notes' }) : null,
+                          ].filter((part) => part !== null),
+                      ),
+            saveAndStart: 'Save and start',
+            saveAndRestart: 'Save and restart',
+            saveOnly: 'Save only',
+            withoutBuild:
+                'No build is selected, so FXServer cannot start yet: save now, then start it once a build is selected.',
+            starting: 'Saved. FXServer is starting: its first launch is followed below.',
+            startFailed: (reason: string) => `Saved, but FXServer did not start. ${reason}`,
+            argumentsRefused:
+                'This host refuses the extra arguments saved with the launch settings, which the setup keeps as they are. Fix them on the Server page, then save here again.',
+            openServer: 'Open the Server page',
+        },
+        launch: {
+            title: 'First launch',
+            steps: {
+                started: 'FXServer started',
+                port: 'Port open',
+                licence: 'Licence accepted',
+                bridge: 'Observer bridge connected',
+                ready: 'Server ready',
+            } satisfies Record<LaunchStep, string>,
+            ready: 'FXServer is ready: players can connect.',
+            unknown: 'The state of FXServer is not known while the live link is down.',
+            console: "The console shows FXServer's output, and what Observer found in the cfg as it started.",
+            openConsole: 'Open the console',
+        },
     },
     users: {
         title: 'Users',
@@ -1682,6 +1918,7 @@ export const en = {
             autoStart: 'Start with Observer',
             txadminEvents: 'txAdmin events',
             extraArguments: 'Extra arguments',
+            setup: 'From the server setup',
             command: 'Command',
             automatic: 'With Observer',
             reason: 'Reason',
@@ -1847,7 +2084,7 @@ export const en = {
         unknown_permissions: 'This Observer does not know some of these permissions. Reload the page.',
         invalid_launch_settings: 'Some settings need fixing. Each one says why below its field.',
         launch_not_configured:
-            'FXServer has no launch settings yet. The owner saves them on the Server page.',
+            'FXServer has no launch settings yet. The owner saves them in the server setup.',
         launch_failed: (params) => {
             const reason = stringParam(params, 'reason');
             return isSpawnFailure(reason)
@@ -1919,6 +2156,17 @@ export const en = {
         crash_file_not_found: 'This file is no longer on the host.',
         crash_file_too_large: (params) =>
             `This file is over ${formatBytes('en', numberParam(params, 'maxBytes'))}: it stays on the host, in Observer's data folder.`,
+        setup_blocked: (params) => {
+            if (typeof params.folder === 'string') {
+                return 'The server folder no longer passes its check, so nothing was saved: the check below says why.';
+            }
+            if (typeof params.cfg === 'string') {
+                return 'The cfg can no longer be read, so nothing was saved: the check below says why.';
+            }
+            return Array.isArray(params.findings)
+                ? 'The cfg now keeps FXServer from starting under Observer, so nothing was saved: the check below says what blocks.'
+                : 'The server folder or its cfg keeps FXServer from starting under Observer. Check them again, fix what blocks, then save.';
+        },
     } satisfies Record<ErrorCode, ErrorMessage>,
     failure: {
         unknown: 'Something went wrong. Try again.',

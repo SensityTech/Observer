@@ -128,6 +128,9 @@ pub enum ErrorCode {
     CrashFileNotFound,
     /// The file is too large to go through the panel: it stays on the host. Params: `maxBytes`.
     CrashFileTooLarge,
+    /// The server folder or its cfg keeps FXServer from starting under Observer. Params: `folder`,
+    /// a `FolderProblem`; or `cfg`, a `CfgFileProblem`; or `findings`, the blocking `FindingKind`s.
+    SetupBlocked,
 }
 
 /// The body of every error response.

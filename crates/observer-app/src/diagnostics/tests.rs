@@ -1,5 +1,6 @@
 //! The diagnostics' driver fed with supervisor events, over a real database and a manual clock.
 
+use std::net::SocketAddr;
 use std::path::PathBuf;
 
 use observer_domain::diagnostics::{SyscallGroup, ThreadState};
@@ -42,6 +43,7 @@ async fn lab() -> Lab {
             clock: clock.clone(),
             accounts,
             data_dir: data_dir.clone(),
+            panel: SocketAddr::from(([127, 0, 0, 1], 41975)),
             artifacts: data_dir.join("artifacts"),
             console_logs: data_dir.join("logs/console"),
             log: None,

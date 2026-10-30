@@ -11,16 +11,7 @@ import {
     X,
     type LucideIcon,
 } from 'lucide-react';
-import {
-    useEffect,
-    useId,
-    useRef,
-    useState,
-    type ComponentProps,
-    type FormEvent,
-    type ReactNode,
-    type Ref,
-} from 'react';
+import { useEffect, useId, useRef, useState, type ComponentProps, type FormEvent, type Ref } from 'react';
 
 import { ApiError } from '../api/client';
 import { Permission } from '../api/generated/Permission';
@@ -43,6 +34,7 @@ import {
 } from '../api/schedule';
 import { allows, useMe } from '../auth/me';
 import { Button, buttonVariants } from '../components/Button';
+import { Card } from '../components/Card';
 import { Chip, chipVariants } from '../components/Chip';
 import { Dialog } from '../components/Dialog';
 import { FieldError, TextField, inputClass } from '../components/Field';
@@ -146,32 +138,6 @@ function ZoneNote({ zone, now }: { zone: string; now: number }) {
             <Clock size={14} strokeWidth={1.5} aria-hidden="true" />
             {known ? t.schedule.zone(zone, offset(now)) : t.schedule.zoneUnknown(zone)}
         </span>
-    );
-}
-
-function Card({
-    id,
-    icon: Icon,
-    title,
-    children,
-}: {
-    id: string;
-    icon: LucideIcon;
-    title: string;
-    children: ReactNode;
-}) {
-    return (
-        <section className="card" aria-labelledby={id}>
-            <div className="card-head">
-                <span className="grid size-6 place-items-center rounded-[6px] border border-line bg-surface-2 text-ink-2">
-                    <Icon size={14} strokeWidth={1.5} aria-hidden="true" />
-                </span>
-                <h2 id={id} className="text-card text-ink">
-                    {title}
-                </h2>
-            </div>
-            <div className="p-5 max-md:p-4">{children}</div>
-        </section>
     );
 }
 

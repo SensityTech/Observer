@@ -1,6 +1,7 @@
 //! Everything about FXServer that is not operating system plumbing.
 
 pub mod bridge;
+pub mod cfg;
 pub mod command;
 pub mod console;
 pub mod crashes;
@@ -10,6 +11,7 @@ pub mod launch;
 pub mod layout;
 pub mod perf;
 pub mod recovery;
+pub mod server_data;
 pub mod stdin;
 pub mod supervisor;
 pub mod trace;

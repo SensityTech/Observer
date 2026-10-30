@@ -3,6 +3,7 @@ import { expect, test, type Page } from '@playwright/test';
 import { en } from '../src/i18n/en';
 
 const PASSWORD = 'e2e-owner-passphrase';
+const setup = en.serverSetup;
 
 const env = (name: string) => {
     const value = process.env[name];
@@ -36,65 +37,59 @@ test.describe.serial('Observer in a browser', () => {
         await expect(page.getByRole('heading', { level: 1 })).toContainText(en.overview.title);
     };
 
-    test('the owner sets up Observer from the printed link and signs in again', async () => {
+    test('the owner sets up Observer from the printed link, then the server through its setup', async () => {
         await page.goto(env('E2E_SETUP_LINK'));
         await page.getByLabel(en.setup.username).fill('ada');
         await page.getByLabel(en.setup.password, { exact: true }).fill(PASSWORD);
         await page.getByLabel(en.setup.confirm).fill(PASSWORD);
         await page.getByRole('button', { name: en.setup.submit }).click();
-        await expect(page.getByRole('heading', { level: 1 })).toContainText(en.overview.title);
+        await expect(page.getByRole('heading', { level: 1 })).toContainText(setup.title);
 
+        await page.getByRole('textbox', { name: setup.folder.label }).fill(env('E2E_SERVER_DATA'));
+        await page.getByRole('button', { name: setup.folder.check }).click();
+        await expect(page.getByText(setup.folder.accepted)).toBeVisible();
+        await page.getByRole('button', { name: setup.continue }).click();
+
+        // Entering the step checks the cfg: without a licence key it warns, and nothing blocks.
+        await expect(page.getByText(setup.cfg.kinds.licenceMissing())).toBeVisible();
+        await page.getByRole('button', { name: setup.continue }).click();
+
+        const build = env('E2E_BUILD');
+        await page.getByRole('button', { name: setup.build.use(build) }).click();
+        const dialog = page.getByRole('dialog', { name: en.artifacts.use.title(build) });
+        await expect(
+            dialog.getByRole('radio', { name: new RegExp(en.artifacts.use.nextStart) }),
+        ).toBeChecked();
+        await dialog.getByRole('button', { name: en.artifacts.use.confirm, exact: true }).click();
+        await expect(page.getByText(setup.build.selected(build))).toBeVisible();
+        await page.getByRole('button', { name: setup.continue }).click();
+
+        await page.getByRole('button', { name: setup.start.saveAndStart }).click();
+        // A sign-in a moment ago may stand for the password; otherwise the panel asks for it.
+        const reauth = page.locator('dialog[open]').filter({ hasText: en.reauth.title });
+        const starting = page.getByText(setup.start.starting);
+        await expect(starting.or(reauth)).toBeVisible();
+        if (await reauth.isVisible()) {
+            await reauth.getByLabel(en.reauth.password, { exact: true }).fill(PASSWORD);
+            await reauth.getByRole('button', { name: en.reauth.submit }).click();
+        }
+        await expect(starting).toBeVisible();
+        // Ready once the fake's bridge has reported in.
+        await expect(page.getByText(setup.launch.ready)).toBeVisible();
+        await expect(status()).toContainText(en.server_state.states.online);
+    });
+
+    test('the owner signs in again and lands on the Overview, the server being set up', async () => {
         await page.getByRole('button', { name: en.account.menu('ada') }).click();
         await page.getByRole('menuitem', { name: en.account.signOut }).click();
         await page.getByLabel(en.login.username).fill('ada');
         await page.getByLabel(en.login.password, { exact: true }).fill(PASSWORD);
         await page.getByRole('button', { name: en.login.submit }).click();
         await expect(page.getByRole('heading', { level: 1 })).toContainText(en.overview.title);
-
-        await page.getByRole('link', { name: en.nav.server, exact: true }).click();
-        await page.getByLabel(en.server.dataPath).fill(env('E2E_SERVER_DATA'));
-        await page.getByLabel(en.server.cfgFile).fill('server.cfg');
-        await page.getByRole('button', { name: en.server.save }).click();
-        // A sign-in a moment ago may stand for the password; otherwise the panel asks for it.
-        const reauth = page.locator('dialog[open]').filter({ hasText: en.reauth.title });
-        const saved = page.getByText(en.server.saved);
-        await expect(saved.or(reauth)).toBeVisible();
-        if (await reauth.isVisible()) {
-            await reauth.getByLabel(en.reauth.password, { exact: true }).fill(PASSWORD);
-            await reauth.getByRole('button', { name: en.reauth.submit }).click();
-        }
-        await expect(saved).toBeVisible();
     });
 
-    test('FXServer waits for a build, then starts the one the owner picks', async () => {
+    test('FXServer restarts, stops and starts from the top bar', async () => {
         await overview();
-        const start = controls().getByRole('button', { name: en.controls.start, exact: true });
-        await expect(start).toHaveAttribute('title', en.controls.noBuild);
-        // Off, yet pressable: pressing it says why, as it does for a keyboard.
-        await start.click({ force: true });
-        await expect(
-            page.getByText(en.controls.unavailable(en.controls.start, en.controls.noBuild)),
-        ).toBeVisible();
-
-        const build = env('E2E_BUILD');
-        await page.getByRole('link', { name: en.nav.artifacts, exact: true }).click();
-        await page
-            .getByRole('row')
-            .filter({ hasText: build })
-            .getByRole('button', { name: en.artifacts.installed.use, exact: true })
-            .click();
-        const dialog = page.getByRole('dialog', { name: en.artifacts.use.title(build) });
-        await expect(
-            dialog.getByRole('radio', { name: new RegExp(en.artifacts.use.nextStart) }),
-        ).toBeChecked();
-        await dialog.getByRole('button', { name: en.artifacts.use.confirm, exact: true }).click();
-        await expect(page.getByText(en.artifacts.use.done.nextStart(build))).toBeVisible();
-    });
-
-    test('FXServer starts, restarts and stops from the top bar', async () => {
-        await overview();
-        await controls().getByRole('button', { name: en.controls.start, exact: true }).click();
-        // Online once the fake's bridge has reported in.
         await expect(status()).toContainText(en.server_state.states.online);
 
         await controls().getByRole('button', { name: en.controls.restart, exact: true }).click();

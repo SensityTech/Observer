@@ -4,7 +4,7 @@
 #![allow(clippy::unwrap_used)]
 
 use std::fs;
-use std::net::{IpAddr, Ipv4Addr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex, PoisonError};
 use std::time::{Duration, Instant};
@@ -29,6 +29,7 @@ use observer_domain::schedule::{
 use observer_domain::server::{
     CommandAck, ConsoleLine, Delivery, LINE_MASKED, LineKind, ServerState, ServerStatus, StateCause,
 };
+use observer_domain::server_data::{CfgCheck, FindingKind};
 use observer_fxserver::console::plain;
 use observer_fxserver::health::HealthLimits;
 use observer_fxserver::recovery::RecoveryPolicy;
@@ -138,6 +139,7 @@ impl Services {
             accounts: self.accounts.clone(),
             servers: self.servers.clone(),
             data_dir: dir.join("observer-data"),
+            panel: SocketAddr::from(([127, 0, 0, 1], 41975)),
             artifacts: dir.join("observer-data/artifacts"),
             console_logs: dir.join("observer-data/logs/console"),
             log: None,
@@ -1341,6 +1343,45 @@ async fn a_connection_the_server_holds_reaches_the_topic_open_then_closed() {
             .iter()
             .any(|listener| listener.role == Some(ListenerRole::Game)),
         "{listeners:?}"
+    );
+    observer.stop_observer().await;
+}
+
+#[tokio::test]
+async fn a_started_server_has_its_cfg_noted_and_keeps_its_port_out_of_the_setup_check() {
+    let mut observer = Observer::new(false).await;
+    let data = observer.dir.path().join("server-data");
+    fs::create_dir_all(data.join("resources/chat")).unwrap();
+    fs::write(
+        data.join("resources/chat/fxmanifest.lua"),
+        "fx_version 'cerulean'\n",
+    )
+    .unwrap();
+    let check = CfgCheck {
+        data_path: data.to_str().unwrap().to_owned(),
+        cfg_file: "server.cfg".to_owned(),
+        onesync: OneSync::On,
+    };
+
+    observer.supervision.start_server(&observer.owner).await.unwrap();
+    observer.state(ServerState::Online).await;
+    let note = observer.console_until("server.cfg sets no licence key").await;
+    let report = observer.supervision.check_cfg(check).await.unwrap();
+
+    assert_eq!(
+        (note.2, note.3, note.4.as_deref()),
+        (1, LineKind::Observer, Some("observer"))
+    );
+    let endpoint = &report.facts.unwrap().endpoints[0].address;
+    assert!(
+        std::net::TcpListener::bind(endpoint).is_err(),
+        "FXServer holds {endpoint}"
+    );
+    let kinds: Vec<_> = report.findings.iter().map(|finding| finding.kind).collect();
+    assert_eq!(
+        kinds,
+        [FindingKind::LicenceMissing],
+        "a running server's own ports are not in use"
     );
     observer.stop_observer().await;
 }

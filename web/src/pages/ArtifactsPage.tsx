@@ -1,15 +1,11 @@
 import { useMutation, useQuery, useQueryClient, type UseQueryResult } from '@tanstack/react-query';
 import {
     Check,
-    Circle,
-    CircleCheck,
-    CircleX,
     Clock,
     Copy,
     Download,
     FolderInput,
     HardDrive,
-    LoaderCircle,
     Package,
     Plus,
     RefreshCw,
@@ -59,11 +55,13 @@ import { launchProblem, launchQuery } from '../api/launch';
 import { useArtifacts } from '../artifacts/context';
 import { allows, useMe } from '../auth/me';
 import { Button } from '../components/Button';
+import { Card } from '../components/Card';
 import { Checkbox } from '../components/Checkbox';
 import { Chip } from '../components/Chip';
 import { Dialog } from '../components/Dialog';
 import { FieldError, TextField, inputClass } from '../components/Field';
 import { Notice } from '../components/Notice';
+import { Steps } from '../components/Steps';
 import { table } from '../components/table';
 import { errorMessage } from '../i18n/errors';
 import { formatClock, formatDay, knownZone, zoneOffset } from '../i18n/format';
@@ -79,7 +77,7 @@ import { isRunning } from '../server/state';
  * `focus`: the control it answers goes away with it, so the keyboard moves to the notice. `until`:
  * the live status that overtakes it, after which the page shows what came of it instead.
  */
-type Outcome = {
+export type Outcome = {
     tone: 'success' | 'warning' | 'danger';
     message: string;
     focus?: boolean;
@@ -274,40 +272,6 @@ function ZoneNote() {
             <Clock size={14} strokeWidth={1.5} aria-hidden="true" />
             {t.artifacts.zone(times)}
         </span>
-    );
-}
-
-function Card({
-    id,
-    icon: Icon,
-    title,
-    aside,
-    flush = false,
-    children,
-}: {
-    id: string;
-    icon: LucideIcon;
-    title: string;
-    aside?: ReactNode;
-    /** The body runs to the card's edges, as a table does. */
-    flush?: boolean;
-    children: ReactNode;
-}) {
-    return (
-        <section className="card" aria-labelledby={id}>
-            <div className="card-head flex-wrap">
-                <span className="grid size-6 place-items-center rounded-[6px] border border-line bg-surface-2 text-ink-2">
-                    <Icon size={14} strokeWidth={1.5} aria-hidden="true" />
-                </span>
-                <h2 id={id} className="text-card text-ink">
-                    {title}
-                </h2>
-                {aside !== undefined && (
-                    <div className="ml-auto flex flex-wrap items-center gap-2">{aside}</div>
-                )}
-            </div>
-            <div className={flush ? '' : 'p-5 max-md:p-4'}>{children}</div>
-        </section>
     );
 }
 
@@ -720,39 +684,17 @@ export function JobCard({
             }
         >
             <div className="flex flex-col gap-4">
-                <ol className="flex flex-wrap gap-x-4 gap-y-2" aria-label={words.title}>
-                    {steps.map((step, index) => {
-                        const isCurrent = index === current;
-                        const passed = index < current || (job.state === 'installed' && index <= current);
-                        const failed = isCurrent && (job.state === 'failed' || job.state === 'cancelled');
-                        const Icon = failed
-                            ? CircleX
-                            : passed
-                              ? CircleCheck
-                              : isCurrent && running
-                                ? LoaderCircle
-                                : Circle;
-                        return (
-                            <li
-                                key={step}
-                                aria-current={isCurrent ? 'step' : undefined}
-                                className={cn(
-                                    'inline-flex items-center gap-1.5 text-ui',
-                                    isCurrent ? 'font-medium text-ink' : passed ? 'text-ink-2' : 'text-ink-3',
-                                    failed && 'text-danger-ink',
-                                )}
-                            >
-                                <Icon
-                                    size={14}
-                                    strokeWidth={1.75}
-                                    className={cn(isCurrent && running && 'animate-spin')}
-                                    aria-hidden="true"
-                                />
-                                {words.steps[step]}
-                            </li>
-                        );
-                    })}
-                </ol>
+                <Steps
+                    label={words.title}
+                    steps={steps.map((step, index) => ({
+                        key: step,
+                        label: words.steps[step],
+                        passed: index < current || (job.state === 'installed' && index <= current),
+                        failed: index === current && (job.state === 'failed' || job.state === 'cancelled'),
+                    }))}
+                    current={current}
+                    busy={running}
+                />
                 {running && (
                     <>
                         <progress

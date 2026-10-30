@@ -92,7 +92,8 @@ fn status(code: ErrorCode) -> StatusCode {
         | ErrorCode::EndOfLife
         | ErrorCode::KvpRollback
         | ErrorCode::NoBuildSelected
-        | ErrorCode::CrashFileTooLarge => StatusCode::UNPROCESSABLE_ENTITY,
+        | ErrorCode::CrashFileTooLarge
+        | ErrorCode::SetupBlocked => StatusCode::UNPROCESSABLE_ENTITY,
         ErrorCode::JsonRequired => StatusCode::UNSUPPORTED_MEDIA_TYPE,
         ErrorCode::UnknownHost => StatusCode::MISDIRECTED_REQUEST,
         ErrorCode::InvalidUsername
