@@ -124,9 +124,7 @@ export const checklist = (before: ServerStatus | null, status: ServerStatus): Ch
         return { passed: LAUNCH_STEPS.length, failed: null, waiting: false };
     }
     const failed = failedAt(status);
-    return {
-        passed: 1,
-        failed,
-        waiting: failed === null && (status.state === 'starting' || status.state === 'hung'),
-    };
+    // A run being stopped is followed to its end: stopped, crashed, or the new run of a restart.
+    const going = status.state === 'starting' || status.state === 'hung' || status.state === 'stopping';
+    return { passed: 1, failed, waiting: failed === null && going };
 };

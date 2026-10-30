@@ -222,6 +222,17 @@ describe('checklist', () => {
         expect(checklist(running, stopping)).toEqual({ passed: 0, failed: null, waiting: true });
     });
 
+    it('should keep waiting while the new run stops, for what it ends as', () => {
+        const stopping = status({
+            state: 'stopping',
+            generation: 4,
+            since: '2026-10-30T14:00:05Z',
+            cause: { kind: 'requested', by: 'ada' },
+        });
+
+        expect(checklist(before, stopping)).toEqual({ passed: 1, failed: null, waiting: true });
+    });
+
     it('should end without a failure when someone stops the new run', () => {
         const stopped = status({
             generation: 4,
