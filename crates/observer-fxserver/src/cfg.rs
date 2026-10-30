@@ -7,7 +7,7 @@ use std::fs::{self, File};
 use std::io::{self, Read};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpListener, UdpSocket};
 use std::ops::RangeInclusive;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf, Prefix};
 
 use observer_domain::launch::{MAX_TEXT_CHARS, OneSync};
 use observer_domain::server_data::{
@@ -388,6 +388,13 @@ impl Scanner<'_> {
             self.report_at(FindingKind::ExecTooDeep, place, params);
             return;
         }
+        // Resolving a path on another host reaches out to it, with Observer's credentials.
+        if remote(target) {
+            self.unchecked = true;
+            self.list(written, CfgFileState::Outside);
+            self.report_at(FindingKind::ExecOutside, place, params);
+            return;
+        }
         if self.looked_up == MAX_LOOKUPS {
             self.unchecked = true;
             self.list(written, CfgFileState::TooMany);
@@ -727,6 +734,14 @@ fn licence_state(key: &str) -> LicenceState {
     } else {
         LicenceState::Malformed
     }
+}
+
+/// Whether `target` names a share of another host, or a device, rather than a path on a drive.
+fn remote(target: &str) -> bool {
+    matches!(
+        Path::new(target).components().next(),
+        Some(Component::Prefix(prefix)) if !matches!(prefix.kind(), Prefix::Disk(_) | Prefix::VerbatimDisk(_))
+    )
 }
 
 fn slashed(relative: &Path) -> String {
@@ -1247,6 +1262,33 @@ mod tests {
         );
         assert_eq!(scan.findings, []);
         assert_eq!(scan.endpoint, Some(SocketAddr::from(([127, 0, 0, 1], 30140))));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_target_on_another_host_is_left_unresolved() {
+        let folder = Folder::new();
+        let launch = Context {
+            follow_outside: true,
+            ..context()
+        };
+
+        let scan = folder.scan_with(
+            &format!(
+                "{QUIET}{}\n{}\n",
+                r"exec \\localhost\observer-lab\net.cfg", r#"exec "//localhost/observer-lab/keys.cfg""#
+            ),
+            &launch,
+        );
+
+        assert_eq!(
+            states(&scan),
+            [
+                ("server.cfg", CfgFileState::Read),
+                (r"\\localhost\observer-lab\net.cfg", CfgFileState::Outside),
+                ("//localhost/observer-lab/keys.cfg", CfgFileState::Outside),
+            ]
+        );
     }
 
     #[test]
