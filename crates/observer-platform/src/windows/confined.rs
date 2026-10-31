@@ -79,6 +79,7 @@ impl Folder {
 #[derive(Debug)]
 pub struct TemporaryFile {
     file: File,
+    folder: RelativePath,
     name: String,
 }
 
@@ -104,7 +105,8 @@ impl ConfinedTree {
         if !attributes(&handle)?.is_folder() {
             return Err(io::Error::from(io::ErrorKind::NotADirectory));
         }
-        let final_path = final_path(&handle)?;
+        // A volume's root reads `\Device\HarddiskVolume3\`; its entries follow without a second `\`.
+        let final_path = final_path(&handle)?.trim_end_matches('\\').to_owned();
         Ok(Self {
             root: Folder {
                 handle,
@@ -194,6 +196,17 @@ impl ConfinedTree {
 
     /// The folder's entries, links and mount points left out.
     pub fn list(&self, folder: &Folder) -> Result<Vec<Entry>, TreeError> {
+        // A handle of its own: duplicated handles share one enumeration, which two listings of
+        // the same folder would restart under each other.
+        let listing = nt_open(
+            &folder.handle,
+            "",
+            FOLDER_ACCESS,
+            FOLDER_SHARE,
+            FILE_OPEN,
+            FILE_DIRECTORY_FILE,
+            0,
+        )?;
         let mut entries = Vec::new();
         let mut buffer = vec![0u64; 8192];
         let mut class: FILE_INFO_BY_HANDLE_CLASS = FileIdExtdDirectoryRestartInfo;
@@ -203,12 +216,7 @@ impl ConfinedTree {
             // SAFETY: the folder handle is open and synchronous, and `buffer` holds `size`
             // writable bytes, aligned for the entries the call writes there.
             let filled = unsafe {
-                GetFileInformationByHandleEx(
-                    folder.handle.as_raw_handle(),
-                    class,
-                    buffer.as_mut_ptr().cast(),
-                    size,
-                )
+                GetFileInformationByHandleEx(listing.as_raw_handle(), class, buffer.as_mut_ptr().cast(), size)
             };
             if filled == 0 {
                 let error = io::Error::last_os_error();
@@ -223,10 +231,20 @@ impl ConfinedTree {
             loop {
                 // SAFETY: the call filled the buffer with a chain of entries; `offset` is 0 or a
                 // `NextEntryOffset` it wrote, so it points at an entry inside the buffer.
-                let info = unsafe { &*buffer.as_ptr().cast::<FILE_ID_EXTD_DIR_INFO>().byte_add(offset) };
+                let entry = unsafe { buffer.as_ptr().cast::<FILE_ID_EXTD_DIR_INFO>().byte_add(offset) };
+                // SAFETY: as above, the entry lies inside the buffer.
+                let info = unsafe { &*entry };
                 let units = info.FileNameLength as usize / size_of::<u16>();
-                // SAFETY: the entry's name follows it in the buffer, `FileNameLength` bytes long.
-                let name = unsafe { std::slice::from_raw_parts(info.FileName.as_ptr(), units) };
+                // SAFETY: the entry's name starts at its `FileName` field and runs `FileNameLength`
+                // bytes inside the buffer; the pointer is taken from the buffer, not the field.
+                let name = unsafe {
+                    std::slice::from_raw_parts(
+                        entry
+                            .byte_add(offset_of!(FILE_ID_EXTD_DIR_INFO, FileName))
+                            .cast::<u16>(),
+                        units,
+                    )
+                };
                 if let Some(entry) = listed_entry(info, name) {
                     entries.push(entry);
                 }
@@ -241,6 +259,7 @@ impl ConfinedTree {
 
     /// Creates a new file under `name` in the folder, to be committed under another name.
     pub fn create_temporary(&self, folder: &Folder, name: &str) -> Result<TemporaryFile, TreeError> {
+        child(folder, name)?;
         let file = nt_open(
             &folder.handle,
             name,
@@ -252,36 +271,43 @@ impl ConfinedTree {
         )?;
         Ok(TemporaryFile {
             file,
+            folder: folder.path.clone(),
             name: name.to_owned(),
         })
     }
 
     /// Makes the temporary file the folder's `target`, by one rename. Without `replace`, an entry
-    /// already named `target` refuses the commit (`Exists`) and the temporary file stays.
+    /// already named `target` refuses the commit (`Exists`). On any refusal the temporary file is
+    /// removed: the upload is over either way.
     pub fn commit(
+        &self,
+        folder: &Folder,
+        temporary: TemporaryFile,
+        target: &str,
+        replace: bool,
+    ) -> Result<(), TreeError> {
+        let committed = self.commit_inner(folder, &temporary, target, replace);
+        if committed.is_err() {
+            let _ = self.delete_handle(&temporary.file);
+        }
+        drop(temporary);
+        committed
+    }
+
+    fn commit_inner(
         &self,
         folder: &Folder,
         temporary: &TemporaryFile,
         target: &str,
         replace: bool,
     ) -> Result<(), TreeError> {
+        if temporary.folder != folder.path {
+            return Err(TreeError::Escaped);
+        }
+        let path = child(folder, target)?;
         temporary.file.sync_all().map_err(TreeError::Io)?;
-        if replace
-            && let Ok(existing) = nt_open(
-                &folder.handle,
-                target,
-                FILE_READ_ATTRIBUTES | SYNCHRONIZE,
-                FILE_SHARE,
-                FILE_OPEN,
-                FILE_NON_DIRECTORY_FILE,
-                0,
-            )
-        {
-            let attributes = attributes(&existing).map_err(TreeError::Io)?;
-            attributes.refuse_reparse()?;
-            if attributes.file_attributes & FILE_ATTRIBUTE_READONLY != 0 {
-                return Err(TreeError::ReadOnly);
-            }
+        if replace {
+            self.check_replaced(folder, target, &path)?;
         }
         retried(|| self.rename_handle(&temporary.file, &folder.handle, target, replace))
     }
@@ -302,6 +328,8 @@ impl ConfinedTree {
         new_name: &str,
         replace: bool,
     ) -> Result<(), TreeError> {
+        let source_path = child(from, name)?;
+        let target_path = child(to, new_name)?;
         let source = nt_open(
             &from.handle,
             name,
@@ -316,6 +344,10 @@ impl ConfinedTree {
         if !attributes.is_folder() && links(&source)? > 1 {
             return Err(TreeError::HardLink);
         }
+        self.check_final(&source, &source_path)?;
+        if replace {
+            self.check_replaced(to, new_name, &target_path)?;
+        }
         retried(|| self.rename_handle(&source, &to.handle, new_name, replace))
     }
 
@@ -329,6 +361,7 @@ impl ConfinedTree {
     }
 
     pub fn make_folder(&self, folder: &Folder, name: &str) -> Result<(), TreeError> {
+        child(folder, name)?;
         nt_open(
             &folder.handle,
             name,
@@ -425,6 +458,7 @@ impl ConfinedTree {
         name: &str,
         kind: NTCREATEFILE_CREATE_OPTIONS,
     ) -> Result<(), TreeError> {
+        let path = child(folder, name)?;
         let handle = nt_open(
             &folder.handle,
             name,
@@ -442,8 +476,42 @@ impl ConfinedTree {
         if !attributes.is_folder() && links(&handle)? > 1 {
             return Err(TreeError::HardLink);
         }
+        self.check_final(&handle, &path)?;
         self.delete_handle(&handle)
     }
+
+    /// Checks the file a replacing rename would take the place of, when one is there: reached
+    /// under its own name, a regular file with one link, and not read-only.
+    fn check_replaced(&self, folder: &Folder, name: &str, path: &RelativePath) -> Result<(), TreeError> {
+        let existing = match nt_open(
+            &folder.handle,
+            name,
+            FILE_READ_ATTRIBUTES | SYNCHRONIZE,
+            FILE_SHARE,
+            FILE_OPEN,
+            FILE_NON_DIRECTORY_FILE,
+            0,
+        ) {
+            Ok(existing) => existing,
+            Err(TreeError::NotFound) => return Ok(()),
+            Err(error) => return Err(error),
+        };
+        let attributes = attributes(&existing).map_err(TreeError::Io)?;
+        attributes.refuse_reparse()?;
+        if links(&existing)? > 1 {
+            return Err(TreeError::HardLink);
+        }
+        self.check_final(&existing, path)?;
+        if attributes.file_attributes & FILE_ATTRIBUTE_READONLY != 0 {
+            return Err(TreeError::ReadOnly);
+        }
+        Ok(())
+    }
+}
+
+/// The path of `name` in the folder, refusing a name that is not one component.
+fn child(folder: &Folder, name: &str) -> Result<RelativePath, TreeError> {
+    folder.path.join(name).map_err(|_| TreeError::Escaped)
 }
 
 /// Retries what a scan or another program holding the file briefly can refuse.
@@ -670,7 +738,8 @@ fn set_rename(
     let wide: Vec<u16> = std::ffi::OsStr::new(name).encode_wide().collect();
     let name_offset = offset_of!(FILE_RENAME_INFO, FileName);
     let name_bytes = u32::try_from(wide.len() * size_of::<u16>()).map_err(|_| STATUS_INVALID_PARAMETER)?;
-    let size = name_offset + wide.len() * size_of::<u16>();
+    // Never shorter than the structure itself, which a one-character name would be.
+    let size = (name_offset + wide.len() * size_of::<u16>()).max(size_of::<FILE_RENAME_INFO>());
     // u64 units keep the structure aligned; it is followed by the name, without a terminator.
     let mut buffer = vec![0u64; size.div_ceil(size_of::<u64>())];
     let info = buffer.as_mut_ptr().cast::<FILE_RENAME_INFO>();

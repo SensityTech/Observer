@@ -48,6 +48,7 @@ impl Folder {
 #[derive(Debug)]
 pub struct TemporaryFile {
     file: File,
+    folder: RelativePath,
     name: String,
 }
 
@@ -128,7 +129,11 @@ impl ConfinedTree {
         };
         let parent = self.open_folder(&parent)?;
         // Non-blocking, so that a pipe in the file's place never makes the open wait.
-        let handle = self.open_in(&parent.handle, name, OFlags::RDONLY | OFlags::NONBLOCK)?;
+        let handle = self.open_in(
+            &parent.handle,
+            name,
+            OFlags::RDONLY | OFlags::NONBLOCK | OFlags::NOCTTY,
+        )?;
         let stat = rustix::fs::fstat(&handle).map_err(errno)?;
         refuse_unless_regular(&stat)?;
         self.check_final(&handle, path)?;
@@ -173,24 +178,46 @@ impl ConfinedTree {
 
     /// Creates a new file under `name` in the folder, to be committed under another name.
     pub fn create_temporary(&self, folder: &Folder, name: &str) -> Result<TemporaryFile, TreeError> {
+        self.in_place(folder, name)?;
         let flags = OFlags::RDWR | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC;
         let handle =
             rustix::fs::openat(&folder.handle, name, flags, Mode::from_raw_mode(0o666)).map_err(errno)?;
         Ok(TemporaryFile {
             file: File::from(handle),
+            folder: folder.path.clone(),
             name: name.to_owned(),
         })
     }
 
     /// Makes the temporary file the folder's `target`, by one rename. Without `replace`, an entry
-    /// already named `target` refuses the commit (`Exists`) and the temporary file stays.
+    /// already named `target` refuses the commit (`Exists`). On any refusal the temporary file is
+    /// removed: the upload is over either way.
     pub fn commit(
+        &self,
+        folder: &Folder,
+        temporary: TemporaryFile,
+        target: &str,
+        replace: bool,
+    ) -> Result<(), TreeError> {
+        if temporary.folder != folder.path || !Self::still_named(folder, &temporary) {
+            return Err(TreeError::Escaped);
+        }
+        let committed = self.commit_inner(folder, &temporary, target, replace);
+        if committed.is_err() && Self::still_named(folder, &temporary) {
+            let _ = rustix::fs::unlinkat(&folder.handle, &*temporary.name, AtFlags::empty());
+        }
+        drop(temporary);
+        committed
+    }
+
+    fn commit_inner(
         &self,
         folder: &Folder,
         temporary: &TemporaryFile,
         target: &str,
         replace: bool,
     ) -> Result<(), TreeError> {
+        self.in_place(folder, target)?;
         temporary.file.sync_all().map_err(TreeError::Io)?;
         if replace {
             match rustix::fs::statat(&folder.handle, target, AtFlags::SYMLINK_NOFOLLOW) {
@@ -209,8 +236,22 @@ impl ConfinedTree {
         rustix::fs::fsync(&folder.handle).map_err(errno)
     }
 
+    /// Whether the temporary file's name in the folder still leads to the file it was created as.
+    fn still_named(folder: &Folder, temporary: &TemporaryFile) -> bool {
+        let (Ok(named), Ok(held)) = (
+            rustix::fs::statat(&folder.handle, &*temporary.name, AtFlags::SYMLINK_NOFOLLOW),
+            rustix::fs::fstat(&temporary.file),
+        ) else {
+            return false;
+        };
+        (named.st_dev, named.st_ino) == (held.st_dev, held.st_ino)
+    }
+
     /// Removes a temporary file that will not be committed.
     pub fn discard(&self, folder: &Folder, temporary: TemporaryFile) -> Result<(), TreeError> {
+        if temporary.folder != folder.path || !Self::still_named(folder, &temporary) {
+            return Err(TreeError::Escaped);
+        }
         drop(temporary.file);
         rustix::fs::unlinkat(&folder.handle, &*temporary.name, AtFlags::empty()).map_err(errno)
     }
@@ -224,12 +265,19 @@ impl ConfinedTree {
         new_name: &str,
         replace: bool,
     ) -> Result<(), TreeError> {
+        self.in_place(from, name)?;
+        self.in_place(to, new_name)?;
         let stat = rustix::fs::statat(&from.handle, name, AtFlags::SYMLINK_NOFOLLOW).map_err(errno)?;
         let kind = self.kind(from, name, &stat)?;
         if kind == EntryKind::File && stat.st_nlink > 1 {
             return Err(TreeError::HardLink);
         }
         if replace {
+            match rustix::fs::statat(&to.handle, new_name, AtFlags::SYMLINK_NOFOLLOW) {
+                Ok(target) => refuse_unless_regular(&target)?,
+                Err(Errno::NOENT) => {}
+                Err(error) => return Err(errno(error)),
+            }
             rustix::fs::renameat(&from.handle, name, &to.handle, new_name).map_err(errno)?;
         } else {
             Self::rename_new(from, name, to, new_name, kind == EntryKind::File)?;
@@ -239,6 +287,7 @@ impl ConfinedTree {
     }
 
     pub fn remove_file(&self, folder: &Folder, name: &str) -> Result<(), TreeError> {
+        self.in_place(folder, name)?;
         let stat = rustix::fs::statat(&folder.handle, name, AtFlags::SYMLINK_NOFOLLOW).map_err(errno)?;
         refuse_unless_regular(&stat)?;
         rustix::fs::unlinkat(&folder.handle, name, AtFlags::empty()).map_err(errno)
@@ -246,6 +295,7 @@ impl ConfinedTree {
 
     /// Removes an empty folder.
     pub fn remove_folder(&self, folder: &Folder, name: &str) -> Result<(), TreeError> {
+        self.in_place(folder, name)?;
         let stat = rustix::fs::statat(&folder.handle, name, AtFlags::SYMLINK_NOFOLLOW).map_err(errno)?;
         if self.kind(folder, name, &stat)? != EntryKind::Folder {
             return Err(TreeError::NotAFolder);
@@ -254,7 +304,15 @@ impl ConfinedTree {
     }
 
     pub fn make_folder(&self, folder: &Folder, name: &str) -> Result<(), TreeError> {
+        self.in_place(folder, name)?;
         rustix::fs::mkdirat(&folder.handle, name, Mode::from_raw_mode(0o777)).map_err(errno)
+    }
+
+    /// Checks that `name` is one component and that the folder is still where it was opened: a
+    /// held descriptor follows its folder wherever a host process moves it, outside the root too.
+    fn in_place(&self, folder: &Folder, name: &str) -> Result<(), TreeError> {
+        folder.path.join(name).map_err(|_| TreeError::Escaped)?;
+        self.check_final(&folder.handle, &folder.path)
     }
 
     /// Where the folder is now, read back from its descriptor: a folder renamed since it was
@@ -319,7 +377,12 @@ impl ConfinedTree {
         }
         if file {
             match rustix::fs::linkat(&from.handle, name, &to.handle, new_name, AtFlags::empty()) {
-                Ok(()) => return rustix::fs::unlinkat(&from.handle, name, AtFlags::empty()).map_err(errno),
+                // Linked under its new name, the file is there; an old name left behind is a
+                // second link the start's sweep removes.
+                Ok(()) => {
+                    let _ = rustix::fs::unlinkat(&from.handle, name, AtFlags::empty());
+                    return Ok(());
+                }
                 Err(Errno::PERM | Errno::OPNOTSUPP) => {}
                 Err(error) => return Err(errno(error)),
             }

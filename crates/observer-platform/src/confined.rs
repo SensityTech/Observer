@@ -312,11 +312,12 @@ mod tests {
         let mut upload = tree.create_temporary(&folder, ".observer-upload-f").unwrap();
         upload.file().write_all(b"fx_version 'adamant'").unwrap();
         assert!(matches!(
-            tree.commit(&folder, &upload, "fxmanifest.lua", false),
+            tree.commit(&folder, upload, "fxmanifest.lua", false),
             Err(TreeError::Exists)
         ));
-        tree.commit(&folder, &upload, "copy.lua", false).unwrap();
-        drop(upload);
+        let mut upload = tree.create_temporary(&folder, ".observer-upload-f").unwrap();
+        upload.file().write_all(b"fx_version 'adamant'").unwrap();
+        tree.commit(&folder, upload, "copy.lua", false).unwrap();
         assert_eq!(
             read(&tree, "resources/[maps]/harbour/copy.lua").unwrap(),
             "fx_version 'adamant'"
@@ -328,16 +329,17 @@ mod tests {
         let download = tree
             .open_file(&path("resources/[maps]/harbour/fxmanifest.lua"))
             .unwrap();
-        let held = tree.commit(&folder, &upload, "fxmanifest.lua", true);
+        let held = tree.commit(&folder, upload, "fxmanifest.lua", true);
         if cfg!(windows) {
             // Without POSIX semantics, any open handle on the target blocks the replace.
             assert!(matches!(held, Err(TreeError::InUse)), "{held:?}");
             drop(download);
-            tree.commit(&folder, &upload, "fxmanifest.lua", true).unwrap();
+            let mut upload = tree.create_temporary(&folder, ".observer-upload-g").unwrap();
+            upload.file().write_all(b"new").unwrap();
+            tree.commit(&folder, upload, "fxmanifest.lua", true).unwrap();
         } else {
             held.unwrap();
         }
-        drop(upload);
         assert_eq!(
             read(&tree, "resources/[maps]/harbour/fxmanifest.lua").unwrap(),
             "new"
@@ -394,16 +396,25 @@ mod tests {
         let mut upload = tree.create_temporary(&folder, ".observer-upload-a").unwrap();
         upload.file().write_all(b"fx_version 'bodacious'").unwrap();
         assert!(matches!(
-            tree.commit(&folder, &upload, "fxmanifest.lua", false),
+            tree.commit(&folder, upload, "fxmanifest.lua", false),
             Err(TreeError::Exists)
         ));
         assert_eq!(
             read(&tree, "resources/[maps]/harbour/fxmanifest.lua").unwrap(),
             "fx_version 'cerulean'"
         );
+        // A refused commit removes its temporary file.
+        let names: Vec<_> = tree
+            .list(&folder)
+            .unwrap()
+            .into_iter()
+            .map(|entry| entry.name)
+            .collect();
+        assert_eq!(names, ["fxmanifest.lua"]);
 
-        tree.commit(&folder, &upload, "fxmanifest.lua", true).unwrap();
-        drop(upload);
+        let mut upload = tree.create_temporary(&folder, ".observer-upload-a").unwrap();
+        upload.file().write_all(b"fx_version 'bodacious'").unwrap();
+        tree.commit(&folder, upload, "fxmanifest.lua", true).unwrap();
         assert_eq!(
             read(&tree, "resources/[maps]/harbour/fxmanifest.lua").unwrap(),
             "fx_version 'bodacious'"
@@ -418,8 +429,7 @@ mod tests {
 
         let mut fresh = tree.create_temporary(&folder, ".observer-upload-b").unwrap();
         fresh.file().write_all(b"Citizen.Wait(0)").unwrap();
-        tree.commit(&folder, &fresh, "client.lua", false).unwrap();
-        drop(fresh);
+        tree.commit(&folder, fresh, "client.lua", false).unwrap();
         assert_eq!(
             read(&tree, "resources/[maps]/harbour/client.lua").unwrap(),
             "Citizen.Wait(0)"
@@ -428,6 +438,62 @@ mod tests {
             tree.create_temporary(&folder, "client.lua"),
             Err(TreeError::Exists)
         ));
+    }
+
+    #[test]
+    fn a_name_that_is_not_one_component_is_refused_everywhere() {
+        let (_dir, root) = server();
+        let tree = ConfinedTree::open(&root).unwrap();
+        let folder = tree.open_folder(&path("resources")).unwrap();
+
+        for name in ["", ".", "..", "../secret.cfg", "a/b", "a\\b", "server.cfg:stream"] {
+            assert!(
+                matches!(tree.create_temporary(&folder, name), Err(TreeError::Escaped)),
+                "{name:?}"
+            );
+            assert!(
+                matches!(tree.make_folder(&folder, name), Err(TreeError::Escaped)),
+                "{name:?}"
+            );
+            assert!(
+                matches!(tree.remove_file(&folder, name), Err(TreeError::Escaped)),
+                "{name:?}"
+            );
+            assert!(
+                matches!(tree.remove_folder(&folder, name), Err(TreeError::Escaped)),
+                "{name:?}"
+            );
+            assert!(
+                matches!(
+                    tree.rename(&folder, "[maps]", &folder, name, false),
+                    Err(TreeError::Escaped)
+                ),
+                "{name:?}"
+            );
+            let upload = tree.create_temporary(&folder, ".observer-upload-i").unwrap();
+            assert!(
+                matches!(tree.commit(&folder, upload, name, false), Err(TreeError::Escaped)),
+                "{name:?}"
+            );
+        }
+        assert!(
+            tree.entry(&path("resources/[maps]/harbour/fxmanifest.lua"))
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn a_one_character_name_is_a_valid_rename_target() {
+        let (_dir, root) = server();
+        let tree = ConfinedTree::open(&root).unwrap();
+        let folder = tree.open_folder(&path("resources/[maps]/harbour")).unwrap();
+
+        tree.rename(&folder, "fxmanifest.lua", &folder, "f", false)
+            .unwrap();
+        assert_eq!(
+            read(&tree, "resources/[maps]/harbour/f").unwrap(),
+            "fx_version 'cerulean'"
+        );
     }
 
     #[test]
@@ -460,8 +526,7 @@ mod tests {
 
         let mut upload = tree.create_temporary(&folder, ".observer-upload-d").unwrap();
         upload.file().write_all(b"new").unwrap();
-        tree.commit(&folder, &upload, "fxmanifest.lua", true).unwrap();
-        drop(upload);
+        tree.commit(&folder, upload, "fxmanifest.lua", true).unwrap();
 
         let mut old = String::new();
         download.read_to_string(&mut old).unwrap();
@@ -492,22 +557,49 @@ mod tests {
         upload.file().write_all(b"new").unwrap();
 
         assert!(matches!(
-            tree.commit(&folder, &upload, "fxmanifest.lua", true),
+            tree.commit(&folder, upload, "fxmanifest.lua", true),
             Err(TreeError::InUse)
         ));
         drop(held);
         let mut permissions = fs::metadata(&manifest).unwrap().permissions();
         permissions.set_readonly(true);
         fs::set_permissions(&manifest, permissions).unwrap();
+        let mut upload = tree.create_temporary(&folder, ".observer-upload-e").unwrap();
+        upload.file().write_all(b"new").unwrap();
         assert!(matches!(
-            tree.commit(&folder, &upload, "fxmanifest.lua", true),
+            tree.commit(&folder, upload, "fxmanifest.lua", true),
             Err(TreeError::ReadOnly)
         ));
         assert!(matches!(
             tree.remove_file(&folder, "fxmanifest.lua"),
             Err(TreeError::ReadOnly)
         ));
-        tree.discard(&folder, upload).unwrap();
+        let names: Vec<_> = tree
+            .list(&folder)
+            .unwrap()
+            .into_iter()
+            .map(|entry| entry.name)
+            .collect();
+        assert_eq!(names, ["fxmanifest.lua"]);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_short_name_never_renames_removes_or_replaces_the_long_one() {
+        let (_dir, root) = server();
+        fs::create_dir(root.join(".gitignored-repository")).unwrap();
+        fs::write(root.join("observer-settings.toml"), "listen").unwrap();
+        let tree = ConfinedTree::open(&root).unwrap();
+        let top = tree.root();
+
+        // Whether the volume makes short names or not, nothing happens to the long-named entries.
+        assert!(tree.rename(top, "GITIGN~1", top, "public", false).is_err());
+        assert!(tree.remove_file(top, "OBSERV~1.TOM").is_err());
+        let mut upload = tree.create_temporary(top, ".observer-upload-h").unwrap();
+        upload.file().write_all(b"x").unwrap();
+        assert!(tree.commit(top, upload, "OBSERV~1.TOM", true).is_err());
+        assert_eq!(read(&tree, "observer-settings.toml").unwrap(), "listen");
+        assert!(tree.entry(&path(".gitignored-repository")).is_ok());
     }
 
     #[cfg(windows)]
