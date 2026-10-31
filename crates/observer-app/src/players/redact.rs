@@ -22,6 +22,8 @@ const IDENTIFIERS: [(&str, &str); 8] = [
     ("ip", "[ip]"),
 ];
 const SECRET_NAMES: [&str; 5] = ["password", "pwd", "token", "secret", "key"];
+/// Authorization schemes whose credential follows them.
+const SCHEMES: [&str; 2] = ["bearer ", "basic "];
 /// Where a user's folder starts, lowercased: Windows, Windows in JSON, Linux, macOS.
 const USER_FOLDERS: [&str; 5] = [":\\users\\", ":\\\\users\\\\", ":/users/", "/home/", "/users/"];
 /// A user folder's name is never longer than this.
@@ -34,7 +36,7 @@ pub(super) fn redact(text: &str) -> String {
         .map(|c| if c.is_control() { ' ' } else { c })
         .collect();
     let text = urls(&text);
-    let text = bearer_tokens(&text);
+    let text = authorizations(&text);
     let text = identifiers(&text);
     let text = secret_pairs(&text);
     let text = tokens(&text);
@@ -106,19 +108,33 @@ fn urls(text: &str) -> String {
     replace(text, ranges)
 }
 
-fn bearer_tokens(text: &str) -> String {
+/// `Bearer x`, and `Basic x` when `x` looks encoded: "basic" is also an ordinary word.
+fn authorizations(text: &str) -> String {
     let lower = text.to_ascii_lowercase();
     let mut ranges = Vec::new();
-    for (start, scheme) in lower.match_indices("bearer ") {
-        if word_start(text, start) {
+    for scheme in SCHEMES {
+        for (start, _) in lower.match_indices(scheme) {
+            if !word_start(text, start) {
+                continue;
+            }
             let value = start + scheme.len();
             let end = end_of(text, value, |c| !c.is_whitespace() && !"\"',;".contains(c));
-            if end > value {
+            if end > value && (scheme == "bearer " || encoded(&text[value..end])) {
                 ranges.push((value, end, "[REDACTED]"));
             }
         }
     }
     replace(text, ranges)
+}
+
+fn encoded(value: &str) -> bool {
+    value.len() >= 8
+        && value
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "+/=".contains(c))
+        && value
+            .chars()
+            .any(|c| c.is_ascii_digit() || c.is_ascii_uppercase() || "+/=".contains(c))
 }
 
 fn identifiers(text: &str) -> String {
@@ -135,7 +151,9 @@ fn identifiers(text: &str) -> String {
             if !text[separator..].starts_with([':', '=']) {
                 continue;
             }
-            let value = end_of(text, separator + 1, |c| c == '"' || c == ' ');
+            // `=>`, as in a Lua or PHP table.
+            let arrow = usize::from(text[separator..].starts_with("=>"));
+            let value = end_of(text, separator + 1 + arrow, |c| c == '"' || c == ' ');
             let end = end_of(text, value, |c| c.is_ascii_alphanumeric() || ".:[]_-".contains(c));
             if end > value {
                 ranges.push((start, end, replacement));
@@ -145,19 +163,32 @@ fn identifiers(text: &str) -> String {
     replace(text, ranges)
 }
 
+/// `token=x`, `token: x`, `"token":"x"` and `token => x`, a quoted value whole.
 fn secret_pairs(text: &str) -> String {
     let lower = text.to_ascii_lowercase();
     let mut ranges = Vec::new();
-    for (equals, _) in lower.match_indices('=') {
-        let name_start = lower[..equals]
+    for (separator, _) in lower.match_indices([':', '=']) {
+        let before = lower[..separator].trim_end_matches([' ', '"']);
+        let name_start = before
             .rfind(|c: char| !c.is_ascii_alphanumeric() && c != '_')
             .map_or(0, |at| at + 1);
-        let name = &lower[name_start..equals];
-        if SECRET_NAMES.iter().any(|secret| name.ends_with(secret)) {
-            let end = end_of(text, equals + 1, |c| !c.is_whitespace() && !"&;,\"'".contains(c));
-            if end > equals + 1 {
-                ranges.push((equals + 1, end, "[REDACTED]"));
+        if !SECRET_NAMES
+            .iter()
+            .any(|secret| before[name_start..].ends_with(secret))
+        {
+            continue;
+        }
+        let arrow = usize::from(text[separator..].starts_with("=>"));
+        let mut value = end_of(text, separator + 1 + arrow, |c| c == ' ');
+        let end = match text[value..].chars().next() {
+            Some(quote @ ('"' | '\'')) => {
+                value += 1;
+                text[value..].find(quote).map_or(text.len(), |at| value + at)
             }
+            _ => end_of(text, value, |c| !c.is_whitespace() && !"&;,\"'".contains(c)),
+        };
+        if end > value {
+            ranges.push((value, end, "[REDACTED]"));
         }
     }
     replace(text, ranges)
@@ -223,7 +254,8 @@ fn is_address(candidate: &str) -> bool {
     host.parse::<IpAddr>().is_ok()
 }
 
-/// A licence without its prefix (40 hex digits) and a Discord id or mention (17 to 20 digits).
+/// A licence without its prefix (40 hex digits), a Steam id in hex (`1100001` and 8 more) and a
+/// Discord id or mention (17 to 20 digits).
 fn bare_identifiers(text: &str) -> String {
     let mut ranges = Vec::new();
     let mut at = 0;
@@ -235,6 +267,8 @@ fn bare_identifiers(text: &str) -> String {
             if word_start(text, at) && word_end(text, end) {
                 if run.len() == 40 {
                     ranges.push((at, end, "[license]"));
+                } else if run.len() == 15 && run.starts_with("1100001") {
+                    ranges.push((at, end, "[steam]"));
                 } else if digits && (17..=20).contains(&run.len()) {
                     ranges.push((at, end, "[discord]"));
                 }
@@ -247,15 +281,21 @@ fn bare_identifiers(text: &str) -> String {
     replace(text, ranges)
 }
 
-/// The account name in a user's folder, often the person's own: up to the next separator.
+/// The account name in a user's folder, often the person's own: up to the next separator, or,
+/// when none comes soon or blanks surround it, up to its first blank.
 fn user_folders(text: &str) -> String {
     let lower = text.to_ascii_lowercase();
     let mut ranges = Vec::new();
     for marker in USER_FOLDERS {
         for (start, _) in lower.match_indices(marker) {
-            let name = start + marker.len();
-            let end = end_of(text, name, |c| !"\\/\"'<>".contains(c) && !c.is_control());
-            if end > name && end - name <= MAX_USER_NAME && text[name..end].trim() == &text[name..end] {
+            let name = end_of(text, start + marker.len(), |c| c == ' ');
+            let mut end = end_of(text, name, |c| !"\\/\"'<>".contains(c) && !c.is_control());
+            if end - name > MAX_USER_NAME || text[name..end].trim_end() != &text[name..end] {
+                end = text[name..end]
+                    .find(char::is_whitespace)
+                    .map_or(end, |at| name + at);
+            }
+            if end > name {
                 ranges.push((name, end, "[user]"));
             }
         }
@@ -294,6 +334,10 @@ mod tests {
         assert_eq!(
             redact("ban 0123456789abcdef0123456789abcdef01234567 by <@123456789012345678>"),
             "ban [license] by <@[discord]>"
+        );
+        assert_eq!(
+            redact("license => 0123456789abcdef0123456789abcdef01234567, hex 11000011a2b3c4d"),
+            "[license], hex [steam]"
         );
     }
 
@@ -338,6 +382,33 @@ mod tests {
     }
 
     #[test]
+    fn secrets_come_out_however_they_are_written() {
+        assert_eq!(
+            redact(r#"{"password": "hunter 2", "api_key":"k3y"} secret => abc, token: xyz"#),
+            r#"{"password": "[REDACTED]", "api_key":"[REDACTED]"} secret => [REDACTED], token: [REDACTED]"#
+        );
+        assert_eq!(
+            redact("Authorization: Basic dXNlcjpwYXNz"),
+            "Authorization: Basic [REDACTED]"
+        );
+    }
+
+    #[test]
+    fn a_user_folder_with_no_separator_after_it_ends_at_its_first_blank() {
+        let words = " then a long story of what happened while the game was loading its world";
+
+        assert_eq!(
+            redact(&format!(r"crash in C:\Users\Ada{words}")),
+            format!(r"crash in C:\Users\[user]{words}")
+        );
+        assert_eq!(
+            redact(r"crash in C:\Users\Jean Dupont"),
+            r"crash in C:\Users\[user]"
+        );
+        assert_eq!(redact(r"seen in /home/ ada /x"), r"seen in /home/ [user] /x");
+    }
+
+    #[test]
     fn ordinary_words_and_numbers_stay() {
         for text in [
             "AFK for 31 minutes",
@@ -346,6 +417,7 @@ mod tests {
             "Version 1.2 is too old",
             "Server restarting in 1761900000000 ms",
             "live performance license plate",
+            "Kicked for basic settings",
         ] {
             assert_eq!(redact(text), text, "{text}");
         }

@@ -221,6 +221,68 @@ async fn a_session_whose_credit_was_written_is_not_credited_again() {
 }
 
 #[tokio::test]
+async fn a_record_is_not_credited_to_a_session_that_carries_another_key() {
+    let lab = Lab::new().await;
+    let player = lab.left_open().await;
+    lab.metrics
+        .database()
+        .write(|tx| stored_sessions::attach(tx, 1, [7; 16], [8; 16]))
+        .await
+        .unwrap();
+
+    let (_, playing) = lab.players().await;
+    playing.close().await;
+
+    assert_eq!(lab.play_ms(player).await, Some(0));
+    assert_eq!(lab.db.read(stored::open_records).await.unwrap(), []);
+}
+
+#[test]
+fn the_writes_of_a_run_never_recorded_are_set_aside_and_the_others_kept() {
+    let lost = RunKey {
+        generation: 2,
+        ..EARLIER
+    };
+    let open = |id, run| {
+        SessionWrite::Open(NewSession {
+            id,
+            run,
+            net_id: 1,
+            joined_ms: None,
+            seen_ms: 0,
+        })
+    };
+    let close = |id| SessionWrite::Close {
+        closure: Closure {
+            id,
+            ended_ms: 0,
+            length_ms: Some(0),
+            category: DropCategory::Quit,
+            kind: None,
+            native: None,
+            resource: None,
+            crash_text: None,
+            reason_text: None,
+            loading: None,
+            synthesized: false,
+        },
+        credit: None,
+    };
+    let mut later = Later {
+        sessions: vec![open(1, lost), open(2, EARLIER), close(1), close(2)],
+        attaches: vec![(1, [7; 16], [9; 16]), (2, [7; 16], [8; 16])],
+        ..Later::default()
+    };
+
+    let set_aside = later.set_aside(lost);
+
+    assert_eq!(set_aside, 1);
+    assert_eq!(later.sessions, [open(2, EARLIER), close(2)]);
+    assert_eq!(later.attaches, [(2, [7; 16], [8; 16])]);
+    assert!(later.lost_runs.contains(&lost));
+}
+
+#[tokio::test]
 async fn a_forgotten_licence_a_restored_backup_brought_back_is_forgotten_again_at_start() {
     let lab = Lab::new().await;
     let (_, playing) = lab.players().await;

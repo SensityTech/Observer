@@ -483,6 +483,45 @@ fn a_roster_with_a_missing_page_or_too_many_pages_is_given_up() {
 }
 
 #[test]
+fn a_roster_whose_last_page_never_comes_is_given_up_and_the_list_follows_players_again() {
+    let mut bench = Bench::new();
+    bench.send(
+        50,
+        PlayerReportKind::Roster(RosterPage {
+            timer_ms: Some(50_000),
+            page: 1,
+            last: false,
+            players: vec![(7, shown(LICENSE, "Ada"))],
+            dropped: 0,
+        }),
+    );
+
+    bench.list(55, &[(7, LICENSE, "Ada")]);
+    bench.list(58, &[(7, LICENSE, "Ada")]);
+    let waited = bench.sessions.open().count();
+    bench.list(70, &[(7, LICENSE, "Ada")]);
+    bench.list(75, &[(7, LICENSE, "Ada")]);
+
+    assert_eq!(waited, 0);
+    assert_eq!(bench.sessions.counts.rosters_given_up, 1);
+    assert_eq!(bench.sessions.open().count(), 1);
+}
+
+#[test]
+fn a_run_already_followed_is_not_started_again() {
+    let mut bench = Bench::new();
+    bench.join(10, 7, LICENSE, "Ada");
+    bench.sessions.take_writes();
+    let (_, now) = bench.at(20);
+
+    bench.sessions.spawned(RUN, now);
+
+    assert_eq!(bench.sessions.take_writes(), Writes::default());
+    assert_eq!(bench.sessions.open().count(), 1);
+    assert!(bench.sessions.holds(1));
+}
+
+#[test]
 fn a_stop_closes_what_fxserver_did_not_report_with_the_stop_reason() {
     let mut bench = Bench::new();
     bench.join(10, 1, LICENSE, "Ada");
@@ -623,6 +662,55 @@ fn a_forgotten_licence_earns_nothing_more_in_this_run() {
     bench.drop(70, 7, Some(70_000), 2, "Exiting");
 
     assert_eq!(closes(&bench.sessions.take_writes())[0].1, None);
+}
+
+#[test]
+fn a_forgotten_licences_sessions_keep_no_text_from_a_drop_that_comes_after() {
+    let mut bench = Bench::new();
+    bench.join(10, 7, LICENSE, "Ada");
+    bench.list(15, &[(7, LICENSE, "Ada")]);
+    // Observer closed the session itself, before FXServer's drop came.
+    bench.exit(30, false);
+    bench.sessions.take_writes();
+
+    let forgotten = bench.sessions.forget(LICENSE);
+    bench.drop(
+        31,
+        7,
+        Some(31_000),
+        2,
+        r"Game crashed: Recursive error in C:\Users\jdupont\FiveM\cars.meta",
+    );
+
+    assert_eq!(forgotten, HashSet::from([1]));
+    let writes = bench.sessions.take_writes();
+    let late = reclassified(&writes);
+    assert_eq!((late[0].id, late[0].category), (1, DropCategory::Crash));
+    assert_eq!(late[0].crash_text, None);
+}
+
+#[test]
+fn a_forgotten_licences_open_session_keeps_no_text_from_its_drop() {
+    let mut bench = Bench::new();
+    bench.join(10, 7, LICENSE, "Ada");
+    bench.list(15, &[(7, LICENSE, "Ada")]);
+    bench.sessions.take_writes();
+
+    assert_eq!(bench.sessions.forget(LICENSE), HashSet::from([1]));
+    bench.drop(
+        20,
+        7,
+        Some(20_000),
+        2,
+        r"Game crashed: Recursive error in C:\Users\jdupont\FiveM\cars.meta",
+    );
+
+    let writes = bench.sessions.take_writes();
+    let (closure, credit) = closes(&writes)[0];
+    assert_eq!(
+        (closure.category, closure.crash_text.as_deref(), credit),
+        (DropCategory::Crash, None, None)
+    );
 }
 
 #[test]

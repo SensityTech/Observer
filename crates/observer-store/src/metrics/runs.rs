@@ -6,7 +6,7 @@ use rusqlite::{Connection, Transaction, params};
 use crate::database::StoreError;
 
 /// A run as the Observer that started it knows it: generations start again at 1 with each one.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct RunKey {
     /// When that Observer's metrics started, in Unix milliseconds.
     pub observer_started: i64,

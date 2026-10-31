@@ -32,6 +32,8 @@ const LATE_DROP: Duration = Duration::from_mins(5);
 const CLOCK_SLACK_MS: i64 = 1000;
 /// More pages than a full server's roster: 2,048 players at 100 a page.
 const MOST_PAGES: u32 = 32;
+/// A roster still missing pages this long after its first one was lost: it is given up.
+const ROSTER_WAIT: Duration = Duration::from_secs(10);
 
 /// A session of the run under way.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -116,8 +118,10 @@ struct Run {
     roster: Option<Roster>,
     /// Drops that matched no session, for the join that may trail them.
     early_drops: HashMap<u32, Instant>,
-    /// Sessions Observer closed itself, for the drop that may come late.
-    closed_by_observer: HashMap<u32, (i64, Instant)>,
+    /// Sessions Observer closed itself, for the drop that may come late, with their licence.
+    closed_by_observer: HashMap<u32, (i64, Instant, Option<String>)>,
+    /// Sessions of licences forgotten during the run: what comes for them keeps no text.
+    forgotten: HashSet<i64>,
     /// When each net id's last session ended: a list asked before cannot reopen it.
     ended_at: HashMap<u32, Instant>,
     /// Players listed in successive lists without a session, from their first sighting.
@@ -176,9 +180,19 @@ impl Sessions {
             .map(|run| run.key.generation)
     }
 
+    /// Whether the run of `generation` is known, under way or ended.
+    pub(super) fn holds(&self, generation: u32) -> bool {
+        self.run
+            .as_ref()
+            .is_some_and(|run| run.key.generation == generation)
+    }
+
     /// FXServer started: a new run. Sessions an exit never closed, because the event was missed,
     /// end where they were last seen.
     pub(super) fn spawned(&mut self, key: RunKey, now: Instant) {
+        if self.run.as_ref().is_some_and(|run| run.key == key) {
+            return;
+        }
         self.end_lost(now);
         self.run = Some(Run {
             key,
@@ -187,6 +201,7 @@ impl Sessions {
             roster: None,
             early_drops: HashMap::new(),
             closed_by_observer: HashMap::new(),
+            forgotten: HashSet::new(),
             ended_at: HashMap::new(),
             untracked: HashMap::new(),
             stop: None,
@@ -238,7 +253,8 @@ impl Sessions {
         let open: Vec<Open> = run.open.drain().map(|(_, open)| open).collect();
         for open in open {
             if let Some(run) = self.run.as_mut() {
-                run.closed_by_observer.insert(open.net_id, (open.id, now));
+                run.closed_by_observer
+                    .insert(open.net_id, (open.id, now, license_of(&open.identity)));
             }
             self.close_by_observer(&open, at_ms, category, kind, now);
         }
@@ -366,17 +382,23 @@ impl Sessions {
         if let Some(open) = run.open.remove(&dropped.net_id) {
             run.ended_at.insert(dropped.net_id, report.received);
             closure.id = open.id;
+            if run.forgotten.contains(&open.id) {
+                blank(&mut closure);
+            }
             closure.length_ms = Some(self.reported_length(&open, dropped.timer_ms, report));
             let credit = credit_of(&open.identity);
             self.writes.sessions.push(SessionWrite::Close { closure, credit });
             return;
         }
-        if let Some((id, _)) = run
+        if let Some((id, _, _)) = run
             .closed_by_observer
             .remove(&dropped.net_id)
-            .filter(|(_, closed)| report.received.duration_since(*closed) < LATE_DROP)
+            .filter(|(_, closed, _)| report.received.duration_since(*closed) < LATE_DROP)
         {
             closure.id = id;
+            if run.forgotten.contains(&id) {
+                blank(&mut closure);
+            }
             self.writes.sessions.push(SessionWrite::Reclassify(closure));
             return;
         }
@@ -498,7 +520,12 @@ impl Sessions {
         run.early_drops
             .retain(|_, dropped| at.duration_since(*dropped) < EARLY_DROP);
         run.closed_by_observer
-            .retain(|_, (_, closed)| at.duration_since(*closed) < LATE_DROP);
+            .retain(|_, (_, closed, _)| at.duration_since(*closed) < LATE_DROP);
+        // The last page of a roster may never come: then the list follows players again.
+        let given_up = run
+            .roster
+            .take_if(|roster| at.duration_since(roster.received) > ROSTER_WAIT)
+            .is_some();
         run.ended_at
             .retain(|_, ended| at.duration_since(*ended) < LIST_LAG * 2);
         let shown: HashMap<u32, _> = list.shown.iter().map(|listed| (listed.id, listed)).collect();
@@ -551,6 +578,7 @@ impl Sessions {
             self.confirm(net_id);
         }
         self.counts.unconfirmed += unconfirmed;
+        self.counts.rosters_given_up += usize::from(given_up);
         for net_id in gone {
             if let Some(open) = self.run.as_mut().and_then(|run| run.open.remove(&net_id)) {
                 let ended = open.last_listed_ms.unwrap_or(open.seen_ms);
@@ -607,7 +635,8 @@ impl Sessions {
 
     fn miss(&mut self, open: &Open, ended_ms: i64, now: Instant) {
         if let Some(run) = self.run.as_mut() {
-            run.closed_by_observer.insert(open.net_id, (open.id, now));
+            run.closed_by_observer
+                .insert(open.net_id, (open.id, now, license_of(&open.identity)));
         }
         self.close_by_observer(open, ended_ms, DropCategory::Unknown, DropKind::Missed, now);
     }
@@ -661,9 +690,18 @@ impl Sessions {
     }
 
     /// Detaches a forgotten licence from the sessions under way: they keep running, earn nothing
-    /// and write no identity.
-    pub(super) fn forget(&mut self, license: &str) {
+    /// and write no identity. Returns the sessions of that licence in this run, whose texts must
+    /// not be written again.
+    pub(super) fn forget(&mut self, license: &str) -> HashSet<i64> {
         let mut keys = Vec::new();
+        let mut theirs_ids = HashSet::new();
+        if let Some(run) = self.run.as_mut() {
+            for (id, _, known) in run.closed_by_observer.values() {
+                if known.as_deref() == Some(license) {
+                    theirs_ids.insert(*id);
+                }
+            }
+        }
         for open in self.run.iter_mut().flat_map(|run| run.open.values_mut()) {
             let theirs = match &open.identity {
                 Identity::Confirmed {
@@ -679,7 +717,11 @@ impl Sessions {
             };
             if theirs {
                 open.identity = Identity::Anonymous;
+                theirs_ids.insert(open.id);
             }
+        }
+        if let Some(run) = self.run.as_mut() {
+            run.forgotten.extend(theirs_ids.iter().copied());
         }
         self.writes
             .identities
@@ -690,7 +732,13 @@ impl Sessions {
             {
                 *credit = None;
             }
+            if let SessionWrite::Close { closure, .. } | SessionWrite::Reclassify(closure) = write
+                && theirs_ids.contains(&closure.id)
+            {
+                blank(closure);
+            }
         }
+        theirs_ids
     }
 
     fn run_of(&mut self, generation: u32) -> Option<&mut Run> {
@@ -703,6 +751,20 @@ fn measured_since(open: &Open, now: Instant) -> i64 {
     i64::try_from(now.saturating_duration_since(open.received).as_millis())
         .unwrap_or(i64::MAX)
         .saturating_add(CLOCK_SLACK_MS)
+}
+
+/// What a forgotten player said leaving is not kept: only the kind of drop stays.
+pub(super) fn blank(closure: &mut Closure) {
+    closure.crash_text = None;
+    closure.reason_text = None;
+}
+
+fn license_of(identity: &Identity) -> Option<String> {
+    match identity {
+        Identity::Confirmed { license, .. } => Some(license.clone()),
+        Identity::Confirming(claim) => Some(claim.license.clone()),
+        _ => None,
+    }
 }
 
 fn credit_of(identity: &Identity) -> Option<[u8; 16]> {
