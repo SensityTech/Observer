@@ -3005,6 +3005,7 @@ dependencies = [
  "observer-fxserver",
  "observer-platform",
  "observer-store",
+ "serde",
  "serde_json",
  "sha2",
  "tempfile",
