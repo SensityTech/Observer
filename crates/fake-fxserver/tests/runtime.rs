@@ -12,8 +12,8 @@ use std::time::{Duration, Instant};
 use jiff::{SignedDuration, Timestamp, Unit};
 use observer_app::{
     Accounts, AuditLog, Caller, Client, Clock, DatabaseFiles, Diagnostics, DiagnosticsSetup, DiagnosticsTask,
-    Error, Metrics, MetricsSetup, PasswordCost, Running, Schedule, ScheduleSetup, ScheduleTask, Servers,
-    Setup, Sources, Supervision,
+    Error, Metrics, MetricsSetup, PasswordCost, Players, PlayersSetup, Running, Schedule, ScheduleSetup,
+    ScheduleTask, Servers, Setup, Sources, Supervision,
 };
 use observer_domain::audit::{ActorKind, AuditAction, AuditEntry, AuditFilter, Outcome};
 use observer_domain::diagnostics::{
@@ -23,6 +23,8 @@ use observer_domain::diagnostics::{
 use observer_domain::error::ErrorCode;
 use observer_domain::launch::{ExtraArgument, LaunchSettings, OneSync};
 use observer_domain::metrics::{LiveSample, MarkerKind, Range, Series, ThreadGroup, ThreadShares};
+use observer_domain::permissions::Permissions;
+use observer_domain::players::{Confirmation, IdentifierKind, PlayerProfile, PlayerSort};
 use observer_domain::schedule::{
     OneOffRequest, OneOffRestart, RestartSource, ScheduleChange, ScheduleSettings,
 };
@@ -1384,4 +1386,153 @@ async fn a_started_server_has_its_cfg_noted_and_keeps_its_port_out_of_the_setup_
         "a running server's own ports are not in use"
     );
     observer.stop_observer().await;
+}
+
+/// Every file Observer wrote under `dir`, the databases and their write-ahead logs included,
+/// holding `needle`. The builds folder holds the fake itself, which knows its players' address.
+fn files_holding(dir: &Path, needle: &[u8]) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    for entry in fs::read_dir(dir).unwrap().flatten() {
+        let path = entry.path();
+        if path.ends_with("artifacts") {
+            continue;
+        }
+        if path.is_dir() {
+            found.extend(files_holding(&path, needle));
+        } else if fs::read(&path)
+            .is_ok_and(|bytes| bytes.windows(needle.len()).any(|window| window == needle))
+        {
+            found.push(path);
+        }
+    }
+    found
+}
+
+#[tokio::test]
+async fn players_are_confirmed_followed_and_credited_and_their_address_is_kept_nowhere() {
+    let mut observer = Observer::new(false).await;
+    let path = observer.dir.path().join("metrics.sqlite3");
+    let metrics = Metrics::open(MetricsSetup {
+        path: path.clone(),
+        clock: Clock::system(),
+    })
+    .await
+    .unwrap();
+    let (_sockets, sockets) = watch::channel(1);
+    let sampling = metrics.start(Sources {
+        supervision: observer.supervision.clone(),
+        sockets,
+        data_dir: observer.dir.path().to_path_buf(),
+        databases: DatabaseFiles {
+            state: observer.dir.path().join("observer.sqlite3"),
+            metrics: path,
+        },
+    });
+    let (players, playing) = Players::start(PlayersSetup {
+        db: observer.db.clone(),
+        metrics: metrics.clone(),
+        clock: Clock::system(),
+        supervision: observer.supervision.clone(),
+        schedule: observer.schedule.status(),
+        data_dir: observer.dir.path().join("observer-data"),
+    })
+    .await
+    .unwrap();
+    let confirmed = |count: usize| {
+        let players = players.clone();
+        async move {
+            let deadline = Instant::now() + WAIT;
+            loop {
+                let online = players.online().await.unwrap();
+                let done = online
+                    .players
+                    .iter()
+                    .filter(|player| {
+                        player.confirmation == Confirmation::Confirmed && player.player.is_some()
+                    })
+                    .count();
+                if done == count && online.players.len() == count {
+                    return online;
+                }
+                assert!(Instant::now() < deadline, "never {count} confirmed: {online:?}");
+                tokio::time::sleep(Duration::from_millis(200)).await;
+            }
+        }
+    };
+
+    observer.supervision.start_server(&observer.owner).await.unwrap();
+    observer.state(ServerState::Online).await;
+    for line in ["fake_join Ada", "fake_join Grace"] {
+        observer
+            .supervision
+            .command(&observer.owner, line, CONSOLE_ROUTE.0, CONSOLE_ROUTE.1)
+            .await
+            .unwrap();
+    }
+    let both = confirmed(2).await;
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    observer
+        .supervision
+        .command(
+            &observer.owner,
+            "fake_drop 1 2 - Exiting",
+            CONSOLE_ROUTE.0,
+            CONSOLE_ROUTE.1,
+        )
+        .await
+        .unwrap();
+    let one = confirmed(1).await;
+    let deadline = Instant::now() + WAIT;
+    let page = loop {
+        let page = players
+            .page(None, PlayerSort::PlayTime, None, Permissions::all())
+            .await
+            .unwrap();
+        if page.players.iter().any(|player| player.sessions == 1) {
+            break page;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "Ada's session was never credited: {page:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    };
+    let grace = one.players[0].player.unwrap();
+    let profile = players.profile(grace, Permissions::all()).await.unwrap();
+    observer.supervision.stop_server(&observer.owner).await.unwrap();
+    observer.state(ServerState::Stopped).await;
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    let after_stop = players.profile(grace, Permissions::all()).await.unwrap();
+    playing.close().await;
+    sampling.close().await;
+    metrics.close().await.unwrap();
+    observer.stop_observer().await;
+
+    assert_eq!(both.players[0].name.as_deref(), Some("Ada"));
+    assert_eq!(page.players.len(), 2);
+    let ada = page.players.iter().find(|player| player.name == "Ada").unwrap();
+    assert_eq!(ada.sessions, 1);
+    assert!(ada.play_ms >= 2000, "{ada:?}");
+    assert!(profile.online);
+    assert!(profile.in_progress_ms > 0);
+    let kinds: Vec<_> = profile
+        .identifiers
+        .unwrap()
+        .iter()
+        .map(|shown| shown.kind)
+        .collect();
+    assert!(kinds.contains(&IdentifierKind::Ip), "{kinds:?}");
+    assert!(kinds.contains(&IdentifierKind::Token), "{kinds:?}");
+    assert_eq!(after_stop.sessions, 1);
+    assert!(!after_stop.online);
+    let shown = serde_json::to_string(&(&both, &page, &profile_json(&after_stop))).unwrap();
+    assert!(!shown.contains("192.0.2.77"));
+    assert_eq!(
+        files_holding(observer.dir.path(), b"192.0.2.77"),
+        Vec::<PathBuf>::new()
+    );
+}
+
+fn profile_json(profile: &PlayerProfile) -> serde_json::Value {
+    serde_json::to_value(profile).unwrap()
 }
