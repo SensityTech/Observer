@@ -263,8 +263,9 @@ impl Changes {
     }
 
     /// Lists and hashes the server folder now, to compare with the running start: what the next
-    /// restart applies. One at a time, 30 seconds apart, and never while a start's job runs.
-    pub async fn check(&self) -> Result<(), Error> {
+    /// restart applies. One at a time, 30 seconds apart, and never while a start's job runs. The
+    /// check is recorded before this answers, so that it shows at once as under way.
+    pub async fn check(&self, caller: &Caller) -> Result<i64, Error> {
         let mut job = self.inner.job.lock().await;
         if job.as_ref().is_some_and(|running| !running.task.is_finished()) {
             return Err(ErrorCode::CheckRunning.into());
@@ -295,12 +296,20 @@ impl Changes {
             .last_check
             .lock()
             .unwrap_or_else(PoisonError::into_inner) = Some(Instant::now());
+        let record = Record::by(caller, AuditAction::ChangeCheckRequested).target(SERVER);
+        let now = self.inner.shared.clock.now();
+        self.inner
+            .shared
+            .db
+            .write(move |tx| record.write(tx, now).map_err(Error::from))
+            .await?;
+        let id = job::new_check(&self.inner.shared, &launch).await?;
         let (shared, settings) = (Arc::clone(&self.inner.shared), self.settings());
         let cancel = CancellationToken::new();
         let task = tokio::spawn({
             let cancel = cancel.clone();
             async move {
-                match job::check(shared, settings, launch, cancel).await {
+                match job::check(shared, settings, launch, id, cancel).await {
                     Ok(Ended::Done(id)) => info!(snapshot = id, "the disk is checked"),
                     Ok(Ended::Cancelled(_) | Ended::Failed) => {}
                     Err(error) => warn!(%error, "the check of the disk failed"),
@@ -308,7 +317,7 @@ impl Changes {
             }
         });
         *job = Some(Running { cancel, task });
-        Ok(())
+        Ok(id)
     }
 
     /// Raises `observer:startChanges` for the start `id`, in the run it started. Best effort, as
@@ -357,6 +366,12 @@ impl Changes {
     /// in the database's free pages, its log or the copies set aside. A version shared with
     /// another path goes too: it is stored once.
     pub async fn purge(&self, caller: &Caller, path: String) -> Result<Purged, Error> {
+        // A job under way could store a version again once it is cleared: it stops, and no other
+        // begins until the purge is over.
+        let mut job = self.inner.job.lock().await;
+        if let Some(running) = job.take() {
+            running.stop().await;
+        }
         let store = &self.inner.shared.store;
         let wanted = path.clone();
         let digests = store.read(move |conn| upkeep::digests_of(conn, &wanted)).await?;
@@ -423,6 +438,11 @@ impl Changes {
             .await?;
         *self.inner.settings.lock().unwrap_or_else(PoisonError::into_inner) = changed.clone();
         if reindex {
+            // A job under way would index files again as the old extensions read them.
+            let mut job = self.inner.job.lock().await;
+            if let Some(running) = job.take() {
+                running.stop().await;
+            }
             let forgotten = self.inner.shared.store.write(|tx| index::clear(tx)).await?;
             info!(
                 files = forgotten,

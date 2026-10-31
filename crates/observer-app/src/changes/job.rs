@@ -113,13 +113,8 @@ pub(crate) async fn start(
     Ok(ended)
 }
 
-/// Takes a snapshot of the disk as it is now, which replaces the previous check.
-pub(crate) async fn check(
-    shared: Arc<Shared>,
-    settings: ChangesSettings,
-    launch: LaunchSettings,
-    cancel: CancellationToken,
-) -> Result<Ended, Error> {
+/// Records a check of the disk, which [`check`] then takes: it shows at once as under way.
+pub(crate) async fn new_check(shared: &Shared, launch: &LaunchSettings) -> Result<i64, Error> {
     let snapshot = NewSnapshot {
         server: SERVER.to_owned(),
         kind: SnapshotKind::Check,
@@ -131,7 +126,7 @@ pub(crate) async fn check(
         build_sha256: None,
         game: None,
         game_build: None,
-        launch: launch_record(&launch, &shared.keys),
+        launch: launch_record(launch, &shared.keys),
         cfg: json!({}),
         baseline: false,
         taken_at: shared.clock.now(),
@@ -141,6 +136,17 @@ pub(crate) async fn check(
         .write(move |tx| snapshots::insert(tx, &snapshot))
         .await?;
     shared.changed(id);
+    Ok(id)
+}
+
+/// Takes the check `id` of the disk as it is now, which replaces the previous check.
+pub(crate) async fn check(
+    shared: Arc<Shared>,
+    settings: ChangesSettings,
+    launch: LaunchSettings,
+    id: i64,
+    cancel: CancellationToken,
+) -> Result<Ended, Error> {
     let mut work = Work::new(Arc::clone(&shared), &settings, id, None, cancel);
     let ended = work.run(&launch, true, None).await?;
     if let Ended::Done(id) = ended {
@@ -344,10 +350,13 @@ impl Work {
         online: Option<(u32, watch::Receiver<Status>)>,
     ) -> Result<Ended, Error> {
         match self.passes(launch, read_text_now, online).await {
-            Ok(()) => {
-                self.finish().await?;
-                Ok(Ended::Done(self.id))
-            }
+            Ok(()) => match self.finish().await {
+                Ok(()) => Ok(Ended::Done(self.id)),
+                Err(error) => {
+                    self.failed(&error).await;
+                    Err(error)
+                }
+            },
             Err(Interrupted::Cancelled) => {
                 self.end(SnapshotState::Partial, Some(PartialReason::Cancelled))
                     .await?;
@@ -363,7 +372,25 @@ impl Work {
                 self.shared.changed(id);
                 Ok(Ended::Failed)
             }
-            Err(Interrupted::Error(error)) => Err(error),
+            Err(Interrupted::Error(error)) => {
+                self.failed(&error).await;
+                Err(error)
+            }
+        }
+    }
+
+    /// A write that failed leaves the snapshot failed rather than under way until the next start;
+    /// best effort, as the database that refused one write may refuse this one.
+    async fn failed(&self, error: &Error) {
+        let (id, now) = (self.id, self.shared.clock.now());
+        let reason = format!("the snapshot could not be stored: {error}");
+        let written = self
+            .shared
+            .store
+            .write(move |tx| snapshots::fail(tx, id, &reason, now))
+            .await;
+        if written.is_ok() {
+            self.shared.changed(id);
         }
     }
 

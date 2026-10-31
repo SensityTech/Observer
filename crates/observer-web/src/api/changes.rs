@@ -140,9 +140,12 @@ pub(crate) async fn history(
     Ok(Json(state.changes.history(query.name).await?))
 }
 
-/// Lists and hashes the disk now; the result comes as the latest check.
-pub(crate) async fn check(State(state): State<AppState>) -> Result<StatusCode, Failure> {
-    state.changes.check().await?;
+/// Lists and hashes the disk now; the result comes as the latest check, under way at once.
+pub(crate) async fn check(
+    State(state): State<AppState>,
+    Extension(caller): Extension<Caller>,
+) -> Result<StatusCode, Failure> {
+    state.changes.check(&caller).await?;
     Ok(StatusCode::ACCEPTED)
 }
 
@@ -162,7 +165,10 @@ pub(crate) async fn diff(
         page: number("page", query.page.as_deref(), 0, usize::MAX)?,
     };
     let path = path(query.path)?;
-    Ok(Json(state.changes.diff(&caller, from, to, path, options).await?))
+    let diff = state.changes.diff(&caller, from, to, path, options).await;
+    Ok(Json(
+        owner_only(&state, &caller, "/api/servers/default/changes/diff", diff).await?,
+    ))
 }
 
 pub(crate) async fn file(
@@ -173,7 +179,27 @@ pub(crate) async fn file(
     let start = id("start", Some(&query.start))?.ok_or_else(|| invalid("start"))?;
     let page = number("page", query.page.as_deref(), 0, usize::MAX)?;
     let path = path(query.path)?;
-    Ok(Json(state.changes.file(&caller, start, path, page).await?))
+    let file = state.changes.file(&caller, start, path, page).await;
+    Ok(Json(
+        owner_only(&state, &caller, "/api/servers/default/changes/file", file).await?,
+    ))
+}
+
+/// A read of the cfg exec chain refused to anyone but the owner is audited as the owner's routes'
+/// refused reads are: the chain holds the server's secrets.
+async fn owner_only<T>(
+    state: &AppState,
+    caller: &Caller,
+    route: &str,
+    read: Result<T, Error>,
+) -> Result<T, Error> {
+    match read {
+        Err(error) if error.code() == Some(ErrorCode::OwnerOnly) => {
+            state.accounts.authorize_owner(caller, "GET", route, true).await?;
+            Err(error)
+        }
+        read => read,
+    }
 }
 
 pub(crate) async fn settings(State(state): State<AppState>) -> Result<Json<ChangesSettingsView>, Failure> {

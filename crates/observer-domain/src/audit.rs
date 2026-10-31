@@ -140,10 +140,12 @@ pub enum AuditAction {
     ChangeSettingsChanged,
     ChangeContentsPurged,
     ChangeVerifyRequested,
+    /// A check of the disk, which reads the server folder at the capped rate.
+    ChangeCheckRequested,
 }
 
 impl AuditAction {
-    pub const ALL: [Self; 77] = [
+    pub const ALL: [Self; 78] = [
         Self::SetupCompleted,
         Self::SetupLinkCreated,
         Self::LoginSucceeded,
@@ -221,6 +223,7 @@ impl AuditAction {
         Self::ChangeSettingsChanged,
         Self::ChangeContentsPurged,
         Self::ChangeVerifyRequested,
+        Self::ChangeCheckRequested,
     ];
 
     pub const fn as_str(self) -> &'static str {
@@ -302,6 +305,7 @@ impl AuditAction {
             Self::ChangeSettingsChanged => "change_settings_changed",
             Self::ChangeContentsPurged => "change_contents_purged",
             Self::ChangeVerifyRequested => "change_verify_requested",
+            Self::ChangeCheckRequested => "change_check_requested",
         }
     }
 

@@ -5,8 +5,8 @@
 use std::collections::{HashMap, HashSet};
 
 use observer_domain::changes::{
-    ChangeCounts, FileChange, FileChangeKind, FileCounts, FileFlag, FileKind, LineCounts, ResourceChange,
-    ResourceChangeKind, SnapshotKind, SnapshotState, SnapshotSummary, hidden,
+    ChangeCounts, FileChange, FileChangeKind, FileCounts, FileFlag, FileKind, LineCounts, PartialReason,
+    ResourceChange, ResourceChangeKind, SnapshotKind, SnapshotState, SnapshotSummary, hidden,
 };
 use observer_domain::files::{NEVER_SHOW, glob_matches};
 use observer_fxserver::changes::tree::TreeEntry;
@@ -443,6 +443,15 @@ pub(crate) fn summary(snapshot: &Snapshot, counts: Option<ChangeCounts>, crashed
 }
 
 /// Whether the snapshot's job is over: a resource still without a tree then stays unknown.
+/// Whether the listing left resources out, at a limit or in a category it could not read: one
+/// missing from it is not known to be gone.
+pub(crate) fn shortened(snapshot: &Snapshot) -> bool {
+    matches!(
+        snapshot.partial_reason,
+        Some(PartialReason::Limit | PartialReason::Unreadable)
+    )
+}
+
 pub(crate) fn settled(snapshot: &Snapshot) -> bool {
     snapshot.settled() && !(snapshot.kind == SnapshotKind::Start && snapshot.state == SnapshotState::Listing)
 }

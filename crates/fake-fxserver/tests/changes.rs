@@ -11,14 +11,16 @@ use std::time::{Duration, Instant};
 
 use jiff::Timestamp;
 use observer_app::{
-    Accounts, Caller, Changes, ChangesSetup, ChangesTask, Client, Clock, DiffOptions, PasswordCost, Running,
-    Servers, Setup, Supervision,
+    Accounts, Caller, Changes, ChangesSetup, ChangesTask, Client, Clock, ComparedTo, DiffOptions,
+    PasswordCost, Running, Servers, Setup, Supervision,
 };
-use observer_domain::audit::ActorKind;
+use observer_domain::audit::{ActorKind, AuditAction};
 use observer_domain::changes::{
     FileChangeKind, FileKind, LiveChangeKind, ResourceChangeKind, SnapshotKind, SnapshotState, StartCause,
 };
+use observer_domain::error::ErrorCode;
 use observer_domain::launch::{LaunchSettings, OneSync};
+use observer_domain::permissions::Permissions;
 use observer_domain::server::{ServerState, ServerStatus};
 use observer_fxserver::changes::tree::TreeEntry;
 use observer_fxserver::console::plain;
@@ -27,7 +29,7 @@ use observer_fxserver::supervisor::StopTimings;
 use observer_store::artifacts::{self, ArtifactState};
 use observer_store::changes::snapshots::{self, Snapshot};
 use observer_store::changes::{live, resources, texts, trees};
-use observer_store::{ChangesDatabase, Database, StoreError};
+use observer_store::{ChangesDatabase, Database, StoreError, audit};
 use tempfile::TempDir;
 use tokio::time::timeout;
 
@@ -60,6 +62,7 @@ impl Drop for Port {
 
 struct Lab {
     dir: TempDir,
+    db: Database,
     _port: Port,
     store: ChangesDatabase,
     supervision: Supervision,
@@ -118,7 +121,7 @@ impl Lab {
             .await
             .unwrap();
         let (changes, following) = Changes::start(ChangesSetup {
-            db,
+            db: db.clone(),
             store: store.clone(),
             clock,
             supervision: supervision.clone(),
@@ -129,6 +132,7 @@ impl Lab {
         .unwrap();
         Self {
             dir,
+            db,
             _port: port,
             store,
             supervision,
@@ -526,5 +530,70 @@ async fn an_unchanged_restart_shares_the_previous_rows_and_a_live_restart_is_att
     let second = lab.settled_start(2).await;
     assert_eq!(second.same_as, Some(first.id));
     assert_eq!(lab.rows(&second).await, lab.rows(&first).await);
+    lab.stop().await;
+}
+
+#[tokio::test]
+async fn a_check_shows_at_once_and_is_audited_and_the_cfg_chain_stays_the_owners() {
+    let mut lab = Lab::new().await;
+    lab.supervision.start_server(&lab.owner).await.unwrap();
+    let first = lab.settled_start(1).await;
+
+    // The start's job may go on with a full verification, which the check waits for.
+    let deadline = Instant::now() + WAIT;
+    loop {
+        match lab.changes.check(&lab.owner).await {
+            Ok(_) => break,
+            Err(error) if error.code() == Some(ErrorCode::CheckRunning) && Instant::now() < deadline => {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+            Err(error) => panic!("{error}"),
+        }
+    }
+    let disk = lab
+        .changes
+        .compare(&lab.owner, None, Some(ComparedTo::Disk))
+        .await
+        .unwrap();
+    assert_eq!(disk.to.kind, SnapshotKind::Check);
+    assert_eq!(disk.from.id, first.id);
+    assert!(
+        disk.resources
+            .iter()
+            .all(|resource| resource.change != ResourceChangeKind::Removed),
+        "{:#?}",
+        disk.resources
+    );
+    let checks = lab
+        .db
+        .read(|conn| {
+            audit::of_actions(
+                conn,
+                &[AuditAction::ChangeCheckRequested],
+                Timestamp::MIN,
+                Timestamp::MAX,
+                10,
+            )
+        })
+        .await
+        .unwrap();
+    assert_eq!(checks.len(), 1);
+
+    let mut member = lab.owner.clone();
+    member.is_owner = false;
+    member.permissions = Permissions::CHANGES_VIEW | Permissions::CHANGES_CONTENT;
+    let start = Some(ComparedTo::Start(first.id));
+    let refused = lab
+        .changes
+        .diff(
+            &member,
+            Some(first.id),
+            start,
+            "server.cfg".to_owned(),
+            DiffOptions::default(),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(refused.code(), Some(ErrorCode::OwnerOnly));
     lab.stop().await;
 }

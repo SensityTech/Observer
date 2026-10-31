@@ -12,12 +12,12 @@ use observer_domain::changes::{
     ChangesSettingsView, Comparison, EnvironmentChange, EnvironmentFact, FileChange, FileChangeKind,
     FileDiff, FileFlag, FileKind, FileText, GameChange, LineCounts, LiveChange, NumberChange, PackageChange,
     ResourceChange, ResourceChangeKind, ResourceDetail, ResourceVersion, SettingChange, SnapshotKind,
-    StartList, glob_covers, hidden,
+    SnapshotState, StartList, glob_covers, hidden,
 };
 use observer_domain::error::{ApiError, ErrorCode};
 use observer_fxserver::bridge::{self, BridgeEvent, NumberMoved, StartChange, StartCounts, StartHead};
 use observer_fxserver::changes::diff::{self, DiffOptions};
-use observer_fxserver::changes::mask::{Masked, Redaction};
+use observer_fxserver::changes::mask::{self, Masked, Redaction};
 use observer_fxserver::changes::tree::TreeEntry;
 use observer_store::Connection;
 use observer_store::changes::resources::{self, ResourceRow};
@@ -124,12 +124,11 @@ fn snapshots_of(
     };
     let from = if let Some(id) = from {
         found(id)?
+    } else if to.kind == SnapshotKind::Start {
+        snapshots::reference(conn, SERVER, to.id)?.ok_or(ErrorCode::StartNotFound)?
     } else {
-        // The disk now compares with the start that runs, the newest.
-        let before = (to.kind == SnapshotKind::Start).then_some(to.id);
-        snapshots::starts(conn, SERVER, before, 1)?
-            .pop()
-            .ok_or(ErrorCode::StartNotFound)?
+        // The disk compares with the start that ran when it was checked.
+        snapshots::ran_at(conn, SERVER, to.taken_at)?.ok_or(ErrorCode::StartNotFound)?
     };
     Ok((from, to))
 }
@@ -222,8 +221,23 @@ fn changed_resources(
         }
         resources.push(change);
     }
+    // A side still listing has no rows yet, and one whose listing left resources out does not
+    // say the others are gone.
+    let missing = |side: &Side, otherwise: ResourceChangeKind| {
+        if side.snapshot.state == SnapshotState::Listing {
+            ResourceChangeKind::Checking
+        } else if compare::shortened(&side.snapshot) {
+            ResourceChangeKind::Unknown
+        } else {
+            otherwise
+        }
+    };
+    let (gone, new) = (
+        missing(to, ResourceChangeKind::Removed),
+        missing(from, ResourceChangeKind::Added),
+    );
     for before in removed.into_iter().map(|index| &from.rows[index]) {
-        let mut change = compare::resource_change(Some(before), None, ResourceChangeKind::Removed, true);
+        let mut change = compare::resource_change(Some(before), None, gone, true);
         if with_files && let Some(x) = entries(conn, before)? {
             change.files =
                 compare::file_counts(&compare::files(Some((&before.path, &x)), None, hidden_globs));
@@ -231,7 +245,7 @@ fn changed_resources(
         resources.push(change);
     }
     for after in added.into_iter().map(|index| &to.rows[index]) {
-        let mut change = compare::resource_change(None, Some(after), ResourceChangeKind::Added, true);
+        let mut change = compare::resource_change(None, Some(after), new, true);
         if with_files && let Some(y) = entries(conn, after)? {
             change.files = compare::file_counts(&compare::files(None, Some((&after.path, &y)), hidden_globs));
         }
@@ -396,6 +410,23 @@ fn cfg_change(
     Ok((cfg, chain))
 }
 
+/// What an attribution tells: a change of the launch settings shows others than the owner the
+/// settings the comparison shows them, never the cfg file, the data folder or the arguments' names.
+fn shown_details(action: AuditAction, details: Value, owner: bool) -> Value {
+    if owner || action != AuditAction::LaunchSettingsChanged {
+        return details;
+    }
+    match details {
+        Value::Object(fields) => Value::Object(
+            fields
+                .into_iter()
+                .filter(|(name, _)| SHOWN_SETTINGS.contains(&name.as_str()))
+                .collect(),
+        ),
+        _ => Value::Null,
+    }
+}
+
 /// The launch settings compared: what every viewer sees, and for the owner the cfg file, the data
 /// folder and which argument's value changed.
 fn environment(from: &Snapshot, to: &Snapshot, owner: bool) -> EnvironmentChange {
@@ -501,7 +532,7 @@ impl Changes {
                 let mut sides: HashMap<i64, Side> = HashMap::new();
                 let mut summaries = Vec::with_capacity(starts.len());
                 for snapshot in &starts {
-                    let earlier = snapshots::starts(conn, SERVER, Some(snapshot.id), 1)?.pop();
+                    let earlier = snapshots::reference(conn, SERVER, snapshot.id)?;
                     let counts = match earlier {
                         Some(earlier) if !snapshot.baseline && snapshot.listed_at.is_some() => {
                             for side_of in [&earlier, snapshot] {
@@ -540,9 +571,11 @@ impl Changes {
             .shared
             .store
             .read(move |conn| -> Result<ChangesLive, Error> {
-                let mut starts = snapshots::starts(conn, SERVER, None, 2)?.into_iter();
-                let latest = starts.next();
-                let earlier = starts.next();
+                let latest = snapshots::starts(conn, SERVER, None, 1)?.pop();
+                let earlier = match &latest {
+                    Some(latest) => snapshots::reference(conn, SERVER, latest.id)?,
+                    None => None,
+                };
                 let latest = latest
                     .map(|latest| -> Result<_, StoreError> {
                         let counts = match &earlier {
@@ -577,7 +610,7 @@ impl Changes {
             .read(move |conn| -> Result<BridgeEvent, Error> {
                 let to = snapshots::get(conn, id)?.ok_or(ErrorCode::StartNotFound)?;
                 let millis = |at: Timestamp| at.as_millisecond();
-                let earlier = snapshots::starts(conn, SERVER, Some(id), 1)?.pop();
+                let earlier = snapshots::reference(conn, SERVER, id)?;
                 let Some(from) = earlier.filter(|_| !to.baseline) else {
                     let head = StartHead {
                         at: millis(to.taken_at),
@@ -695,10 +728,10 @@ impl Changes {
         environment.attributions = environment_entries
             .into_iter()
             .map(|entry| Attribution {
+                details: shown_details(entry.action, entry.details, caller.is_owner),
                 action: entry.action,
                 by: entry.actor_name,
                 at: entry.at,
-                details: entry.details,
             })
             .collect();
         let mut cfg = compared.cfg;
@@ -819,7 +852,7 @@ impl Changes {
         }
         let owner = caller.is_owner;
         let lookup = path.clone();
-        let (from_id, to_id, resource, file, diff) = self
+        let (from_id, to_id, resource, chain, file, diff) = self
             .inner
             .shared
             .store
@@ -829,10 +862,11 @@ impl Changes {
                 if before.is_none() && after.is_none() {
                     return Err(ErrorCode::NotFound.into());
                 }
-                let in_chain = before
-                    .as_ref()
-                    .or(after.as_ref())
-                    .is_some_and(|located| located.chain);
+                // A file the chain runs on either side is the owner's on both.
+                let in_chain = [&before, &after]
+                    .into_iter()
+                    .flatten()
+                    .any(|located| located.chain);
                 if in_chain && !owner {
                     return Err(ErrorCode::OwnerOnly.into());
                 }
@@ -879,13 +913,14 @@ impl Changes {
                         .map(|(_, flag)| flag)
                         .collect();
                 }
-                Ok((from.id, to.id, resource, file, diff))
+                Ok((from.id, to.id, resource, in_chain, file, diff))
             })
             .await?;
         if diff.is_some() {
             self.audit_read(
                 caller,
                 &path,
+                chain,
                 json!({ "from": from_id, "to": to_id, "resource": resource, "view": "diff" }),
             )
             .await?;
@@ -909,7 +944,7 @@ impl Changes {
         }
         let owner = caller.is_owner;
         let lookup = path.clone();
-        let (resource, text) = self
+        let (resource, chain, text) = self
             .inner
             .shared
             .store
@@ -928,12 +963,13 @@ impl Changes {
                     .ok_or(ErrorCode::ContentNotKept)?
                     .to_owned();
                 let text = masked(conn, &digest)?.ok_or(ErrorCode::ContentNotKept)?;
-                Ok((located.resource, diff::page(&text, page)))
+                Ok((located.resource, located.chain, diff::page(&text, page)))
             })
             .await?;
         self.audit_read(
             caller,
             &path,
+            chain,
             json!({ "from": snapshot, "to": snapshot, "resource": resource, "view": "file" }),
         )
         .await?;
@@ -941,14 +977,27 @@ impl Changes {
     }
 
     /// Audits a read of contents, unless the same account read the same file of the same pair of
-    /// snapshots within the hour: the audit log is append-only, so repeats are left out.
-    async fn audit_read(&self, caller: &Caller, path: &str, details: Value) -> Result<(), Error> {
+    /// snapshots within the hour: the audit log is append-only, so repeats are left out. A file of
+    /// the cfg exec chain, outside any resource, is named by a keyed tag: its path may say where
+    /// the host keeps its secrets, and the audit log is read by more than the owner.
+    async fn audit_read(
+        &self,
+        caller: &Caller,
+        path: &str,
+        chain: bool,
+        details: Value,
+    ) -> Result<(), Error> {
         let now = self.inner.shared.clock.now();
         let since = now - AUDIT_WINDOW;
+        let target = if chain {
+            format!("cfg:{:04x}", mask::tag(path, &self.inner.shared.keys.tag))
+        } else {
+            path.to_owned()
+        };
         let record = Record::by(caller, AuditAction::ChangeContentsViewed)
-            .target(path)
+            .target(&target)
             .details(details.clone());
-        let (user, path) = (caller.username.clone(), path.to_owned());
+        let (user, path) = (caller.username.clone(), target);
         self.inner
             .shared
             .db
@@ -1222,4 +1271,26 @@ fn packages(before: Option<&ResourceRow>, after: Option<&ResourceRow>) -> Vec<Pa
         .collect();
     changes.sort_by(|a, b| a.name.cmp(&b.name));
     changes
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn others_than_the_owner_see_only_the_shown_launch_settings_in_an_attribution() {
+        let details = json!({
+            "onesync": { "before": "on", "after": "legacy" },
+            "cfgFile": true,
+            "extraArguments": { "set": ["sv_licenseKey"], "removed": [] },
+        });
+
+        let shown = shown_details(AuditAction::LaunchSettingsChanged, details.clone(), false);
+        let owner = shown_details(AuditAction::LaunchSettingsChanged, details.clone(), true);
+        let build = shown_details(AuditAction::BuildSelected, details.clone(), false);
+
+        assert_eq!(shown, json!({ "onesync": { "before": "on", "after": "legacy" } }));
+        assert_eq!(owner, details);
+        assert_eq!(build, details);
+    }
 }

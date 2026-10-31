@@ -2617,6 +2617,7 @@ export const en = {
             change_settings_changed: 'Change tracking settings changed',
             change_contents_purged: 'Kept contents of a file purged',
             change_verify_requested: 'Full verification of the files asked for',
+            change_check_requested: 'Check of the disk asked for',
         } satisfies Record<AuditAction, string>,
         outcomes: {
             success: 'Success',

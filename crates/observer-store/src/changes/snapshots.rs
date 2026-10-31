@@ -234,6 +234,42 @@ pub fn previous_complete(
         .optional()?)
 }
 
+/// The start a start is compared with when nothing else is asked: the newest listed one before
+/// it, one whose files were all read if there is any. A failed start, or one cut short before its
+/// listing ended, has no rows to compare.
+pub fn reference(conn: &Connection, server: &str, before: i64) -> Result<Option<Snapshot>, StoreError> {
+    Ok(conn
+        .query_row(
+            &format!(
+                "SELECT {COLUMNS} FROM snapshot
+                 WHERE server_id = ?1 AND kind = 'start' AND id < ?2
+                   AND state <> 'failed' AND listed_at IS NOT NULL
+                 ORDER BY state = 'complete' OR (state = 'partial' AND partial_reason <> 'cancelled') DESC,
+                          id DESC
+                 LIMIT 1"
+            ),
+            params![server, before],
+            read,
+        )
+        .optional()?)
+}
+
+/// The start that ran when a check was taken at `at`: the newest listed one taken before it.
+pub fn ran_at(conn: &Connection, server: &str, at: Timestamp) -> Result<Option<Snapshot>, StoreError> {
+    Ok(conn
+        .query_row(
+            &format!(
+                "SELECT {COLUMNS} FROM snapshot
+                 WHERE server_id = ?1 AND kind = 'start' AND taken_at <= ?2
+                   AND state <> 'failed' AND listed_at IS NOT NULL
+                 ORDER BY id DESC LIMIT 1"
+            ),
+            params![server, Utc(at)],
+            read,
+        )
+        .optional()?)
+}
+
 /// The latest check of the disk, kept until the next one replaces it.
 pub fn latest_check(conn: &Connection, server: &str) -> Result<Option<Snapshot>, StoreError> {
     Ok(conn
@@ -252,7 +288,9 @@ pub fn latest_check(conn: &Connection, server: &str) -> Result<Option<Snapshot>,
 pub fn has_starts(conn: &Connection, server: &str) -> Result<bool, StoreError> {
     Ok(conn
         .query_row(
-            "SELECT 1 FROM snapshot WHERE server_id = ?1 AND kind = 'start' AND state <> 'failed' LIMIT 1",
+            "SELECT 1 FROM snapshot
+             WHERE server_id = ?1 AND kind = 'start' AND state <> 'failed' AND listed_at IS NOT NULL
+             LIMIT 1",
             [server],
             |_| Ok(()),
         )
@@ -404,6 +442,70 @@ mod tests {
             first
         );
         assert_eq!(interrupted(&conn, Timestamp::now()).unwrap(), 1);
+    }
+
+    #[test]
+    fn a_start_compares_with_the_newest_listed_one_whose_files_were_all_read() {
+        let conn = memory();
+        let at = Timestamp::from_second(1_793_000_000).unwrap();
+        assert!(!has_starts(&conn, "default").unwrap());
+        let read = insert(&conn, &sample("default", 0)).unwrap();
+        listed(&conn, read, 1, 1, SnapshotState::Hashing, at).unwrap();
+        finish(
+            &conn,
+            read,
+            SnapshotState::Partial,
+            Some(PartialReason::Limit),
+            at,
+        )
+        .unwrap();
+        let cut = insert(&conn, &sample("default", 1)).unwrap();
+        listed(&conn, cut, 1, 1, SnapshotState::Hashing, at).unwrap();
+        finish(
+            &conn,
+            cut,
+            SnapshotState::Partial,
+            Some(PartialReason::Cancelled),
+            at,
+        )
+        .unwrap();
+        let unlisted = insert(&conn, &sample("default", 2)).unwrap();
+        finish(
+            &conn,
+            unlisted,
+            SnapshotState::Partial,
+            Some(PartialReason::Cancelled),
+            at,
+        )
+        .unwrap();
+        let failed = insert(&conn, &sample("default", 3)).unwrap();
+        fail(&conn, failed, "no resources folder", at).unwrap();
+        let latest = insert(&conn, &sample("default", 4)).unwrap();
+
+        assert_eq!(reference(&conn, "default", latest).unwrap().unwrap().id, read);
+        assert_eq!(reference(&conn, "default", read).unwrap(), None);
+        let check_at = Timestamp::from_second(1_793_000_000 + 150).unwrap();
+        assert_eq!(ran_at(&conn, "default", check_at).unwrap().unwrap().id, cut);
+        assert!(has_starts(&conn, "default").unwrap());
+    }
+
+    #[test]
+    fn a_start_that_failed_or_was_never_listed_leaves_the_next_a_baseline() {
+        let conn = memory();
+        let at = Timestamp::from_second(1_793_000_000).unwrap();
+        let failed = insert(&conn, &sample("default", 0)).unwrap();
+        fail(&conn, failed, "no resources folder", at).unwrap();
+        let unlisted = insert(&conn, &sample("default", 1)).unwrap();
+        finish(
+            &conn,
+            unlisted,
+            SnapshotState::Partial,
+            Some(PartialReason::Cancelled),
+            at,
+        )
+        .unwrap();
+
+        assert!(!has_starts(&conn, "default").unwrap());
     }
 
     #[test]

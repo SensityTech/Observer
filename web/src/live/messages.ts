@@ -229,6 +229,7 @@ const AUDIT_ACTIONS = {
     change_settings_changed: true,
     change_contents_purged: true,
     change_verify_requested: true,
+    change_check_requested: true,
 } satisfies Record<AuditAction, true>;
 
 const OUTCOMES = { success: true, failure: true, denied: true } satisfies Record<Outcome, true>;
