@@ -317,6 +317,9 @@ trusted_proxies = ["127.0.0.1"]      # the proxy, as Observer sees it
 - Behind HTTPS, the session cookie gets `Secure`, and every response carries
   `Strict-Transport-Security: max-age=31536000`, without `includeSubDomains`. A proxy that adds its own
   sends the header twice.
+- A browser that saw that header reaches the name over HTTPS only, on every port, for a year. Give the
+  panel a name of its own, which no plain-HTTP service shares: txAdmin on port 40120 under the same name
+  would no longer open in that browser.
 - The setup link names the `listen` address. Behind the proxy, open the same path and fragment on the
   public name: `https://panel.example.com/setup#<token>`.
 
