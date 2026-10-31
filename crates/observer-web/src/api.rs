@@ -9,6 +9,7 @@ mod audit;
 mod auth;
 mod diagnostics;
 mod metrics;
+mod players;
 mod schedule;
 mod servers;
 mod setup;
@@ -71,6 +72,10 @@ pub(crate) fn routes() -> Vec<Route> {
     let change_builds = Reauthenticated(P::ARTIFACTS_MANAGE);
     // A crash's files hold FXServer's memory: the owner's alone, with the password again.
     let dumps = ReauthenticatedOwner;
+    // Names, licences and play time; identifiers and linked accounts need PLAYER_IDENTIFIERS_VIEW
+    // too, which the service checks on what is asked. Retentions and erasures are the owner's.
+    let players = Permission(P::PLAYERS_VIEW);
+    let erase = ReauthenticatedOwner;
     vec![
         route(M::GET,    "/health",                     Public,       health),
         route(M::GET,    "/setup",                      Public,       setup::status),
@@ -127,6 +132,13 @@ pub(crate) fn routes() -> Vec<Route> {
         route(M::GET,    "/about/licences",             Session,      about::licences),
         route(M::GET,    "/servers/default/crashes/{id}/files/{name}", dumps, diagnostics::download_file),
         route(M::DELETE, "/servers/default/crashes/{id}/files",        dumps, diagnostics::delete_files),
+        route(M::GET,    "/servers/default/players",           players, players::page),
+        route(M::GET,    "/servers/default/players/online",    players, players::online),
+        route(M::GET,    "/servers/default/players/community", players, players::community),
+        route(M::GET,    "/servers/default/players/settings",  Owner,   players::settings),
+        route(M::PUT,    "/servers/default/players/settings",  erase,   players::change_settings),
+        route(M::GET,    "/servers/default/players/{id}",      players, players::profile),
+        route(M::DELETE, "/servers/default/players/{id}",      erase,   players::forget),
     ]
 }
 

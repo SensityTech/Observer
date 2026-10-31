@@ -16,6 +16,7 @@ use std::time::{Duration, Instant};
 
 use jiff::tz::TimeZone;
 use jiff::{SignedDuration, Timestamp};
+use observer_domain::audit::AuditAction;
 use observer_domain::drops::{DropCategory, DropKind};
 use observer_domain::error::{ApiError, ErrorCode};
 use observer_domain::permissions::Permissions;
@@ -30,6 +31,7 @@ use observer_store::metrics::runs::RunKey;
 use observer_store::metrics::sessions::{self as stored_sessions, Closure};
 use observer_store::players::{self as stored, Credit, PlayerFilter, PlayerQuery, Seen};
 use observer_store::{Database, MetricsDatabase, StoreError};
+use serde_json::json;
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
@@ -38,7 +40,8 @@ use tracing::{info, warn};
 
 use self::identity::{Fingerprints, Keys, hex, split_days};
 use self::sessions::{ClosureWrite, Identity, IdentityWrite, Sessions};
-use crate::{Clock, Error, Metrics, Supervision};
+use crate::audit::Record;
+use crate::{Caller, Clock, Error, Metrics, Servers, Supervision};
 
 const FLUSH_EVERY: Duration = Duration::from_secs(1);
 const UPKEEP_EVERY: Duration = Duration::from_hours(1);
@@ -436,30 +439,47 @@ impl Players {
         Ok(self.inner.db.read(stored::settings).await?)
     }
 
-    pub async fn change_settings(&self, settings: PlayersSettings) -> Result<(), Error> {
+    /// Changes the retentions; the owner's alone, which the route checks.
+    pub async fn change_settings(&self, caller: &Caller, settings: PlayersSettings) -> Result<(), Error> {
         if settings.check().is_err() {
             return Err(ErrorCode::InvalidPlayersSettings.into());
         }
+        let before = self.settings().await?;
+        if before == settings {
+            return Ok(());
+        }
+        let record = Record::by(caller, AuditAction::PlayersRetentionChanged)
+            .target(Servers::DEFAULT)
+            .details(json!({ "from": before, "to": settings }));
+        let now = self.inner.clock.now();
         self.inner
             .db
-            .write(move |tx| stored::save_settings(tx, &settings))
+            .write(move |tx| -> Result<(), StoreError> {
+                stored::save_settings(tx, &settings)?;
+                record.write(tx, now)
+            })
             .await?;
         Ok(())
     }
 
-    /// Forgets a player for an erasure request. Returns the licence's keyed fingerprint in hex,
-    /// which the audit entry carries instead of the licence.
-    pub async fn forget(&self, player: i64) -> Result<String, Error> {
+    /// Forgets a player for an erasure request: their profile, play time, identifiers others do
+    /// not hold, names, and the texts and pseudonym of their sessions. The audit entry names the
+    /// licence's keyed fingerprint, never the licence.
+    pub async fn forget(&self, caller: &Caller, player: i64) -> Result<(), Error> {
         let (reply, answer) = oneshot::channel();
         self.inner
             .requests
             .send(Request::Forget { player, reply })
             .await
             .map_err(|_| Error::from(ErrorCode::ShuttingDown))?;
-        let forgotten = answer.await.map_err(|_| Error::from(ErrorCode::ShuttingDown))??;
-        forgotten
-            .map(|fingerprint| hex(&fingerprint))
-            .ok_or_else(|| ErrorCode::PlayerNotFound.into())
+        let fingerprint = answer
+            .await
+            .map_err(|_| Error::from(ErrorCode::ShuttingDown))??
+            .ok_or(ErrorCode::PlayerNotFound)?;
+        let record = Record::by(caller, AuditAction::PlayerForgotten).target(hex(&fingerprint));
+        let now = self.inner.clock.now();
+        self.inner.db.write(move |tx| record.write(tx, now)).await?;
+        Ok(())
     }
 
     fn today(&self) -> (TimeZone, String) {
@@ -750,7 +770,7 @@ impl Worker {
             }
             Err(FlushError::RunMissing) => {}
             Err(FlushError::Store(error)) => {
-                self.failed(&error, "the players' sessions could not be written")
+                self.failed(&error, "the players' sessions could not be written");
             }
         }
     }

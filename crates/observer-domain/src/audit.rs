@@ -102,10 +102,17 @@ pub enum AuditAction {
     /// once when it happens, then at the run's end with the starts whose command line was not kept
     /// in `unrecorded`.
     TreeRecordsFull,
+    /// Every trace of a player was erased on request. The target is the licence's keyed
+    /// fingerprint, never the licence.
+    PlayerForgotten,
+    /// txAdmin's players database was taken in. The details hold the file's size and counts only.
+    PlayersImported,
+    /// The retentions of the players' identities, play time per day and profiles changed.
+    PlayersRetentionChanged,
 }
 
 impl AuditAction {
-    pub const ALL: [Self; 48] = [
+    pub const ALL: [Self; 51] = [
         Self::SetupCompleted,
         Self::SetupLinkCreated,
         Self::LoginSucceeded,
@@ -154,6 +161,9 @@ impl AuditAction {
         Self::CrashFileDownloaded,
         Self::CrashFilesDeleted,
         Self::TreeRecordsFull,
+        Self::PlayerForgotten,
+        Self::PlayersImported,
+        Self::PlayersRetentionChanged,
     ];
 
     pub const fn as_str(self) -> &'static str {
@@ -206,6 +216,9 @@ impl AuditAction {
             Self::CrashFileDownloaded => "crash_file_downloaded",
             Self::CrashFilesDeleted => "crash_files_deleted",
             Self::TreeRecordsFull => "tree_records_full",
+            Self::PlayerForgotten => "player_forgotten",
+            Self::PlayersImported => "players_imported",
+            Self::PlayersRetentionChanged => "players_retention_changed",
         }
     }
 
