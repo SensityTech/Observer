@@ -558,6 +558,9 @@ async fn a_check_shows_at_once_and_is_audited_and_the_cfg_chain_stays_the_owners
         .unwrap();
     assert_eq!(disk.to.kind, SnapshotKind::Check);
     assert_eq!(disk.from.id, first.id);
+    // A check runs nothing: it has no build to differ by.
+    assert_eq!(disk.environment.build, None);
+    assert_eq!(disk.counts.environment, []);
     assert!(
         disk.resources
             .iter()

@@ -152,7 +152,13 @@ fn compared(
 ) -> Result<Compared, StoreError> {
     let (resources, unchanged) = changed_resources(conn, from, to, hidden_globs, with_files)?;
     let mut counts = compare::count(&resources, unchanged);
-    let (cfg, _) = cfg_change(conn, &from.snapshot, &to.snapshot)?;
+    // A side still listing has read no cfg yet: its chain is not known to differ.
+    let listed = from.snapshot.listed_at.is_some() && to.snapshot.listed_at.is_some();
+    let cfg = if listed {
+        cfg_change(conn, &from.snapshot, &to.snapshot)?.0
+    } else {
+        CfgChange::default()
+    };
     counts.environment = environment_facts(&from.snapshot, &to.snapshot, &cfg);
     let (live, changed_while_starting) = live_of(conn, &to.snapshot)?;
     Ok(Compared {
@@ -260,11 +266,19 @@ fn changed_resources(
     Ok((resources, unchanged))
 }
 
+/// Whether the builds of two snapshots compare: a check of the disk runs nothing, so it has none.
+fn builds(from: &Snapshot, to: &Snapshot) -> bool {
+    from.kind == SnapshotKind::Start && to.kind == SnapshotKind::Start
+}
+
 /// What changed besides the resources.
 fn environment_facts(from: &Snapshot, to: &Snapshot, cfg: &CfgChange) -> Vec<EnvironmentFact> {
     [
-        (EnvironmentFact::Build, from.build != to.build),
-        (EnvironmentFact::GameBuild, from.game_build != to.game_build),
+        (EnvironmentFact::Build, builds(from, to) && from.build != to.build),
+        (
+            EnvironmentFact::GameBuild,
+            builds(from, to) && from.game_build != to.game_build,
+        ),
         (EnvironmentFact::Launch, from.launch != to.launch),
         (
             EnvironmentFact::Cfg,
@@ -495,8 +509,8 @@ fn environment(from: &Snapshot, to: &Snapshot, owner: bool) -> EnvironmentChange
         }
     }
     EnvironmentChange {
-        build: number(from.build, to.build),
-        game_build: number(from.game_build, to.game_build),
+        build: number(from.build, to.build).filter(|_| builds(from, to)),
+        game_build: number(from.game_build, to.game_build).filter(|_| builds(from, to)),
         game: (from.game != to.game).then_some(GameChange {
             from: from.game,
             to: to.game,

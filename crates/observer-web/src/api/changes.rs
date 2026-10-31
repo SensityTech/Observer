@@ -149,7 +149,7 @@ pub(crate) async fn check(
     Extension(caller): Extension<Caller>,
 ) -> Result<StatusCode, Failure> {
     state.changes.check(&caller).await?;
-    Ok(StatusCode::ACCEPTED)
+    Ok(StatusCode::NO_CONTENT)
 }
 
 pub(crate) async fn diff(
@@ -227,7 +227,7 @@ pub(crate) async fn verify(
     Extension(caller): Extension<Caller>,
 ) -> Result<StatusCode, Failure> {
     state.changes.verify(&caller).await?;
-    Ok(StatusCode::ACCEPTED)
+    Ok(StatusCode::NO_CONTENT)
 }
 
 pub(crate) async fn purge(
