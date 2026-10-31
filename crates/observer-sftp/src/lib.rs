@@ -286,8 +286,8 @@ async fn revoke_on_change(files: Files, grant: Grant, ip: IpAddr, handle: russh:
     recheck.tick().await;
     loop {
         tokio::select! {
-            changed = changes.changed() => {
-                if changed.is_err() {
+            signal = changes.changed() => {
+                if signal.is_err() {
                     return;
                 }
             }
