@@ -199,6 +199,10 @@ export const en = {
     app: {
         name: 'Observer',
         skipToContent: 'Skip to content',
+        plainHttp: {
+            title: 'Unencrypted connection.',
+            body: 'Passwords and console commands travel in clear text. Put Observer behind an HTTPS proxy or reach it over a VPN.',
+        },
     },
     common: {
         cancel: 'Cancel',
