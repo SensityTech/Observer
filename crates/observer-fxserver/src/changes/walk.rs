@@ -2,10 +2,11 @@
 //! every entry with its size and time, reading no file but the manifests, git heads and npm
 //! package files. Links and junctions are followed, as FXServer follows them; a loop is cut.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, VecDeque};
 use std::fs::{self, DirEntry, Metadata};
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
+use std::rc::Rc;
 
 use observer_domain::changes::{GitHead, Manifest, Package, glob_covers, hidden};
 use observer_domain::files::UPLOAD_PREFIX;
@@ -135,7 +136,8 @@ pub enum Shortened {
 pub struct Listing {
     pub resources: Vec<ResourceListing>,
     pub shortened: Option<Shortened>,
-    /// Categories that could not be read: their resources are not listed, which is no removal.
+    /// Folders that could not be read, categories or folders of a resource: what they hold is not
+    /// listed, which is no removal.
     pub unreadable: Vec<String>,
 }
 
@@ -208,15 +210,47 @@ struct Pending {
     location: PathBuf,
     path: String,
     depth: usize,
-    /// Below a followed link: what lies there is checked where it really is.
+    /// Where it really is, when the file system resolves it.
+    really: Option<PathBuf>,
+    /// Below a followed link, or in a resource reached through one: what lies there is checked
+    /// where it really is.
     linked: bool,
+    /// The resource's real folder and the targets of the links followed down to this one: a link
+    /// back to one of them is a loop.
+    chain: Rc<[PathBuf]>,
+}
+
+impl Pending {
+    /// Its folder `name`, reached through a link onto `target` when there is one.
+    fn below(&self, location: PathBuf, path: String, name: &str, target: Option<PathBuf>) -> Self {
+        let depth = self.depth + 1;
+        match target {
+            Some(target) => Self {
+                location,
+                path,
+                depth,
+                really: Some(target.clone()),
+                linked: true,
+                chain: self.chain.iter().cloned().chain([target]).collect(),
+            },
+            None => Self {
+                location,
+                path,
+                depth,
+                really: self.really.as_ref().map(|here| here.join(name)),
+                linked: self.linked,
+                chain: Rc::clone(&self.chain),
+            },
+        }
+    }
 }
 
 impl Walk<'_> {
     /// Walks the categories breadth first, in name order, as FXServer finds the resources.
     fn categories(&mut self, folder: PathBuf, path: String) -> Result<(), Cancelled> {
-        let mut queue = std::collections::VecDeque::from([(folder, path, 1)]);
-        while let Some((folder, path, depth)) = queue.pop_front() {
+        let chain: Rc<[PathBuf]> = fs::canonicalize(&folder).ok().into_iter().collect();
+        let mut queue = VecDeque::from([(folder, path, chain, 1)]);
+        while let Some((folder, path, chain, depth)) = queue.pop_front() {
             let Ok(entries) = sorted(&folder) else {
                 self.listing.unreadable.push(path);
                 continue;
@@ -233,17 +267,28 @@ impl Walk<'_> {
                 if self.excluded(&child) || !self.folder(&entry) {
                     continue;
                 }
+                // A category or a resource is checked where it really is, as a link's target is:
+                // one reached through a link may be one of Observer's own folders.
+                let really = fs::canonicalize(entry.path()).ok();
+                if let Some(really) = &really {
+                    // A link back to a category on the way here would list it again at each level.
+                    let looped = chain.iter().any(|category| category.starts_with(really));
+                    if looped || matches!(self.guard(really), Guard::Refused) {
+                        continue;
+                    }
+                }
                 let lower = name.to_ascii_lowercase();
                 if name.starts_with('[') && name.ends_with(']') {
                     if depth < self.limits.depth {
-                        queue.push_back((entry.path(), child, depth + 1));
+                        let chain = chain.iter().cloned().chain(really).collect();
+                        queue.push_back((entry.path(), child, chain, depth + 1));
                     }
                 } else if !NOT_RESOURCES.contains(&lower.as_str()) && !name.starts_with(UPLOAD_PREFIX) {
                     if self.listing.resources.len() >= self.limits.resources {
                         self.listing.shortened = Some(Shortened::Resources);
                         return Ok(());
                     }
-                    self.resource(entry.path(), child, name, lower, depth)?;
+                    self.resource(entry.path(), really, child, name, lower, depth)?;
                 }
             }
         }
@@ -266,6 +311,7 @@ impl Walk<'_> {
     fn resource(
         &mut self,
         location: PathBuf,
+        really: Option<PathBuf>,
         path: String,
         shown_name: String,
         name: String,
@@ -290,40 +336,42 @@ impl Walk<'_> {
             packages: Vec::new(),
             entries: Vec::new(),
         };
-        let resolved = fs::canonicalize(&location).ok();
-        let mut visited: HashSet<PathBuf> = resolved.iter().cloned().collect();
-        let mut stack = vec![(
-            Pending {
-                location,
-                path,
-                depth,
-                linked: false,
-            },
-            resolved,
-        )];
-        while let Some((folder, resolved)) = stack.pop() {
+        // A resource reached through a link, its own or a category's, is checked where it really
+        // is, as what lies below a link inside a resource.
+        let linked = match (&self.root, &really) {
+            (Some(root), Some(really)) => {
+                let mut there = root.clone();
+                there.extend(path.split('/'));
+                *really != there
+            }
+            _ => true,
+        };
+        let mut stack = vec![Pending {
+            location,
+            path,
+            depth,
+            chain: really.iter().cloned().collect(),
+            really,
+            linked,
+        }];
+        while let Some(folder) = stack.pop() {
             self.check()?;
             let Ok(entries) = sorted(&folder.location) else {
+                // What it holds is unknown, which is no removal: the snapshot is partial.
+                self.files += 1;
+                self.listing.unreadable.push(folder.path.clone());
                 unreadable(&mut resource, folder.location, folder.path);
                 continue;
             };
-            // Reversed so that the stack walks folders in name order.
             let mut folders = Vec::new();
             for entry in entries {
                 if self.files >= self.limits.files {
                     self.listing.shortened = Some(Shortened::Files);
                     break;
                 }
-                self.entry(&mut resource, &folder, resolved.as_deref(), &entry, &mut folders);
+                self.entry(&mut resource, &folder, &entry, &mut folders);
             }
-            // A folder reached twice through links, as two junctions pointing at each other's
-            // folders make it, is walked once.
-            folders.retain(|(pending, resolved): &(Pending, Option<PathBuf>)| {
-                !pending.linked
-                    || resolved
-                        .as_ref()
-                        .is_none_or(|resolved| visited.insert(resolved.clone()))
-            });
+            // Reversed so that the stack walks folders in name order.
             stack.extend(folders.into_iter().rev());
         }
         resource.packages.sort();
@@ -336,9 +384,8 @@ impl Walk<'_> {
         &mut self,
         resource: &mut ResourceListing,
         folder: &Pending,
-        resolved: Option<&Path>,
         entry: &DirEntry,
-        folders: &mut Vec<(Pending, Option<PathBuf>)>,
+        folders: &mut Vec<Pending>,
     ) {
         let location = entry.path();
         let Ok(name) = entry.file_name().into_string() else {
@@ -353,7 +400,7 @@ impl Walk<'_> {
         }
         let mut hidden_below_link = false;
         if folder.linked
-            && let Some(really) = resolved.map(|here| here.join(&name))
+            && let Some(really) = folder.really.as_ref().map(|here| here.join(&name))
         {
             match self.guard(&really) {
                 Guard::Refused => return,
@@ -372,14 +419,14 @@ impl Walk<'_> {
             return;
         };
         let mut metadata = entry.metadata().ok();
-        let mut child = None;
+        let mut target = None;
         if kind.is_symlink() {
-            let Some((target_metadata, resolved_target)) = self.link(resource, &path, &location, resolved)
+            let Some((target_metadata, resolved_target)) = self.link(resource, &path, &location, folder)
             else {
                 return;
             };
             if target_metadata.is_dir() {
-                child = Some(resolved_target);
+                target = Some(resolved_target);
             }
             metadata = Some(target_metadata);
         }
@@ -402,17 +449,7 @@ impl Walk<'_> {
                 unreadable(resource, location, path);
                 return;
             }
-            let linked = folder.linked || child.is_some();
-            let resolved = child.or_else(|| resolved.map(|here| here.join(&name)));
-            folders.push((
-                Pending {
-                    location,
-                    path,
-                    depth: folder.depth + 1,
-                    linked,
-                },
-                resolved,
-            ));
+            folders.push(folder.below(location, path, &name, target));
             return;
         }
         self.files += 1;
@@ -437,7 +474,7 @@ impl Walk<'_> {
         resource: &mut ResourceListing,
         path: &str,
         location: &Path,
-        resolved: Option<&Path>,
+        folder: &Pending,
     ) -> Option<(Metadata, PathBuf)> {
         let target = fs::read_link(location)
             .map(|target| target.to_string_lossy().into_owned())
@@ -445,8 +482,14 @@ impl Walk<'_> {
         let followed = self
             .followable(location)
             .filter(|resolved_target| {
-                // A target that holds the folder being walked leads back to it.
-                resolved.is_none_or(|here| !here.starts_with(resolved_target))
+                // A target that holds the folder being walked, or that the walk already went
+                // through on its way here, leads back to it. Two links onto one folder are no
+                // loop: each lists it.
+                folder
+                    .really
+                    .as_deref()
+                    .is_none_or(|here| !here.starts_with(resolved_target))
+                    && !folder.chain.contains(resolved_target)
             })
             .and_then(|resolved_target| Some((fs::metadata(location).ok()?, resolved_target)));
         // A followed link to a file is listed as that file, at the link's path.
@@ -466,31 +509,27 @@ impl Walk<'_> {
         followed
     }
 
-    /// What a path reached through a link really is: one of Observer's own folders, FXServer's
-    /// cache or what the owner excluded is never listed, and what the owner hid stays hidden.
+    /// What the real place of a path allows, for a path that may differ from it: one of
+    /// Observer's own folders, FXServer's cache or what the owner excluded is never listed, and
+    /// what the owner hid stays hidden.
     fn guard(&self, really: &Path) -> Guard {
         if self.never_read.iter().any(|folder| really.starts_with(folder)) {
             return Guard::Refused;
         }
-        let absolute = really.to_string_lossy().replace('\\', "/");
-        let inside = self
-            .root
-            .as_deref()
-            .and_then(|root| really.strip_prefix(root).ok())
-            .map(|inside| inside.to_string_lossy().replace('\\', "/"));
-        if let Some(relative) = &inside {
+        let (relative, inside) = self.relative(really);
+        if inside {
+            // FXServer's cache is never read, whichever path leads to it.
             let cache = relative
                 .split('/')
                 .next()
                 .is_some_and(|first| first.eq_ignore_ascii_case("cache"));
-            if cache || self.excluded(relative) {
+            if cache || self.excluded(&relative) {
                 return Guard::Refused;
             }
         }
-        let hidden_inside = inside
-            .as_deref()
-            .is_some_and(|relative| hidden(relative, &self.settings.hidden));
-        if hidden_inside || hidden(&absolute, &[]) {
+        // The owner's globs are paths from the data folder: they say nothing of what lies outside.
+        let globs: &[String] = if inside { &self.settings.hidden } else { &[] };
+        if hidden(&relative, globs) {
             Guard::Hidden
         } else {
             Guard::Free
@@ -501,32 +540,22 @@ impl Walk<'_> {
     /// nor onto what the owner excluded or hid, nor onto a name never shown.
     fn followable(&self, link: &Path) -> Option<PathBuf> {
         let target = fs::canonicalize(link).ok()?;
-        if self.never_read.iter().any(|folder| target.starts_with(folder)) {
-            return None;
-        }
-        let absolute = target.to_string_lossy().replace('\\', "/");
-        if hidden(&absolute, &[]) {
-            return None;
-        }
-        if let Some(inside) = self
+        matches!(self.guard(&target), Guard::Free).then_some(target)
+    }
+
+    /// A real path as the checks read it, and whether it lies in the data folder: from the data
+    /// folder, or else from the deepest folder that holds both. A data folder kept in txAdmin's
+    /// `txData` must not make every path it reaches one never shown.
+    fn relative(&self, really: &Path) -> (String, bool) {
+        let base = self
             .root
             .as_deref()
-            .and_then(|root| target.strip_prefix(root).ok())
-        {
-            let relative = inside.to_string_lossy().replace('\\', "/");
-            if self.excluded(&relative) || hidden(&relative, &self.settings.hidden) {
-                return None;
-            }
-            // FXServer's cache is never read, whichever path leads to it.
-            if relative
-                .split('/')
-                .next()
-                .is_some_and(|first| first.eq_ignore_ascii_case("cache"))
-            {
-                return None;
-            }
-        }
-        Some(target)
+            .and_then(|root| root.ancestors().find(|folder| really.starts_with(folder)));
+        let inside = base.is_some() && base == self.root.as_deref();
+        let below = base
+            .and_then(|base| really.strip_prefix(base).ok())
+            .unwrap_or(really);
+        (slashed(below), inside)
     }
 
     fn excluded(&self, path: &str) -> bool {
@@ -542,7 +571,7 @@ impl Walk<'_> {
     }
 }
 
-/// What the real place of a path below a link allows.
+/// What the real place of a path allows.
 enum Guard {
     Free,
     Hidden,
@@ -559,11 +588,26 @@ fn unreadable(resource: &mut ResourceListing, location: PathBuf, path: String) {
     });
 }
 
-/// The entries of a folder in name order.
+/// The entries of a folder in name order. One that cannot be read makes the whole folder
+/// unreadable, since leaving it out would read as its removal.
 fn sorted(folder: &Path) -> io::Result<Vec<DirEntry>> {
-    let mut entries: Vec<DirEntry> = fs::read_dir(folder)?.filter_map(Result::ok).collect();
+    let mut entries = fs::read_dir(folder)?.collect::<io::Result<Vec<DirEntry>>>()?;
     entries.sort_by_key(DirEntry::file_name);
     Ok(entries)
+}
+
+/// The names of a path joined with `/`, as the globs read them.
+fn slashed(path: &Path) -> String {
+    let mut slashed = String::new();
+    for component in path.components() {
+        if let Component::Normal(name) = component {
+            if !slashed.is_empty() {
+                slashed.push('/');
+            }
+            slashed.push_str(&name.to_string_lossy());
+        }
+    }
+    slashed
 }
 
 fn read_small(path: &Path, limit: u64) -> Option<String> {
@@ -653,6 +697,46 @@ mod tests {
                 .status()
                 .unwrap();
             assert!(status.success());
+        }
+    }
+
+    /// Keeps a folder from being listed until dropped: a handle that shares nothing on Windows, as
+    /// another process may hold one, and no permissions on unix.
+    struct Locked {
+        #[cfg(windows)]
+        _handle: fs::File,
+        #[cfg(unix)]
+        folder: PathBuf,
+    }
+
+    fn lock_folder(folder: &Path) -> Locked {
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+            let handle = fs::OpenOptions::new()
+                .read(true)
+                .share_mode(0)
+                .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+                .open(folder)
+                .unwrap();
+            Locked { _handle: handle }
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(folder, fs::Permissions::from_mode(0o000)).unwrap();
+            Locked {
+                folder: folder.to_owned(),
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    impl Drop for Locked {
+        fn drop(&mut self) {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = fs::set_permissions(&self.folder, fs::Permissions::from_mode(0o755));
         }
     }
 
@@ -864,7 +948,169 @@ mod tests {
                 "resources/a/x/y"
             ]
         );
+        assert!(matches!(a.entries[3].found, Found::Link { followed: false, .. }));
         assert!(a.entries.iter().all(|entry| entry.found != Found::Unreadable));
+    }
+
+    #[test]
+    fn two_links_onto_one_folder_are_both_walked() {
+        let server = Server::new();
+        server.file("resources/res/shared/lib/util.lua", "");
+        fs::create_dir_all(server.data().join("resources/res/client")).unwrap();
+        fs::create_dir_all(server.data().join("resources/res/server")).unwrap();
+        let shared = server.data().join("resources/res/shared/lib");
+        link_folder(&shared, &server.data().join("resources/res/client/lib"));
+        link_folder(&shared, &server.data().join("resources/res/server/lib"));
+
+        let listing = server.list(&ScanSettings::default());
+
+        assert_eq!(
+            paths(&listing.resources[0]),
+            [
+                "resources/res/client/lib",
+                "resources/res/client/lib/util.lua",
+                "resources/res/server/lib",
+                "resources/res/server/lib/util.lua",
+                "resources/res/shared/lib/util.lua"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_category_linked_above_observers_folders_never_lists_them() {
+        let server = Server::new();
+        let above = tempfile::tempdir().unwrap();
+        for file in [
+            "data/observer.sqlite3",
+            "builds/17000/FXServer.exe",
+            "tools/notes.txt",
+        ] {
+            let path = above.path().join(file);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, "").unwrap();
+        }
+        link_folder(above.path(), &server.data().join("resources/[ext]"));
+        let settings = ScanSettings {
+            never_read: vec![above.path().join("data"), above.path().join("builds")],
+            ..ScanSettings::default()
+        };
+
+        let listing = server.list(&settings);
+
+        let names: Vec<&str> = listing.resources.iter().map(|r| r.path.as_str()).collect();
+        assert_eq!(names, ["resources/[ext]/tools"]);
+        assert_eq!(paths(&listing.resources[0]), ["resources/[ext]/tools/notes.txt"]);
+    }
+
+    #[test]
+    fn a_resource_reached_through_a_linked_category_is_checked_where_it_really_is() {
+        let server = Server::new();
+        server.file("resources/[real]/bank/config.lua", "token");
+        server.file("resources/[real]/vault/notes.lua", "");
+        link_folder(
+            &server.data().join("resources/[real]"),
+            &server.data().join("resources/[mirror]"),
+        );
+        let settings = ScanSettings {
+            excluded: vec!["resources/[real]/vault".to_owned()],
+            hidden: vec!["resources/[real]/bank/config.lua".to_owned()],
+            ..ScanSettings::default()
+        };
+
+        let listing = server.list(&settings);
+
+        let seen: Vec<(&str, bool)> = listing
+            .resources
+            .iter()
+            .flat_map(|resource| &resource.entries)
+            .map(|entry| (entry.path.as_str(), entry.hidden))
+            .collect();
+        assert_eq!(
+            seen,
+            [
+                ("resources/[mirror]/bank/config.lua", true),
+                ("resources/[real]/bank/config.lua", false)
+            ]
+        );
+    }
+
+    #[test]
+    fn a_category_linked_back_to_a_folder_above_it_is_cut() {
+        let server = Server::new();
+        server.file("resources/chat/client.lua", "");
+        link_folder(
+            &server.data().join("resources"),
+            &server.data().join("resources/[loop]"),
+        );
+
+        let listing = server.list(&ScanSettings::default());
+
+        let names: Vec<&str> = listing.resources.iter().map(|r| r.path.as_str()).collect();
+        assert_eq!(names, ["resources/chat"]);
+    }
+
+    #[test]
+    fn a_data_folder_kept_in_txdata_still_follows_links() {
+        let host = tempfile::tempdir().unwrap();
+        let data = host.path().join("txData/default.base");
+        let common = host.path().join("txData/common");
+        fs::create_dir_all(data.join("resources/shared/lib")).unwrap();
+        fs::write(data.join("resources/shared/lib/util.lua"), "").unwrap();
+        fs::create_dir_all(data.join("resources/app")).unwrap();
+        fs::create_dir_all(&common).unwrap();
+        fs::write(common.join("config.lua"), "").unwrap();
+        fs::write(common.join("server.pem"), "").unwrap();
+        link_folder(
+            &data.join("resources/shared/lib"),
+            &data.join("resources/app/lib"),
+        );
+        link_folder(&common, &data.join("resources/app/common"));
+
+        let listing = list(&data, &ScanSettings::default(), &CancellationToken::new()).unwrap();
+
+        let app = &listing.resources[0];
+        let seen: Vec<(&str, bool)> = app
+            .entries
+            .iter()
+            .map(|entry| (entry.path.as_str(), entry.hidden))
+            .collect();
+        assert_eq!(
+            seen,
+            [
+                ("resources/app/common", false),
+                ("resources/app/lib", false),
+                ("resources/app/common/config.lua", false),
+                ("resources/app/common/server.pem", true),
+                ("resources/app/lib/util.lua", false)
+            ]
+        );
+        assert!(matches!(app.entries[0].found, Found::Link { followed: true, .. }));
+        assert!(matches!(app.entries[1].found, Found::Link { followed: true, .. }));
+    }
+
+    #[test]
+    fn a_folder_that_cannot_be_read_makes_the_listing_partial() {
+        let server = Server::new();
+        server.file("resources/a/client.lua", "");
+        server.file("resources/a/locked/server.lua", "");
+        server.file("resources/b/client.lua", "");
+        let folder = server.data().join("resources/a/locked");
+        let _locked = lock_folder(&folder);
+        #[cfg(unix)]
+        if fs::read_dir(&folder).is_ok() {
+            // Root lists any folder.
+            return;
+        }
+        let mut limited = ScanSettings::default();
+        limited.limits.files = 2;
+
+        let listing = server.list(&ScanSettings::default());
+
+        let a = &listing.resources[0];
+        assert_eq!(paths(a), ["resources/a/client.lua", "resources/a/locked"]);
+        assert_eq!(a.entries[1].found, Found::Unreadable);
+        assert_eq!(listing.unreadable, ["resources/a/locked"]);
+        assert_eq!(server.list(&limited).shortened, Some(Shortened::Files));
     }
 
     #[test]
