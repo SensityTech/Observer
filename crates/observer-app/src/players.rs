@@ -1271,3 +1271,6 @@ fn start_of(day: &str, zone: &TimeZone) -> Timestamp {
         .and_then(|date| date.to_zoned(zone.clone()).ok())
         .map_or(Timestamp::UNIX_EPOCH, |zoned| zoned.timestamp())
 }
+
+#[cfg(test)]
+mod tests;
