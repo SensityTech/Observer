@@ -3,4 +3,4 @@
 /**
  * A set of rights. On the wire and in the database, a list of their names.
  */
-export type Rights = Array<Right>;
+export type Rights = Array<"list" | "read" | "create" | "modify" | "rename" | "delete" | "makeFolder" | "removeFolder">;

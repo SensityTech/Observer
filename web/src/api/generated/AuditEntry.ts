@@ -5,6 +5,7 @@ import type { Outcome } from "./Outcome";
 
 export type AuditEntry = { id: number, at: string, actorKind: ActorKind, 
 /**
- * The user's id when the actor was a user. It outlives the account, unlike a foreign key.
+ * The user's id when the actor was a user, or the file access's id for a service. It outlives
+ * the account, unlike a foreign key.
  */
 actorId: number | null, actorName: string | null, ip: string | null, userAgent: string | null, action: AuditAction, target: string | null, outcome: Outcome, details: Record<string, unknown>, };

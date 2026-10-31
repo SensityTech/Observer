@@ -41,7 +41,7 @@ impl Right {
 
 /// A set of rights. On the wire and in the database, a list of their names.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, TS)]
-#[ts(export, type = "Array<Right>")]
+#[ts(export, as = "Vec<Right>")]
 pub struct Rights(u8);
 
 impl Rights {

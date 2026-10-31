@@ -139,6 +139,7 @@ const ACTOR_KINDS = {
     cli: true,
     system: true,
     anonymous: true,
+    service: true,
 } satisfies Record<ActorKind, true>;
 
 const AUDIT_ACTIONS = {
