@@ -47,6 +47,15 @@ impl FromStr for TrustedProxy {
         if prefix > bits {
             return Err(invalid());
         }
+        // A dual-stack listener shows an IPv4 proxy as `::ffff:a.b.c.d`, the form the audit log
+        // records, while `contains` compares it as IPv4. A block that reaches past the mapped
+        // range is no IPv4 block.
+        let (address, prefix) = match address.to_canonical() {
+            mapped @ IpAddr::V4(_) if address.is_ipv6() => {
+                (mapped, prefix.checked_sub(96).ok_or_else(invalid)?)
+            }
+            _ => (address, prefix),
+        };
         Ok(Self {
             network: masked(address, prefix),
             prefix,
@@ -211,6 +220,8 @@ mod tests {
             "::1",
             "fd00::/8",
             "2001:db8::/32",
+            "::ffff:172.18.0.2",
+            "::ffff:172.18.0.0/112",
         ] {
             assert!(valid.parse::<TrustedProxy>().is_ok(), "{valid}");
         }
@@ -226,6 +237,7 @@ mod tests {
             "fe80::1%eth0",
             "[::1]",
             "127.0.0.1:443",
+            "::ffff:10.0.0.0/8",
         ] {
             let error = invalid.parse::<TrustedProxy>().unwrap_err();
             assert_eq!(
@@ -250,6 +262,12 @@ mod tests {
         assert!(block("fd00::/8").contains(ip("fd12:3456::1")));
         assert!(!block("fd00::/8").contains(ip("fe80::1")));
         assert!(block("127.0.0.1").contains(ip("::ffff:127.0.0.1")));
+        assert!(
+            block("::ffff:172.18.0.2").contains(ip("::ffff:172.18.0.2")),
+            "an IPv4 proxy as a dual-stack listener shows it"
+        );
+        assert!(block("::ffff:172.18.0.2").contains(ip("172.18.0.2")));
+        assert_eq!(block("::ffff:172.18.0.0/112"), block("172.18.0.0/16"));
         assert!(!block("0.0.0.0/0").contains(ip("::2")));
         assert!(!block("::/0").contains(ip("192.0.2.1")));
     }
