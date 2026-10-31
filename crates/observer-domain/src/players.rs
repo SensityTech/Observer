@@ -6,8 +6,11 @@
 
 use std::net::IpAddr;
 
+use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
+
+use crate::drops::{DropCategory, DropKind};
 
 /// The longest name kept, in bytes.
 pub const MAX_NAME_BYTES: usize = 256;
@@ -253,9 +256,324 @@ impl Search {
     }
 }
 
+/// How the players list is sorted, largest or latest first.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum PlayerSort {
+    /// Total play time, imported time included.
+    #[default]
+    PlayTime,
+    /// Play time in the last 30 days.
+    Recent,
+    LastSeen,
+    FirstSeen,
+    Sessions,
+}
+
+/// A player in the players list.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct PlayerSummary {
+    pub id: i64,
+    pub name: String,
+    pub license: String,
+    /// Time connected that Observer saw, in milliseconds.
+    pub play_ms: i64,
+    /// From txAdmin's players database.
+    pub imported_ms: i64,
+    /// Play time in the last 30 days.
+    pub recent_ms: i64,
+    pub sessions: i64,
+    pub first_seen: Timestamp,
+    pub last_seen: Timestamp,
+    pub online: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct PlayerPage {
+    pub players: Vec<PlayerSummary>,
+    /// What to pass as `after` for the next page, if there is one.
+    pub next: Option<String>,
+}
+
+/// Whether FXServer's own player list confirmed what the bridge reported of a player.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum Confirmation {
+    Confirming,
+    Confirmed,
+    /// It did not match: the session has no identity, no play time and no link.
+    Unconfirmed,
+}
+
+/// A player connected now.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct OnlinePlayer {
+    pub net_id: u32,
+    pub confirmation: Confirmation,
+    /// The profile, once the identity is confirmed and written.
+    pub player: Option<i64>,
+    pub name: Option<String>,
+    pub license: Option<String>,
+    /// When Observer saw the session start, or first saw it.
+    pub since: Timestamp,
+    pub session_ms: i64,
+    /// Total play time with this session, imported time included.
+    pub total_ms: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct OnlinePlayers {
+    pub players: Vec<OnlinePlayer>,
+}
+
+/// Unique players, new players and play time of a day, a date in the schedule's time zone.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct CommunityDay {
+    /// `YYYY-MM-DD`.
+    pub day: String,
+    pub players: i64,
+    pub new_players: i64,
+    pub play_ms: i64,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct CommunityTotals {
+    pub players: i64,
+    pub new_players: i64,
+    pub play_ms: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct Community {
+    /// The schedule's time zone, which days are dates in.
+    pub zone: String,
+    /// Today in that zone: its figures are today's so far.
+    pub today: String,
+    /// The last 30 days, today included, oldest first, days without play included.
+    pub days: Vec<CommunityDay>,
+    /// The last 7 days, today included, and the 7 before.
+    pub week: CommunityTotals,
+    pub previous_week: CommunityTotals,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct PlayerName {
+    pub name: String,
+    pub first_seen: Timestamp,
+    pub last_seen: Timestamp,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct PlayDay {
+    pub day: String,
+    pub play_ms: i64,
+}
+
+/// A session of the player that ended, within the sessions' retention.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct PlayerDrop {
+    pub ended_at: Timestamp,
+    pub category: DropCategory,
+    pub kind: Option<DropKind>,
+    /// The resource that kicked the player.
+    pub resource: Option<String>,
+    pub length_ms: Option<i64>,
+}
+
+/// An identifier a player showed, with how many other licences showed it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ShownIdentifier {
+    pub kind: IdentifierKind,
+    /// `None` for an address: only its fingerprint is kept, and it is not shown.
+    pub value: Option<String>,
+    pub first_seen: Timestamp,
+    pub last_seen: Timestamp,
+    pub times: i64,
+    /// From txAdmin and not seen by Observer since.
+    pub imported: bool,
+    pub other_licences: i64,
+}
+
+/// Why two licences are linked: an identifier they share.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct Link {
+    pub kind: IdentifierKind,
+    pub value: Option<String>,
+    pub strong: bool,
+}
+
+/// Another licence linked to the player's.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct LinkedLicence {
+    pub player: i64,
+    pub name: String,
+    pub license: String,
+    /// The identifiers shared with the licence it was reached from.
+    pub through: Vec<Link>,
+    /// Reached through strong links only.
+    pub strong: bool,
+    /// 1 when it shares an identifier with the player, 2 through another licence.
+    pub steps: u8,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct PlayerProfile {
+    pub id: i64,
+    pub name: String,
+    pub license: String,
+    pub first_seen: Timestamp,
+    pub last_seen: Timestamp,
+    /// When txAdmin's record was taken in, if it was.
+    pub imported_at: Option<Timestamp>,
+    pub online: bool,
+    pub play_ms: i64,
+    pub imported_ms: i64,
+    /// The session under way, not in `play_ms` yet.
+    pub in_progress_ms: i64,
+    /// The last 7 and 30 days, the session under way included.
+    pub last7_ms: i64,
+    pub last30_ms: i64,
+    pub sessions: i64,
+    pub longest_ms: i64,
+    pub crashes: i64,
+    pub timeouts: i64,
+    pub kicks: i64,
+    /// Crashes per 100 hours of the play time Observer saw.
+    pub crash_rate: Option<f64>,
+    /// The server's, over the sessions kept.
+    pub server_crash_rate: Option<f64>,
+    pub names: Vec<PlayerName>,
+    /// The days of the last 90 with play, the session under way included.
+    pub days: Vec<PlayDay>,
+    pub drops: Vec<PlayerDrop>,
+    /// Only with the permission to see identifiers.
+    pub identifiers: Option<Vec<ShownIdentifier>>,
+    pub linked: Option<Vec<LinkedLicence>>,
+    /// The schedule's time zone, which days are dates in.
+    pub zone: String,
+    pub today: String,
+}
+
+/// How long player data is kept, in days. A profile kept for good has `None`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct PlayersSettings {
+    /// Each link between a licence and an identifier or a name, after it was last seen.
+    pub link_days: u32,
+    /// Links to an address's fingerprint.
+    pub address_days: u32,
+    /// Play time per day.
+    pub day_days: u32,
+    /// A profile, after the player's last visit.
+    pub profile_days: Option<u32>,
+}
+
+impl Default for PlayersSettings {
+    fn default() -> Self {
+        Self {
+            link_days: 365,
+            address_days: 90,
+            day_days: 400,
+            profile_days: Some(730),
+        }
+    }
+}
+
+/// Retentions out of their ranges: links 30 days to the profile's retention, addresses 7 days to
+/// the links', days 30 days to the profile's, profiles 365 days or more.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OutOfRange;
+
+impl PlayersSettings {
+    /// None outlives what it hangs on.
+    pub fn check(&self) -> Result<(), OutOfRange> {
+        const MOST: u32 = 36_500;
+        let profile = self.profile_days.unwrap_or(MOST).min(MOST);
+        let valid = self.profile_days.is_none_or(|days| (365..=MOST).contains(&days))
+            && (30..=profile).contains(&self.link_days)
+            && (7..=self.link_days).contains(&self.address_days)
+            && (30..=profile).contains(&self.day_days);
+        if valid { Ok(()) } else { Err(OutOfRange) }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn retentions_never_outlive_what_they_hang_on() {
+        let defaults = PlayersSettings::default();
+
+        assert_eq!(defaults.check(), Ok(()));
+        for settings in [
+            PlayersSettings {
+                link_days: 29,
+                ..defaults
+            },
+            PlayersSettings {
+                address_days: 366,
+                ..defaults
+            },
+            PlayersSettings {
+                address_days: 6,
+                ..defaults
+            },
+            PlayersSettings {
+                day_days: 731,
+                ..defaults
+            },
+            PlayersSettings {
+                profile_days: Some(364),
+                ..defaults
+            },
+            PlayersSettings {
+                profile_days: Some(400),
+                link_days: 401,
+                ..defaults
+            },
+        ] {
+            assert_eq!(settings.check(), Err(OutOfRange), "{settings:?}");
+        }
+        let kept = PlayersSettings {
+            profile_days: None,
+            link_days: 3000,
+            day_days: 3000,
+            ..defaults
+        };
+        assert_eq!(kept.check(), Ok(()));
+    }
 
     const LICENSE: &str = "license:0123456789abcdef0123456789abcdef01234567";
     const TOKEN: &str = "4:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";

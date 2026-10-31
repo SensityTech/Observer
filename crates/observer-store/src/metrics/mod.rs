@@ -8,6 +8,7 @@ pub mod rollups;
 pub mod runs;
 pub mod samples;
 pub mod series;
+pub mod sessions;
 pub mod threads;
 
 use std::path::{Path, PathBuf};
@@ -25,6 +26,7 @@ pub use columns::{Affinity, Column, Kind, Values};
 const MIGRATIONS: &[M<'static>] = &[
     M::up(include_str!("../../migrations/metrics/0001_samples.sql")),
     M::up(include_str!("../../migrations/metrics/0002_depth.sql")),
+    M::up(include_str!("../../migrations/metrics/0003_sessions.sql")),
 ];
 
 /// The metrics database. One connection writes, as for the state database; reads have their own

@@ -11,6 +11,7 @@ pub mod launch;
 pub mod login_failures;
 pub mod metrics;
 mod migrations;
+pub mod players;
 pub mod schedule;
 pub mod sessions;
 pub mod settings;
