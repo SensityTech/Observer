@@ -685,6 +685,72 @@ fn mask_v6(address: u128, length: u32) -> u128 {
     address.checked_shr(128 - length).unwrap_or(0)
 }
 
+/// A pipeline's access: a login without a person, for CI/CD uploads.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ServiceAccess {
+    pub id: i64,
+    /// The pipeline's name; it logs in as `+name`.
+    pub name: String,
+    pub enabled: bool,
+    pub networks: Vec<String>,
+    pub groups: Vec<FileGroup>,
+    pub keys: Vec<AccessKey>,
+    pub last_login_at: Option<jiff::Timestamp>,
+    pub last_login_ip: Option<String>,
+    pub version: i64,
+}
+
+/// An account and the groups it holds, for the People view.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct UserAccess {
+    pub user_id: i64,
+    pub username: String,
+    pub is_owner: bool,
+    pub groups: Vec<i64>,
+    pub keys: usize,
+    pub last_login_at: Option<jiff::Timestamp>,
+}
+
+/// Every account and every pipeline, as a manager of file access sees them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct FileAccesses {
+    pub users: Vec<UserAccess>,
+    pub services: Vec<ServiceAccess>,
+}
+
+/// A pipeline to create. Its key pair is made by Observer and its private key shown once.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct CreateServiceRequest {
+    pub name: String,
+    pub groups: Vec<i64>,
+    #[serde(default)]
+    pub networks: Vec<String>,
+    /// The key's life in days: 90 by default, 365 at most.
+    #[serde(default)]
+    #[ts(optional)]
+    pub expires_in_days: Option<u32>,
+}
+
+/// A new pipeline, with the only copy of its private key.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct CreatedServiceAccess {
+    pub access: ServiceAccess,
+    /// The login to give the pipeline: `+name`.
+    pub login: String,
+    /// In OpenSSH's format; never stored, never shown again.
+    pub private_key: String,
+}
+
 /// A public key an access logs in with.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]

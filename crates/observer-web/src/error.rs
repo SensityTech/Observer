@@ -97,7 +97,8 @@ fn status(code: ErrorCode) -> StatusCode {
         | ErrorCode::SetupBlocked
         | ErrorCode::InvalidRule
         | ErrorCode::InvalidPublicKey
-        | ErrorCode::TooManyKeys => StatusCode::UNPROCESSABLE_ENTITY,
+        | ErrorCode::TooManyKeys
+        | ErrorCode::InvalidAccess => StatusCode::UNPROCESSABLE_ENTITY,
         ErrorCode::JsonRequired => StatusCode::UNSUPPORTED_MEDIA_TYPE,
         ErrorCode::UnknownHost => StatusCode::MISDIRECTED_REQUEST,
         ErrorCode::InvalidUsername

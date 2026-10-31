@@ -324,3 +324,63 @@ async fn a_session_ends_as_soon_as_its_groups_are_taken_away() {
     assert!(lab.connect("linus", Arc::clone(&lab.key)).await.is_none());
     lab.stop.cancel();
 }
+
+#[tokio::test]
+async fn a_pipeline_uploads_with_the_key_observer_made_and_showed_once() {
+    let lab = Lab::new().await;
+    let owner = observer_app::Caller {
+        session_id: 0,
+        user_id: 0,
+        username: "ada".to_owned(),
+        is_owner: true,
+        permissions: Permissions::NONE,
+        must_change_password: false,
+        reauthenticated_at: None,
+        client: observer_app::Client {
+            ip: "127.0.0.1".parse().unwrap(),
+            user_agent: None,
+        },
+    };
+    let group = lab.files.groups().await.unwrap().remove(0);
+
+    let created = lab
+        .files
+        .create_service(
+            &owner,
+            observer_domain::files::CreateServiceRequest {
+                name: "deploy-main".to_owned(),
+                groups: vec![group.row.id],
+                networks: vec!["127.0.0.0/8".to_owned()],
+                expires_in_days: None,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(created.login, "+deploy-main");
+    assert!(created.access.keys[0].expires_at.is_some());
+    let key = Arc::new(PrivateKey::from_openssh(&created.private_key).unwrap());
+
+    let sftp = lab.connect("+deploy-main", key).await.unwrap();
+    let mut upload = sftp.create("/resources/[maps]/harbour/stream.ytd").await.unwrap();
+    upload.write_all(b"texture").await.unwrap();
+    upload.shutdown().await.unwrap();
+    drop(upload);
+    assert_eq!(
+        std::fs::read(lab.root.join("resources/[maps]/harbour/stream.ytd")).unwrap(),
+        b"texture"
+    );
+    let actor: String = lab
+        .db
+        .read(|conn| {
+            conn.query_row(
+                "SELECT actor_kind || ' ' || actor_name FROM audit_log WHERE action = 'file_written'",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(StoreError::from)
+        })
+        .await
+        .unwrap();
+    assert_eq!(actor, "service +deploy-main");
+    lab.stop.cancel();
+}

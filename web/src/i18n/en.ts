@@ -2214,6 +2214,12 @@ export const en = {
             return 'This is not an OpenSSH public key line. Paste the whole line of the .pub file.';
         },
         key_in_use: 'This key is already registered.',
+        invalid_access: (params) =>
+            params.field === 'name'
+                ? 'A pipeline name is 1 to 32 lowercase letters, digits and dashes.'
+                : params.field === 'networks'
+                  ? 'Each network is an address or a block such as 192.0.2.0/24.'
+                  : 'A pipeline key lasts 1 to 365 days.',
         too_many_keys: (params) =>
             typeof params.max === 'number' ? `An access holds ${params.max} keys at most.` : 'Too many keys.',
     } satisfies Record<ErrorCode, ErrorMessage>,

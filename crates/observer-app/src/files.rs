@@ -9,7 +9,8 @@ use observer_domain::audit::{ActorKind, AuditAction, Outcome};
 use observer_domain::delegation::Account;
 use observer_domain::error::{ApiError, ErrorCode};
 use observer_domain::files::{
-    self, AccessChange, AccessHolder, AccessKey, FileGroup, MyFileAccess, Reach, Rule,
+    self, AccessChange, AccessHolder, AccessKey, CreateServiceRequest, CreatedServiceAccess, FileAccesses,
+    FileGroup, MyFileAccess, Reach, Rule, ServiceAccess, UserAccess,
 };
 use observer_store::files::{self as store, FileAccessRow, FileGroupRow, FileKeyRow, HostKeyRow};
 use observer_store::login_failures::FILES;
@@ -36,6 +37,10 @@ const KEY_TYPES: [(&str, &str); 3] = [
 ];
 const MAX_KEY_LINE: usize = 8 * 1024;
 const MAX_KEY_COMMENT: usize = 255;
+const MAX_SERVICE_NAME: usize = 32;
+/// A pipeline key's life, by default and at most.
+const SERVICE_KEY_DAYS: u32 = 90;
+const MAX_SERVICE_KEY_DAYS: u32 = 365;
 /// A row of SFTP login failures with no lock and no failure for this long is forgotten.
 const FORGET_FAILURES_AFTER: jiff::SignedDuration = jiff::SignedDuration::from_hours(24);
 
@@ -466,6 +471,171 @@ impl Files {
             .await?)
     }
 
+    /// Every account and every pipeline, for a manager of file access.
+    pub async fn accesses(&self) -> Result<FileAccesses, Error> {
+        Ok(self
+            .db
+            .read(|conn| {
+                let mut people = Vec::new();
+                for user in users::list(conn)? {
+                    let (groups, keys) = match store::user_access(conn, user.id)? {
+                        Some(access) => (
+                            store::access_groups(conn, access.id)?
+                                .into_iter()
+                                .map(|group| group.id)
+                                .collect(),
+                            store::keys(conn, access.id)?.len(),
+                        ),
+                        None => (Vec::new(), 0),
+                    };
+                    people.push(UserAccess {
+                        user_id: user.id,
+                        username: user.username,
+                        is_owner: user.is_owner,
+                        groups,
+                        keys,
+                        last_login_at: None,
+                    });
+                }
+                let mut services = Vec::new();
+                for access in store::accesses(conn)?
+                    .into_iter()
+                    .filter(|access| access.service_name.is_some())
+                {
+                    services.push(service_access(conn, access)?);
+                }
+                Ok::<_, StoreError>(FileAccesses {
+                    users: people,
+                    services,
+                })
+            })
+            .await?)
+    }
+
+    /// Creates a pipeline with a key pair of Observer's making. The private key leaves only in
+    /// the answer; Observer keeps the public half, which expires.
+    pub async fn create_service(
+        &self,
+        caller: &Caller,
+        request: CreateServiceRequest,
+    ) -> Result<CreatedServiceAccess, Error> {
+        owner(caller)?;
+        let name = request.name.trim().to_owned();
+        if name.is_empty()
+            || name.len() > MAX_SERVICE_NAME
+            || !name
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+        {
+            return Err(ApiError::new(ErrorCode::InvalidAccess)
+                .with("field", "name")
+                .into());
+        }
+        if request
+            .networks
+            .iter()
+            .any(|network| !files::network_allows(std::slice::from_ref(network), network_address(network)))
+        {
+            return Err(ApiError::new(ErrorCode::InvalidAccess)
+                .with("field", "networks")
+                .into());
+        }
+        let days = request.expires_in_days.unwrap_or(SERVICE_KEY_DAYS);
+        if days == 0 || days > MAX_SERVICE_KEY_DAYS {
+            return Err(ApiError::new(ErrorCode::InvalidAccess)
+                .with("field", "expiry")
+                .into());
+        }
+        let mut seed = [0u8; 32];
+        getrandom::fill(&mut seed).map_err(Error::Random)?;
+        let private = ssh_key::PrivateKey::new(
+            ssh_key::private::KeypairData::Ed25519(ssh_key::private::Ed25519Keypair::from_seed(&seed)),
+            format!("+{name}"),
+        )
+        .map_err(|_| Error::Hashing("the pipeline key could not be made".to_owned()))?;
+        let private_text = private
+            .to_openssh(ssh_key::LineEnding::LF)
+            .map_err(|_| Error::Hashing("the pipeline key could not be written".to_owned()))?
+            .to_string();
+        let public = private.public_key().clone();
+        let now = self.clock.now();
+        let expires_at = now + jiff::SignedDuration::from_hours(24 * i64::from(days));
+        let record = Record::by(caller, AuditAction::ServiceAccessCreated).target(format!("+{name}"));
+        let networks = request.networks.clone();
+        let group_ids = request.groups.clone();
+        let access = self
+            .db
+            .write(move |tx| {
+                let row = FileAccessRow {
+                    id: 0,
+                    user_id: None,
+                    service_name: Some(name.clone()),
+                    enabled: true,
+                    expires_at: None,
+                    networks,
+                    daily_budget: None,
+                    max_rate: None,
+                    version: 1,
+                    created_at: now,
+                    last_login_at: None,
+                    last_login_ip: None,
+                };
+                let id = store::insert_service(tx, &row)?.ok_or(ErrorCode::NameTaken)?;
+                let mut names = Vec::new();
+                for group_id in &group_ids {
+                    names.push(store::group(tx, *group_id)?.ok_or(ErrorCode::NotFound)?.name);
+                }
+                store::set_access_groups(tx, id, &group_ids)?;
+                let key = FileKeyRow {
+                    id: 0,
+                    access_id: id,
+                    algorithm: public.algorithm().to_string(),
+                    public_key: public.to_bytes().map_err(|_| ErrorCode::Internal)?,
+                    fingerprint: public.fingerprint(ssh_key::HashAlg::Sha256).to_string(),
+                    comment: format!("+{name}"),
+                    created_at: now,
+                    expires_at: Some(expires_at),
+                    last_used_at: None,
+                    last_used_ip: None,
+                };
+                store::insert_key(tx, &key)?;
+                record
+                    .details(json!({
+                        "groups": names,
+                        "networks": row.networks,
+                        "fingerprint": key.fingerprint,
+                        "expiresAt": expires_at,
+                    }))
+                    .write(tx, now)?;
+                let access = store::access(tx, id)?.ok_or(ErrorCode::NotFound)?;
+                Ok::<_, Error>(service_access(tx, access)?)
+            })
+            .await?;
+        self.changed();
+        Ok(CreatedServiceAccess {
+            login: format!("+{}", access.name),
+            access,
+            private_key: private_text,
+        })
+    }
+
+    /// Deletes a pipeline: taking access away, which any manager of file access may.
+    pub async fn delete_service(&self, caller: &Caller, id: i64) -> Result<(), Error> {
+        let now = self.clock.now();
+        let record = Record::by(caller, AuditAction::ServiceAccessDeleted);
+        self.db
+            .write(move |tx| {
+                let access = store::access(tx, id)?.ok_or(ErrorCode::NotFound)?;
+                let name = access.service_name.ok_or(ErrorCode::NotFound)?;
+                store::delete_access(tx, id)?;
+                record.target(format!("+{name}")).write(tx, now)?;
+                Ok::<_, Error>(())
+            })
+            .await?;
+        self.changed();
+        Ok(())
+    }
+
     /// The signed-in account's login, keys and groups.
     pub async fn my_access(&self, caller: &Caller) -> Result<MyFileAccess, Error> {
         let user_id = caller.user_id;
@@ -596,6 +766,35 @@ fn access_for_login(
         return Ok(None);
     };
     Ok(store::user_access(conn, user.id)?.map(|access| (access, Some(user))))
+}
+
+/// The address a CIDR block starts at, to check that it parses.
+fn network_address(block: &str) -> IpAddr {
+    block
+        .split_once('/')
+        .map_or(block, |(address, _)| address)
+        .parse()
+        .unwrap_or(IpAddr::from([255, 255, 255, 255]))
+}
+
+fn service_access(conn: &Connection, access: FileAccessRow) -> Result<ServiceAccess, StoreError> {
+    Ok(ServiceAccess {
+        id: access.id,
+        name: access.service_name.unwrap_or_default(),
+        enabled: access.enabled,
+        networks: access.networks,
+        groups: store::access_groups(conn, access.id)?
+            .into_iter()
+            .map(|row| file_group(group(row)))
+            .collect(),
+        keys: store::keys(conn, access.id)?
+            .into_iter()
+            .map(access_key)
+            .collect(),
+        last_login_at: access.last_login_at,
+        last_login_ip: access.last_login_ip,
+        version: access.version,
+    })
 }
 
 /// A pasted public key, checked.

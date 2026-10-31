@@ -140,6 +140,8 @@ pub enum ErrorCode {
     KeyInUse,
     /// Params: `max`, the most keys an access holds.
     TooManyKeys,
+    /// A pipeline's settings are unusable. Params: `field`, `name`, `networks` or `expiry`.
+    InvalidAccess,
 }
 
 /// The body of every error response.

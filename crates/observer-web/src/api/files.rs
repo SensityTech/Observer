@@ -4,7 +4,8 @@ use axum::{Extension, Json};
 use observer_app::{Caller, file_group};
 use observer_domain::error::ErrorCode;
 use observer_domain::files::{
-    AccessKey, AddKeyRequest, FileGroup, FileGroupRequest, MyFileAccess, UserGroupsRequest,
+    AccessKey, AddKeyRequest, CreateServiceRequest, CreatedServiceAccess, FileAccesses, FileGroup,
+    FileGroupRequest, MyFileAccess, UserGroupsRequest,
 };
 
 use crate::AppState;
@@ -93,5 +94,27 @@ pub(crate) async fn remove_key(
     Id(id): Id,
 ) -> Result<StatusCode, Failure> {
     state.files.remove_own_key(&caller, id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub(crate) async fn accesses(State(state): State<AppState>) -> Result<Json<FileAccesses>, Failure> {
+    Ok(Json(state.files.accesses().await?))
+}
+
+pub(crate) async fn create_service(
+    State(state): State<AppState>,
+    Extension(caller): Extension<Caller>,
+    JsonBody(request): JsonBody<CreateServiceRequest>,
+) -> Result<(StatusCode, Json<CreatedServiceAccess>), Failure> {
+    let created = state.files.create_service(&caller, request).await?;
+    Ok((StatusCode::CREATED, Json(created)))
+}
+
+pub(crate) async fn delete_service(
+    State(state): State<AppState>,
+    Extension(caller): Extension<Caller>,
+    Id(id): Id,
+) -> Result<StatusCode, Failure> {
+    state.files.delete_service(&caller, id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
