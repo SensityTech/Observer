@@ -192,8 +192,9 @@ test.describe.serial('Observer in a browser', () => {
     });
 
     test('a player who crashes shows in the drop log, then with their crash signature', async () => {
-        // The drops service classifies a crash at its next round, every minute.
-        test.setTimeout(150_000);
+        // The page reads the log every 30 s, and the drops service classifies a crash at its next
+        // round, every minute.
+        test.setTimeout(200_000);
         await page.getByRole('link', { name: en.nav.console, exact: true }).click();
         const command = page.getByRole('textbox', { name: en.console.commandLabel });
         const crash = 'fake_drop 1 2 - Game crashed: kilo-ohio-lemon (GTA5_b3095.exe+1A2B3C)';
@@ -205,9 +206,12 @@ test.describe.serial('Observer in a browser', () => {
         await expect(page.getByRole('heading', { level: 1 })).toContainText(en.drops.title);
         const log = page.getByRole('region', { name: en.drops.log.title, exact: true });
         await expect(log.getByRole('link', { name: 'Ada', exact: true }).first()).toBeVisible({
-            timeout: 30_000,
+            timeout: 45_000,
         });
-        await expect(log.getByText('hash:GTA5_b3095.exe+1A2B3C').first()).toBeVisible({ timeout: 120_000 });
+        // The row's own button, not the filter's option of the same text.
+        await expect(log.getByRole('button', { name: /hash:GTA5_b3095\.exe\+1A2B3C/ }).first()).toBeVisible({
+            timeout: 120_000,
+        });
     });
 
     test('a one-off restart happens at its time', async () => {
