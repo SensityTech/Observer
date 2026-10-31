@@ -468,3 +468,46 @@ fn the_fingerprint_key_is_made_once() {
     assert_eq!(first, [1; 32]);
     assert_eq!(second, first);
 }
+
+#[test]
+fn every_sort_pages_through_every_player_once() {
+    let mut conn = memory();
+    let license = |n: u8| format!("license:{}", format!("{n:02x}").repeat(20));
+    for n in 1..=7u8 {
+        let when = format!("2026-10-{:02}T10:00:00Z", 10 + n % 4);
+        let id = see(&mut conn, &license(n), &format!("P{n}"), &[], &when).0;
+        let day = format!("2026-10-{:02}", 20 + n % 3);
+        credit_session(&mut conn, id, n, 1000, &[(&day, i64::from(n % 3) * 1000)]);
+    }
+
+    for sort in [
+        PlayerSort::PlayTime,
+        PlayerSort::Recent,
+        PlayerSort::LastSeen,
+        PlayerSort::FirstSeen,
+        PlayerSort::Sessions,
+    ] {
+        let mut seen = Vec::new();
+        let mut after = None;
+        loop {
+            let rows = page(
+                &conn,
+                &PlayerQuery {
+                    filter: PlayerFilter::All,
+                    sort,
+                    recent_from: "2026-10-21".to_owned(),
+                    after,
+                    limit: 3,
+                },
+            )
+            .unwrap();
+            let Some((last, key)) = rows.last() else {
+                break;
+            };
+            after = Some((*key, last.id));
+            seen.extend(rows.iter().map(|(row, _)| row.id));
+        }
+        seen.sort_unstable();
+        assert_eq!(seen, (1..=7).collect::<Vec<i64>>(), "{sort:?}");
+    }
+}

@@ -235,11 +235,11 @@ pub fn page(conn: &Connection, query: &PlayerQuery) -> Result<Vec<(PlayerSummary
         }
     };
     let key = match query.sort {
-        PlayerSort::PlayTime => "(p.play_ms + p.imported_ms)",
+        PlayerSort::PlayTime => "play_ms + imported_ms",
         PlayerSort::Recent => "recent",
-        PlayerSort::LastSeen => "unixepoch(p.last_seen, 'subsec') * 1000",
-        PlayerSort::FirstSeen => "unixepoch(p.first_seen, 'subsec') * 1000",
-        PlayerSort::Sessions => "p.sessions",
+        PlayerSort::LastSeen => "unixepoch(last_seen, 'subsec') * 1000",
+        PlayerSort::FirstSeen => "unixepoch(first_seen, 'subsec') * 1000",
+        PlayerSort::Sessions => "sessions",
     };
     let after = match query.after {
         Some((sort, id)) => {
@@ -253,10 +253,13 @@ pub fn page(conn: &Connection, query: &PlayerQuery) -> Result<Vec<(PlayerSummary
     values.push(Box::new(query.limit));
     let sql = format!(
         "SELECT * FROM (
-             SELECT p.id, p.name, p.license, p.play_ms, p.imported_ms,
-                 coalesce((SELECT sum(d.play_ms) FROM player_day d WHERE d.player = p.id AND d.day >= ?1), 0) AS recent,
-                 p.sessions, p.first_seen, p.last_seen, CAST({key} AS INTEGER) AS sort_key
-             FROM player p WHERE 1{filter}
+             SELECT *, CAST({key} AS INTEGER) AS sort_key FROM (
+                 SELECT p.id, p.name, p.license, p.play_ms, p.imported_ms,
+                     coalesce((SELECT sum(d.play_ms) FROM player_day d WHERE d.player = p.id AND d.day >= ?1), 0)
+                         AS recent,
+                     p.sessions, p.first_seen, p.last_seen
+                 FROM player p WHERE 1{filter}
+             )
          ){after} ORDER BY sort_key DESC, id DESC LIMIT ?{}",
         values.len()
     );
