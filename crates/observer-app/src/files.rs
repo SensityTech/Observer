@@ -8,8 +8,10 @@ use std::sync::Arc;
 use observer_domain::audit::{ActorKind, AuditAction, Outcome};
 use observer_domain::delegation::Account;
 use observer_domain::error::{ApiError, ErrorCode};
-use observer_domain::files::{self, AccessChange, AccessHolder, Reach, Rule};
-use observer_store::files::{self as store, FileAccessRow, FileGroupRow, HostKeyRow};
+use observer_domain::files::{
+    self, AccessChange, AccessHolder, AccessKey, FileGroup, MyFileAccess, Reach, Rule,
+};
+use observer_store::files::{self as store, FileAccessRow, FileGroupRow, FileKeyRow, HostKeyRow};
 use observer_store::login_failures::FILES;
 use observer_store::{Connection, Database, StoreError, launch, users};
 use serde_json::{Value, json};
@@ -23,6 +25,17 @@ use crate::{Accounts, Caller, Clock, Error};
 pub const SERVER: &str = "default";
 const MAX_GROUP_NAME: usize = 64;
 const MAX_RULES: usize = 64;
+/// The most keys one access holds.
+const MAX_KEYS: usize = 10;
+/// The key types accepted, by their label, with how their key data starts once base64-encoded:
+/// the same name again. A plain label over a certificate's blob is refused before any parsing.
+const KEY_TYPES: [(&str, &str); 3] = [
+    ("ssh-ed25519", "AAAAC3NzaC1lZDI1NTE5"),
+    ("ecdsa-sha2-nistp256", "AAAAE2VjZHNhLXNoYTItbmlzdHAyNTY"),
+    ("ecdsa-sha2-nistp384", "AAAAE2VjZHNhLXNoYTItbmlzdHAzODQ"),
+];
+const MAX_KEY_LINE: usize = 8 * 1024;
+const MAX_KEY_COMMENT: usize = 255;
 /// A row of SFTP login failures with no lock and no failure for this long is forgotten.
 const FORGET_FAILURES_AFTER: jiff::SignedDuration = jiff::SignedDuration::from_hours(24);
 
@@ -416,6 +429,81 @@ impl Files {
         Ok(self.db.write(move |tx| record.write(tx, now)).await?)
     }
 
+    /// The signed-in account's login, keys and groups.
+    pub async fn my_access(&self, caller: &Caller) -> Result<MyFileAccess, Error> {
+        let user_id = caller.user_id;
+        let (keys, groups) = self
+            .db
+            .read(move |conn| match store::user_access(conn, user_id)? {
+                Some(access) => Ok::<_, StoreError>((
+                    store::keys(conn, access.id)?,
+                    store::access_groups(conn, access.id)?,
+                )),
+                None => Ok((Vec::new(), Vec::new())),
+            })
+            .await?;
+        Ok(MyFileAccess {
+            login: caller.username.clone(),
+            keys: keys.into_iter().map(access_key).collect(),
+            groups: groups.into_iter().map(|row| file_group(group(row))).collect(),
+        })
+    }
+
+    /// Registers a key to the signed-in account. Only its holder adds one: a key someone else
+    /// added could log in as them.
+    pub async fn add_own_key(&self, caller: &Caller, line: &str) -> Result<AccessKey, Error> {
+        let parsed = parse_key(line)?;
+        let now = self.clock.now();
+        let user_id = caller.user_id;
+        let record = Record::by(caller, AuditAction::FileKeyAdded).target(caller.username.clone());
+        let key = self
+            .db
+            .write(move |tx| {
+                let access = store::user_access_or_new(tx, user_id, now)?;
+                if store::keys(tx, access.id)?.len() >= MAX_KEYS {
+                    return Err(ApiError::new(ErrorCode::TooManyKeys).with("max", MAX_KEYS).into());
+                }
+                let mut key = FileKeyRow {
+                    id: 0,
+                    access_id: access.id,
+                    algorithm: parsed.algorithm,
+                    public_key: parsed.blob,
+                    fingerprint: parsed.fingerprint,
+                    comment: parsed.comment,
+                    created_at: now,
+                    expires_at: None,
+                    last_used_at: None,
+                    last_used_ip: None,
+                };
+                key.id = store::insert_key(tx, &key)?.ok_or(ErrorCode::KeyInUse)?;
+                record
+                    .details(json!({ "fingerprint": key.fingerprint, "algorithm": key.algorithm, "comment": key.comment }))
+                    .write(tx, now)?;
+                Ok::<_, Error>(key)
+            })
+            .await?;
+        self.changed();
+        Ok(access_key(key))
+    }
+
+    pub async fn remove_own_key(&self, caller: &Caller, key_id: i64) -> Result<(), Error> {
+        let now = self.clock.now();
+        let user_id = caller.user_id;
+        let record = Record::by(caller, AuditAction::FileKeyRemoved).target(caller.username.clone());
+        self.db
+            .write(move |tx| {
+                let access = store::user_access(tx, user_id)?.ok_or(ErrorCode::NotFound)?;
+                let key = store::delete_key(tx, access.id, key_id)?.ok_or(ErrorCode::NotFound)?;
+                record
+                    .details(json!({ "fingerprint": key.fingerprint, "algorithm": key.algorithm, "comment": key.comment }))
+                    .write(tx, now)?;
+                Ok::<_, Error>(())
+            })
+            .await?;
+        self.changed();
+        Ok(())
+    }
+
     async fn group(&self, id: i64) -> Result<Group, Error> {
         let row = self.db.read(move |conn| store::group(conn, id)).await?;
         row.map(group).ok_or_else(|| ErrorCode::NotFound.into())
@@ -473,6 +561,85 @@ fn access_for_login(
     Ok(store::user_access(conn, user.id)?.map(|access| (access, Some(user))))
 }
 
+/// A pasted public key, checked.
+struct ParsedKey {
+    algorithm: String,
+    blob: Vec<u8>,
+    fingerprint: String,
+    comment: String,
+}
+
+fn invalid_key(reason: &str) -> Error {
+    ApiError::new(ErrorCode::InvalidPublicKey)
+        .with("reason", reason)
+        .into()
+}
+
+/// Reads one line of an OpenSSH `.pub` file: `type base64 [comment]`.
+fn parse_key(line: &str) -> Result<ParsedKey, Error> {
+    let line = line.trim();
+    if line.is_empty() || line.len() > MAX_KEY_LINE || line.contains(['\n', '\r']) {
+        return Err(invalid_key("format"));
+    }
+    let mut parts = line.splitn(3, char::is_whitespace);
+    let label = parts.next().unwrap_or_default();
+    let data = parts.next().unwrap_or_default().trim();
+    if label.contains("-cert-v01@") {
+        return Err(invalid_key("certificate"));
+    }
+    let Some((_, prefix)) = KEY_TYPES.iter().find(|(known, _)| *known == label) else {
+        let ssh_like = label.starts_with("ssh-") || label.starts_with("ecdsa-") || label.starts_with("sk-");
+        return Err(invalid_key(if ssh_like { "algorithm" } else { "format" }));
+    };
+    if !data.starts_with(prefix) {
+        // The data names another type than the label: a certificate's blob behind a plain label
+        // is refused here, before the parser sees it.
+        return Err(invalid_key("certificate"));
+    }
+    let key =
+        ssh_key::PublicKey::from_openssh(&format!("{label} {data}")).map_err(|_| invalid_key("format"))?;
+    let blob = key.to_bytes().map_err(|_| invalid_key("format"))?;
+    let comment: String = parts
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(MAX_KEY_COMMENT)
+        .collect();
+    Ok(ParsedKey {
+        algorithm: label.to_owned(),
+        blob,
+        fingerprint: key.fingerprint(ssh_key::HashAlg::Sha256).to_string(),
+        comment,
+    })
+}
+
+fn access_key(row: FileKeyRow) -> AccessKey {
+    AccessKey {
+        id: row.id,
+        algorithm: row.algorithm,
+        fingerprint: row.fingerprint,
+        comment: row.comment,
+        created_at: row.created_at,
+        expires_at: row.expires_at,
+        last_used_at: row.last_used_at,
+        last_used_ip: row.last_used_ip,
+    }
+}
+
+/// A group as the panel shows it.
+pub fn file_group(group: Group) -> FileGroup {
+    FileGroup {
+        id: group.row.id,
+        name: group.row.name,
+        description: group.row.description,
+        rules: group.row.rules,
+        reach: group.reach,
+        version: group.row.version,
+    }
+}
+
 fn rusqlite_missing() -> observer_store::RusqliteError {
     observer_store::RusqliteError::QueryReturnedNoRows
 }
@@ -507,4 +674,49 @@ fn check_group(name: &str, rules: &[Rule]) -> Result<(), Error> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use ssh_key::private::{Ed25519Keypair, KeypairData};
+
+    use super::*;
+
+    fn line(seed: u8) -> String {
+        let key = ssh_key::PrivateKey::new(
+            KeypairData::Ed25519(Ed25519Keypair::from_seed(&[seed; 32])),
+            "ada@laptop",
+        )
+        .unwrap();
+        key.public_key().to_openssh().unwrap()
+    }
+
+    fn reason(result: Result<ParsedKey, Error>) -> String {
+        match result {
+            Err(Error::Refused(refusal)) => refusal.params["reason"].as_str().unwrap().to_owned(),
+            other => panic!("{:?}", other.map(|key| key.fingerprint)),
+        }
+    }
+
+    #[test]
+    fn a_pasted_key_is_one_plain_line_of_an_accepted_type() {
+        let parsed = parse_key(&format!("  {}  \n", line(1))).unwrap();
+        assert_eq!(parsed.algorithm, "ssh-ed25519");
+        assert_eq!(parsed.comment, "ada@laptop");
+        assert!(parsed.fingerprint.starts_with("SHA256:"));
+
+        let data = line(1).split_whitespace().nth(1).unwrap().to_owned();
+        assert_eq!(
+            reason(parse_key(&format!("ssh-ed25519-cert-v01@openssh.com {data}"))),
+            "certificate"
+        );
+        assert_eq!(
+            reason(parse_key(&format!("ecdsa-sha2-nistp256 {data}"))),
+            "certificate"
+        );
+        assert_eq!(reason(parse_key("ssh-rsa AAAAB3NzaC1yc2E= old")), "algorithm");
+        assert_eq!(reason(parse_key("-----BEGIN OPENSSH PRIVATE KEY-----")), "format");
+        assert_eq!(reason(parse_key(&format!("ssh-ed25519 {data}x"))), "format");
+        assert_eq!(reason(parse_key(&format!("{}\n{}", line(1), line(2)))), "format");
+    }
 }

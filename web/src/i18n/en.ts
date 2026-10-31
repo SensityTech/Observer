@@ -2204,6 +2204,18 @@ export const en = {
             typeof params.index === 'number'
                 ? `Rule ${params.index + 1} needs fixing: check its ${String(params.field ?? 'fields')}.`
                 : 'A rule needs fixing.',
+        invalid_public_key: (params) => {
+            if (params.reason === 'certificate') {
+                return 'Certificates are not accepted: paste the public key itself.';
+            }
+            if (params.reason === 'algorithm') {
+                return 'Only Ed25519 and ECDSA (P-256, P-384) keys are accepted. Make one with ssh-keygen -t ed25519.';
+            }
+            return 'This is not an OpenSSH public key line. Paste the whole line of the .pub file.';
+        },
+        key_in_use: 'This key is already registered.',
+        too_many_keys: (params) =>
+            typeof params.max === 'number' ? `An access holds ${params.max} keys at most.` : 'Too many keys.',
     } satisfies Record<ErrorCode, ErrorMessage>,
     failure: {
         unknown: 'Something went wrong. Try again.',

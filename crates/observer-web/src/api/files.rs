@@ -1,9 +1,11 @@
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::{Extension, Json};
-use observer_app::{Caller, Group};
+use observer_app::{Caller, file_group};
 use observer_domain::error::ErrorCode;
-use observer_domain::files::{FileGroup, FileGroupRequest, UserGroupsRequest};
+use observer_domain::files::{
+    AccessKey, AddKeyRequest, FileGroup, FileGroupRequest, MyFileAccess, UserGroupsRequest,
+};
 
 use crate::AppState;
 use crate::error::Failure;
@@ -69,13 +71,27 @@ pub(crate) async fn set_user_groups(
     Ok(StatusCode::NO_CONTENT)
 }
 
-fn file_group(group: Group) -> FileGroup {
-    FileGroup {
-        id: group.row.id,
-        name: group.row.name,
-        description: group.row.description,
-        rules: group.row.rules,
-        reach: group.reach,
-        version: group.row.version,
-    }
+pub(crate) async fn my_access(
+    State(state): State<AppState>,
+    Extension(caller): Extension<Caller>,
+) -> Result<Json<MyFileAccess>, Failure> {
+    Ok(Json(state.files.my_access(&caller).await?))
+}
+
+pub(crate) async fn add_key(
+    State(state): State<AppState>,
+    Extension(caller): Extension<Caller>,
+    JsonBody(request): JsonBody<AddKeyRequest>,
+) -> Result<(StatusCode, Json<AccessKey>), Failure> {
+    let key = state.files.add_own_key(&caller, &request.public_key).await?;
+    Ok((StatusCode::CREATED, Json(key)))
+}
+
+pub(crate) async fn remove_key(
+    State(state): State<AppState>,
+    Extension(caller): Extension<Caller>,
+    Id(id): Id,
+) -> Result<StatusCode, Failure> {
+    state.files.remove_own_key(&caller, id).await?;
+    Ok(StatusCode::NO_CONTENT)
 }

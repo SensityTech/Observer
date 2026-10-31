@@ -685,6 +685,41 @@ fn mask_v6(address: u128, length: u32) -> u128 {
     address.checked_shr(128 - length).unwrap_or(0)
 }
 
+/// A public key an access logs in with.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct AccessKey {
+    pub id: i64,
+    pub algorithm: String,
+    /// `SHA256:` and the digest, as OpenSSH prints it.
+    pub fingerprint: String,
+    pub comment: String,
+    pub created_at: jiff::Timestamp,
+    pub expires_at: Option<jiff::Timestamp>,
+    pub last_used_at: Option<jiff::Timestamp>,
+    pub last_used_ip: Option<String>,
+}
+
+/// What the signed-in account reaches over SFTP.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct MyFileAccess {
+    /// The name to log in with: the username.
+    pub login: String,
+    pub keys: Vec<AccessKey>,
+    pub groups: Vec<FileGroup>,
+}
+
+/// A public key to register: one line of an OpenSSH `.pub` file.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct AddKeyRequest {
+    pub public_key: String,
+}
+
 /// A group of rules, as the panel shows it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]

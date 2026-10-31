@@ -88,6 +88,10 @@ pub(crate) fn routes() -> Vec<Route> {
         route(M::GET,    "/ws",                         Ticket,       live::open),
         route(M::POST,   "/account/password",           Account,      account::change_password),
         route(M::GET,    "/account/sessions",           Session,      account::sessions),
+        route(M::GET,    "/account/files",              Session,      files::my_access),
+        // A key added logs in as its holder: the password again first.
+        route(M::POST,   "/account/files/keys",         Reauthenticated(P::NONE), files::add_key),
+        route(M::DELETE, "/account/files/keys/{id}",    Session,      files::remove_key),
         route(M::DELETE, "/account/sessions/{id}",      Session,      account::revoke_session),
         route(M::GET,    "/permissions",                read_users,   users::catalog),
         route(M::GET,    "/users",                      read_users,   users::list),
