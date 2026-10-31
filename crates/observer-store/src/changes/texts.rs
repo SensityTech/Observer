@@ -150,6 +150,18 @@ pub fn remasked(
     Ok(())
 }
 
+/// A path whose text had the digest `digest`, which tells the masking rules what kind of file it is.
+pub fn path_of(conn: &Connection, digest: &str) -> Result<Option<String>, StoreError> {
+    Ok(conn
+        .query_row(
+            "SELECT path FROM tree_text WHERE digest = ?1
+             UNION ALL SELECT path FROM snapshot_text WHERE digest = ?1 LIMIT 1",
+            [digest],
+            |row| row.get(0),
+        )
+        .optional()?)
+}
+
 /// The paths whose text a snapshot holds outside its trees: the files of the cfg exec chain.
 pub fn attach(conn: &Connection, snapshot: i64, path: &str, digest: &str) -> Result<(), StoreError> {
     conn.execute(

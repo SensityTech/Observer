@@ -138,6 +138,21 @@ pub fn fail(conn: &Connection, id: i64, failure: &str, at: Timestamp) -> Result<
     Ok(())
 }
 
+/// What the listing read of the cfg exec chain and the game it sets.
+pub fn set_chain(
+    conn: &Connection,
+    id: i64,
+    cfg: &Value,
+    game: Option<Game>,
+    game_build: Option<u32>,
+) -> Result<(), StoreError> {
+    conn.execute(
+        "UPDATE snapshot SET cfg = ?2, game = ?3, game_build = coalesce(game_build, ?4) WHERE id = ?1",
+        params![id, cfg.to_string(), game.as_ref().map(name), game_build],
+    )?;
+    Ok(())
+}
+
 /// The game build `/info.json` reported once the server answered, which wins over the cfg's.
 pub fn set_game_build(conn: &Connection, id: i64, game_build: u32) -> Result<(), StoreError> {
     conn.execute(
@@ -260,6 +275,17 @@ pub fn flag(conn: &Connection, id: i64, path: &str, flag: FileFlag) -> Result<()
         params![id, path, name(&flag)],
     )?;
     Ok(())
+}
+
+/// The files of the resource at `resource` modified after the start were reloaded by a restart of
+/// the resource while the server ran.
+pub fn reloaded(conn: &Connection, id: i64, resource: &str) -> Result<usize, StoreError> {
+    Ok(conn.execute(
+        "INSERT OR IGNORE INTO snapshot_flag (snapshot_id, path, flag)
+         SELECT snapshot_id, path, 'reloadedLive' FROM snapshot_flag
+         WHERE snapshot_id = ?1 AND flag = 'afterStart' AND substr(path, 1, length(?2) + 1) = ?2 || '/'",
+        params![id, resource],
+    )?)
 }
 
 pub fn flags(conn: &Connection, id: i64) -> Result<Vec<(String, FileFlag)>, StoreError> {

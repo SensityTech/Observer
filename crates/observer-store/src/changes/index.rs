@@ -70,6 +70,12 @@ pub fn save(conn: &Connection, entries: &[(String, IndexEntry)], at: Timestamp) 
     Ok(())
 }
 
+/// Forgets every file, so that the next scan reads them all again: the extensions that may be
+/// text changed, and with them what each file is.
+pub fn clear(conn: &Connection) -> Result<usize, StoreError> {
+    Ok(conn.execute("DELETE FROM file_index", [])?)
+}
+
 /// Forgets every path a complete listing did not see.
 pub fn keep_only<S: BuildHasher>(conn: &Connection, seen: &HashSet<String, S>) -> Result<usize, StoreError> {
     let mut statement = conn.prepare("SELECT path FROM file_index")?;

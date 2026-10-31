@@ -205,7 +205,8 @@ fn apply(text: &str, secrets: Vec<Range<usize>>, existing: &[Redaction], tag_key
     }
 }
 
-fn tag(value: &str, key: &[u8; 32]) -> u16 {
+/// The tag of a hidden value: a keyed hash cut to 16 bits, which never leaves the server.
+pub fn tag(value: &str, key: &[u8; 32]) -> u16 {
     let mut mac = <Hmac<Sha256> as KeyInit>::new_from_slice(key).expect("HMAC takes a key of any length");
     mac.update(value.as_bytes());
     let bytes = mac.finalize().into_bytes();
