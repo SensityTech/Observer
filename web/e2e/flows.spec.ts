@@ -171,6 +171,26 @@ test.describe.serial('Observer in a browser', () => {
         );
     });
 
+    test('a player who joins shows online once FXServer lists them, with a profile of their own', async () => {
+        await page.getByRole('link', { name: en.nav.console, exact: true }).click();
+        const command = page.getByRole('textbox', { name: en.console.commandLabel });
+        await command.fill('fake_join Ada');
+        await command.press('Enter');
+        await expect(page.getByText(en.console.sent('fake_join Ada'))).toBeVisible();
+
+        await page.getByRole('link', { name: en.nav.players, exact: true }).click();
+        await expect(page.getByRole('heading', { level: 1 })).toContainText(en.players.title);
+        const online = page.getByRole('region', { name: en.players.now.title, exact: true });
+        // Confirmed against FXServer's player list, read every five seconds, then shown at the
+        // page's next refresh.
+        const ada = online.getByRole('link', { name: 'Ada', exact: true });
+        await expect(ada).toBeVisible({ timeout: 30_000 });
+        await ada.click();
+
+        await expect(page.getByRole('heading', { level: 1 })).toContainText('Ada');
+        await expect(page.getByText(en.players.online, { exact: true }).first()).toBeVisible();
+    });
+
     test('a one-off restart happens at its time', async () => {
         test.setTimeout(120_000);
         await page.getByRole('link', { name: en.nav.schedule, exact: true }).click();
