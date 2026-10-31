@@ -5,7 +5,7 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-/// The supervisor's states, PLAN.md §4.1.
+/// The states the supervisor moves FXServer through.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
