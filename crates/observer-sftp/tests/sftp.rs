@@ -57,6 +57,73 @@ fn rule(effect: Effect, folder: &str, names: &[&str], rights: Rights) -> Rule {
     }
 }
 
+/// `linus`, his group, his key, and the launch settings naming the server folder.
+async fn seed(db: &Database, fingerprint: String, data_path: String) -> i64 {
+    db.write(move |tx| {
+        let now = jiff::Timestamp::now();
+        let user = users::insert(
+            tx,
+            &NewUser {
+                username: "linus",
+                password_hash: "unused",
+                is_owner: false,
+                permissions: Permissions::NONE,
+                must_change_password: false,
+                password_expires_at: None,
+                created_at: now,
+            },
+        )?
+        .unwrap();
+        let rules = vec![
+            rule(Effect::Allow, "resources", &[], Rights::FULL),
+            rule(
+                Effect::Deny,
+                "",
+                &["*.cfg"],
+                Rights::of(&[Right::Read, Right::Modify]),
+            ),
+        ];
+        let group = file_store::insert_group(tx, "default", "Developers", "", &rules, now)?.unwrap();
+        let access = file_store::user_access_or_new(tx, user, now)?;
+        file_store::set_access_groups(tx, access.id, &[group])?;
+        file_store::insert_key(
+            tx,
+            &FileKeyRow {
+                id: 0,
+                access_id: access.id,
+                algorithm: "ssh-ed25519".to_owned(),
+                public_key: Vec::new(),
+                fingerprint,
+                comment: String::new(),
+                created_at: now,
+                expires_at: None,
+                last_used_at: None,
+                last_used_ip: None,
+            },
+        )?;
+        launch::save(
+            tx,
+            "default",
+            &StoredLaunch {
+                settings: LaunchSettings {
+                    data_path,
+                    cfg_file: "server.cfg".to_owned(),
+                    onesync: OneSync::On,
+                    auto_start: false,
+                    txadmin_events: false,
+                    extra_arguments: Vec::new(),
+                },
+                version: 1,
+                legacy_build_path: None,
+            },
+            now,
+        )?;
+        Ok::<_, StoreError>(user)
+    })
+    .await
+    .unwrap()
+}
+
 impl Lab {
     /// `linus` holds a group that edits `resources` but never a `*.cfg`, and one key.
     async fn new() -> Self {
@@ -82,70 +149,7 @@ impl Lab {
             PrivateKey::new(KeypairData::Ed25519(Ed25519Keypair::from_seed(&[7; 32])), "linus").unwrap();
         let fingerprint = key.fingerprint(HashAlg::Sha256).to_string();
         let data_path = root.to_string_lossy().into_owned();
-        let linus = db
-            .write(move |tx| {
-                let now = jiff::Timestamp::now();
-                let user = users::insert(
-                    tx,
-                    &NewUser {
-                        username: "linus",
-                        password_hash: "unused",
-                        is_owner: false,
-                        permissions: Permissions::NONE,
-                        must_change_password: false,
-                        password_expires_at: None,
-                        created_at: now,
-                    },
-                )?
-                .unwrap();
-                let rules = vec![
-                    rule(Effect::Allow, "resources", &[], Rights::FULL),
-                    rule(
-                        Effect::Deny,
-                        "",
-                        &["*.cfg"],
-                        Rights::of(&[Right::Read, Right::Modify]),
-                    ),
-                ];
-                let group = file_store::insert_group(tx, "default", "Developers", "", &rules, now)?.unwrap();
-                let access = file_store::user_access_or_new(tx, user, now)?;
-                file_store::set_access_groups(tx, access.id, &[group])?;
-                file_store::insert_key(
-                    tx,
-                    &FileKeyRow {
-                        id: 0,
-                        access_id: access.id,
-                        algorithm: "ssh-ed25519".to_owned(),
-                        public_key: Vec::new(),
-                        fingerprint,
-                        comment: String::new(),
-                        created_at: now,
-                        expires_at: None,
-                        last_used_at: None,
-                        last_used_ip: None,
-                    },
-                )?;
-                launch::save(
-                    tx,
-                    "default",
-                    &StoredLaunch {
-                        settings: LaunchSettings {
-                            data_path,
-                            cfg_file: "server.cfg".to_owned(),
-                            onesync: OneSync::On,
-                            auto_start: false,
-                            txadmin_events: false,
-                            extra_arguments: Vec::new(),
-                        },
-                        version: 1,
-                        legacy_build_path: None,
-                    },
-                    now,
-                )?;
-                Ok::<_, StoreError>(user)
-            })
-            .await
-            .unwrap();
+        let linus = seed(&db, fingerprint, data_path).await;
 
         let host_key = observer_sftp::host_key(&files).await.unwrap();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
