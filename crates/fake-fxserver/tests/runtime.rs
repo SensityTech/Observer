@@ -12,14 +12,16 @@ use std::time::{Duration, Instant};
 use jiff::{SignedDuration, Timestamp, Unit};
 use observer_app::{
     Accounts, AuditLog, Caller, Client, Clock, DatabaseFiles, Diagnostics, DiagnosticsSetup, DiagnosticsTask,
-    Error, Metrics, MetricsSetup, PasswordCost, Players, PlayersSetup, PlayersTask, Running, Sampling,
-    Schedule, ScheduleSetup, ScheduleTask, Servers, Setup, Sources, Supervision,
+    Drops, DropsSetup, Error, LogQuery, Metrics, MetricsSetup, PasswordCost, Players, PlayersSetup,
+    PlayersTask, Running, Sampling, Schedule, ScheduleSetup, ScheduleTask, Servers, Setup, Sources,
+    Supervision,
 };
 use observer_domain::audit::{ActorKind, AuditAction, AuditEntry, AuditFilter, Outcome};
 use observer_domain::diagnostics::{
     Alert, AlertKind, AnalysisState, CrashFileKind, CrashKind, DiagnosticsEvent, ListenerRole, ProcessKind,
     Protocol, Scope,
 };
+use observer_domain::drops::{DropCategory, DropsRange, TileKind};
 use observer_domain::error::ErrorCode;
 use observer_domain::launch::{ExtraArgument, LaunchSettings, OneSync};
 use observer_domain::metrics::{LiveSample, MarkerKind, Range, Series, ThreadGroup, ThreadShares};
@@ -1541,4 +1543,118 @@ async fn players_are_confirmed_followed_and_credited_and_their_address_is_kept_n
 
 fn profile_json(profile: &PlayerProfile) -> serde_json::Value {
     serde_json::to_value(profile).unwrap()
+}
+
+/// Waits until `count` players are online, every one of them confirmed.
+async fn confirmed(players: &Players, count: usize) {
+    let deadline = Instant::now() + WAIT;
+    loop {
+        let online = players.online().await.unwrap();
+        let done = online
+            .players
+            .iter()
+            .filter(|player| player.confirmation == Confirmation::Confirmed && player.player.is_some())
+            .count();
+        if done == count && online.players.len() == count {
+            return;
+        }
+        assert!(Instant::now() < deadline, "never {count} confirmed: {online:?}");
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+}
+
+#[tokio::test]
+async fn a_crash_and_a_kick_reach_the_drops_with_their_signature_and_reason_group() {
+    let mut observer = Observer::new(false).await;
+    let (metrics, sampling, players, playing) = follow_players(&observer).await;
+    observer.supervision.start_server(&observer.owner).await.unwrap();
+    observer.state(ServerState::Online).await;
+    for line in ["fake_join Ada", "fake_join Grace"] {
+        observer
+            .supervision
+            .command(&observer.owner, line, CONSOLE_ROUTE.0, CONSOLE_ROUTE.1)
+            .await
+            .unwrap();
+    }
+    confirmed(&players, 2).await;
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    for line in [
+        "fake_drop 1 2 - Game crashed: kilo-ohio-lemon (GTA5_b3095.exe+1A2B3C)",
+        "fake_drop 2 1 afk AFK for 31 minutes",
+    ] {
+        observer
+            .supervision
+            .command(&observer.owner, line, CONSOLE_ROUTE.0, CONSOLE_ROUTE.1)
+            .await
+            .unwrap();
+    }
+    confirmed(&players, 0).await;
+    // The players' flush writes the closures within a second; the drops' first round then
+    // classifies them.
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    let (drops, dropping) = Drops::start(DropsSetup {
+        db: observer.db.clone(),
+        metrics: metrics.clone(),
+        clock: Clock::system(),
+        schedule: observer.schedule.status(),
+        players: players.clone(),
+    });
+    let deadline = Instant::now() + WAIT;
+    let log = loop {
+        let log = drops.log(&LogQuery::default(), Permissions::all()).await.unwrap();
+        if log.rows.iter().any(|row| row.signature.is_some()) {
+            break log;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the crash was never classified: {log:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    };
+    let signatures = drops
+        .signatures(DropsRange::Week, Permissions::all())
+        .await
+        .unwrap();
+    let resources = drops
+        .resources(DropsRange::Week, Permissions::all())
+        .await
+        .unwrap();
+    let summary = drops
+        .summary(DropsRange::Week, Permissions::DROPS_VIEW)
+        .await
+        .unwrap();
+    dropping.close().await;
+    observer.supervision.stop_server(&observer.owner).await.unwrap();
+    observer.state(ServerState::Stopped).await;
+    playing.close().await;
+    sampling.close().await;
+    metrics.close().await.unwrap();
+    observer.stop_observer().await;
+
+    let crash = log
+        .rows
+        .iter()
+        .find(|row| row.category == DropCategory::Crash)
+        .unwrap();
+    assert_eq!(crash.signature.as_deref(), Some("hash:GTA5_b3095.exe+1A2B3C"));
+    assert_eq!(crash.label.as_deref(), Some("kilo-ohio-lemon"));
+    assert_eq!(
+        crash.player.as_ref().and_then(|player| player.name.as_deref()),
+        Some("Ada")
+    );
+    let entry = &signatures.signatures[0];
+    assert_eq!(
+        (entry.module.as_deref(), entry.game_build),
+        (Some("GTA5.exe"), Some(3095))
+    );
+    assert_eq!((entry.drops, entry.players), (1, 1));
+    let afk = &resources.resources[0];
+    assert_eq!(afk.resource.as_deref(), Some("afk"));
+    assert_eq!(afk.reasons.as_ref().unwrap()[0].template, "AFK for {n} minutes");
+    let crashes = summary
+        .tiles
+        .iter()
+        .find(|tile| tile.kind == TileKind::Crashes)
+        .unwrap();
+    assert_eq!(crashes.drops, 1);
 }
