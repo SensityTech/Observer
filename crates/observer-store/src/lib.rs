@@ -18,6 +18,7 @@ pub mod sessions;
 pub mod settings;
 pub mod setup_tokens;
 mod time;
+pub mod tools;
 pub mod users;
 
 pub use backup::BackupKind;

@@ -1,11 +1,18 @@
-//! Server tools: their reports and settings, as the panel shows them.
+//! Server tools: their settings, runs, reports and the files they changed, as the panel shows them.
 //!
 //! A tool reads the server folder, predicts what the FiveM client does with its resources, and
 //! changes a file only where the change cannot alter what players see. Everything it leaves alone
 //! is reported with every reason, so that the owner knows which setting would change the answer and
 //! what to pass on to a resource's author. The first tool finds the archetypes the client registers
 //! more than once, which it logs as `Duplicate Archetype` warnings.
+//!
+//! Every file a tool changes stays in a journal until it no longer holds the change, with the
+//! entries taken out and the copy kept for each, so that the change can be healed when a kept copy
+//! goes and undone on request.
 
+use std::fmt::Write as _;
+
+use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
@@ -489,6 +496,404 @@ pub struct ToolTimings {
     pub total_ms: u64,
 }
 
+/// Who started a run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum ToolTrigger {
+    /// Observer, before FXServer starts.
+    Start,
+    /// The owner, on the Tools page.
+    Panel,
+    /// The command line.
+    Cli,
+}
+
+impl ToolTrigger {
+    pub const ALL: [Self; 3] = [Self::Start, Self::Panel, Self::Cli];
+
+    /// The name on the wire and in the store.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Start => "start",
+            Self::Panel => "panel",
+            Self::Cli => "cli",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|trigger| trigger.as_str() == name)
+    }
+}
+
+/// What a run does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum ToolRunMode {
+    /// Scans and reports, and writes nothing.
+    Report,
+    /// Scans and applies the plan.
+    Fix,
+    /// Puts back only the entries whose kept copy is gone.
+    Heal,
+    /// Puts back the entries the owner names.
+    Undo,
+}
+
+impl ToolRunMode {
+    pub const ALL: [Self; 4] = [Self::Report, Self::Fix, Self::Heal, Self::Undo];
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Report => "report",
+            Self::Fix => "fix",
+            Self::Heal => "heal",
+            Self::Undo => "undo",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|mode| mode.as_str() == name)
+    }
+}
+
+/// How a run ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum ToolRunOutcome {
+    Done,
+    /// A stop or a shutdown ended it between two files.
+    Cancelled,
+    /// It ran past the time a start gives it, and ended between two files.
+    TimedOut,
+    /// An error ended it: its summary's `problem` says which.
+    Failed,
+}
+
+impl ToolRunOutcome {
+    pub const ALL: [Self; 4] = [Self::Done, Self::Cancelled, Self::TimedOut, Self::Failed];
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Done => "done",
+            Self::Cancelled => "cancelled",
+            Self::TimedOut => "timedOut",
+            Self::Failed => "failed",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|outcome| outcome.as_str() == name)
+    }
+}
+
+/// What a run found and did, in counts. Stored as written: a field added later reads as its default
+/// in older runs.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", default)]
+#[ts(export)]
+pub struct ToolRunSummary {
+    /// Hashes registered more than once.
+    pub groups: u32,
+    /// Groups the plan fixes.
+    pub fixable: u32,
+    /// Groups whose fix this run wrote.
+    pub fixed: u32,
+    /// Groups left as they are, with their reasons in the report.
+    pub left: u32,
+    /// Files this run changed.
+    pub files_changed: u32,
+    /// Files this run gave entries back to, or their original.
+    pub files_restored: u32,
+    /// Entries this run took out.
+    pub removals: u32,
+    pub elapsed_ms: u64,
+    /// Why the run failed, or what ended it early.
+    pub problem: Option<String>,
+}
+
+/// One run of a tool, as its history keeps it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ToolRun {
+    pub id: i64,
+    pub tool: ToolKind,
+    pub trigger: ToolTrigger,
+    /// The account that asked, or null when Observer ran it by itself.
+    pub actor: Option<String>,
+    pub mode: ToolRunMode,
+    pub started_at: Timestamp,
+    /// Null while it runs, as are its outcome and summary.
+    pub finished_at: Option<Timestamp>,
+    pub outcome: Option<ToolRunOutcome>,
+    pub summary: Option<ToolRunSummary>,
+    /// The SHA-256 of the plan its report holds, in hex: a fix names it to confirm the plan the
+    /// owner saw.
+    pub plan: Option<String>,
+    /// Kept for the latest report and for the runs that changed files; null in lists.
+    pub report: Option<ArchetypeReport>,
+}
+
+/// What a changed file holds, which says what its entries are.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum ToolFileFormat {
+    /// A `.ytyp`: entries are positions in its archetype list.
+    Ytyp,
+    /// A model-info `.meta`: entries are the ordinals of its `Item`s.
+    ModelInfo,
+}
+
+impl ToolFileFormat {
+    pub const ALL: [Self; 2] = [Self::Ytyp, Self::ModelInfo];
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Ytyp => "ytyp",
+            Self::ModelInfo => "modelInfo",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|format| format.as_str() == name)
+    }
+}
+
+/// One entry a tool took out of a file, as the journal keeps it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ToolRemoval {
+    /// Its position in the file before Observer changed it: an archetype index or an item ordinal.
+    pub index: u32,
+    /// The name hash it registers.
+    pub hash: u32,
+    /// The name, when the run's report spelled it.
+    #[serde(default)]
+    pub name: Option<String>,
+    /// The copy that keeps registering the hash.
+    pub keeper: ToolKeeper,
+    /// The run that took it out.
+    pub run: i64,
+}
+
+/// The copy of an archetype that stays when another is taken out.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ToolKeeper {
+    /// Relative to the server folder, with `/`: the changed file itself when both copies share it.
+    pub path: String,
+    pub format: ToolFileFormat,
+    /// Its position in its file when the run planned the removal.
+    pub index: u32,
+    /// The SHA-256 of its file then, in hex.
+    pub sha256: String,
+}
+
+/// Where a change stands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum ToolChangeState {
+    /// A write is under way, or was when Observer stopped: the next start or run settles it.
+    Pending,
+    /// The file holds the change.
+    Applied,
+    /// Over: the file is no longer Observer's to heal or undo.
+    Closed,
+}
+
+impl ToolChangeState {
+    pub const ALL: [Self; 3] = [Self::Pending, Self::Applied, Self::Closed];
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Applied => "applied",
+            Self::Closed => "closed",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|state| state.as_str() == name)
+    }
+}
+
+/// Why a change was closed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum ToolCloseReason {
+    /// The owner undid it: Observer gave the file its original back.
+    Undone,
+    /// Every copy it kept went away: Observer gave the file its original back.
+    Healed,
+    /// The file changed since, by someone else's hand: Observer leaves it alone.
+    Stale,
+    /// The file was found holding its original again, put back by hand or by a deploy.
+    Restored,
+    /// Its first write never happened.
+    Abandoned,
+}
+
+impl ToolCloseReason {
+    pub const ALL: [Self; 5] = [
+        Self::Undone,
+        Self::Healed,
+        Self::Stale,
+        Self::Restored,
+        Self::Abandoned,
+    ];
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Undone => "undone",
+            Self::Healed => "healed",
+            Self::Stale => "stale",
+            Self::Restored => "restored",
+            Self::Abandoned => "abandoned",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|reason| reason.as_str() == name)
+    }
+}
+
+/// A file a tool changed, as the Tools page lists it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ToolChange {
+    pub id: i64,
+    /// The server folder the file is in, as it was when the change was made.
+    pub folder: String,
+    /// Relative to the server folder, with `/`.
+    pub path: String,
+    pub resource: String,
+    pub format: ToolFileFormat,
+    /// The entries the file holds without; once closed, those it held without last.
+    pub removals: Vec<ToolRemoval>,
+    pub state: ToolChangeState,
+    pub close_reason: Option<ToolCloseReason>,
+    /// The SHA-256 of the file before Observer changed it, in hex: its backup's name under
+    /// `data/tools/backups`.
+    pub backup: String,
+    pub opened_at: Timestamp,
+    /// When its latest write landed; null until the first did.
+    pub changed_at: Option<Timestamp>,
+    pub closed_at: Option<Timestamp>,
+}
+
+/// The Tools page: each tool with its settings, its latest runs and the files it changed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ToolsView {
+    pub tools: Vec<ToolView>,
+}
+
+/// One tool on the Tools page.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ToolView {
+    pub tool: ToolKind,
+    pub settings: ToolSettings,
+    /// The settings' version, null until they are first saved.
+    pub version: Option<i64>,
+    /// The latest run, with its report if it made one.
+    pub last_run: Option<ToolRun>,
+    /// The latest run that made a report, with it, when that is an earlier run than the latest: a
+    /// heal at a start makes none.
+    pub last_report: Option<ToolRun>,
+    /// The changes still open, in every server folder.
+    pub open: Vec<ToolChange>,
+    /// The changes closed recently, the latest first.
+    pub closed: Vec<ToolChange>,
+    /// What the backups of these changes take on the disk.
+    pub backup_bytes: u64,
+}
+
+/// The owner's change of a tool's settings.
+#[derive(Debug, Clone, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+#[ts(export)]
+pub struct ToolSettingsChange {
+    pub settings: ToolSettings,
+    /// The version the change was made from, null before the first save.
+    pub version: Option<i64>,
+}
+
+/// A fix the owner confirmed: it is applied only if a fresh scan plans exactly what the owner saw.
+#[derive(Debug, Clone, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+#[ts(export)]
+pub struct ToolFixRequest {
+    /// The `plan` of the run whose report the owner saw.
+    pub plan: String,
+}
+
+impl ToolFixRequest {
+    /// The plan's SHA-256, or `None` when the request does not hold one.
+    pub fn plan_sha256(&self) -> Option<[u8; 32]> {
+        sha256_from_hex(&self.plan)
+    }
+}
+
+/// The changes the owner asks to undo.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+#[ts(export)]
+pub struct ToolUndoRequest {
+    pub scope: ToolUndoScope,
+}
+
+/// What an undo puts back. Written `"all"`, `{ "run": id }` or `{ "changes": [id, ...] }`: one key
+/// only, so that a request never names two scopes.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum ToolUndoScope {
+    /// Every open change in the server folder.
+    All,
+    /// The entries one run took out, in every file it changed.
+    Run(i64),
+    /// These changes, whole.
+    Changes(Vec<i64>),
+}
+
+/// A SHA-256 as the journal, the backups and the panel write it: 64 lowercase hex digits.
+pub fn sha256_hex(digest: &[u8; 32]) -> String {
+    digest.iter().fold(String::with_capacity(64), |mut hex, byte| {
+        let _ = write!(hex, "{byte:02x}");
+        hex
+    })
+}
+
+/// Reads what [`sha256_hex`] writes, and nothing else: no sign, no upper case, no other length.
+pub fn sha256_from_hex(text: &str) -> Option<[u8; 32]> {
+    let (pairs, rest) = text.as_bytes().as_chunks::<2>();
+    if pairs.len() != 32 || !rest.is_empty() {
+        return None;
+    }
+    let nibble = |digit: u8| match digit {
+        b'0'..=b'9' => Some(digit - b'0'),
+        b'a'..=b'f' => Some(digit - b'a' + 10),
+        _ => None,
+    };
+    let mut digest = [0; 32];
+    for (byte, [high, low]) in digest.iter_mut().zip(pairs) {
+        *byte = (nibble(*high)? << 4) | nibble(*low)?;
+    }
+    Some(digest)
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
@@ -513,6 +918,140 @@ mod tests {
             assert_eq!(serde_json::to_value(policy).unwrap(), policy.as_str());
             assert_eq!(EscrowPolicy::from_name(policy.as_str()), Some(policy));
         }
+        for trigger in ToolTrigger::ALL {
+            assert_eq!(serde_json::to_value(trigger).unwrap(), trigger.as_str());
+            assert_eq!(ToolTrigger::from_name(trigger.as_str()), Some(trigger));
+        }
+        for mode in ToolRunMode::ALL {
+            assert_eq!(serde_json::to_value(mode).unwrap(), mode.as_str());
+            assert_eq!(ToolRunMode::from_name(mode.as_str()), Some(mode));
+        }
+        for outcome in ToolRunOutcome::ALL {
+            assert_eq!(serde_json::to_value(outcome).unwrap(), outcome.as_str());
+            assert_eq!(ToolRunOutcome::from_name(outcome.as_str()), Some(outcome));
+        }
+        for format in ToolFileFormat::ALL {
+            assert_eq!(serde_json::to_value(format).unwrap(), format.as_str());
+            assert_eq!(ToolFileFormat::from_name(format.as_str()), Some(format));
+        }
+        for state in ToolChangeState::ALL {
+            assert_eq!(serde_json::to_value(state).unwrap(), state.as_str());
+            assert_eq!(ToolChangeState::from_name(state.as_str()), Some(state));
+        }
+        for reason in ToolCloseReason::ALL {
+            assert_eq!(serde_json::to_value(reason).unwrap(), reason.as_str());
+            assert_eq!(ToolCloseReason::from_name(reason.as_str()), Some(reason));
+        }
+        assert_eq!(ToolRunOutcome::from_name("timed_out"), None);
+    }
+
+    #[test]
+    fn a_summary_stored_by_an_older_build_reads_with_the_fields_it_lacks_at_their_default() {
+        let summary: ToolRunSummary = serde_json::from_value(json!({ "groups": 4, "fixed": 2 })).unwrap();
+
+        assert_eq!(
+            summary,
+            ToolRunSummary {
+                groups: 4,
+                fixed: 2,
+                ..ToolRunSummary::default()
+            }
+        );
+        assert_eq!(
+            serde_json::to_value(&summary).unwrap(),
+            json!({
+                "groups": 4, "fixable": 0, "fixed": 2, "left": 0, "filesChanged": 0, "filesRestored": 0,
+                "removals": 0, "elapsedMs": 0, "problem": null
+            })
+        );
+    }
+
+    #[test]
+    fn a_removal_names_its_keeper_and_its_run() {
+        let removal = ToolRemoval {
+            index: 3,
+            hash: 0x1234_abcd,
+            name: Some("bz_prop_gift".to_owned()),
+            keeper: ToolKeeper {
+                path: "resources/gifts/stream/bz_prop_gift2.ytyp".to_owned(),
+                format: ToolFileFormat::Ytyp,
+                index: 0,
+                sha256: "ab".repeat(32),
+            },
+            run: 7,
+        };
+        let wire = json!({
+            "index": 3, "hash": 0x1234_abcd_u32, "name": "bz_prop_gift",
+            "keeper": {
+                "path": "resources/gifts/stream/bz_prop_gift2.ytyp", "format": "ytyp", "index": 0,
+                "sha256": "ab".repeat(32)
+            },
+            "run": 7
+        });
+
+        assert_eq!(serde_json::to_value(&removal).unwrap(), wire);
+        assert_eq!(serde_json::from_value::<ToolRemoval>(wire).unwrap(), removal);
+        let mut unnamed = serde_json::to_value(&removal).unwrap();
+        unnamed.as_object_mut().unwrap().remove("name");
+        assert_eq!(serde_json::from_value::<ToolRemoval>(unnamed).unwrap().name, None);
+    }
+
+    #[test]
+    fn an_undo_names_everything_a_run_or_changes_and_nothing_else() {
+        let undo = |text: &str| serde_json::from_str::<ToolUndoRequest>(text).map(|request| request.scope);
+
+        assert_eq!(undo(r#"{ "scope": "all" }"#).unwrap(), ToolUndoScope::All);
+        assert_eq!(
+            undo(r#"{ "scope": { "run": 12 } }"#).unwrap(),
+            ToolUndoScope::Run(12)
+        );
+        assert_eq!(
+            undo(r#"{ "scope": { "changes": [3, 4] } }"#).unwrap(),
+            ToolUndoScope::Changes(vec![3, 4])
+        );
+        assert!(undo(r#"{ "scope": "run" }"#).is_err());
+        assert!(undo(r#"{ "scope": { "run": 12, "changes": [3] } }"#).is_err());
+        assert!(undo(r#"{ "scope": "everything" }"#).is_err());
+        assert!(undo(r#"{ "scope": "all", "force": true }"#).is_err());
+    }
+
+    #[test]
+    fn a_fix_confirms_a_plan_by_its_digest_and_settings_by_their_version() {
+        let digest = [0x5a; 32];
+        let fix: ToolFixRequest = serde_json::from_value(json!({ "plan": sha256_hex(&digest) })).unwrap();
+        assert_eq!(fix.plan_sha256(), Some(digest));
+        let unknown: ToolFixRequest = serde_json::from_value(json!({ "plan": "5A".repeat(32) })).unwrap();
+        assert_eq!(unknown.plan_sha256(), None);
+        assert!(serde_json::from_value::<ToolFixRequest>(json!({ "plan": "", "force": true })).is_err());
+
+        let change: ToolSettingsChange = serde_json::from_value(json!({
+            "settings": {
+                "atStart": "report", "differences": "identical", "escrowed": "skip", "excluded": []
+            },
+            "version": null
+        }))
+        .unwrap();
+        assert_eq!(change.settings.at_start, ToolMode::Report);
+        assert_eq!(change.version, None);
+    }
+
+    #[test]
+    fn a_digest_is_written_in_lowercase_hex_and_read_back_only_in_that_form() {
+        let mut digest = [0; 32];
+        for (byte, value) in digest.iter_mut().zip(0u8..) {
+            *byte = value.wrapping_mul(37);
+        }
+
+        let hex = sha256_hex(&digest);
+
+        assert_eq!(hex.len(), 64);
+        assert!(hex.starts_with("00254a6f94b9"));
+        assert_eq!(sha256_from_hex(&hex), Some(digest));
+        assert_eq!(sha256_from_hex(&hex.to_uppercase()), None);
+        assert_eq!(sha256_from_hex(&hex[..62]), None);
+        assert_eq!(sha256_from_hex(&format!("{hex}0")), None);
+        assert_eq!(sha256_from_hex(&format!("+{}", &hex[1..])), None);
+        assert_eq!(sha256_from_hex(&"g".repeat(64)), None);
     }
 
     #[test]

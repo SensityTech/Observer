@@ -216,6 +216,9 @@ const AUDIT_ACTIONS = {
     player_forgotten: true,
     players_imported: true,
     players_retention_changed: true,
+    tool_settings_changed: true,
+    tool_files_changed: true,
+    tool_files_restored: true,
 } satisfies Record<AuditAction, true>;
 
 const OUTCOMES = { success: true, failure: true, denied: true } satisfies Record<Outcome, true>;

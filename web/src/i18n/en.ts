@@ -2255,6 +2255,9 @@ export const en = {
             player_forgotten: 'Player forgotten',
             players_imported: "txAdmin's players imported",
             players_retention_changed: 'Player retention changed',
+            tool_settings_changed: 'Tool settings changed',
+            tool_files_changed: 'Files changed by a tool',
+            tool_files_restored: 'Files restored by a tool',
         } satisfies Record<AuditAction, string>,
         outcomes: {
             success: 'Success',

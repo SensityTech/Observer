@@ -134,10 +134,20 @@ pub enum AuditAction {
     PlayersImported,
     /// The retentions of the players' identities, play time per day and profiles changed.
     PlayersRetentionChanged,
+    /// The owner changed a tool's settings. The target is the tool; `details` holds each changed
+    /// setting with its value before and after.
+    ToolSettingsChanged,
+    /// A tool's run changed files in the server folder. The target is the tool; `details` holds
+    /// the `run`, its `trigger`, the `files` changed (a capped list) and their `count`.
+    ToolFilesChanged,
+    /// A tool gave files back entries it had taken out, or their original. The target is the
+    /// tool; `details` holds the `run`, the `reason` (`heal` or `undo`), the `files` (a capped
+    /// list) and their `count`.
+    ToolFilesRestored,
 }
 
 impl AuditAction {
-    pub const ALL: [Self; 73] = [
+    pub const ALL: [Self; 76] = [
         Self::SetupCompleted,
         Self::SetupLinkCreated,
         Self::LoginSucceeded,
@@ -211,6 +221,9 @@ impl AuditAction {
         Self::PlayerForgotten,
         Self::PlayersImported,
         Self::PlayersRetentionChanged,
+        Self::ToolSettingsChanged,
+        Self::ToolFilesChanged,
+        Self::ToolFilesRestored,
     ];
 
     pub const fn as_str(self) -> &'static str {
@@ -288,6 +301,9 @@ impl AuditAction {
             Self::PlayerForgotten => "player_forgotten",
             Self::PlayersImported => "players_imported",
             Self::PlayersRetentionChanged => "players_retention_changed",
+            Self::ToolSettingsChanged => "tool_settings_changed",
+            Self::ToolFilesChanged => "tool_files_changed",
+            Self::ToolFilesRestored => "tool_files_restored",
         }
     }
 
