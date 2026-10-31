@@ -163,7 +163,19 @@ fn secret_name(name: &str) -> bool {
 }
 
 fn apply(text: &str, secrets: Vec<Range<usize>>, existing: &[Redaction], tag_key: &[u8; 32]) -> Masked {
-    let mut ranges: Vec<Range<usize>> = secrets;
+    let mut ranges: Vec<Range<usize>> = secrets
+        .into_iter()
+        .map(|range| {
+            let start = (0..=range.start)
+                .rev()
+                .find(|at| text.is_char_boundary(*at))
+                .unwrap_or(0);
+            let end = (range.end..=text.len())
+                .find(|at| text.is_char_boundary(*at))
+                .unwrap_or(text.len());
+            start..end
+        })
+        .collect();
     // A marker already in the text is a secret as it stands, so that what overlaps it merges with it.
     let markers: Vec<Range<usize>> = existing
         .iter()
@@ -251,8 +263,10 @@ fn name_before(text: &str, at: usize) -> Option<&str> {
         return (!name.contains('\n')).then_some(name);
     }
     let start = before
-        .rfind(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '$'))
-        .map_or(0, |index| index + 1);
+        .char_indices()
+        .rev()
+        .find(|(_, c)| !(c.is_ascii_alphanumeric() || *c == '_' || *c == '-' || *c == '$'))
+        .map_or(0, |(index, c)| index + c.len_utf8());
     let name = &before[start..];
     (!name.is_empty()).then_some(name)
 }
@@ -352,8 +366,20 @@ fn token_shapes(line: &str, found: &mut Vec<Range<usize>>) {
             found.push(value..end);
         }
     }
-    let mut start = 0;
-    for run in line.split(|c: char| !(word(c) || c == '.')) {
+    let mut runs = Vec::new();
+    let mut opened = None;
+    for (index, c) in line.char_indices().chain([(line.len(), ' ')]) {
+        match (opened, word(c) || c == '.') {
+            (None, true) => opened = Some(index),
+            (Some(start), false) => {
+                runs.push(start..index);
+                opened = None;
+            }
+            _ => {}
+        }
+    }
+    for range in runs {
+        let run = &line[range.clone()];
         let parts: Vec<&str> = run.split('.').collect();
         let jwt = parts.len() == 3
             && parts[0].starts_with("eyJ")
@@ -364,9 +390,8 @@ fn token_shapes(line: &str, found: &mut Vec<Range<usize>>) {
             && (6..=7).contains(&parts[1].len())
             && (27..=40).contains(&parts[2].len());
         if jwt || bot {
-            found.push(start..start + run.len());
+            found.push(range);
         }
-        start += run.len() + 1;
     }
 }
 
@@ -522,6 +547,23 @@ mod tests {
             masked("version 1.2.3 and v.1.2", "a.md"),
             "version 1.2.3 and v.1.2"
         );
+    }
+
+    #[test]
+    fn tokens_after_characters_of_several_bytes_are_hidden_whole() {
+        for line in [
+            "print('€ eyJhbGciOi.eyJzdWIiOi.c2lnbmF0dXJl')",
+            "-- Jeton d’accès: eyJhbGciOi.eyJzdWIiOi.c2lnbmF0dXJl",
+            "-- été  eyJhbGciOi.eyJzdWIiOi.c2VjcmV0",
+            "print(\"🚨 MTEyMzQ1Njc4OTAxMjM0NTY3OA.GhIjKl.abcdefghijklmnopqrstuvwxyz0123\")",
+        ] {
+            let shown = masked(line, "a.lua");
+            assert!(shown.contains(REDACTED), "{line} -> {shown}");
+            assert!(
+                !shown.contains("c2Vj") && !shown.contains("abcdefghij"),
+                "{line} -> {shown}"
+            );
+        }
     }
 
     #[test]
