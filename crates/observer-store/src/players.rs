@@ -284,6 +284,7 @@ fn summary(row: &Row<'_>) -> rusqlite::Result<PlayerSummary> {
         sessions: row.get(6)?,
         first_seen: row.get::<_, Utc>(7)?.0,
         last_seen: row.get::<_, Utc>(8)?.0,
+        in_progress_ms: 0,
         online: false,
     })
 }

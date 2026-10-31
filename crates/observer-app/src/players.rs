@@ -280,22 +280,27 @@ impl Players {
             rows.truncate(PAGE as usize);
             rows.last().map(|(row, key)| format!("{key}.{}", row.id))
         });
-        let online: HashSet<String> = self
+        let now_ms = Timestamp::now().as_millisecond();
+        let online: HashMap<String, i64> = self
             .connected()
             .await
             .into_iter()
             .filter(|session| session.confirmation == Confirmation::Confirmed)
-            .filter_map(|session| session.license)
+            .filter_map(|session| Some((session.license?, (now_ms - session.seen_ms).max(0))))
             .collect();
         Ok(PlayerPage {
             players: rows
                 .into_iter()
                 .map(|(mut row, _)| {
-                    row.online = online.contains(&row.license);
+                    if let Some(session_ms) = online.get(&row.license) {
+                        row.online = true;
+                        row.in_progress_ms = *session_ms;
+                    }
                     row
                 })
                 .collect(),
             next: next.flatten(),
+            zone: zone_name(&self.inner.schedule.borrow()),
         })
     }
 

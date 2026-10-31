@@ -5,4 +5,8 @@ export type PlayerPage = { players: Array<PlayerSummary>,
 /**
  * What to pass as `after` for the next page, if there is one.
  */
-next: string | null, };
+next: string | null, 
+/**
+ * The schedule's time zone, which visits are shown in.
+ */
+zone: string, };

@@ -285,6 +285,8 @@ pub struct PlayerSummary {
     pub imported_ms: i64,
     /// Play time in the last 30 days.
     pub recent_ms: i64,
+    /// The session under way, in neither of the two above yet.
+    pub in_progress_ms: i64,
     pub sessions: i64,
     pub first_seen: Timestamp,
     pub last_seen: Timestamp,
@@ -298,6 +300,8 @@ pub struct PlayerPage {
     pub players: Vec<PlayerSummary>,
     /// What to pass as `after` for the next page, if there is one.
     pub next: Option<String>,
+    /// The schedule's time zone, which visits are shown in.
+    pub zone: String,
 }
 
 /// Whether FXServer's own player list confirmed what the bridge reported of a player.

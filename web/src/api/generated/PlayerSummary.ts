@@ -15,4 +15,8 @@ importedMs: number,
 /**
  * Play time in the last 30 days.
  */
-recentMs: number, sessions: number, firstSeen: string, lastSeen: string, online: boolean, };
+recentMs: number, 
+/**
+ * The session under way, in neither of the two above yet.
+ */
+inProgressMs: number, sessions: number, firstSeen: string, lastSeen: string, online: boolean, };
