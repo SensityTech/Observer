@@ -80,6 +80,76 @@ impl FileKind {
     }
 }
 
+/// What a snapshot records: a start of FXServer, or the disk as it was when someone checked it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum SnapshotKind {
+    Start,
+    Check,
+}
+
+/// Where a snapshot stands. `Listing` and `Hashing` while its job runs; `Partial` when the job
+/// stopped short of some files, `Failed` when it could not list anything.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum SnapshotState {
+    Listing,
+    Hashing,
+    Complete,
+    Partial,
+    Failed,
+}
+
+/// Why a snapshot is partial.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum PartialReason {
+    /// The server holds more files or resources than a snapshot lists.
+    Limit,
+    /// A newer start, or Observer stopping, cut its job short.
+    Cancelled,
+    /// The data folder's volume ran short of space: digests only, no contents.
+    DiskFloor,
+    Unreadable,
+}
+
+/// Why FXServer started.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum StartCause {
+    Requested,
+    Restart,
+    Scheduled,
+    Recovery,
+}
+
+/// What holds for one file in one snapshot only.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum FileFlag {
+    /// Modified after FXServer started: the running server may hold the earlier version.
+    AfterStart,
+    /// It changed on every read: its contents were not kept.
+    Unsettled,
+    /// Its resource was restarted after it changed, so the running server reloaded it.
+    ReloadedLive,
+}
+
+/// A resource started, stopped or restarted while the server ran.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum LiveChangeKind {
+    Started,
+    Stopped,
+    Restarted,
+}
+
 /// What a resource's manifest says, read as text and never run. Each value is the first the
 /// manifest gives, at most 256 characters; one the manifest computes in Lua is listed in
 /// `computed` instead.

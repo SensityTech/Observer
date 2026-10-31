@@ -23,6 +23,7 @@ argon2 = "0.6.0"
 axum = "0.8.9"
 clap = { version = "4.6.7", features = ["derive"] }
 eframe = { version = "0.37.0", default-features = false, features = ["accesskit", "clipboard", "default_fonts", "wgpu_no_default_features"] }
+flate2 = { version = "1.1.10", default-features = false, features = ["zlib-rs"] }
 futures-util = { version = "0.3.34", default-features = false }
 getrandom = "0.4.3"
 hmac = "0.13.0"
