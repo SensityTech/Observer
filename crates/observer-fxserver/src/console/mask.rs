@@ -83,6 +83,14 @@ pub(crate) fn secret_convar(name: &str) -> bool {
         .any(|known| known.eq_ignore_ascii_case(name))
 }
 
+/// Whether `word` sets a convar: `set` or its kin, or `+set`.
+pub(crate) fn set_command(word: &str) -> bool {
+    SET_COMMANDS
+        .iter()
+        .chain(&["+set"])
+        .any(|command| command.eq_ignore_ascii_case(word))
+}
+
 /// For each command of `text` that sets a convar `secret` holds for, as `set` or its kin, `+set`
 /// or the convar's name alone, the range of the value it gives: everything after the name, read
 /// the way FXServer reads the command.
@@ -90,15 +98,9 @@ pub(crate) fn set_values(text: &str, secret: impl Fn(&str) -> bool) -> Vec<Range
     let mut values = Vec::new();
     for span in command::spans(text) {
         let words = command::word_spans(&text[span.clone()]);
-        let set = |word: &str| {
-            SET_COMMANDS
-                .iter()
-                .chain(&["+set"])
-                .any(|command| command.eq_ignore_ascii_case(word))
-        };
         let named = match words.as_slice() {
-            [(_, command), (name_span, name), _, ..] if set(command) && secret(name) => name_span.end,
-            [(name_span, name), _, ..] if !set(name) && secret_convar(name) => name_span.end,
+            [(_, command), (name_span, name), _, ..] if set_command(command) && secret(name) => name_span.end,
+            [(name_span, name), _, ..] if !set_command(name) && secret_convar(name) => name_span.end,
             _ => continue,
         };
         let end = words.last().map_or(named, |(last, _)| last.end);
