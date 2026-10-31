@@ -1815,6 +1815,7 @@ export const en = {
             cli: 'Command line',
             system: 'Observer',
             anonymous: 'Anonymous',
+            service: 'Pipeline',
         } satisfies Record<ActorKind, string>,
         // A failed sign-in whose username names no account: it may have been a password.
         unknownUsername: 'Unknown username',

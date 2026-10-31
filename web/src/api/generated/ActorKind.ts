@@ -2,6 +2,6 @@
 
 /**
  * Who acted: a signed-in user, someone at the host's own window, the command line, Observer
- * itself, or an anonymous client such as a failed login.
+ * itself, an anonymous client such as a failed login, or a pipeline's file access.
  */
-export type ActorKind = "user" | "local" | "cli" | "system" | "anonymous";
+export type ActorKind = "user" | "local" | "cli" | "system" | "anonymous" | "service";

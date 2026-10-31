@@ -16,6 +16,7 @@ const MIGRATIONS: &[M<'static>] = &[
     M::up(include_str!("../migrations/0005_schedule.sql")),
     M::up(include_str!("../migrations/0006_artifacts.sql")),
     M::up(include_str!("../migrations/0007_diagnostics.sql")),
+    M::up(include_str!("../migrations/0008_file_access.sql")),
 ];
 
 /// The schema version this build migrates to.
@@ -108,5 +109,67 @@ mod tests {
             )
             .unwrap();
         assert_eq!(columns, 0);
+    }
+    #[test]
+    fn the_audit_log_rebuild_keeps_every_row_its_sequence_and_its_triggers() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        let migrations = Migrations::from_slice(MIGRATIONS);
+        migrations.to_version(&mut conn, 7).unwrap();
+        for (id, actor) in [(1, "user"), (2, "cli"), (3, "anonymous"), (4, "system")] {
+            conn.execute(
+                "INSERT INTO audit_log (id, at, actor_kind, actor_id, actor_name, ip, user_agent, action, target,
+                     outcome, details, expires_at)
+                 VALUES (?1, '2026-10-30T09:00:00.000Z', ?2, 7, 'owner', '192.0.2.4', 'Firefox', 'login', NULL,
+                     'success', '{\"a\":1}', '2027-10-30T09:00:00.000Z')",
+                rusqlite::params![id, actor],
+            )
+            .unwrap();
+        }
+        // The newest entry gone, as if purged: its id must never come back.
+        conn.execute_batch("DROP TRIGGER audit_log_kept_until_purged; DELETE FROM audit_log WHERE id = 4;")
+            .unwrap();
+        let rows = |conn: &Connection| -> Vec<String> {
+            let mut statement = conn
+                .prepare("SELECT id, at, actor_kind, actor_id, actor_name, ip, user_agent, action, target, outcome, details, expires_at FROM audit_log ORDER BY id")
+                .unwrap();
+            statement
+                .query_map([], |row| {
+                    Ok((0..12)
+                        .map(|i| format!("{:?}", row.get_ref(i).unwrap()))
+                        .collect::<Vec<_>>()
+                        .join("|"))
+                })
+                .unwrap()
+                .map(Result::unwrap)
+                .collect()
+        };
+        let before = rows(&conn);
+
+        migrations.to_latest(&mut conn).unwrap();
+
+        assert_eq!(rows(&conn), before);
+        conn.execute(
+            "INSERT INTO audit_log (at, actor_kind, actor_id, actor_name, action, outcome, expires_at)
+             VALUES ('2026-10-31T09:00:00.000Z', 'service', 3, '+deploy-main', 'file_written', 'success',
+                 '2027-10-31T09:00:00.000Z')",
+            [],
+        )
+        .unwrap();
+        let newest: i64 = conn
+            .query_row("SELECT max(id) FROM audit_log", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(newest, 5);
+        let update = conn.execute("UPDATE audit_log SET action = 'x' WHERE id = 1", []);
+        assert!(update.unwrap_err().to_string().contains("append-only"));
+        let delete = conn.execute("DELETE FROM audit_log WHERE id = 1", []);
+        assert!(delete.unwrap_err().to_string().contains("kept until"));
+        let indexes: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type = 'index' AND tbl_name = 'audit_log' AND name LIKE 'audit_log_%'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(indexes, 3);
     }
 }

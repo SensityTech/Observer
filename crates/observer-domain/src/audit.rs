@@ -215,7 +215,7 @@ impl AuditAction {
 }
 
 /// Who acted: a signed-in user, someone at the host's own window, the command line, Observer
-/// itself, or an anonymous client such as a failed login.
+/// itself, an anonymous client such as a failed login, or a pipeline's file access.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export)]
@@ -225,10 +225,18 @@ pub enum ActorKind {
     Cli,
     System,
     Anonymous,
+    Service,
 }
 
 impl ActorKind {
-    pub const ALL: [Self; 5] = [Self::User, Self::Local, Self::Cli, Self::System, Self::Anonymous];
+    pub const ALL: [Self; 6] = [
+        Self::User,
+        Self::Local,
+        Self::Cli,
+        Self::System,
+        Self::Anonymous,
+        Self::Service,
+    ];
 
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -237,6 +245,7 @@ impl ActorKind {
             Self::Cli => "cli",
             Self::System => "system",
             Self::Anonymous => "anonymous",
+            Self::Service => "service",
         }
     }
 
@@ -291,7 +300,8 @@ pub struct AuditEntry {
     pub id: i64,
     pub at: Timestamp,
     pub actor_kind: ActorKind,
-    /// The user's id when the actor was a user. It outlives the account, unlike a foreign key.
+    /// The user's id when the actor was a user, or the file access's id for a service. It outlives
+    /// the account, unlike a foreign key.
     pub actor_id: Option<i64>,
     pub actor_name: Option<String>,
     pub ip: Option<String>,
