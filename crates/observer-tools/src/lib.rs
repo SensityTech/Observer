@@ -3,5 +3,8 @@
 //! keep the game's behaviour; applying a plan replaces files atomically and keeps their originals, so
 //! that every change can be healed or undone.
 
+pub mod archetypes;
+pub mod edit;
 pub mod glob;
 pub mod manifest;
+pub mod resources;
