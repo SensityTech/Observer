@@ -77,7 +77,10 @@ CREATE INDEX snapshot_resource_tree ON snapshot_resource (tree) WHERE tree IS NO
 CREATE TABLE tree (
     sha256  TEXT PRIMARY KEY,
     -- deflate of the sorted entries as JSON: path, size, key, kind and the plain SHA-256 shown.
-    listing BLOB NOT NULL
+    listing BLOB NOT NULL,
+    -- A hash of what the hash leaves out, each entry's kind and plain SHA-256: a listing made
+    -- under other settings of the same files replaces this one.
+    kinds   TEXT NOT NULL
 ) STRICT, WITHOUT ROWID;
 
 -- The text entries of each tree, so that SQL can tell which starts use which text version.
@@ -120,14 +123,19 @@ CREATE TABLE text_version (
     -- The version of the masking rules the body was masked with.
     masking    INTEGER NOT NULL,
     -- Where each redaction lies in the masked text and its tag, six bytes each.
-    redactions BLOB    NOT NULL,
-    -- Snapshot ids: the first and the newest snapshot whose trees or texts list it. They may name a
-    -- snapshot retention removed.
+    redactions BLOB    NOT NULL
+) STRICT, WITHOUT ROWID;
+
+-- The first and the newest snapshot whose trees or texts list a text version, apart from its body:
+-- stamped at every start, which rewriting the body's row would make cost the whole store. They may
+-- name a snapshot retention removed.
+CREATE TABLE text_seen (
+    digest     TEXT    PRIMARY KEY REFERENCES text_version (digest) ON DELETE CASCADE,
     first_seen INTEGER NOT NULL,
     last_seen  INTEGER NOT NULL
 ) STRICT, WITHOUT ROWID;
 
-CREATE INDEX text_version_seen ON text_version (last_seen) WHERE body IS NOT NULL;
+CREATE INDEX text_seen_last ON text_seen (last_seen);
 CREATE INDEX text_version_masking ON text_version (masking) WHERE body IS NOT NULL;
 
 -- What the last scan saw of each file, so that only what changed is read again. A cache: lost, the
@@ -145,7 +153,9 @@ CREATE TABLE file_index (
     kind      TEXT    NOT NULL,
     -- Hashed less than two seconds after its last write: read again next time.
     racy      INTEGER NOT NULL DEFAULT 0 CHECK (racy IN (0, 1)),
-    hashed_at TEXT
+    hashed_at TEXT,
+    -- When a full verification last read it, which a verification cut short resumes from.
+    verified_at TEXT
 ) STRICT, WITHOUT ROWID;
 
 -- Resources started, stopped or restarted while a run was up.

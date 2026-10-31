@@ -33,18 +33,26 @@ pub struct Text {
 
 /// Stores the text, or fills a body the budget dropped, and records that `snapshot` lists it.
 pub fn store(conn: &Connection, text: &NewText, snapshot: i64) -> Result<(), StoreError> {
+    write(conn, text, snapshot, false)
+}
+
+/// Stores the text over the body kept for its digest: a file of the cfg exec chain, masked with
+/// the cfg's rules, replaces what the same bytes gave as an ordinary file.
+pub fn store_over(conn: &Connection, text: &NewText, snapshot: i64) -> Result<(), StoreError> {
+    write(conn, text, snapshot, true)
+}
+
+fn write(conn: &Connection, text: &NewText, snapshot: i64, over: bool) -> Result<(), StoreError> {
     let body = deflate(text.text.as_bytes());
     let lines = text.text.lines().count();
     conn.execute(
-        "INSERT INTO text_version (digest, body, stored, bytes, lines, masking, redactions, first_seen, last_seen)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)
+        "INSERT INTO text_version (digest, body, stored, bytes, lines, masking, redactions)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
          ON CONFLICT (digest) DO UPDATE SET
-             body = coalesce(body, excluded.body),
-             stored = CASE WHEN body IS NULL THEN excluded.stored ELSE stored END,
-             masking = CASE WHEN body IS NULL THEN excluded.masking ELSE masking END,
-             redactions = CASE WHEN body IS NULL THEN excluded.redactions ELSE redactions END,
-             first_seen = min(first_seen, excluded.first_seen),
-             last_seen = max(last_seen, excluded.last_seen)",
+             body = CASE WHEN body IS NULL OR ?8 THEN excluded.body ELSE body END,
+             stored = CASE WHEN body IS NULL OR ?8 THEN excluded.stored ELSE stored END,
+             masking = CASE WHEN body IS NULL OR ?8 THEN excluded.masking ELSE masking END,
+             redactions = CASE WHEN body IS NULL OR ?8 THEN excluded.redactions ELSE redactions END",
         params![
             text.digest,
             body,
@@ -53,8 +61,15 @@ pub fn store(conn: &Connection, text: &NewText, snapshot: i64) -> Result<(), Sto
             sql(lines as u64),
             text.masking,
             text.redactions,
-            snapshot
+            over
         ],
+    )?;
+    conn.execute(
+        "INSERT INTO text_seen (digest, first_seen, last_seen) VALUES (?1, ?2, ?2)
+         ON CONFLICT (digest) DO UPDATE SET
+             first_seen = min(first_seen, excluded.first_seen),
+             last_seen = max(last_seen, excluded.last_seen)",
+        params![text.digest, snapshot],
     )?;
     Ok(())
 }
@@ -62,7 +77,7 @@ pub fn store(conn: &Connection, text: &NewText, snapshot: i64) -> Result<(), Sto
 /// Records that `snapshot` lists texts already stored, which keeps them last in the budget's order.
 pub fn seen(conn: &Connection, digests: &[String], snapshot: i64) -> Result<(), StoreError> {
     let mut statement = conn.prepare(
-        "UPDATE text_version SET last_seen = max(last_seen, ?2), first_seen = min(first_seen, ?2)
+        "UPDATE text_seen SET last_seen = max(last_seen, ?2), first_seen = min(first_seen, ?2)
          WHERE digest = ?1",
     )?;
     for digest in digests {
@@ -208,7 +223,7 @@ mod tests {
         assert_eq!(text.text.as_deref(), Some("a\nb\n"));
         assert_eq!(text.lines, 2);
         let seen: (i64, i64) = conn
-            .query_row("SELECT first_seen, last_seen FROM text_version", [], |row| {
+            .query_row("SELECT first_seen, last_seen FROM text_seen", [], |row| {
                 Ok((row.get(0)?, row.get(1)?))
             })
             .unwrap();

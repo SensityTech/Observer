@@ -12,14 +12,18 @@ use super::unsigned;
 use crate::database::StoreError;
 use crate::time::Utc;
 
-/// Deletes the starts of `server` taken before `before`. One that later starts share rows with
-/// hands its rows to the oldest of them, and the others point there instead.
-pub fn expire(conn: &Connection, server: &str, before: Timestamp) -> Result<usize, StoreError> {
+/// Deletes the starts of `server` taken before `before`, but the newest start and those in `keep`,
+/// whose runs may still be up. One that later starts share rows with hands its rows to the oldest
+/// of them, and the others point there instead.
+pub fn expire(conn: &Connection, server: &str, before: Timestamp, keep: &[i64]) -> Result<usize, StoreError> {
     let mut statement = conn.prepare(
-        "SELECT id FROM snapshot WHERE server_id = ?1 AND kind = 'start' AND taken_at < ?2 ORDER BY id",
+        "SELECT id FROM snapshot WHERE server_id = ?1 AND kind = 'start' AND taken_at < ?2
+           AND id < (SELECT max(id) FROM snapshot WHERE server_id = ?1 AND kind = 'start')
+         ORDER BY id",
     )?;
     let expired: Vec<i64> = statement
         .query_map(params![server, Utc(before)], |row| row.get(0))?
+        .filter(|id| id.as_ref().map_or(true, |id| !keep.contains(id)))
         .collect::<Result<_, _>>()?;
     for &id in &expired {
         let mut sharing = conn.prepare("SELECT id FROM snapshot WHERE same_as = ?1 ORDER BY id")?;
@@ -40,6 +44,15 @@ pub fn expire(conn: &Connection, server: &str, before: Timestamp) -> Result<usiz
         conn.execute("DELETE FROM snapshot WHERE id = ?1", [id])?;
     }
     Ok(expired.len())
+}
+
+/// Deletes the checks of `server` older than `newer_than`: a check older than the newest start
+/// no longer says what the next restart applies.
+pub fn stale_checks(conn: &Connection, server: &str, newer_than: Timestamp) -> Result<usize, StoreError> {
+    Ok(conn.execute(
+        "DELETE FROM snapshot WHERE server_id = ?1 AND kind = 'check' AND taken_at < ?2",
+        params![server, Utc(newer_than)],
+    )?)
 }
 
 /// Deletes the checks of `server` but `keep`, the latest.
@@ -84,7 +97,8 @@ pub fn enforce_budget(conn: &Connection, budget: u64, protected: &[i64]) -> Resu
     }
     let spared = protected_digests(conn, protected)?;
     let mut statement = conn.prepare(
-        "SELECT digest, stored FROM text_version WHERE body IS NOT NULL ORDER BY last_seen, digest",
+        "SELECT v.digest, v.stored FROM text_version v LEFT JOIN text_seen s ON s.digest = v.digest
+         WHERE v.body IS NOT NULL ORDER BY coalesce(s.last_seen, 0), v.digest",
     )?;
     let candidates: Vec<(String, u64)> = statement
         .query_map([], |row| Ok((row.get(0)?, unsigned(row.get(1)?))))?
@@ -162,11 +176,10 @@ pub fn clear_bodies<S: BuildHasher>(
 }
 
 /// Gives the pages freed back to the file system, then truncates the log, so that no copy of a
-/// cleared body stays in either.
+/// cleared body stays in either. A log a reader keeps busy is an error, never a silent success.
 pub fn compact(conn: &mut Connection) -> Result<(), StoreError> {
     conn.execute_batch("PRAGMA incremental_vacuum;")?;
-    conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))?;
-    Ok(())
+    crate::database::checkpoint(conn)
 }
 
 #[cfg(test)]
@@ -185,7 +198,7 @@ mod tests {
     #[test]
     fn an_expired_start_hands_its_rows_to_the_starts_that_share_them() {
         let conn = memory();
-        trees::insert(&conn, "t1", b"[]", &[]).unwrap();
+        trees::insert(&conn, "t1", b"[]", &[], "k").unwrap();
         let old = start(&conn, 0, "t1");
         let later: Vec<i64> = (1..4)
             .map(|minutes| {
@@ -196,7 +209,7 @@ mod tests {
             .collect();
 
         let cutoff = Timestamp::from_second(1_793_000_000 + 30).unwrap();
-        assert_eq!(expire(&conn, "default", cutoff).unwrap(), 1);
+        assert_eq!(expire(&conn, "default", cutoff, &[]).unwrap(), 1);
 
         let heir = snapshots::get(&conn, later[0]).unwrap().unwrap();
         assert_eq!(heir.same_as, None);
@@ -207,6 +220,40 @@ mod tests {
     }
 
     #[test]
+    fn the_newest_start_and_those_of_runs_still_up_never_expire() {
+        let conn = memory();
+        trees::insert(&conn, "t1", b"[]", &[], "k").unwrap();
+        let running = start(&conn, 0, "t1");
+        let old = start(&conn, 1, "t1");
+        let newest = start(&conn, 2, "t1");
+
+        let cutoff = Timestamp::from_second(1_793_000_000 + 600).unwrap();
+        assert_eq!(expire(&conn, "default", cutoff, &[running]).unwrap(), 1);
+
+        assert!(snapshots::get(&conn, running).unwrap().is_some());
+        assert!(snapshots::get(&conn, old).unwrap().is_none());
+        assert!(snapshots::get(&conn, newest).unwrap().is_some());
+    }
+
+    #[test]
+    fn a_check_older_than_a_start_goes() {
+        let conn = memory();
+        let check = |minutes| {
+            let mut snapshot = snapshots::sample("default", minutes);
+            snapshot.kind = observer_domain::changes::SnapshotKind::Check;
+            snapshots::insert(&conn, &snapshot).unwrap()
+        };
+        let before = check(0);
+        let after = check(5);
+
+        let started = Timestamp::from_second(1_793_000_000 + 180).unwrap();
+        assert_eq!(stale_checks(&conn, "default", started).unwrap(), 1);
+
+        assert!(snapshots::get(&conn, before).unwrap().is_none());
+        assert!(snapshots::get(&conn, after).unwrap().is_some());
+    }
+
+    #[test]
     fn unreferenced_trees_and_texts_go() {
         let conn = memory();
         trees::insert(
@@ -214,6 +261,7 @@ mod tests {
             "kept",
             b"[]",
             &[("resources/a/x.lua".to_owned(), "d1".to_owned())],
+            "k",
         )
         .unwrap();
         trees::insert(
@@ -221,6 +269,7 @@ mod tests {
             "gone",
             b"[]",
             &[("resources/a/x.lua".to_owned(), "d2".to_owned())],
+            "k",
         )
         .unwrap();
         let id = start(&conn, 0, "kept");
@@ -242,6 +291,7 @@ mod tests {
             "t1",
             b"[]",
             &[("resources/a/x.lua".to_owned(), "new".to_owned())],
+            "k",
         )
         .unwrap();
         let protected = start(&conn, 10, "t1");
@@ -265,6 +315,7 @@ mod tests {
             "t1",
             b"[]",
             &[("resources/a/x.lua".to_owned(), "v1".to_owned())],
+            "k",
         )
         .unwrap();
         trees::insert(
@@ -272,6 +323,7 @@ mod tests {
             "t2",
             b"[]",
             &[("resources/a/x.lua".to_owned(), "v2".to_owned())],
+            "k",
         )
         .unwrap();
         for digest in ["v1", "v2", "other"] {

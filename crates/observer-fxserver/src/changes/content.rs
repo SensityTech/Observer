@@ -60,22 +60,30 @@ impl FileRead {
     }
 }
 
-/// Reads the file at `location`, `path` from the data folder. `chain` for a file of the cfg exec
-/// chain, whose text is masked as a cfg's.
+/// How a file is read besides what its path says.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Treatment {
+    /// A file of the cfg exec chain, whose text is masked as a cfg's whatever its name.
+    pub chain: bool,
+    /// Hidden whatever its path: reached through a link onto a file the owner hid.
+    pub hidden: bool,
+}
+
+/// Reads the file at `location`, `path` from the data folder.
 pub fn read(
     path: &str,
     location: &Path,
-    chain: bool,
+    treatment: Treatment,
     settings: &ScanSettings,
     keys: &Keys,
     rate: &mut Rate,
     cancel: &CancellationToken,
 ) -> Result<FileRead, Cancelled> {
-    let hidden = hidden(path, &settings.hidden);
+    let hidden = treatment.hidden || hidden(path, &settings.hidden);
     let name = path.rsplit('/').next().unwrap_or(path).to_ascii_lowercase();
     let plan = Plan {
         path,
-        chain,
+        chain: treatment.chain,
         tag_key: &keys.tag,
         hidden,
         candidate: !hidden
@@ -364,7 +372,7 @@ mod tests {
         read(
             &path,
             &location,
-            false,
+            Treatment::default(),
             &settings(),
             &Keys::fixed(),
             &mut Rate::new(0),
@@ -472,7 +480,7 @@ mod tests {
         let read = read(
             "resources/r/big.lua",
             &location,
-            false,
+            Treatment::default(),
             &settings,
             &Keys::fixed(),
             &mut Rate::new(0),
@@ -498,7 +506,7 @@ mod tests {
             read(
                 "resources/r/a.lua",
                 &location,
-                false,
+                Treatment::default(),
                 &settings(),
                 keys,
                 &mut Rate::new(0),
@@ -517,7 +525,7 @@ mod tests {
         let read = read(
             "resources/r/gone.lua",
             Path::new("definitely/not/here.lua"),
-            false,
+            Treatment::default(),
             &settings(),
             &Keys::fixed(),
             &mut Rate::new(0),

@@ -5,14 +5,15 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
+use jiff::Timestamp;
 use observer_domain::changes::{ARCHIVE_EXTENSIONS, FileKind, extension, hidden};
 use observer_domain::launch::LaunchSettings;
 use observer_domain::server_data::{CfgFileState, Game};
 use observer_fxserver::cfg::{self, Context};
 use observer_fxserver::changes::tree::{self, TreeEntry};
 use observer_fxserver::changes::{
-    Cancelled, Entry, FileRead, Found, Keys, ListError, Rate, ResourceListing, ScanSettings, Shortened, list,
-    read,
+    Cancelled, Entry, FileRead, Found, Keys, ListError, Rate, ResourceListing, ScanSettings, Shortened,
+    Treatment, list, read,
 };
 use observer_fxserver::server_data;
 use observer_store::changes::index::IndexEntry;
@@ -142,6 +143,7 @@ impl Read {
             sha256: self.read.sha256.clone(),
             kind: self.read.kind.as_str().to_owned(),
             racy: self.read.racy || self.read.unsettled,
+            verified_at: None,
         })
     }
 }
@@ -156,6 +158,7 @@ pub(crate) fn known(
 ) -> Option<TreeEntry> {
     let found = index?;
     let stat = &entry.stat;
+    let hidden = entry.hidden || hidden(&entry.path, &settings.hidden);
     let moved = found.size != stat.size
         || found.modified_ns != stat.modified_ns
         || found.inode != stat.inode
@@ -165,7 +168,7 @@ pub(crate) fn known(
     }
     let digest = found.digest.clone()?;
     let stored = FileKind::from_name(&found.kind)?;
-    let kind = match (stored, hidden(&entry.path, &settings.hidden)) {
+    let kind = match (stored, hidden) {
         (_, true) => FileKind::Hidden,
         (FileKind::Hidden, false) => return None,
         (FileKind::Text, false) if stat.size <= settings.limits.max_text && !bodies.contains(&digest) => {
@@ -226,14 +229,18 @@ pub(crate) struct ListingInput {
     pub keys: Keys,
     pub index: HashMap<String, IndexEntry>,
     pub bodies: HashSet<String>,
-    /// Every changed file is left for the hashing pass, as a check of the disk does not need.
+    /// Changed texts are read at once, up to 64 MB, rather than left for the hashing pass.
     pub read_text_now: bool,
+    /// For a full verification: what the index knows only counts when a read verified it since.
+    pub verified_after: Option<Timestamp>,
 }
 
 pub(crate) struct ListingPass {
     pub resources: Vec<Planned>,
     pub reads: Vec<Read>,
     pub shortened: Option<Shortened>,
+    /// Categories that could not be read.
+    pub unreadable: Vec<String>,
     pub chain: Chain,
     /// Every path listed, for the index to forget the others.
     pub paths: HashSet<String>,
@@ -246,6 +253,17 @@ pub(crate) fn listing_pass(
     cancel: &CancellationToken,
 ) -> Result<ListingPass, ListError> {
     let listing = list(&input.data, &input.settings, cancel)?;
+    // The chain first: its files under `resources/` are masked as cfg files when they are read.
+    let chain = chain(
+        &input.data,
+        &input.launch,
+        &listing.resources,
+        &input.settings,
+        &input.keys,
+        rate,
+        cancel,
+    )?;
+    let in_chain: HashSet<String> = chain.files.iter().map(|file| file.path.clone()).collect();
     let mut reads = Vec::new();
     let mut paths = HashSet::new();
     let mut budget = if input.read_text_now { LISTING_TEXT } else { 0 };
@@ -255,14 +273,14 @@ pub(crate) fn listing_pass(
         let mut slots = Vec::with_capacity(entries.len());
         for entry in &entries {
             paths.insert(entry.path.clone());
-            if let Some(known) = unread(entry, &input.settings).or_else(|| {
-                known(
-                    entry,
-                    input.index.get(&entry.path),
-                    &input.settings,
-                    &input.bodies,
-                )
-            }) {
+            let index = input.index.get(&entry.path).filter(|index| {
+                input
+                    .verified_after
+                    .is_none_or(|after| index.verified_at.is_some_and(|at| at >= after))
+            });
+            if let Some(known) =
+                unread(entry, &input.settings).or_else(|| known(entry, index, &input.settings, &input.bodies))
+            {
                 slots.push(Slot::Known(known));
                 continue;
             }
@@ -273,7 +291,7 @@ pub(crate) fn listing_pass(
                     read: read(
                         &entry.path,
                         &entry.location,
-                        false,
+                        treatment(entry, &in_chain),
                         &input.settings,
                         &input.keys,
                         rate,
@@ -289,26 +307,29 @@ pub(crate) fn listing_pass(
         resource.entries = entries;
         resources.push(Planned { resource, slots });
     }
-    let chain = chain(
-        &input.data,
-        &input.launch,
-        &input.settings,
-        &input.keys,
-        rate,
-        cancel,
-    )?;
     Ok(ListingPass {
         resources,
         reads,
         shortened: listing.shortened,
+        unreadable: listing.unreadable,
         chain,
         paths,
     })
 }
 
+/// How an entry is read: as a file of the cfg exec chain when it is one, hidden when a link led
+/// onto a hidden file.
+pub(crate) fn treatment(entry: &Entry, in_chain: &HashSet<String>) -> Treatment {
+    Treatment {
+        chain: in_chain.contains(&entry.path),
+        hidden: entry.hidden,
+    }
+}
+
 /// Reads the entries left for the hashing pass, each under the key it came with.
 pub(crate) fn hash<K>(
     entries: Vec<(K, Entry)>,
+    in_chain: &HashSet<String>,
     settings: &ScanSettings,
     keys: &Keys,
     rate: &mut Rate,
@@ -317,7 +338,16 @@ pub(crate) fn hash<K>(
     entries
         .into_iter()
         .map(|(key, entry)| {
-            let read = read(&entry.path, &entry.location, false, settings, keys, rate, cancel)?;
+            let treatment = treatment(&entry, in_chain);
+            let read = read(
+                &entry.path,
+                &entry.location,
+                treatment,
+                settings,
+                keys,
+                rate,
+                cancel,
+            )?;
             Ok((
                 key,
                 Read {
@@ -352,6 +382,7 @@ pub(crate) struct ChainFile {
 fn chain(
     data: &Path,
     launch: &LaunchSettings,
+    listed: &[ResourceListing],
     settings: &ScanSettings,
     keys: &Keys,
     rate: &mut Rate,
@@ -387,7 +418,17 @@ fn chain(
         .iter()
         .filter_map(|folder| std::fs::canonicalize(folder).ok())
         .collect();
-    for file in scan.files {
+    for mut file in scan.files {
+        // `exec @resource/file.cfg` runs a file of that resource, which FXServer finds by name.
+        if file.state == CfgFileState::Resource
+            && let Some((name, rest)) = file.path.strip_prefix('@').and_then(|path| path.split_once('/'))
+            && let Some(resource) = listed
+                .iter()
+                .find(|resource| resource.name.eq_ignore_ascii_case(name))
+        {
+            file.path = format!("{}/{rest}", resource.path);
+            file.state = CfgFileState::Read;
+        }
         let location = if Path::new(&file.path).is_absolute() {
             PathBuf::from(&file.path)
         } else {
@@ -397,7 +438,11 @@ fn chain(
             && std::fs::canonicalize(&location)
                 .is_ok_and(|resolved| !never_read.iter().any(|folder| resolved.starts_with(folder)));
         let digest = if readable {
-            let read = read(&file.path, &location, true, settings, keys, rate, cancel)?;
+            let treatment = Treatment {
+                chain: true,
+                hidden: false,
+            };
+            let read = read(&file.path, &location, treatment, settings, keys, rate, cancel)?;
             let digest = read.digest.clone();
             chain.reads.push(Read {
                 path: file.path.clone(),
@@ -433,6 +478,7 @@ mod tests {
                 inode: None,
                 changed_ns: None,
             },
+            hidden: false,
         }
     }
 
@@ -446,6 +492,7 @@ mod tests {
             sha256: Some("s".repeat(64)),
             kind: kind.as_str().to_owned(),
             racy: false,
+            verified_at: None,
         }
     }
 

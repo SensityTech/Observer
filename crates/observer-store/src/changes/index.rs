@@ -24,11 +24,13 @@ pub struct IndexEntry {
     pub kind: String,
     /// Hashed less than two seconds after its last write: read again next time.
     pub racy: bool,
+    /// When a read last went through its bytes, which a full verification skips for a while.
+    pub verified_at: Option<Timestamp>,
 }
 
 pub fn load(conn: &Connection) -> Result<HashMap<String, IndexEntry>, StoreError> {
     let mut statement = conn.prepare(
-        "SELECT path, size, mtime_ns, inode, ctime_ns, digest, sha256, kind, racy FROM file_index",
+        "SELECT path, size, mtime_ns, inode, ctime_ns, digest, sha256, kind, racy, verified_at FROM file_index",
     )?;
     let rows = statement.query_map([], |row| {
         Ok((
@@ -42,6 +44,7 @@ pub fn load(conn: &Connection) -> Result<HashMap<String, IndexEntry>, StoreError
                 sha256: row.get(6)?,
                 kind: row.get(7)?,
                 racy: row.get(8)?,
+                verified_at: row.get::<_, Option<Utc>>(9)?.map(|at| at.0),
             },
         ))
     })?;
@@ -50,8 +53,9 @@ pub fn load(conn: &Connection) -> Result<HashMap<String, IndexEntry>, StoreError
 
 pub fn save(conn: &Connection, entries: &[(String, IndexEntry)], at: Timestamp) -> Result<(), StoreError> {
     let mut statement = conn.prepare(
-        "INSERT OR REPLACE INTO file_index (path, size, mtime_ns, inode, ctime_ns, digest, sha256, kind, racy, hashed_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        "INSERT OR REPLACE INTO file_index
+             (path, size, mtime_ns, inode, ctime_ns, digest, sha256, kind, racy, hashed_at, verified_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10)",
     )?;
     for (path, entry) in entries {
         statement.execute(params![
@@ -106,6 +110,7 @@ mod tests {
             sha256: None,
             kind: "text".to_owned(),
             racy: true,
+            verified_at: None,
         }
     }
 
@@ -124,6 +129,7 @@ mod tests {
 
         let index = load(&conn).unwrap();
         assert_eq!(index.len(), 1);
-        assert_eq!(index["a"], entry(3));
+        assert_eq!(index["a"].size, 3);
+        assert!(index["a"].verified_at.is_some());
     }
 }

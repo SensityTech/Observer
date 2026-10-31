@@ -58,6 +58,8 @@ const MAX_GLOBS: usize = 200;
 const MAX_EXTENSIONS: usize = 200;
 /// When the last full verification ended, in the state database's settings.
 const VERIFIED_AT: &str = "changes.verified_at";
+/// When the full verification under way began, empty between two: a round cut short goes on.
+const VERIFY_SINCE: &str = "changes.verify_since";
 /// The live state is read again at most this often while a job writes.
 const LIVE_EVERY: Duration = Duration::from_millis(500);
 
@@ -128,6 +130,16 @@ impl Shared {
         let mut runs = self.runs.lock().unwrap_or_else(PoisonError::into_inner);
         runs.insert(generation, id);
         runs.retain(|known, _| *known + RUNS_KEPT >= generation);
+    }
+
+    /// The snapshots of the recent runs.
+    fn recent_runs(&self) -> Vec<i64> {
+        self.runs
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .values()
+            .copied()
+            .collect()
     }
 
     fn run(&self, generation: u32) -> Option<i64> {
@@ -479,9 +491,11 @@ impl Changes {
         let store = &self.inner.shared.store;
         let cutoff = self.inner.shared.clock.now()
             - SignedDuration::from_hours(24 * i64::from(settings.retention_days));
+        // The starts of runs that may still be up keep their rows, whatever their age.
+        let running = self.inner.shared.recent_runs();
         let (expired, (trees, texts)) = store
             .write(move |tx| -> Result<_, Error> {
-                let expired = upkeep::expire(tx, SERVER, cutoff)?;
+                let expired = upkeep::expire(tx, SERVER, cutoff, &running)?;
                 Ok((expired, upkeep::unreferenced(tx)?))
             })
             .await?;
@@ -665,18 +679,45 @@ async fn verification_due(shared: &Shared, settings: &ChangesSettings) -> bool {
     last.is_none_or(|last| shared.clock.now() - every >= last)
 }
 
+/// When the round under way began, or now for a new one.
+async fn verify_since(shared: &Shared) -> Result<Timestamp, Error> {
+    let now = shared.clock.now();
+    Ok(shared
+        .db
+        .write(move |tx| -> Result<Timestamp, StoreError> {
+            let since =
+                observer_store::settings::get(tx, VERIFY_SINCE)?.and_then(|at| at.parse::<Timestamp>().ok());
+            if let Some(since) = since {
+                return Ok(since);
+            }
+            observer_store::settings::set(tx, VERIFY_SINCE, &now.to_string())?;
+            Ok(now)
+        })
+        .await?)
+}
+
 async fn run_verification(
     shared: Arc<Shared>,
     settings: ChangesSettings,
     launch: LaunchSettings,
     cancel: CancellationToken,
 ) {
-    match job::verify(Arc::clone(&shared), settings, launch, cancel).await {
+    let since = match verify_since(&shared).await {
+        Ok(since) => since,
+        Err(error) => {
+            warn!(%error, "cannot begin the full verification");
+            return;
+        }
+    };
+    match job::verify(Arc::clone(&shared), settings, launch, since, cancel).await {
         Ok(true) => {
             let now = shared.clock.now().to_string();
             let saved = shared
                 .db
-                .write(move |tx| observer_store::settings::set(tx, VERIFIED_AT, &now))
+                .write(move |tx| {
+                    observer_store::settings::set(tx, VERIFIED_AT, &now)?;
+                    observer_store::settings::set(tx, VERIFY_SINCE, "")
+                })
                 .await;
             if let Err(error) = saved {
                 warn!(%error, "cannot record the end of the full verification");

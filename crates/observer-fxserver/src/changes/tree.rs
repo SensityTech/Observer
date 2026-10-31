@@ -60,6 +60,19 @@ pub fn hash(entries: &mut [TreeEntry]) -> String {
     hex(&hasher.finalize())
 }
 
+/// A hash of what the tree's hash leaves out, each entry's kind and plain SHA-256: two listings of
+/// the same files made under other settings differ in it.
+pub fn kinds(entries: &[TreeEntry]) -> String {
+    let mut hasher = Sha256::new();
+    for entry in entries {
+        hasher.update(entry.kind.as_str().as_bytes());
+        hasher.update([0]);
+        hasher.update(entry.sha256.as_deref().unwrap_or_default().as_bytes());
+        hasher.update([0]);
+    }
+    hex(&hasher.finalize())
+}
+
 pub fn hex(bytes: &[u8]) -> String {
     use std::fmt::Write;
     bytes

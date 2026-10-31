@@ -180,7 +180,7 @@ mod tests {
     fn rows_read_back_with_their_pending_listing() {
         let conn = memory();
         let id = snapshots::insert(&conn, &snapshots::sample("default", 0)).unwrap();
-        trees::insert(&conn, "t1", b"[]", &[]).unwrap();
+        trees::insert(&conn, "t1", b"[]", &[], "k").unwrap();
         let checking = ResourceRow {
             pending_listing: Some(br#"[{"path":"a","size":1,"key":""}]"#.to_vec()),
             pending: 1,
@@ -202,7 +202,7 @@ mod tests {
     fn a_tree_ends_the_wait() {
         let conn = memory();
         let id = snapshots::insert(&conn, &snapshots::sample("default", 0)).unwrap();
-        trees::insert(&conn, "t1", b"[]", &[]).unwrap();
+        trees::insert(&conn, "t1", b"[]", &[], "k").unwrap();
         insert(&conn, id, &[sample("resources/a", None)]).unwrap();
         set_pending(&conn, id, "resources/a", b"[]", 3).unwrap();
 

@@ -72,6 +72,7 @@ pub(crate) async fn start(
         .store
         .read(|conn| snapshots::has_starts(conn, SERVER))
         .await?;
+    let taken_at = shared.clock.now();
     let snapshot = NewSnapshot {
         server: SERVER.to_owned(),
         kind: SnapshotKind::Start,
@@ -86,7 +87,7 @@ pub(crate) async fn start(
         launch: launch_record(&spawn.launch, &shared.keys),
         cfg: json!({}),
         baseline,
-        taken_at: shared.clock.now(),
+        taken_at,
     };
     let id = shared
         .store
@@ -95,14 +96,21 @@ pub(crate) async fn start(
     shared.started(spawn.generation, id);
     shared.changed(id);
     let started_ns = i64::try_from(spawn.run_started.as_nanosecond()).unwrap_or(i64::MAX);
-    let mut work = Work::new(shared, &settings, id, Some(started_ns), cancel);
+    let mut work = Work::new(Arc::clone(&shared), &settings, id, Some(started_ns), cancel);
     let ended = work
         .run(&spawn.launch, true, Some((spawn.generation, status)))
-        .await;
+        .await?;
+    if let Ended::Done(_) = ended {
+        // A check taken before this start no longer says what the next restart applies.
+        shared
+            .store
+            .write(move |tx| upkeep::stale_checks(tx, SERVER, taken_at))
+            .await?;
+    }
     if baseline {
         info!(snapshot = id, "the first snapshot of the server is a baseline");
     }
-    ended
+    Ok(ended)
 }
 
 /// Takes a snapshot of the disk as it is now, which replaces the previous check.
@@ -144,12 +152,14 @@ pub(crate) async fn check(
     Ok(ended)
 }
 
-/// Reads every file again, whatever the index says, and records what it finds there: a copy that
-/// kept both size and time shows at the next start. No snapshot is taken.
+/// Reads every file again that no read went through since `since`, when the round began, and
+/// records what it finds there: a copy that kept both size and time shows at the next start. A
+/// round cut short goes on where it stopped. No snapshot is taken.
 pub(crate) async fn verify(
     shared: Arc<Shared>,
     settings: ChangesSettings,
     launch: LaunchSettings,
+    since: Timestamp,
     cancel: CancellationToken,
 ) -> Result<bool, Error> {
     let Some(latest) = shared
@@ -160,14 +170,17 @@ pub(crate) async fn verify(
     else {
         return Ok(false);
     };
+    let index = shared.store.read(index::load).await?;
+    let bodies = shared.store.read(texts::with_body).await?;
     let input = ListingInput {
         data: PathBuf::from(&launch.data_path),
         launch,
         settings: shared.scan_settings(&settings),
         keys: shared.keys.clone(),
-        index: std::collections::HashMap::new(),
-        bodies: HashSet::new(),
+        index,
+        bodies,
         read_text_now: false,
+        verified_after: Some(since),
     };
     let mut rate = Rate::new(settings.hash_rate);
     let floor = below_floor(&shared.data_dir).await;
@@ -186,6 +199,7 @@ pub(crate) async fn verify(
         }
     };
     let (pass, input) = pass;
+    let in_chain = Arc::new(chain_paths(&pass.chain));
     let waiting: Vec<((), Entry)> = pass
         .resources
         .iter()
@@ -196,14 +210,15 @@ pub(crate) async fn verify(
         })
         .collect();
     for chunk in waiting.chunks(CHUNK_FILES) {
-        let (chunk, settings, keys, cancel) = (
+        let (chunk, in_chain, settings, keys, cancel) = (
             chunk.to_vec(),
+            Arc::clone(&in_chain),
             input.settings.clone(),
             input.keys.clone(),
             cancel.clone(),
         );
         let (reads, returned) = tokio::task::spawn_blocking(move || {
-            let reads = plan::hash(chunk, &settings, &keys, &mut rate, &cancel);
+            let reads = plan::hash(chunk, &in_chain, &settings, &keys, &mut rate, &cancel);
             (reads, rate)
         })
         .await
@@ -289,6 +304,10 @@ struct Work {
     rate: Option<Rate>,
     resources: Vec<Planned>,
     shortened: Option<Shortened>,
+    /// Categories the listing could not read: their resources are missing, not removed.
+    unreadable: Vec<String>,
+    /// The files of the cfg exec chain, masked as cfg files wherever they lie.
+    in_chain: Arc<HashSet<String>>,
     /// No contents are kept: the data folder's volume is short of space.
     floor: bool,
 }
@@ -312,6 +331,8 @@ impl Work {
             rate: Some(rate),
             resources: Vec::new(),
             shortened: None,
+            unreadable: Vec::new(),
+            in_chain: Arc::default(),
             floor: false,
         }
     }
@@ -379,6 +400,7 @@ impl Work {
             index,
             bodies,
             read_text_now,
+            verified_after: None,
         };
         let mut rate = self.rate.take().unwrap_or_else(|| Rate::new(0));
         let cancel = self.cancel.clone();
@@ -401,10 +423,16 @@ impl Work {
             resources,
             reads,
             shortened,
+            unreadable,
             chain,
             paths,
         } = pass;
         self.shortened = shortened;
+        self.in_chain = Arc::new(chain_paths(&chain));
+        if !unreadable.is_empty() {
+            warn!(snapshot = self.id, categories = ?unreadable, "some categories could not be read");
+        }
+        self.unreadable = unreadable;
         let mut batch = Batch::new(self.id, self.started_ns, self.floor);
         let mut rows = Vec::with_capacity(resources.len());
         let mut listed = Vec::new();
@@ -441,7 +469,7 @@ impl Work {
             SnapshotState::Listing
         };
         let (id, now, game, game_build) = (self.id, self.shared.clock.now(), chain.game, chain.game_build);
-        let forget = self.shortened.is_none().then_some(paths);
+        let forget = (self.shortened.is_none() && self.unreadable.is_empty()).then_some(paths);
         self.shared
             .store
             .write(move |tx| -> Result<(), Error> {
@@ -507,10 +535,15 @@ impl Work {
                 bytes += next.1.stat.size;
                 chunk.push(next);
             }
-            let (settings, keys, cancel) = (self.scan.clone(), self.shared.keys.clone(), self.cancel.clone());
+            let (in_chain, settings, keys, cancel) = (
+                Arc::clone(&self.in_chain),
+                self.scan.clone(),
+                self.shared.keys.clone(),
+                self.cancel.clone(),
+            );
             let mut rate = self.rate.take().unwrap_or_else(|| Rate::new(0));
             let (reads, rate) = tokio::task::spawn_blocking(move || {
-                let reads = plan::hash(chunk, &settings, &keys, &mut rate, &cancel);
+                let reads = plan::hash(chunk, &in_chain, &settings, &keys, &mut rate, &cancel);
                 (reads, rate)
             })
             .await
@@ -561,15 +594,19 @@ impl Work {
         Ok(())
     }
 
-    /// The snapshot is complete, or partial when the listing stopped at a limit. A start whose rows
-    /// all equal the previous complete start's shares that start's rows.
+    /// The snapshot is complete, or partial when the listing stopped at a limit or could not read
+    /// a category. A start whose rows all equal the previous complete start's shares its rows.
     async fn finish(&self) -> Result<(), Error> {
-        let reason = match (self.shortened, self.floor) {
-            (Some(_), _) => Some(PartialReason::Limit),
-            (None, true) => Some(PartialReason::DiskFloor),
-            (None, false) => None,
+        let reason = if self.shortened.is_some() {
+            Some(PartialReason::Limit)
+        } else if !self.unreadable.is_empty() {
+            Some(PartialReason::Unreadable)
+        } else if self.floor {
+            Some(PartialReason::DiskFloor)
+        } else {
+            None
         };
-        let state = if self.shortened.is_some() {
+        let state = if self.shortened.is_some() || !self.unreadable.is_empty() {
             SnapshotState::Partial
         } else {
             SnapshotState::Complete
@@ -633,12 +670,24 @@ impl From<observer_store::StoreError> for Interrupted {
     }
 }
 
-/// A tree as it is stored: its hash, its entries as JSON, and its text entries.
-type TreeRecord = (String, Vec<u8>, Vec<(String, String)>);
+/// A tree as it is stored: its hash, its entries as JSON, its text entries, and the hash of its
+/// entries' kinds.
+type TreeRecord = (String, Vec<u8>, Vec<(String, String)>, String);
 
 fn tree_record(sha256: String, entries: &[observer_fxserver::changes::tree::TreeEntry]) -> TreeRecord {
     let texts = plan::texts(entries);
-    (sha256, serde_json::to_vec(entries).unwrap_or_default(), texts)
+    let kinds = observer_fxserver::changes::tree::kinds(entries);
+    (
+        sha256,
+        serde_json::to_vec(entries).unwrap_or_default(),
+        texts,
+        kinds,
+    )
+}
+
+/// The paths of the cfg exec chain's files.
+fn chain_paths(chain: &Chain) -> HashSet<String> {
+    chain.files.iter().map(|file| file.path.clone()).collect()
 }
 
 /// What one write of the job stores besides rows: trees, texts, index entries, flags and the
@@ -649,6 +698,9 @@ struct Batch {
     floor: bool,
     trees: Vec<TreeRecord>,
     texts: Vec<NewText>,
+    /// Texts of the cfg exec chain, masked as cfg files: they replace what the same bytes gave as
+    /// an ordinary file.
+    chain_texts: Vec<NewText>,
     index: Vec<(String, IndexEntry)>,
     flags: Vec<(String, FileFlag)>,
     attached: Vec<(String, String)>,
@@ -662,6 +714,7 @@ impl Batch {
             floor,
             trees: Vec::new(),
             texts: Vec::new(),
+            chain_texts: Vec::new(),
             index: Vec::new(),
             flags: Vec::new(),
             attached: Vec::new(),
@@ -695,7 +748,10 @@ impl Batch {
     }
 
     fn add_chain(&mut self, chain: &Chain) {
+        let before = self.texts.len();
         self.add_reads(&chain.reads, false);
+        let chain_texts: Vec<NewText> = self.texts.drain(before..).collect();
+        self.chain_texts.extend(chain_texts);
         for read in &chain.reads {
             if let Some(digest) = &read.read.digest {
                 self.attached.push((read.path.clone(), digest.clone()));
@@ -704,11 +760,14 @@ impl Batch {
     }
 
     fn write(&self, tx: &observer_store::Transaction<'_>, now: Timestamp) -> Result<(), Error> {
-        for (sha256, listing, texts) in &self.trees {
-            trees::insert(tx, sha256, listing, texts)?;
+        for (sha256, listing, texts, kinds) in &self.trees {
+            trees::insert(tx, sha256, listing, texts, kinds)?;
         }
         for text in &self.texts {
             texts::store(tx, text, self.id)?;
+        }
+        for text in &self.chain_texts {
+            texts::store_over(tx, text, self.id)?;
         }
         for (path, digest) in &self.attached {
             texts::attach(tx, self.id, path, digest)?;

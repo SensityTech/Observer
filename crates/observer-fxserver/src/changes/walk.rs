@@ -2,7 +2,7 @@
 //! every entry with its size and time, reading no file but the manifests, git heads and npm
 //! package files. Links and junctions are followed, as FXServer follows them; a loop is cut.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::{self, DirEntry, Metadata};
 use std::io;
 use std::path::{Path, PathBuf};
@@ -30,6 +30,9 @@ pub struct Entry {
     pub location: PathBuf,
     pub found: Found,
     pub stat: Stat,
+    /// Reached through a link onto a file the owner hid: its contents are never kept, though no
+    /// glob covers the path it is listed under.
+    pub hidden: bool,
 }
 
 /// What the listing found at a path.
@@ -132,6 +135,8 @@ pub enum Shortened {
 pub struct Listing {
     pub resources: Vec<ResourceListing>,
     pub shortened: Option<Shortened>,
+    /// Categories that could not be read: their resources are not listed, which is no removal.
+    pub unreadable: Vec<String>,
 }
 
 impl Listing {
@@ -203,6 +208,8 @@ struct Pending {
     location: PathBuf,
     path: String,
     depth: usize,
+    /// Below a followed link: what lies there is checked where it really is.
+    linked: bool,
 }
 
 impl Walk<'_> {
@@ -210,7 +217,11 @@ impl Walk<'_> {
     fn categories(&mut self, folder: PathBuf, path: String) -> Result<(), Cancelled> {
         let mut queue = std::collections::VecDeque::from([(folder, path, 1)]);
         while let Some((folder, path, depth)) = queue.pop_front() {
-            for entry in sorted(&folder).unwrap_or_default() {
+            let Ok(entries) = sorted(&folder) else {
+                self.listing.unreadable.push(path);
+                continue;
+            };
+            for entry in entries {
                 self.check()?;
                 if self.listing.shortened.is_some() {
                     return Ok(());
@@ -280,11 +291,13 @@ impl Walk<'_> {
             entries: Vec::new(),
         };
         let resolved = fs::canonicalize(&location).ok();
+        let mut visited: HashSet<PathBuf> = resolved.iter().cloned().collect();
         let mut stack = vec![(
             Pending {
                 location,
                 path,
                 depth,
+                linked: false,
             },
             resolved,
         )];
@@ -303,6 +316,14 @@ impl Walk<'_> {
                 }
                 self.entry(&mut resource, &folder, resolved.as_deref(), &entry, &mut folders);
             }
+            // A folder reached twice through links, as two junctions pointing at each other's
+            // folders make it, is walked once.
+            folders.retain(|(pending, resolved): &(Pending, Option<PathBuf>)| {
+                !pending.linked
+                    || resolved
+                        .as_ref()
+                        .is_none_or(|resolved| visited.insert(resolved.clone()))
+            });
             stack.extend(folders.into_iter().rev());
         }
         resource.packages.sort();
@@ -330,6 +351,16 @@ impl Walk<'_> {
         if name.starts_with(UPLOAD_PREFIX) || self.excluded(&path) {
             return;
         }
+        let mut hidden_below_link = false;
+        if folder.linked
+            && let Some(really) = resolved.map(|here| here.join(&name))
+        {
+            match self.guard(&really) {
+                Guard::Refused => return,
+                Guard::Hidden => hidden_below_link = true,
+                Guard::Free => {}
+            }
+        }
         if path.len() > self.limits.path {
             self.files += 1;
             unreadable(resource, location, path);
@@ -343,30 +374,8 @@ impl Walk<'_> {
         let mut metadata = entry.metadata().ok();
         let mut child = None;
         if kind.is_symlink() {
-            let target = fs::read_link(&location)
-                .map(|target| target.to_string_lossy().into_owned())
-                .unwrap_or_default();
-            let followed = self
-                .followable(&location)
-                .filter(|resolved_target| {
-                    // A target that holds the folder being walked leads back to it.
-                    resolved.is_none_or(|here| !here.starts_with(resolved_target))
-                })
-                .and_then(|resolved_target| Some((fs::metadata(&location).ok()?, resolved_target)));
-            // A followed link to a file is listed as that file, at the link's path.
-            if followed.as_ref().is_none_or(|(target, _)| target.is_dir()) {
-                self.files += 1;
-                resource.entries.push(Entry {
-                    path: path.clone(),
-                    location: location.clone(),
-                    found: Found::Link {
-                        target,
-                        followed: followed.is_some(),
-                    },
-                    stat: Stat::default(),
-                });
-            }
-            let Some((target_metadata, resolved_target)) = followed else {
+            let Some((target_metadata, resolved_target)) = self.link(resource, &path, &location, resolved)
+            else {
                 return;
             };
             if target_metadata.is_dir() {
@@ -393,12 +402,14 @@ impl Walk<'_> {
                 unreadable(resource, location, path);
                 return;
             }
+            let linked = folder.linked || child.is_some();
             let resolved = child.or_else(|| resolved.map(|here| here.join(&name)));
             folders.push((
                 Pending {
                     location,
                     path,
                     depth: folder.depth + 1,
+                    linked,
                 },
                 resolved,
             ));
@@ -415,7 +426,75 @@ impl Walk<'_> {
             location,
             found,
             stat: Stat::of(&metadata),
+            hidden: hidden_below_link,
         });
+    }
+
+    /// Lists the link at `path` unless it is followed onto a file, and gives its target's metadata
+    /// and resolved path when it is followed.
+    fn link(
+        &mut self,
+        resource: &mut ResourceListing,
+        path: &str,
+        location: &Path,
+        resolved: Option<&Path>,
+    ) -> Option<(Metadata, PathBuf)> {
+        let target = fs::read_link(location)
+            .map(|target| target.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let followed = self
+            .followable(location)
+            .filter(|resolved_target| {
+                // A target that holds the folder being walked leads back to it.
+                resolved.is_none_or(|here| !here.starts_with(resolved_target))
+            })
+            .and_then(|resolved_target| Some((fs::metadata(location).ok()?, resolved_target)));
+        // A followed link to a file is listed as that file, at the link's path.
+        if followed.as_ref().is_none_or(|(target, _)| target.is_dir()) {
+            self.files += 1;
+            resource.entries.push(Entry {
+                path: path.to_owned(),
+                location: location.to_owned(),
+                found: Found::Link {
+                    target,
+                    followed: followed.is_some(),
+                },
+                stat: Stat::default(),
+                hidden: false,
+            });
+        }
+        followed
+    }
+
+    /// What a path reached through a link really is: one of Observer's own folders, FXServer's
+    /// cache or what the owner excluded is never listed, and what the owner hid stays hidden.
+    fn guard(&self, really: &Path) -> Guard {
+        if self.never_read.iter().any(|folder| really.starts_with(folder)) {
+            return Guard::Refused;
+        }
+        let absolute = really.to_string_lossy().replace('\\', "/");
+        let inside = self
+            .root
+            .as_deref()
+            .and_then(|root| really.strip_prefix(root).ok())
+            .map(|inside| inside.to_string_lossy().replace('\\', "/"));
+        if let Some(relative) = &inside {
+            let cache = relative
+                .split('/')
+                .next()
+                .is_some_and(|first| first.eq_ignore_ascii_case("cache"));
+            if cache || self.excluded(relative) {
+                return Guard::Refused;
+            }
+        }
+        let hidden_inside = inside
+            .as_deref()
+            .is_some_and(|relative| hidden(relative, &self.settings.hidden));
+        if hidden_inside || hidden(&absolute, &[]) {
+            Guard::Hidden
+        } else {
+            Guard::Free
+        }
     }
 
     /// The resolved target of a link when it may be followed: not into Observer's own folders,
@@ -463,12 +542,20 @@ impl Walk<'_> {
     }
 }
 
+/// What the real place of a path below a link allows.
+enum Guard {
+    Free,
+    Hidden,
+    Refused,
+}
+
 fn unreadable(resource: &mut ResourceListing, location: PathBuf, path: String) {
     resource.entries.push(Entry {
         path,
         location,
         found: Found::Unreadable,
         stat: Stat::default(),
+        hidden: false,
     });
 }
 
@@ -749,6 +836,79 @@ mod tests {
             listing.resources[0].entries[0].found,
             Found::Link { followed: false, .. }
         ));
+    }
+
+    #[test]
+    fn two_links_pointing_at_each_others_folders_are_walked_once() {
+        let server = Server::new();
+        server.file("resources/a/a.lua", "");
+        server.file("resources/b/b.lua", "");
+        link_folder(
+            &server.data().join("resources/b"),
+            &server.data().join("resources/a/x"),
+        );
+        link_folder(
+            &server.data().join("resources/a"),
+            &server.data().join("resources/b/y"),
+        );
+
+        let listing = server.list(&ScanSettings::default());
+
+        let a = &listing.resources[0];
+        assert_eq!(
+            paths(a),
+            [
+                "resources/a/a.lua",
+                "resources/a/x",
+                "resources/a/x/b.lua",
+                "resources/a/x/y"
+            ]
+        );
+        assert!(a.entries.iter().all(|entry| entry.found != Found::Unreadable));
+    }
+
+    #[test]
+    fn a_link_above_observers_folders_never_reaches_them() {
+        let server = Server::new();
+        let above = tempfile::tempdir().unwrap();
+        fs::create_dir_all(above.path().join("data")).unwrap();
+        fs::write(above.path().join("data/observer.sqlite3"), "state").unwrap();
+        fs::write(above.path().join("notes.txt"), "").unwrap();
+        fs::create_dir_all(server.data().join("resources/a")).unwrap();
+        link_folder(above.path(), &server.data().join("resources/a/up"));
+        let settings = ScanSettings {
+            never_read: vec![above.path().join("data")],
+            ..ScanSettings::default()
+        };
+
+        let listing = server.list(&settings);
+
+        assert_eq!(
+            paths(&listing.resources[0]),
+            ["resources/a/up", "resources/a/up/notes.txt"]
+        );
+    }
+
+    #[test]
+    fn a_hidden_file_stays_hidden_through_a_link() {
+        let server = Server::new();
+        server.file("resources/b/keys.lua", "token");
+        fs::create_dir_all(server.data().join("resources/a")).unwrap();
+        link_folder(
+            &server.data().join("resources/b"),
+            &server.data().join("resources/a/lib"),
+        );
+        let settings = ScanSettings {
+            hidden: vec!["resources/b/keys.lua".to_owned()],
+            ..ScanSettings::default()
+        };
+
+        let listing = server.list(&settings);
+
+        let through = &listing.resources[0].entries[1];
+        assert_eq!(through.path, "resources/a/lib/keys.lua");
+        assert!(through.hidden);
+        assert!(!listing.resources[1].entries[0].hidden);
     }
 
     #[test]

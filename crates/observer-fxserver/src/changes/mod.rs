@@ -16,7 +16,7 @@ use std::path::PathBuf;
 
 use observer_domain::changes::DEFAULT_EXTENSIONS;
 
-pub use content::{FileRead, Rate, decode, read};
+pub use content::{FileRead, Rate, Treatment, decode, read};
 pub use walk::{Entry, Found, ListError, Listing, ResourceListing, Shortened, Stat, list};
 
 /// The work was cancelled: a newer start, or Observer stopping.
