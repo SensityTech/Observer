@@ -1,13 +1,16 @@
 //! Builds switched under a running server, against the fake installed as builds of their own in
 //! Observer's artifacts folder: a switch at the next start and its probation, a build that crashes
 //! and the return to the last healthy one, a build waiting for the scheduled restart, and the
-//! process check that keeps a build in use.
+//! process check that keeps a build in use. Also the install of the fake's own archive, which the
+//! browser tests' catalog lists.
 // The helpers below are test code too, though not inside a `#[test]` function.
 #![allow(clippy::unwrap_used)]
 
 use std::fs;
+use std::io::{BufRead, BufReader};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
+use std::process::{Child, Command, Stdio};
 use std::sync::{LazyLock, Mutex, PoisonError};
 use std::time::Duration;
 
@@ -16,10 +19,10 @@ use observer_app::{
     Accounts, ArtifactTimings, Artifacts, ArtifactsSetup, ArtifactsTask, AuditLog, Caller, Client, Clock,
     PasswordCost, Running, Schedule, ScheduleSetup, ScheduleTask, Servers, Setup, Supervision,
 };
-use observer_artifacts::catalog::{Catalog, Listing};
+use observer_artifacts::catalog::{Availability, Catalog, CatalogBuild, Listing, PolicyDate};
 use observer_artifacts::{Branch, Http, Manifest, Origin, Platform};
 use observer_domain::artifacts::{
-    ApplyMode, ArtifactsStatus, HealthyBuild, NoticeKind, NoticeReason, SelectBuild,
+    ApplyMode, ArtifactsStatus, HealthyBuild, JobState, JobStep, NoticeKind, NoticeReason, SelectBuild,
 };
 use observer_domain::audit::{ActorKind, AuditAction, AuditEntry, AuditFilter};
 use observer_domain::error::ErrorCode;
@@ -40,6 +43,11 @@ const HEALTHY: u32 = 35245;
 const NEW: u32 = 37900;
 /// A third build, chosen while 37900 is on probation.
 const OTHER: u32 = 37950;
+/// The build the fake's own archive holds.
+const ARCHIVED: u32 = 99001;
+/// Where the fake serves its archive, apart from the browser tests' 41955.
+const ARCHIVE_PORT: u16 = 41956;
+const COMMIT: &str = "0cfcdb5ead57a4a26fcb6ebad98adbcd0273e607";
 const SELECTION_ROUTE: (&str, &str) = ("PUT", "/api/servers/default/artifacts/selection");
 /// The build on probation crashes late enough that Observer has seen it online and read its
 /// number first, which a loaded machine can take a few seconds to do.
@@ -84,7 +92,8 @@ struct Lab {
 
 impl Lab {
     /// An Observer whose owner `ada` saved launch settings for the fake, with 35245 selected and
-    /// healthy, and 37900 installed beside it doing what `new_build` says.
+    /// healthy, and 37900 installed beside it doing what `new_build` says. Its catalog lists
+    /// 99001, downloaded from the fake's own archive.
     async fn new(stable_for: Duration, new_build: &str) -> Self {
         let port = Port::lease().await;
         let dir = tempfile::tempdir().unwrap();
@@ -127,7 +136,7 @@ impl Lab {
         .unwrap();
         let listing = Listing {
             platform: Platform::host(),
-            builds: Vec::new(),
+            builds: vec![archived()],
             warnings: Vec::new(),
         };
         let (artifacts, building) = Artifacts::start(
@@ -140,7 +149,7 @@ impl Lab {
                 supervision: supervision.clone(),
                 schedule: schedule.status(),
                 catalog: Catalog::fixed(Ok(listing)),
-                http: Http::new().unwrap(),
+                http: Http::local(ARCHIVE_PORT),
             },
             |timings: &mut ArtifactTimings| timings.stable_for = stable_for,
         )
@@ -185,6 +194,16 @@ impl Lab {
     async fn online_on(&self, build: u32) -> ServerStatus {
         self.until(|status| status.state == ServerState::Online && status.build == Some(build))
             .await
+    }
+
+    async fn job_done(&self) -> ArtifactsStatus {
+        self.builds_until(|status| {
+            status
+                .job
+                .as_ref()
+                .is_some_and(|job| job.state != JobState::Running)
+        })
+        .await
     }
 
     async fn select(&self, build: u32, apply: ApplyMode) -> ArtifactsStatus {
@@ -347,7 +366,7 @@ fn install_fake(root: &Path, build: u32, cfg: &str) {
         files: 3,
         bytes: 1000,
         origin: Origin::Download {
-            commit: "0cfcdb5ead57a4a26fcb6ebad98adbcd0273e607".parse().unwrap(),
+            commit: COMMIT.parse().unwrap(),
             branch: Branch::master(),
             source_url: "https://runtime.fivem.net/artifacts/fivem/build_server_windows/master/".to_owned(),
             archive_bytes: 64,
@@ -356,6 +375,64 @@ fn install_fake(root: &Path, build: u32, cfg: &str) {
     }
     .write(&dir)
     .unwrap();
+}
+
+/// 99001 as the browser tests' catalog lists it, served by [`ArchiveServer`].
+fn archived() -> CatalogBuild {
+    let kind = Platform::host().archive();
+    CatalogBuild {
+        build: ARCHIVED,
+        commit: Some(COMMIT.parse().unwrap()),
+        branch: Some(Branch::master()),
+        recommended: true,
+        latest: false,
+        availability: Availability::Downloadable {
+            url: format!(
+                "http://127.0.0.1:{ARCHIVE_PORT}/{ARCHIVED}-{COMMIT}/{}",
+                kind.file_name()
+            )
+            .parse()
+            .unwrap(),
+            kind,
+            size: None,
+        },
+        published_at: None,
+        end_of_support: Some(PolicyDate::Never),
+        end_of_life: Some(PolicyDate::Never),
+        predates_policy: false,
+        listed: true,
+    }
+}
+
+/// `fake-archive` serving the fake on `ARCHIVE_PORT`, until dropped.
+struct ArchiveServer(Child);
+
+impl ArchiveServer {
+    /// Once it says it listens, which it does once its archive is made. A server already on the
+    /// port would answer too, so the line is waited for rather than a connection.
+    fn start() -> Self {
+        let mut server = Command::new(env!("CARGO_BIN_EXE_fake-archive"))
+            .arg(ARCHIVE_PORT.to_string())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut said = String::new();
+        BufReader::new(server.stdout.take().unwrap())
+            .read_line(&mut said)
+            .unwrap();
+        assert!(
+            !said.is_empty(),
+            "fake-archive could not serve on port {ARCHIVE_PORT}, see its error above"
+        );
+        Self(server)
+    }
+}
+
+impl Drop for ArchiveServer {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
 }
 
 #[cfg(unix)]
@@ -596,5 +673,56 @@ async fn a_build_a_process_runs_from_is_not_deleted() {
     assert_eq!(in_use, Some(ErrorCode::BuildInUse));
     assert!(deleted.installed.iter().all(|build| build.build != 37800));
     assert!(!lab.root().join("37800").exists());
+    lab.stop().await;
+}
+
+/// The archive the browser tests install: on Linux it installs as any build, and the fake runs
+/// from it as build 99001.
+#[cfg(unix)]
+#[tokio::test]
+async fn the_fakes_own_archive_installs_and_starts_on_probation_as_build_99001() {
+    let _archive = ArchiveServer::start();
+    let mut lab = Lab::new(Duration::from_mins(5), "").await;
+    lab.supervision.start_server(&lab.owner).await.unwrap();
+    lab.online_on(HEALTHY).await;
+
+    lab.artifacts.install(&lab.owner, ARCHIVED, false).await.unwrap();
+    let installed = lab.job_done().await;
+    lab.select(ARCHIVED, ApplyMode::NextStart).await;
+    lab.supervision.restart_server(&lab.owner).await.unwrap();
+    lab.online_on(ARCHIVED).await;
+    let on_probation = lab.builds_until(|status| status.probation.is_some()).await;
+
+    let job = installed.job.unwrap();
+    assert_eq!((job.state, job.step), (JobState::Installed, JobStep::Commit));
+    assert!(installed.installed.iter().any(|build| build.build == ARCHIVED));
+    let probation = on_probation.probation.unwrap();
+    assert_eq!((probation.build, probation.from), (ARCHIVED, Some(HEALTHY)));
+    lab.stop().await;
+}
+
+/// Windows only takes an `FXServer.exe` Rockstar Games signed, and the fake is not: the browser
+/// tests see the same refusal.
+#[cfg(windows)]
+#[tokio::test]
+async fn the_fakes_own_archive_is_refused_at_validation_for_want_of_a_signature() {
+    use observer_domain::artifacts::InstallFailure;
+
+    let _archive = ArchiveServer::start();
+    let mut lab = Lab::new(Duration::from_mins(5), "").await;
+
+    lab.artifacts.install(&lab.owner, ARCHIVED, false).await.unwrap();
+    let done = lab.job_done().await;
+
+    let job = done.job.unwrap();
+    assert_eq!(
+        (job.state, job.step, job.failure),
+        (
+            JobState::Failed,
+            JobStep::Validate,
+            Some(InstallFailure::Signature)
+        )
+    );
+    assert!(done.installed.iter().all(|build| build.build != ARCHIVED));
     lab.stop().await;
 }

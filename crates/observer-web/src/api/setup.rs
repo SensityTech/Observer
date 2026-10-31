@@ -1,13 +1,14 @@
-use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::Response;
+use axum::{Extension, Json};
 use observer_domain::accounts::{SetupRequest, SetupStatus};
 
 use crate::AppState;
 use crate::api::auth;
 use crate::error::Failure;
 use crate::extract::{JsonBody, RemoteClient};
+use crate::proxy::Remote;
 
 pub(crate) async fn status(State(state): State<AppState>) -> Result<Json<SetupStatus>, Failure> {
     let required = state.accounts.setup_required().await?;
@@ -17,6 +18,7 @@ pub(crate) async fn status(State(state): State<AppState>) -> Result<Json<SetupSt
 /// Creates the owner and signs them in, exactly as a login would.
 pub(crate) async fn complete(
     State(state): State<AppState>,
+    Extension(remote): Extension<Remote>,
     RemoteClient(client): RemoteClient,
     JsonBody(request): JsonBody<SetupRequest>,
 ) -> Result<Response, Failure> {
@@ -26,6 +28,7 @@ pub(crate) async fn complete(
         .await?;
     Ok(auth::signed_in(
         &state,
+        remote,
         StatusCode::CREATED,
         signed_in,
         request.remember,

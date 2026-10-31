@@ -25,6 +25,9 @@ tasks:
   icons     draw the executable's icons from the mark (--check: fail if they differ)
   licences  list the third-party software a target ships, with its licence texts (--target)";
 
+/// The browser tests' catalog in place of Cfx.re's, which a release never has.
+const TEST_CATALOG: &str = "observer/test-catalog";
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let result = match args.first().map(String::as_str) {
@@ -85,11 +88,20 @@ fn value<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
     args.get(at + 1).map(String::as_str)
 }
 
-/// Not part of `check`: it downloads a browser and takes minutes.
+/// Not part of `check`: it downloads a browser and takes minutes. Observer is built with the test
+/// catalog, from which the flows install a build.
 fn e2e() -> anyhow::Result<()> {
     web()?;
     let panel = root().join("web");
-    let binaries = built(cargo().args(["build", "--package", "observer", "--package", "fake-fxserver"]))?;
+    let binaries = built(cargo().args([
+        "build",
+        "--package",
+        "observer",
+        "--package",
+        "fake-fxserver",
+        "--features",
+        TEST_CATALOG,
+    ]))?;
     run(npx()
         .args(["playwright", "install", "chromium"])
         .current_dir(&panel))?;
@@ -97,7 +109,8 @@ fn e2e() -> anyhow::Result<()> {
         .args(["run", "e2e"])
         .current_dir(&panel)
         .env("OBSERVER_BIN", binary(&binaries, "observer")?)
-        .env("FAKE_FXSERVER_BIN", binary(&binaries, "fake-fxserver")?))
+        .env("FAKE_FXSERVER_BIN", binary(&binaries, "fake-fxserver")?)
+        .env("FAKE_ARCHIVE_BIN", binary(&binaries, "fake-archive")?))
 }
 
 /// Runs a `cargo build` and says where each binary it built went, by name: Cargo's target
@@ -181,6 +194,17 @@ fn check() -> anyhow::Result<()> {
     run(cargo().args(["fmt", "--all", "--check"]))?;
     icons::run(&root(), true)?;
     run(cargo().args(["clippy", "--workspace", "--all-targets", "--", "-D", "warnings"]))?;
+    run(cargo().args([
+        "clippy",
+        "--package",
+        "observer",
+        "--features",
+        TEST_CATALOG,
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings",
+    ]))?;
     run(cargo().args(["test", "--workspace", "--quiet"]))?;
     bindings_unchanged()?;
 

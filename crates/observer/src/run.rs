@@ -19,7 +19,7 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
-use crate::config::{Config, DataPaths};
+use crate::config::{Config, DataPaths, HttpConfig};
 use crate::shutdown::{Signals, StopRequest};
 use crate::{BUILD, lock, logging, setup};
 
@@ -104,7 +104,7 @@ pub async fn run(config: Config, args: RunArgs) -> anyhow::Result<()> {
     let listener = TcpListener::bind(config.http.listen)
         .await
         .with_context(|| format!("cannot listen on {}", config.http.listen))?;
-    announce(config.http.listen);
+    announce(&config.http);
     let setup_token = setup::offer_link(&accounts, config.http.listen).await?;
 
     let stop = CancellationToken::new();
@@ -118,7 +118,13 @@ pub async fn run(config: Config, args: RunArgs) -> anyhow::Result<()> {
         artifacts,
         diagnostics,
     };
-    let state = observer_web::AppState::new(BUILD, services, &instance_id, &config.http.hosts);
+    let state = observer_web::AppState::new(
+        BUILD,
+        services,
+        &instance_id,
+        &config.http.hosts,
+        &config.http.trusted_proxies,
+    );
     let live = state.live.clone();
     // Before FXServer starts with Observer, so that the first samples show its start.
     let sampling = metrics.start(Sources {
@@ -276,6 +282,7 @@ async fn builds(
     paths: &DataPaths,
 ) -> anyhow::Result<(Artifacts, ArtifactsTask)> {
     let root = &paths.artifacts;
+    let (catalog, http) = sources()?;
     let setup = ArtifactsSetup {
         db: db.clone(),
         clock: clock.clone(),
@@ -284,12 +291,64 @@ async fn builds(
         servers: servers.clone(),
         supervision: supervision.clone(),
         schedule: schedule.status(),
-        catalog: Catalog::new(Http::new()?),
-        http: Http::new()?,
+        catalog,
+        http,
     };
     Artifacts::start(setup, |_| {})
         .await
         .with_context(|| format!("cannot use {} for FXServer builds", root.display()))
+}
+
+/// Where builds are listed and downloaded from: Cfx.re, or, in a build with the `test-catalog`
+/// feature, the test catalog when `OBSERVER_TEST_CATALOG` names its port.
+fn sources() -> anyhow::Result<(Catalog, Http)> {
+    #[cfg(feature = "test-catalog")]
+    if let Some(port) = std::env::var_os("OBSERVER_TEST_CATALOG") {
+        return test_catalog(&port);
+    }
+    Ok((Catalog::new(Http::new()?), Http::new()?))
+}
+
+/// The browser tests' catalog: build 99001 alone, recommended and supported, whose archive the
+/// fake FXServer serves on 127.0.0.1:`port`. Nothing else is listed, and Cfx.re is never reached.
+#[cfg(feature = "test-catalog")]
+fn test_catalog(port: &std::ffi::OsStr) -> anyhow::Result<(Catalog, Http)> {
+    use observer_artifacts::catalog::{Availability, CatalogBuild, Listing, PolicyDate};
+    use observer_artifacts::{Branch, Platform};
+
+    const BUILD: u32 = 99001;
+    const COMMIT: &str = "0cfcdb5ead57a4a26fcb6ebad98adbcd0273e607";
+
+    let port: u16 = port
+        .to_str()
+        .and_then(|port| port.parse().ok())
+        .with_context(|| format!("OBSERVER_TEST_CATALOG is not a port: {}", port.display()))?;
+    let kind = Platform::host().archive();
+    let url = format!("http://127.0.0.1:{port}/{BUILD}-{COMMIT}/{}", kind.file_name()).parse()?;
+    let build = CatalogBuild {
+        build: BUILD,
+        commit: Some(COMMIT.parse().map_err(anyhow::Error::msg)?),
+        branch: Some(Branch::master()),
+        recommended: true,
+        latest: false,
+        availability: Availability::Downloadable {
+            url,
+            kind,
+            size: None,
+        },
+        published_at: None,
+        end_of_support: Some(PolicyDate::Never),
+        end_of_life: Some(PolicyDate::Never),
+        predates_policy: false,
+        listed: true,
+    };
+    let listing = Listing {
+        platform: Platform::host(),
+        builds: vec![build],
+        warnings: Vec::new(),
+    };
+    warn!(port, "builds come from the test catalog, not Cfx.re");
+    Ok((Catalog::fixed(Ok(listing)), Http::local(port)))
 }
 
 /// Waits for the tasks the stop token ends: the HTTP server, then the periodic ones.
@@ -340,7 +399,8 @@ async fn stop_fxserver(
     }
 }
 
-fn announce(listen: SocketAddr) {
+fn announce(http: &HttpConfig) {
+    let listen = http.listen;
     if listen.ip().is_unspecified() {
         info!(
             "panel listening on port {} of every interface (http://localhost:{})",
@@ -349,6 +409,11 @@ fn announce(listen: SocketAddr) {
         );
     } else {
         info!("panel listening on http://{listen}");
+    }
+    if http.exposed_over_plain_http() {
+        warn!(
+            "the panel is served over plain HTTP on {listen}; put it behind an HTTPS proxy or reach it over a VPN"
+        );
     }
 }
 

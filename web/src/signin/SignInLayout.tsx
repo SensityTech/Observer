@@ -3,6 +3,7 @@ import { Check, ChevronDown, Moon, Sun } from 'lucide-react';
 import type { ReactNode } from 'react';
 
 import { buttonVariants } from '../components/Button';
+import { PlainHttpNotice } from '../components/PlainHttpNotice';
 import { useI18n } from '../i18n/I18nProvider';
 import { LOCALES, type Locale } from '../i18n/locales';
 import { cn } from '../lib/cn';
@@ -55,6 +56,7 @@ export function SignInLayout({ eyebrow, title, tone, lead, children }: SignInLay
                         </h1>
                         <p className="signin-lead">{lead}</p>
                     </div>
+                    <PlainHttpNotice />
                     {children}
                 </div>
             </main>

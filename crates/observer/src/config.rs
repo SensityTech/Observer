@@ -4,6 +4,7 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
 use anyhow::Context;
+use observer_web::TrustedProxy;
 use serde::Deserialize;
 
 /// The bootstrap configuration, read from `observer.toml` before anything else starts. Everything
@@ -26,6 +27,9 @@ pub struct HttpConfig {
     /// always work; the API refuses any other name, which a stranger's page could have pointed at
     /// this host.
     pub hosts: Vec<String>,
+    /// The reverse proxies whose `X-Forwarded-For` and `X-Forwarded-Proto` are believed: addresses
+    /// and CIDR blocks such as `10.0.0.0/8`. From any other peer those headers are ignored.
+    pub trusted_proxies: Vec<TrustedProxy>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -51,7 +55,16 @@ impl Default for HttpConfig {
         Self {
             listen: SocketAddr::from(([0, 0, 0, 0], 40125)),
             hosts: Vec::new(),
+            trusted_proxies: Vec::new(),
         }
+    }
+}
+
+impl HttpConfig {
+    /// Whether other hosts reach the panel over plain HTTP: it listens past loopback, and no proxy
+    /// is trusted to bring HTTPS in front of it.
+    pub fn exposed_over_plain_http(&self) -> bool {
+        !self.listen.ip().is_loopback() && self.trusted_proxies.is_empty()
     }
 }
 
@@ -122,6 +135,7 @@ mod tests {
 
         assert_eq!(config.data_dir, dir.path().join("data"));
         assert_eq!(config.http.listen.port(), 40125);
+        assert_eq!(config.http.trusted_proxies, Vec::<TrustedProxy>::new());
         assert_eq!(config.log.level, "info");
     }
 
@@ -131,7 +145,8 @@ mod tests {
         let path = dir.path().join("observer.toml");
         fs::write(
             &path,
-            "data_dir = \"state\"\n[http]\nlisten = \"127.0.0.1:9000\"\nhosts = [\"panel.example.com\"]\n",
+            "data_dir = \"state\"\n[http]\nlisten = \"127.0.0.1:9000\"\nhosts = [\"panel.example.com\"]\n\
+             trusted_proxies = [\"127.0.0.1\", \"10.0.0.0/8\", \"fd00::/8\"]\n",
         )
         .unwrap();
 
@@ -140,6 +155,11 @@ mod tests {
         assert_eq!(config.data_dir, dir.path().join("state"));
         assert_eq!(config.http.listen, SocketAddr::from(([127, 0, 0, 1], 9000)));
         assert_eq!(config.http.hosts, ["panel.example.com"]);
+        let proxies: Vec<TrustedProxy> = ["127.0.0.1", "10.0.0.0/8", "fd00::/8"]
+            .iter()
+            .map(|proxy| proxy.parse().unwrap())
+            .collect();
+        assert_eq!(config.http.trusted_proxies, proxies);
         assert_eq!(config.log.level, "info");
     }
 
@@ -150,5 +170,39 @@ mod tests {
         fs::write(&path, "[http]\nlisten_addr = \"127.0.0.1:9000\"\n").unwrap();
 
         assert!(Config::load(&path).is_err());
+    }
+
+    #[test]
+    fn a_trusted_proxy_that_is_not_an_address_or_a_block_stops_the_start_and_is_named() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("observer.toml");
+        fs::write(
+            &path,
+            "[http]\ntrusted_proxies = [\"127.0.0.1\", \"10.0.0.0/33\"]\n",
+        )
+        .unwrap();
+
+        let error = format!("{:#}", Config::load(&path).unwrap_err());
+
+        assert!(
+            error.contains("`10.0.0.0/33` is not an address or a CIDR block"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn only_a_panel_reached_past_loopback_without_a_trusted_proxy_is_exposed_over_plain_http() {
+        let http = |listen: &str, proxies: &[&str]| HttpConfig {
+            listen: listen.parse().unwrap(),
+            hosts: Vec::new(),
+            trusted_proxies: proxies.iter().map(|proxy| proxy.parse().unwrap()).collect(),
+        };
+
+        assert!(http("0.0.0.0:40125", &[]).exposed_over_plain_http());
+        assert!(http("192.168.1.20:40125", &[]).exposed_over_plain_http());
+        assert!(http("[::]:40125", &[]).exposed_over_plain_http());
+        assert!(!http("127.0.0.1:40125", &[]).exposed_over_plain_http());
+        assert!(!http("[::1]:40125", &[]).exposed_over_plain_http());
+        assert!(!http("0.0.0.0:40125", &["172.18.0.0/16"]).exposed_over_plain_http());
     }
 }

@@ -7,7 +7,8 @@ publish.workspace = true
 
 [features]
 # A local archive server, crafted archives and a catalog that answers a fixed listing, for the tests
-# of the crates above this one. Only their dev-dependencies turn it on.
+# of the crates above this one. Their dev-dependencies turn it on, and so does the test-catalog
+# feature of observer; a release build never does.
 test-support = ["lzma-rust2/encoder", "tokio/net"]
 
 [dependencies]

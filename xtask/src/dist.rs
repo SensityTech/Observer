@@ -19,6 +19,8 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 const LICENCES: &str = "THIRD-PARTY-LICENCES.txt";
 /// What a Windows executable imports when it needs the Visual C++ redistributable.
 const CRT_IMPORTS: [&str; 3] = ["vcruntime140.dll", "msvcp140.dll", "api-ms-win-crt-"];
+/// The variable only a binary built with the browser tests' catalog reads.
+const TEST_CATALOG: &[u8] = b"OBSERVER_TEST_CATALOG";
 
 /// The commit a release is built from, as the binary names it.
 struct Source {
@@ -47,6 +49,9 @@ pub fn dist(target: &str, max_glibc: Option<&str>) -> anyhow::Result<()> {
     )?;
     let binary = crate::binary(&binaries, "observer")?;
     let bytes = fs::read(binary).with_context(|| format!("cannot read {}", binary.display()))?;
+    if test_catalog(&bytes) {
+        bail!("{} has the browser tests' catalog built in", binary.display());
+    }
     match system {
         System::Windows => {
             if let Some(import) = crt_import(&bytes) {
@@ -178,6 +183,12 @@ fn crt_import(binary: &[u8]) -> Option<&'static str> {
     })
 }
 
+fn test_catalog(binary: &[u8]) -> bool {
+    binary
+        .windows(TEST_CATALOG.len())
+        .any(|window| window == TEST_CATALOG)
+}
+
 /// The highest `GLIBC_2.N[.M]` symbol version the binary asks for.
 fn glibc_floor(binary: &[u8]) -> Option<(u32, u32)> {
     const PREFIX: &[u8] = b"GLIBC_2.";
@@ -302,6 +313,12 @@ mod tests {
             Some("api-ms-win-crt-")
         );
         assert_eq!(crt_import(b"\0KERNEL32.dll\0USER32.dll\0ws2_32.dll\0"), None);
+    }
+
+    #[test]
+    fn a_binary_built_with_the_test_catalog_is_found_out() {
+        assert!(test_catalog(b"\0OBSERVER_TEST_CATALOG is not a port\0"));
+        assert!(!test_catalog(b"\0OBSERVER_LOG\0OBSERVER_COMMIT\0"));
     }
 
     #[test]

@@ -1,3 +1,4 @@
+use axum::Extension;
 use axum::extract::{Request, State};
 use axum::http::{HeaderMap, Uri, header};
 use axum::middleware::Next;
@@ -9,6 +10,7 @@ use observer_domain::permissions::Permissions;
 use crate::AppState;
 use crate::error::Failure;
 use crate::extract::RemoteClient;
+use crate::proxy::Remote;
 use crate::security;
 
 /// The second half of a session, which only the panel's origin can read from `localStorage`.
@@ -49,6 +51,7 @@ pub(crate) struct Guard {
 /// Runs a route's gate, then hands the handler the caller it found.
 pub(crate) async fn enforce(
     State(guard): State<Guard>,
+    Extension(remote): Extension<Remote>,
     RemoteClient(client): RemoteClient,
     mut request: Request,
     next: Next,
@@ -61,7 +64,7 @@ pub(crate) async fn enforce(
     // take whatever a client puts in a URL.
     let path = format!("/api{}", guard.path);
     let admitted = if guard.gate == Gate::Ticket {
-        admit_ticket(&guard, client, request.uri(), request.headers()).await
+        admit_ticket(&guard, remote, client, request.uri(), request.headers()).await
     } else {
         admit(&guard, client, request.headers(), &method, &path).await
     };
@@ -110,11 +113,12 @@ async fn admit(
 
 async fn admit_ticket(
     guard: &Guard,
+    remote: Remote,
     client: Client,
     uri: &Uri,
     headers: &HeaderMap,
 ) -> Result<Caller, Failure> {
-    security::own_origin(headers)?;
+    security::own_origin(headers, remote)?;
     let ticket = uri
         .query()
         .into_iter()
@@ -140,18 +144,27 @@ fn cookie<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
 }
 
 /// The session cookie. It is `HttpOnly` so scripts never see it, and `SameSite=Strict` so other
-/// sites never send it. `Secure` and the `__Host-` prefix come with TLS, which Observer does not
-/// serve yet. Without a `Max-Age`, the browser drops it when it closes.
-pub(crate) fn session_cookie(name: &str, token: &str, max_age_seconds: Option<i64>) -> String {
-    let cookie = format!("{name}={token}; Path=/; HttpOnly; SameSite=Strict");
+/// sites never send it. Behind an HTTPS proxy it is also `Secure`, so the browser never sends it
+/// over plain HTTP, to FXServer's port on the same host included. Without a `Max-Age`, the browser
+/// drops it when it closes.
+pub(crate) fn session_cookie(
+    name: &str,
+    token: &str,
+    max_age_seconds: Option<i64>,
+    remote: Remote,
+) -> String {
+    let mut cookie = format!("{name}={token}; Path=/; HttpOnly; SameSite=Strict");
+    if remote.https {
+        cookie.push_str("; Secure");
+    }
     match max_age_seconds {
         Some(seconds) => format!("{cookie}; Max-Age={seconds}"),
         None => cookie,
     }
 }
 
-pub(crate) fn expired_cookie(name: &str) -> String {
-    session_cookie(name, "", Some(0))
+pub(crate) fn expired_cookie(name: &str, remote: Remote) -> String {
+    session_cookie(name, "", Some(0), remote)
 }
 
 #[cfg(test)]

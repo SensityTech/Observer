@@ -8,6 +8,7 @@ mod extract;
 mod gate;
 mod live;
 mod panel;
+mod proxy;
 mod security;
 #[cfg(test)]
 mod tests;
@@ -25,6 +26,7 @@ use tracing::Span;
 
 pub use gate::SESSION_KEY_HEADER;
 pub use live::Live;
+pub use proxy::{InvalidProxy, TrustedProxy};
 
 /// The largest request body the API accepts. Nothing it takes comes close; artifacts are
 /// downloaded by Observer itself, never uploaded.
@@ -47,6 +49,7 @@ pub struct AppState {
     cookie: String,
     /// The names the panel is reached by, besides addresses and `localhost`.
     hosts: Arc<[String]>,
+    proxies: Arc<[TrustedProxy]>,
 }
 
 /// The services the API stands on.
@@ -62,7 +65,13 @@ pub struct Services {
 }
 
 impl AppState {
-    pub fn new(build: Build, services: Services, instance_id: &str, hosts: &[String]) -> Self {
+    pub fn new(
+        build: Build,
+        services: Services,
+        instance_id: &str,
+        hosts: &[String],
+        proxies: &[TrustedProxy],
+    ) -> Self {
         let Services {
             accounts,
             audit,
@@ -86,6 +95,7 @@ impl AppState {
             live: Live::new(),
             cookie: format!("observer_session_{instance_id}"),
             hosts: hosts.into(),
+            proxies: proxies.into(),
         }
     }
 }
@@ -96,6 +106,7 @@ pub fn router(state: AppState) -> Router {
         .layer(RequestBodyLimitLayer::new(MAX_BODY_BYTES))
         .layer(CatchPanicLayer::new())
         .layer(middleware::from_fn(security::headers))
+        .layer(middleware::from_fn_with_state(state.clone(), proxy::hear))
         .layer(TraceLayer::new_for_http().make_span_with(span))
         .with_state(state)
 }

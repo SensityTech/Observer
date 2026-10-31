@@ -10,9 +10,11 @@ use crate::AppState;
 use crate::error::Failure;
 use crate::extract::{JsonBody, RemoteClient};
 use crate::gate;
+use crate::proxy::Remote;
 
 pub(crate) async fn login(
     State(state): State<AppState>,
+    Extension(remote): Extension<Remote>,
     RemoteClient(client): RemoteClient,
     JsonBody(request): JsonBody<LoginRequest>,
 ) -> Result<Response, Failure> {
@@ -22,6 +24,7 @@ pub(crate) async fn login(
         .await?;
     Ok(self::signed_in(
         &state,
+        remote,
         StatusCode::OK,
         signed_in,
         request.remember,
@@ -32,12 +35,13 @@ pub(crate) async fn login(
 /// cookie lasts as long as the session can.
 pub(crate) fn signed_in(
     state: &AppState,
+    remote: Remote,
     status: StatusCode,
     signed_in: SignedIn,
     remember: bool,
 ) -> Response {
     let max_age = remember.then(|| signed_in.lifetime.as_secs());
-    let cookie = gate::session_cookie(&state.cookie, &signed_in.token, max_age);
+    let cookie = gate::session_cookie(&state.cookie, &signed_in.token, max_age, remote);
     let body = LoginResponse {
         session_key: signed_in.key,
         me: signed_in.me,
@@ -47,10 +51,11 @@ pub(crate) fn signed_in(
 
 pub(crate) async fn logout(
     State(state): State<AppState>,
+    Extension(remote): Extension<Remote>,
     Extension(caller): Extension<Caller>,
 ) -> Result<Response, Failure> {
     state.accounts.logout(&caller).await?;
-    let cookie = gate::expired_cookie(&state.cookie);
+    let cookie = gate::expired_cookie(&state.cookie, remote);
     Ok((StatusCode::NO_CONTENT, [(header::SET_COOKIE, cookie)]).into_response())
 }
 

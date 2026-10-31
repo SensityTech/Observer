@@ -298,6 +298,10 @@
         .content:has(> .console) {
             padding-bottom: 16px;
         }
+        /* Scrolled to, the card's top stops at the mobile bar's bottom edge rather than under the bar. */
+        .console {
+            scroll-margin-top: var(--mobilebar-height);
+        }
         .filter,
         .console-tools .console-tool {
             height: 44px;

@@ -41,6 +41,8 @@ const EVERY_KIND = { stdout: true, stderr: true, command: true, observer: true }
 const BOTTOM = 6;
 /** How often a screen reader hears what came in, rather than every line. */
 const SUMMARY_EVERY = 15_000;
+/** Phones, where the card is sized to fill the screen under the mobile bar. */
+const PHONE = '(max-width: 760px)';
 
 const TONE = {
     red: 'text-term-red',
@@ -76,15 +78,28 @@ export function ConsolePage() {
     const [frozen, setFrozen] = useState<Frozen | null>(null);
     const [logsOpen, setLogsOpen] = useState(false);
     const [announcement, setAnnouncement] = useState('');
+    const card = useRef<HTMLElement>(null);
     const scroller = useRef<HTMLDivElement>(null);
     // What the screen reader summary counts from: the backlog of the first snapshot is not news.
     const summarised = useRef<{ received: number; errors: number } | null>(null);
+
+    // On a phone the newest line sits at the bottom of a card as tall as the screen under the mobile
+    // bar: the page has to be scrolled to the card for it to show.
+    const scrollPageToCard = () => {
+        if (matchMedia(PHONE).matches) {
+            card.current?.scrollIntoView({ block: 'start' });
+        }
+    };
 
     useTopic('console', {
         snapshot: (data) => {
             setRefused(false);
             setLoaded(true);
             store.snapshot(data);
+            // The first snapshot only, and not once the reader froze the view or moved the page off its top.
+            if (summarised.current === null && frozen === null && window.scrollY === 0) {
+                scrollPageToCard();
+            }
             summarised.current ??= { received: store.received(), errors: store.errors() };
         },
         event: (data) => store.append(data.lines),
@@ -170,6 +185,7 @@ export function ConsolePage() {
     const jumpToEnd = () => {
         follow();
         scroller.current?.focus({ preventScroll: true });
+        scrollPageToCard();
     };
 
     const unseen = frozen === null ? 0 : store.received() - frozen.received;
@@ -203,7 +219,7 @@ export function ConsolePage() {
                 </h1>
             </div>
 
-            <section className="card console" aria-label={t.console.card}>
+            <section ref={card} className="card console" aria-label={t.console.card}>
                 <div className="console-bar">
                     <label className="console-search">
                         <span className="sr-only">{t.console.search}</span>

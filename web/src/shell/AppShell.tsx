@@ -22,6 +22,7 @@ import type { Me } from '../api/generated/Me';
 import { allows, MeContext } from '../auth/me';
 import { buttonVariants } from '../components/Button';
 import { Chip } from '../components/Chip';
+import { PlainHttpNotice } from '../components/PlainHttpNotice';
 import { AlertsProvider, useAlerts } from '../diagnostics/alerts';
 import { useI18n } from '../i18n/I18nProvider';
 import { useRealtime } from '../live/context';
@@ -181,6 +182,7 @@ export function AppShell() {
                                         <ServerControls />
                                     </header>
                                     <main className="content" id="content" tabIndex={-1}>
+                                        <PlainHttpNotice />
                                         <Suspense fallback={<PageLoading />}>
                                             <Outlet />
                                         </Suspense>

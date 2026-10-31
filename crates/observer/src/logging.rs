@@ -1,4 +1,6 @@
-use std::io::{self, Write};
+use std::env;
+use std::ffi::OsStr;
+use std::io::{self, IsTerminal, Write};
 use std::path::Path;
 
 use anyhow::Context;
@@ -37,10 +39,15 @@ pub fn init(level: &str, logs: &Path) -> anyhow::Result<[WorkerGuard; 2]> {
     // otherwise hold up whichever task logs next, the supervisor's included. Lines it cannot take
     // in time are dropped.
     let (terminal, terminal_guard) = tracing_appender::non_blocking(io::stderr());
+    let ansi = colours(io::stderr().is_terminal(), env::var_os("NO_COLOR").as_deref());
 
     tracing_subscriber::registry()
         .with(filter)
-        .with(fmt::layer().with_writer(move || OneLine(terminal.clone())))
+        .with(
+            fmt::layer()
+                .with_ansi(ansi)
+                .with_writer(move || OneLine(terminal.clone())),
+        )
         .with(
             fmt::layer()
                 .with_ansi(false)
@@ -48,6 +55,12 @@ pub fn init(level: &str, logs: &Path) -> anyhow::Result<[WorkerGuard; 2]> {
         )
         .init();
     Ok([terminal_guard, file_guard])
+}
+
+/// Colour codes only for a terminal, and only while `NO_COLOR` is unset or empty, as no-color.org
+/// asks. Under systemd stderr is the journal, which would keep the codes as text.
+fn colours(terminal: bool, no_color: Option<&OsStr>) -> bool {
+    terminal && no_color.is_none_or(OsStr::is_empty)
 }
 
 /// Writes each record on a line of its own: a line break inside one, which a name a resource chose
@@ -132,5 +145,20 @@ mod tests {
             "{log}"
         );
         assert!(lines[1].ends_with("the next record"), "{log}");
+    }
+
+    #[test]
+    fn colours_go_to_a_terminal_unless_no_color_is_set() {
+        assert!(colours(true, None));
+        assert!(
+            colours(true, Some(OsStr::new(""))),
+            "an empty NO_COLOR counts as unset"
+        );
+        assert!(!colours(true, Some(OsStr::new("1"))));
+        assert!(
+            !colours(false, None),
+            "the journal or a pipe would keep the codes as text"
+        );
+        assert!(!colours(false, Some(OsStr::new(""))));
     }
 }

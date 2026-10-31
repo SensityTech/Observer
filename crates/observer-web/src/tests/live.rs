@@ -16,6 +16,7 @@ use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, DuplexStream};
 use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use tokio_tungstenite::tungstenite::handshake::client::Request as ClientRequest;
 use tokio_tungstenite::tungstenite::http::HeaderValue;
 use tokio_tungstenite::tungstenite::{self, Message};
 
@@ -53,7 +54,11 @@ impl Server {
         if let Some(protocol) = protocol {
             headers.insert("sec-websocket-protocol", HeaderValue::from_str(protocol).unwrap());
         }
+        self.handshake(request).await
+    }
 
+    /// Sends the upgrade over a connection of its own.
+    async fn handshake(&self, request: ClientRequest) -> Result<Socket, StatusCode> {
         let (client, server) = tokio::io::duplex(64 * 1024);
         let service = TowerToHyperService::new(self.app.clone());
         tokio::spawn(
@@ -224,6 +229,37 @@ async fn a_ticket_opens_one_socket_for_its_own_session_from_the_panels_origin() 
         .upgrade(&"ab".repeat(32), &owner.cookie, ORIGIN, Some(PROTOCOL))
         .await;
     assert_eq!(forged.err(), Some(StatusCode::UNAUTHORIZED));
+}
+
+#[tokio::test]
+async fn a_socket_opens_from_the_https_page_behind_a_trusted_proxy() {
+    let server = Server::behind_proxy().await;
+    let owner = server.owner().await;
+    // The upgrade as the proxy forwards it from `wss://observer.test`, with the scheme it says.
+    let forwarded = |ticket: &str, scheme: &'static str| {
+        let mut request = format!("ws://observer.test/api/ws?ticket={ticket}")
+            .into_client_request()
+            .unwrap();
+        let headers = request.headers_mut();
+        headers.insert("origin", HeaderValue::from_static("https://observer.test"));
+        headers.insert("cookie", HeaderValue::from_str(&owner.cookie).unwrap());
+        headers.insert("sec-websocket-protocol", HeaderValue::from_static(PROTOCOL));
+        headers.insert("x-forwarded-for", HeaderValue::from_static("198.51.100.20"));
+        headers.insert("x-forwarded-proto", HeaderValue::from_static(scheme));
+        request
+    };
+
+    // nginx and Caddy say `https`, Traefik says `wss` for a websocket.
+    for scheme in ["https", "wss"] {
+        let ticket = server.ticket(&owner).await;
+        let mut socket = server.handshake(forwarded(&ticket, scheme)).await.unwrap();
+        assert_eq!(receive(&mut socket).await["type"], "hello", "{scheme}");
+    }
+    for scheme in ["http", "ws"] {
+        let ticket = server.ticket(&owner).await;
+        let plain = server.handshake(forwarded(&ticket, scheme)).await;
+        assert_eq!(plain.err(), Some(StatusCode::FORBIDDEN), "{scheme}");
+    }
 }
 
 #[tokio::test]
