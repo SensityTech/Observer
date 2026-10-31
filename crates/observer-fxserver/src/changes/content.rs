@@ -12,6 +12,7 @@ use observer_domain::changes::{FileKind, LOCKFILES, extension, hidden};
 use sha2::{Digest, Sha256};
 use tokio_util::sync::CancellationToken;
 
+use super::mask::{Masked, mask};
 use super::tree::hex;
 use super::walk::Stat;
 use super::{Cancelled, Keys, ScanSettings};
@@ -34,8 +35,8 @@ pub struct FileRead {
     pub digest: Option<String>,
     /// The plain SHA-256 of a binary, encrypted or generated file.
     pub sha256: Option<String>,
-    /// The decoded text of a text file within the size limit, read in one settled pass.
-    pub text: Option<String>,
+    /// The text of a text file within the size limit, read in one settled pass and masked.
+    pub masked: Option<Masked>,
     /// The metadata after the read.
     pub stat: Stat,
     pub bytes: u64,
@@ -50,7 +51,7 @@ impl FileRead {
             kind: FileKind::Unreadable,
             digest: None,
             sha256: None,
-            text: None,
+            masked: None,
             stat,
             bytes: 0,
             racy: false,
@@ -59,10 +60,12 @@ impl FileRead {
     }
 }
 
-/// Reads the file at `location`, `path` from the data folder.
+/// Reads the file at `location`, `path` from the data folder. `chain` for a file of the cfg exec
+/// chain, whose text is masked as a cfg's.
 pub fn read(
     path: &str,
     location: &Path,
+    chain: bool,
     settings: &ScanSettings,
     keys: &Keys,
     rate: &mut Rate,
@@ -71,6 +74,9 @@ pub fn read(
     let hidden = hidden(path, &settings.hidden);
     let name = path.rsplit('/').next().unwrap_or(path).to_ascii_lowercase();
     let plan = Plan {
+        path,
+        chain,
+        tag_key: &keys.tag,
         hidden,
         candidate: !hidden
             && extension(path).is_some_and(|extension| settings.extensions.contains(&extension))
@@ -114,6 +120,9 @@ pub fn read(
 
 /// What a file's path says before it is read.
 struct Plan<'a> {
+    path: &'a str,
+    chain: bool,
+    tag_key: &'a [u8; 32],
     hidden: bool,
     /// Its extension is on the owner's list: it may be text.
     candidate: bool,
@@ -201,7 +210,7 @@ impl Pass {
             kind: FileKind::Binary,
             digest,
             sha256: None,
-            text: None,
+            masked: None,
             stat,
             bytes: self.bytes,
             racy,
@@ -227,7 +236,7 @@ impl Pass {
                 Some(_) if self.longest_line > LONG_LINE || dense => FileKind::Generated,
                 Some(text) => {
                     if whole && !unsettled {
-                        read.text = Some(text);
+                        read.masked = Some(mask(&text, plan.path, plan.chain, plan.tag_key));
                     }
                     FileKind::Text
                 }
@@ -343,6 +352,10 @@ mod tests {
         ScanSettings::default()
     }
 
+    fn text(read: &FileRead) -> Option<String> {
+        read.masked.as_ref().map(|masked| masked.text.clone())
+    }
+
     fn read_bytes(name: &str, bytes: &[u8]) -> FileRead {
         let dir = tempfile::tempdir().unwrap();
         let location = dir.path().join(name);
@@ -351,6 +364,7 @@ mod tests {
         read(
             &path,
             &location,
+            false,
             &settings(),
             &Keys::fixed(),
             &mut Rate::new(0),
@@ -364,9 +378,27 @@ mod tests {
         let read = read_bytes("client.lua", b"local a = 1\r\nlocal b = 2\n");
 
         assert_eq!(read.kind, FileKind::Text);
-        assert_eq!(read.text.as_deref(), Some("local a = 1\r\nlocal b = 2\n"));
+        assert_eq!(text(&read).as_deref(), Some("local a = 1\r\nlocal b = 2\n"));
         assert_eq!(read.sha256, None);
         assert!(read.racy, "just written");
+    }
+
+    #[test]
+    fn text_is_masked_as_it_is_read() {
+        let read = read_bytes(
+            "config.lua",
+            b"Config.Token = 'abc'
+",
+        );
+
+        assert_eq!(
+            text(&read).as_deref(),
+            Some(
+                "Config.Token = '[REDACTED]'
+"
+            )
+        );
+        assert_eq!(read.masked.unwrap().redactions.len(), 1);
     }
 
     #[test]
@@ -376,14 +408,14 @@ mod tests {
 
         let read = read_bytes("config.lua", &bytes);
 
-        assert_eq!(read.text.as_deref(), Some("a = 'é'\n"));
+        assert_eq!(text(&read).as_deref(), Some("a = 'é'\n"));
     }
 
     #[test]
     fn latin1_without_nul_is_read_as_text() {
         let read = read_bytes("config.lua", b"Config.Label = 'Caf\xe9'\n");
 
-        assert_eq!(read.text.as_deref(), Some("Config.Label = 'Café'\n"));
+        assert_eq!(text(&read).as_deref(), Some("Config.Label = 'Café'\n"));
     }
 
     #[test]
@@ -393,7 +425,7 @@ mod tests {
 
         for read in [nul, unlisted] {
             assert_eq!(read.kind, FileKind::Binary);
-            assert_eq!(read.text, None);
+            assert_eq!(read.masked, None);
             assert_eq!(read.sha256.as_ref().map(String::len), Some(64));
         }
     }
@@ -414,7 +446,7 @@ mod tests {
 
         for read in [long_line, dense, lock] {
             assert_eq!(read.kind, FileKind::Generated);
-            assert_eq!(read.text, None);
+            assert_eq!(read.masked, None);
             assert!(read.sha256.is_some());
         }
     }
@@ -424,7 +456,7 @@ mod tests {
         let read = read_bytes(".env", b"TOKEN=abc\n");
 
         assert_eq!(read.kind, FileKind::Hidden);
-        assert_eq!(read.text, None);
+        assert_eq!(read.masked, None);
         assert_eq!(read.sha256, None);
         assert!(read.digest.is_some());
     }
@@ -440,6 +472,7 @@ mod tests {
         let read = read(
             "resources/r/big.lua",
             &location,
+            false,
             &settings,
             &Keys::fixed(),
             &mut Rate::new(0),
@@ -448,7 +481,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(read.kind, FileKind::Text);
-        assert_eq!(read.text, None);
+        assert_eq!(read.masked, None);
         assert_eq!(read.bytes, 240);
     }
 
@@ -465,6 +498,7 @@ mod tests {
             read(
                 "resources/r/a.lua",
                 &location,
+                false,
                 &settings(),
                 keys,
                 &mut Rate::new(0),
@@ -483,6 +517,7 @@ mod tests {
         let read = read(
             "resources/r/gone.lua",
             Path::new("definitely/not/here.lua"),
+            false,
             &settings(),
             &Keys::fixed(),
             &mut Rate::new(0),

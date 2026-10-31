@@ -3,7 +3,7 @@
 
 mod assemble;
 mod log;
-mod mask;
+pub(crate) mod mask;
 mod sanitize;
 
 use std::collections::VecDeque;

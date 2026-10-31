@@ -6,6 +6,7 @@
 mod content;
 mod git;
 mod manifest;
+pub mod mask;
 mod packages;
 pub mod tree;
 mod walk;
