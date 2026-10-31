@@ -28,6 +28,13 @@
 //!   the way FXServer's dump server ends it on Windows (`0xFFFFFFFE`);
 //! - `fake_spawn_child 1`: start a child that inherits the pipes and outlives a crash, like the
 //!   crash dump server;
+//! - on stdin: `fake_join [name] [identifier,...] [token,...]` and
+//!   `fake_drop <id> <category> <resource or -> <reason...>`: a player joins or drops, which
+//!   `/players.json` follows and the bridge reports (a join shows a full set of identifiers and
+//!   tokens, and the address `192.0.2.77`, IPv4-mapped for every other player, unless given);
+//!   `fake_drop_before_join <id>`, a resource's kick inside its own `playerJoining` handler; the
+//!   players already there are reported once the bridge starts, and `quit` drops every player
+//!   with category 7 through the trace thread, as FXServer does;
 //! - on stdin: `fake_crash [code]`, `fake_hang`, `fake_spin` (a busy loop), `fake_print <text>`,
 //!   `fake_trace <type>`, `fake_stall_input <ms>`, which stops reading stdin for a while, as
 //!   FXServer does while its main loop is stuck; `fake_spawn [NAME=value...] <program> <args...>`,
@@ -44,6 +51,7 @@
 mod console;
 mod dump;
 mod http;
+mod players;
 #[allow(unsafe_code)]
 mod traces;
 
@@ -59,6 +67,7 @@ use std::time::{Duration, Instant};
 use serde_json::json;
 
 use crate::console::{CMD, LICENSE, MAIN, NET, RESOURCES, SCRIPTING, SERVER};
+use crate::players::{Player, Players};
 use crate::traces::Traces;
 
 const TICK: Duration = Duration::from_millis(50);
@@ -73,6 +82,7 @@ const SV_MAIN: &str = "UV loop: svMain";
 /// What the HTTP threads share with the main loop.
 pub struct Server {
     convars: Mutex<HashMap<String, String>>,
+    players: Mutex<Players>,
     main_ticks: AtomicU64,
     /// What svMain's ticks were observed to take, as `/perf/` reports it.
     main_observed: Mutex<Observed>,
@@ -103,6 +113,10 @@ impl Server {
 
     fn flag(&self, name: &str) -> bool {
         self.number(name).is_some_and(|value| value != 0)
+    }
+
+    pub fn players(&self) -> std::sync::MutexGuard<'_, Players> {
+        self.players.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     pub fn main_ticks(&self) -> u64 {
@@ -182,6 +196,7 @@ fn main() {
         let mut fake = Fake {
             server: Arc::new(Server {
                 convars: Mutex::new(HashMap::new()),
+                players: Mutex::default(),
                 main_ticks: AtomicU64::new(0),
                 main_observed: Mutex::default(),
                 started: Instant::now(),
@@ -341,6 +356,32 @@ impl Fake {
                 );
             }
             ("fake_trace", Some(kind)) => self.trace(kind),
+            ("fake_join", _) => self.join(args.first(), args.get(1), args.get(2)),
+            ("fake_drop", Some(id)) => {
+                let category = args
+                    .get(1)
+                    .and_then(|category| category.parse().ok())
+                    .unwrap_or(2);
+                let resource = args
+                    .get(2)
+                    .map_or("", |resource| if resource == "-" { "" } else { resource });
+                let reason = args.get(3..).map(|words| words.join(" ")).unwrap_or_default();
+                if let Ok(id) = id.parse() {
+                    self.drop_player(id, category, resource, &reason);
+                }
+            }
+            ("fake_drop_before_join", Some(id)) => {
+                if let Ok(id) = id.parse::<u32>() {
+                    let t = self.server.uptime_ms();
+                    self.bridge_report(&players::drop_report(id, t, 1, "gate", "Not whitelisted"));
+                    let player = Player {
+                        name: "Late".to_owned(),
+                        identifiers: vec![format!("license:{id:040x}")],
+                        tokens: Vec::new(),
+                    };
+                    self.bridge_report(&players::join_report(id, &player, t));
+                }
+            }
             ("observer_cmd", Some(hex)) if self.bridge.is_some() => bridge_command(hex),
             // Typing a convar's name with a value sets it.
             (convar, Some(value)) if convar.starts_with("sv_") || convar.starts_with("fake_") => {
@@ -394,6 +435,10 @@ impl Fake {
                 "observer",
                 &json!({ "type": "observer", "kind": "resources", "started": self.started }),
             );
+            let roster = self.server.players().roster(self.server.uptime_ms());
+            for page in roster {
+                self.traces.script("observer", &page);
+            }
         }
         if now >= bridge.next_heartbeat {
             bridge.next_heartbeat = now + period;
@@ -420,6 +465,40 @@ impl Fake {
         );
         let delay = self.server.number("fake_quit_delay_ms").unwrap_or(500);
         self.quit_at = Some(Instant::now() + Duration::from_millis(delay));
+        let reason = format!(
+            "Server shutting down: {}",
+            reason.unwrap_or("Quit command executed.")
+        );
+        let ids = self.server.players().ids();
+        for id in ids {
+            self.drop_player(id, 7, "", &reason);
+        }
+    }
+
+    fn join(&self, name: Option<&String>, identifiers: Option<&String>, tokens: Option<&String>) {
+        let (id, player) = self.server.players().join(
+            name.map(String::as_str),
+            identifiers.map(String::as_str),
+            tokens.map(String::as_str),
+        );
+        console::line(MAIN, &format!("Player {} connected (id {id})", player.name));
+        let report = players::join_report(id, &player, self.server.uptime_ms());
+        self.bridge_report(&report);
+    }
+
+    fn drop_player(&self, id: u32, category: u64, resource: &str, reason: &str) {
+        if self.server.players().leave(id).is_none() {
+            return;
+        }
+        let report = players::drop_report(id, self.server.uptime_ms(), category, resource, reason);
+        self.bridge_report(&report);
+    }
+
+    /// A report of the bridge, once it started: the real one only hears what happens after.
+    fn bridge_report(&self, report: &serde_json::Value) {
+        if self.bridge.as_ref().is_some_and(|bridge| bridge.ready) {
+            self.traces.script("observer", report);
+        }
     }
 
     fn trace(&self, kind: &str) {
