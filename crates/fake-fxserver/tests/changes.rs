@@ -259,14 +259,15 @@ impl Lab {
     }
 }
 
-/// A server folder with two resources, one in a category, and a secret in its cfg.
+/// A server folder with two resources, one in a category, and a secret in its cfg. The fake's
+/// bridge beats well within the two seconds the health limits allow, as in the other suites.
 fn plant(data: &Path, port: u16) {
     file(
         data,
         "server.cfg",
         &format!(
             "endpoint_add_tcp \"127.0.0.1:{port}\"\nendpoint_add_udp \"127.0.0.1:{port}\"\n\
-             set my_bot_token AlsoNeverStored\nensure chat\nensure [qb]\n"
+             set fake_heartbeat_ms 200\nset my_bot_token AlsoNeverStored\nensure chat\nensure [qb]\n"
         ),
     );
     file(
