@@ -3,6 +3,7 @@
 //! do is computed the same way by the SFTP server, the panel's rule tester and the tests.
 
 use std::fmt;
+use std::net::IpAddr;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
@@ -642,6 +643,46 @@ impl fmt::Display for Right {
         };
         f.write_str(name)
     }
+}
+
+/// Whether `ip` falls in one of the CIDR blocks; an empty list allows every address. An IPv4
+/// address reached over IPv6 (`::ffff:a.b.c.d`) is compared as IPv4. A block that does not parse
+/// allows nothing.
+pub fn network_allows(networks: &[String], ip: IpAddr) -> bool {
+    if networks.is_empty() {
+        return true;
+    }
+    let ip = match ip {
+        IpAddr::V6(v6) => v6.to_ipv4_mapped().map_or(ip, IpAddr::V4),
+        IpAddr::V4(_) => ip,
+    };
+    networks.iter().any(|network| block_contains(network, ip))
+}
+
+fn block_contains(block: &str, ip: IpAddr) -> bool {
+    let (address, length) = match block.split_once('/') {
+        Some((address, length)) => (address, length.parse::<u32>().ok()),
+        None => (block, None),
+    };
+    match (address.parse::<IpAddr>(), ip) {
+        (Ok(IpAddr::V4(network)), IpAddr::V4(ip)) => {
+            let length = length.unwrap_or(32);
+            length <= 32 && mask_v4(u32::from(network), length) == mask_v4(u32::from(ip), length)
+        }
+        (Ok(IpAddr::V6(network)), IpAddr::V6(ip)) => {
+            let length = length.unwrap_or(128);
+            length <= 128 && mask_v6(u128::from(network), length) == mask_v6(u128::from(ip), length)
+        }
+        _ => false,
+    }
+}
+
+fn mask_v4(address: u32, length: u32) -> u32 {
+    address.checked_shr(32 - length).unwrap_or(0)
+}
+
+fn mask_v6(address: u128, length: u32) -> u128 {
+    address.checked_shr(128 - length).unwrap_or(0)
 }
 
 /// A group of rules, as the panel shows it.

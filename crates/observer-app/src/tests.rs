@@ -1783,3 +1783,99 @@ async fn a_file_manager_gives_read_and_assets_groups_while_code_stays_the_owners
             .any(|entry| entry.details["groupsAdded"] == json!(["Mappers"]))
     );
 }
+
+#[tokio::test]
+async fn an_sftp_login_needs_a_registered_key_on_a_usable_access_and_locks_after_five_failures() {
+    use observer_domain::files::{Effect, Rights};
+    use observer_store::files::{self as file_store, FileKeyRow};
+
+    use crate::Login;
+
+    let lab = Lab::new().await;
+    let owner = lab.owner().await;
+    lab.user(&owner, "linus", P::CONSOLE_VIEW).await;
+    let owner = lab.caller(&owner).await;
+    let linus = lab
+        .db
+        .read(|conn| users::find(conn, "linus"))
+        .await
+        .unwrap()
+        .unwrap();
+    let ip: std::net::IpAddr = "192.0.2.10".parse().unwrap();
+    let login = |name: &str, fingerprint: &str| lab.files.login(name.to_owned(), fingerprint.to_owned(), ip);
+
+    let now = lab.clock.now();
+    let access_id = lab
+        .db
+        .write(move |tx| {
+            let access = file_store::user_access_or_new(tx, linus.id, now)?;
+            file_store::insert_key(
+                tx,
+                &FileKeyRow {
+                    id: 0,
+                    access_id: access.id,
+                    algorithm: "ssh-ed25519".to_owned(),
+                    public_key: vec![1],
+                    fingerprint: "SHA256:linus".to_owned(),
+                    comment: String::new(),
+                    created_at: now,
+                    expires_at: None,
+                    last_used_at: None,
+                    last_used_ip: None,
+                },
+            )?;
+            Ok::<_, StoreError>(access.id)
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(login("nobody", "SHA256:linus").await.unwrap(), Login::Refused);
+    assert_eq!(login("linus", "SHA256:other").await.unwrap(), Login::Refused);
+    assert!(
+        lab.files
+            .key_registered("LINUS".to_owned(), "SHA256:linus".to_owned())
+            .await
+            .unwrap()
+    );
+    // Registered, but no group yet: each try is a failure, and the fifth locks the pair.
+    for _ in 0..5 {
+        assert_eq!(login("linus", "SHA256:linus").await.unwrap(), Login::Failed);
+        lab.clock.advance(SignedDuration::from_secs(2));
+    }
+    assert_eq!(login("linus", "SHA256:linus").await.unwrap(), Login::Locked);
+    lab.clock.advance(SignedDuration::from_mins(2));
+
+    let maps = lab
+        .files
+        .create_group(
+            &owner,
+            "Mappers".to_owned(),
+            String::new(),
+            vec![file_rule(Effect::Allow, &[], Rights::VIEW)],
+        )
+        .await
+        .unwrap();
+    lab.files
+        .set_user_groups(&owner, linus.id, vec![maps.row.id])
+        .await
+        .unwrap();
+    assert_eq!(login("linus", "SHA256:linus").await.unwrap(), Login::NoServer);
+    lab.servers
+        .change_launch_settings(&owner, Servers::DEFAULT, launch_settings(), None)
+        .await
+        .unwrap();
+    let Login::Granted(grant) = login("linus", "SHA256:linus").await.unwrap() else {
+        panic!("linus was not let in");
+    };
+    assert_eq!(grant.access_id, access_id);
+    assert_eq!(grant.login, "linus");
+    assert_eq!(grant.groups.len(), 1);
+    assert_eq!(grant.root, launch_settings().data_path);
+
+    lab.clock.advance(SignedDuration::from_mins(16));
+    lab.files.sweep().await.unwrap();
+    let failed = lab.entries(AuditAction::FileLoginFailed).await;
+    assert_eq!(failed.len(), 1);
+    assert_eq!(failed[0].details["failures"], json!(5));
+    assert_eq!(failed[0].target.as_deref(), Some("linus"));
+}

@@ -2,6 +2,7 @@
 //! SFTP server asks this service who may log in and what each session may do; the panel's routes
 //! ask it to change both.
 
+use std::net::IpAddr;
 use std::sync::Arc;
 
 use observer_domain::audit::{AuditAction, Outcome};
@@ -9,17 +10,50 @@ use observer_domain::delegation::Account;
 use observer_domain::error::{ApiError, ErrorCode};
 use observer_domain::files::{self, AccessChange, AccessHolder, Reach, Rule};
 use observer_store::files::{self as store, FileAccessRow, FileGroupRow};
-use observer_store::{Database, users};
+use observer_store::login_failures::FILES;
+use observer_store::{Connection, Database, StoreError, launch, users};
 use serde_json::{Value, json};
 use tokio::sync::watch;
 
 use crate::audit::Record;
+use crate::throttle;
 use crate::{Accounts, Caller, Clock, Error};
 
 /// The only server today.
 pub const SERVER: &str = "default";
 const MAX_GROUP_NAME: usize = 64;
 const MAX_RULES: usize = 64;
+/// A row of SFTP login failures with no lock and no failure for this long is forgotten.
+const FORGET_FAILURES_AFTER: jiff::SignedDuration = jiff::SignedDuration::from_hours(24);
+
+/// What a login came to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Login {
+    Granted(Grant),
+    /// No such login, or not its key: never a failure.
+    Refused,
+    /// The key is the login's, but the access cannot log in now: counted toward the lock.
+    Failed,
+    Locked,
+    /// No server folder is saved yet.
+    NoServer,
+}
+
+/// A session's access, read once at its login.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Grant {
+    pub access_id: i64,
+    pub key_id: i64,
+    /// The account's id; `None` for a pipeline.
+    pub user_id: Option<i64>,
+    /// The username as stored, or `+name` for a pipeline.
+    pub login: String,
+    pub groups: Vec<(i64, Vec<Rule>)>,
+    /// The server's data folder, as the launch settings hold it.
+    pub root: String,
+    pub max_rate: Option<u64>,
+    pub daily_budget: Option<u64>,
+}
 
 #[derive(Clone)]
 pub struct Files {
@@ -239,6 +273,91 @@ impl Files {
             .await?)
     }
 
+    /// Whether `fingerprint` is one of the keys of the access `login` names. An offered key that is
+    /// not is never a failure: clients offer every key they hold.
+    pub async fn key_registered(&self, login: String, fingerprint: String) -> Result<bool, Error> {
+        Ok(self
+            .db
+            .read(move |conn| {
+                Ok::<_, StoreError>(match access_for_login(conn, &login)? {
+                    Some((access, _)) => store::key(conn, access.id, &fingerprint)?.is_some(),
+                    None => false,
+                })
+            })
+            .await?)
+    }
+
+    /// Checks a login whose signature the SSH layer verified. A key registered to the login on an
+    /// access that cannot log in now counts as a failure toward the pair's lock; anything else
+    /// that refuses is not a failure.
+    pub async fn login(&self, login: String, fingerprint: String, ip: IpAddr) -> Result<Login, Error> {
+        let now = self.clock.now();
+        let network = throttle::network(ip);
+        self.db
+            .write(move |tx| {
+                if let Some(row) = FILES.get(tx, &login, &network)?
+                    && throttle::locked_for(&row, now).is_some()
+                {
+                    return Ok(Login::Locked);
+                }
+                let Some((access, user)) = access_for_login(tx, &login)? else {
+                    return Ok(Login::Refused);
+                };
+                let Some(key) = store::key(tx, access.id, &fingerprint)? else {
+                    return Ok(Login::Refused);
+                };
+                let groups = store::access_groups(tx, access.id)?;
+                let usable = access.enabled
+                    && access.expires_at.is_none_or(|end| end > now)
+                    && key.expires_at.is_none_or(|end| end > now)
+                    && !groups.is_empty()
+                    && files::network_allows(&access.networks, ip)
+                    && user.as_ref().is_none_or(|user| !user.must_change_password);
+                if !usable {
+                    let row = FILES.get(tx, &login, &network)?;
+                    let (row, closed) = throttle::record_failure(row, &login, &network, now);
+                    if let Some(failures) = closed {
+                        Record::file_login_failures(&failures).write(tx, now)?;
+                    }
+                    FILES.save(tx, &row)?;
+                    return Ok(Login::Failed);
+                }
+                let Some(launch) = launch::get(tx, SERVER)? else {
+                    return Ok(Login::NoServer);
+                };
+                store::record_login(tx, access.id, key.id, &ip.to_string(), now)?;
+                Ok::<_, Error>(Login::Granted(Grant {
+                    access_id: access.id,
+                    key_id: key.id,
+                    user_id: user.as_ref().map(|user| user.id),
+                    login: user.map_or_else(|| login.clone(), |user| user.username),
+                    groups: groups.into_iter().map(|group| (group.id, group.rules)).collect(),
+                    root: launch.settings.data_path,
+                    max_rate: access.max_rate,
+                    daily_budget: access.daily_budget,
+                }))
+            })
+            .await
+    }
+
+    /// Upkeep, run every minute: closed windows of failed SFTP logins go to the audit log, and
+    /// quiet rows are forgotten.
+    pub async fn sweep(&self) -> Result<(), Error> {
+        let now = self.clock.now();
+        self.db
+            .write(move |tx| {
+                for mut row in FILES.unaudited_since_before(tx, now - throttle::WINDOW)? {
+                    if let Some(failures) = throttle::take_unaudited(&mut row) {
+                        Record::file_login_failures(&failures).write(tx, now)?;
+                        FILES.save(tx, &row)?;
+                    }
+                }
+                FILES.delete_quiet(tx, now - FORGET_FAILURES_AFTER, now)?;
+                Ok::<_, Error>(())
+            })
+            .await
+    }
+
     async fn group(&self, id: i64) -> Result<Group, Error> {
         let row = self.db.read(move |conn| store::group(conn, id)).await?;
         row.map(group).ok_or_else(|| ErrorCode::NotFound.into())
@@ -280,6 +399,20 @@ impl Files {
             .await?;
         Err(error)
     }
+}
+
+/// The access a login names, with its account: the username for a person, `+name` for a pipeline.
+fn access_for_login(
+    conn: &Connection,
+    login: &str,
+) -> Result<Option<(FileAccessRow, Option<users::UserRow>)>, StoreError> {
+    if let Some(name) = login.strip_prefix('+') {
+        return Ok(store::service_access(conn, name)?.map(|access| (access, None)));
+    }
+    let Some(user) = users::find(conn, login)? else {
+        return Ok(None);
+    };
+    Ok(store::user_access(conn, user.id)?.map(|access| (access, Some(user))))
 }
 
 fn group(row: FileGroupRow) -> Group {

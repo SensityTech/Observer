@@ -93,6 +93,22 @@ impl Record {
         })
     }
 
+    /// The SFTP failures of one closed window, as a single entry naming the login tried.
+    pub(crate) fn file_login_failures(failures: &Unaudited) -> Self {
+        Self {
+            ip: Some(failures.network.clone()),
+            target: Some(failures.username.clone()),
+            outcome: Outcome::Failure,
+            details: json!({
+                "network": failures.network,
+                "failures": failures.failures,
+                "firstAt": failures.first,
+                "lastAt": failures.last,
+            }),
+            ..Self::new(AuditAction::FileLoginFailed, ActorKind::Anonymous)
+        }
+    }
+
     fn user(id: i64, name: &str, client: &Client, action: AuditAction) -> Self {
         Self {
             actor_id: Some(id),

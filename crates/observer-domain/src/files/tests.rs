@@ -34,6 +34,33 @@ fn decide(groups: &[(i64, &[Rule])], at: &str, right: Right) -> Decision {
 }
 
 #[test]
+fn networks_are_compared_by_their_prefix_and_ipv4_over_ipv6_as_ipv4() {
+    let blocks = vec![
+        "192.0.2.0/24".to_owned(),
+        "2001:db8::/32".to_owned(),
+        "198.51.100.7".to_owned(),
+    ];
+    let allows = |ip: &str| network_allows(&blocks, ip.parse().unwrap());
+
+    assert!(allows("192.0.2.200"));
+    assert!(allows("::ffff:192.0.2.9"));
+    assert!(!allows("192.0.3.1"));
+    assert!(allows("2001:db8:1::5"));
+    assert!(!allows("2001:db9::1"));
+    assert!(allows("198.51.100.7"));
+    assert!(!allows("198.51.100.8"));
+    assert!(network_allows(&[], "203.0.113.1".parse().unwrap()));
+    assert!(!network_allows(
+        &["0.0.0.0/33".to_owned()],
+        "203.0.113.1".parse().unwrap()
+    ));
+    assert!(network_allows(
+        &["0.0.0.0/0".to_owned()],
+        "203.0.113.1".parse().unwrap()
+    ));
+}
+
+#[test]
 fn the_glob_matcher_takes_brackets_literally() {
     let cases = [
         ("*.lua", "client.lua", true),
