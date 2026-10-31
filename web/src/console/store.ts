@@ -3,7 +3,7 @@ import type { ConsoleSnapshot } from '../api/generated/ConsoleSnapshot';
 import type { LineKind } from '../api/generated/LineKind';
 import { parseSgr, plainText, type Span } from './sgr';
 
-/** The lines the panel keeps, DESIGN.md §8.11: the newest go in, the oldest out. */
+/** The lines the panel keeps: the newest go in, the oldest out. */
 export const LIMIT = 5_000;
 
 export type LineRow = {

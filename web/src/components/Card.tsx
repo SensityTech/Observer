@@ -1,7 +1,7 @@
 import type { LucideIcon } from 'lucide-react';
 import type { ReactNode, Ref } from 'react';
 
-/** DESIGN.md's card: a head with its icon box and title, named by it, then the body. */
+/** The panel's card: a head with its icon box and title, named by it, then the body. */
 export function Card({
     id,
     icon: Icon,

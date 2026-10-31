@@ -707,7 +707,7 @@ function Switch({
     );
 }
 
-/** The native checkbox as a switch: a 36 × 20 track, its knob moving over when on (DESIGN.md §8.16). */
+/** The native checkbox as a switch: a 36 × 20 track, its knob moving over when on. */
 function SwitchTrack({
     checked,
     ...props
