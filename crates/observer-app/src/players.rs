@@ -61,6 +61,8 @@ const IMPORT_EVERY: Duration = Duration::from_millis(100);
 /// Licences forgotten on request, as keyed fingerprints and dates: outside the backups, so that a
 /// restored backup cannot bring a forgotten player back.
 const FORGOTTEN_FILE: &str = "players-forgotten";
+/// The fingerprints' key, beside the forgotten licences and outside the backups too.
+const KEY_FILE: &str = "players-key";
 
 pub struct PlayersSetup {
     pub db: Database,
@@ -85,6 +87,7 @@ struct Inner {
     schedule: watch::Receiver<ScheduleStatus>,
     requests: mpsc::Sender<Request>,
     import: Arc<Mutex<Option<PlayersImport>>>,
+    reading: tokio::sync::Mutex<()>,
 }
 
 /// The players' task; [`PlayersTask::close`] writes what it holds and ends it.
@@ -140,9 +143,7 @@ impl Players {
             schedule,
             data_dir,
         } = setup;
-        let fresh = random::<32>()?;
-        let key = db.write(move |tx| stored::fingerprint_key(tx, fresh)).await?;
-        let fingerprints = Fingerprints::new(key);
+        let fingerprints = Fingerprints::new(fingerprint_key(&db, &data_dir.join(KEY_FILE)).await?);
         let forgotten_file = data_dir.join(FORGOTTEN_FILE);
         let metrics_db = metrics.database().clone();
         let zone = zone_of(&schedule.borrow());
@@ -168,7 +169,7 @@ impl Players {
                 Sessions::new(next_id, Box::new(move || keys.next()))
             },
             pseudonyms: Keys::new(random::<32>()?),
-            state: Vec::new(),
+            identities: Vec::new(),
             credits: Vec::new(),
             later: Later::default(),
             failing: false,
@@ -193,6 +194,7 @@ impl Players {
                 schedule,
                 requests,
                 import,
+                reading: tokio::sync::Mutex::new(()),
             }),
         };
         Ok((players, PlayersTask { stop, task }))
@@ -395,11 +397,21 @@ impl Players {
     }
 
     /// Unique players, new players and play time per day over the last 30 days.
+    /// The sessions under way count as well, split by day: on a server whose sessions last
+    /// hours, today is never empty until the next restart.
     pub async fn community(&self) -> Result<Community, Error> {
         let (zone, today) = self.today();
         let from = days_before(&today, 29);
         let since = start_of(&from, &zone);
-        let (played, firsts, week, previous) = {
+        let now_ms = Timestamp::now().as_millisecond();
+        let in_progress: Vec<(i64, Vec<(String, i64)>)> = self
+            .connected()
+            .await
+            .into_iter()
+            .filter_map(|session| Some((session.player?, split_days(session.seen_ms, now_ms, &zone))))
+            .collect();
+        let online: Vec<i64> = in_progress.iter().map(|(player, _)| *player).collect();
+        let (played, firsts, week, previous, counted) = {
             let (from, to) = (from.clone(), today.clone());
             let (week_from, previous_from, previous_to) = (
                 days_before(&today, 6),
@@ -414,6 +426,7 @@ impl Players {
                         stored::first_visits(conn, since)?,
                         stored::unique_players(conn, &week_from, &to)?,
                         stored::unique_players(conn, &previous_from, &previous_to)?,
+                        stored::days_of(conn, &online, &from)?,
                     ))
                 })
                 .await?
@@ -424,10 +437,30 @@ impl Players {
                 .entry(first.to_zoned(zone.clone()).date().to_string())
                 .or_default() += 1;
         }
-        let played: HashMap<String, (i64, i64)> = played
+        let mut played: HashMap<String, (i64, i64)> = played
             .into_iter()
             .map(|(day, players, ms)| (day, (players, ms)))
             .collect();
+        let mut counted: HashSet<(i64, String)> = counted.into_iter().collect();
+        let week_from = days_before(&today, 6);
+        let mut week = week;
+        for (player, days) in in_progress {
+            let played_this_week = counted
+                .iter()
+                .any(|(known, day)| *known == player && *day >= week_from);
+            let mut this_week = false;
+            for (day, ms) in days.into_iter().filter(|(day, _)| *day >= from) {
+                this_week |= day >= week_from;
+                let entry = played.entry(day.clone()).or_default();
+                entry.1 += ms;
+                if counted.insert((player, day)) {
+                    entry.0 += 1;
+                }
+            }
+            if this_week && !played_this_week {
+                week += 1;
+            }
+        }
         let days: Vec<CommunityDay> = (0..30)
             .rev()
             .map(|back| {
@@ -506,10 +539,14 @@ impl Players {
     /// Takes txAdmin's players database in: read and checked whole first, then written in the
     /// background, a few hundred players at a time. The path stays out of the audit log.
     pub async fn import(&self, caller: &Caller, path: &str) -> Result<PlayersImport, Error> {
-        if self
+        let writing = self
             .import_status()
-            .is_some_and(|import| import.state == ImportState::Writing)
-        {
+            .is_some_and(|import| import.state == ImportState::Writing);
+        // One file is read at a time: reading one takes memory in proportion to its players.
+        let Ok(_reading) = self.inner.reading.try_lock() else {
+            return Err(ErrorCode::JobRunning.into());
+        };
+        if writing {
             return Err(ErrorCode::JobRunning.into());
         }
         let path = PathBuf::from(path);
@@ -576,7 +613,7 @@ struct Worker {
     sessions: Sessions,
     pseudonyms: Keys,
     /// Identities to write, then sessions to credit, in the state database.
-    state: Vec<IdentityWrite>,
+    identities: Vec<IdentityWrite>,
     credits: Vec<Credit>,
     later: Later,
     failing: bool,
@@ -608,6 +645,7 @@ impl Worker {
         flush.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         let mut upkeep = tokio::time::interval(UPKEEP_EVERY);
         let mut import_batch = tokio::time::interval(IMPORT_EVERY);
+        import_batch.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         upkeep.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             tokio::select! {
@@ -653,7 +691,7 @@ impl Worker {
             self.event(&event);
         }
         self.flush().await;
-        if !self.state.is_empty() || !self.credits.is_empty() || !self.later.is_empty() {
+        if !self.identities.is_empty() || !self.credits.is_empty() || !self.later.is_empty() {
             warn!("some sessions of players could not be written before Observer stopped");
         }
     }
@@ -918,7 +956,7 @@ impl Worker {
     async fn flush(&mut self) {
         let writes = self.sessions.take_writes();
         let zone = zone_of(&self.schedule.borrow());
-        self.state.extend(writes.identities);
+        self.identities.extend(writes.identities);
         for write in writes.sessions {
             if let SessionWrite::Close {
                 closure,
@@ -938,8 +976,8 @@ impl Worker {
     /// Identities, crediting records and credits, in one state transaction. `false` while they
     /// cannot be written: the sessions wait, since a session is closed only once credited.
     async fn flush_identities(&mut self) -> bool {
-        if !self.state.is_empty() || !self.credits.is_empty() {
-            let identities = self.state.clone();
+        if !self.identities.is_empty() || !self.credits.is_empty() {
+            let identities = self.identities.clone();
             let credits = self.credits.clone();
             let pseudonyms: Vec<[u8; 16]> = identities.iter().map(|_| self.pseudonyms.next()).collect();
             let written = self
@@ -970,7 +1008,7 @@ impl Worker {
                 .await;
             match written {
                 Ok(identified) => {
-                    self.state.clear();
+                    self.identities.clear();
                     self.credits.clear();
                     for (session, player, pseudonym, credit) in identified {
                         self.sessions.identified(session, player);
@@ -1051,7 +1089,7 @@ impl Worker {
     /// share one transaction.
     async fn forget(&mut self, player: i64, caller: &Caller) -> Result<Option<[u8; 16]>, Error> {
         self.flush().await;
-        if !self.state.is_empty() || !self.credits.is_empty() {
+        if !self.identities.is_empty() || !self.credits.is_empty() {
             return Err(ErrorCode::Internal.into());
         }
         let Some((license, pseudonym)) = self
@@ -1067,9 +1105,24 @@ impl Worker {
             return Ok(None);
         };
         self.sessions.forget(&license);
+        let theirs: HashSet<i64> = self
+            .later
+            .attaches
+            .iter()
+            .filter(|(_, attached, _)| *attached == pseudonym)
+            .map(|(session, _, _)| *session)
+            .collect();
         self.later
             .attaches
             .retain(|(_, attached, _)| *attached != pseudonym);
+        for write in &mut self.later.sessions {
+            if let SessionWrite::Close { closure, .. } | SessionWrite::Reclassify(closure) = write
+                && theirs.contains(&closure.id)
+            {
+                closure.crash_text = None;
+                closure.reason_text = None;
+            }
+        }
         if let Some(importing) = self.importing.as_mut() {
             let before = importing.records.len();
             importing.records.retain(|record| record.license != license);
@@ -1077,7 +1130,10 @@ impl Worker {
         }
         let fingerprint = self.fingerprints.license(&license);
         let at = self.clock.now();
-        append_forgotten(&self.forgotten_file, fingerprint, at)?;
+        let file = self.forgotten_file.clone();
+        tokio::task::spawn_blocking(move || append_forgotten(&file, fingerprint, at))
+            .await
+            .map_err(|_| Error::from(ErrorCode::Internal))??;
         let record = Record::by(caller, AuditAction::PlayerForgotten).target(hex(&fingerprint));
         forget_everywhere(
             &self.db,
@@ -1248,29 +1304,45 @@ async fn apply_forgotten(
     fingerprints: &Fingerprints,
     file: &Path,
 ) -> Result<(), Error> {
-    let listed = read_forgotten(file)?;
-    db.write(move |tx| -> Result<(), StoreError> {
-        for (fingerprint, at) in listed {
-            stored::remember_forgotten(tx, fingerprint, at)?;
-        }
-        Ok(())
-    })
-    .await?;
-    let (forgotten, players) = db
-        .read(|conn| Ok::<_, StoreError>((stored::forgotten(conn)?, stored::licenses(conn)?)))
-        .await?;
-    for (player, license, last_seen) in players {
-        let fingerprint = fingerprints.license(&license);
-        if forgotten.get(&fingerprint).is_some_and(|at| last_seen <= *at) {
-            let pseudonym = db
-                .read(move |conn| stored::profile(conn, player, ""))
-                .await?
-                .map(|profile| profile.pseudonym);
-            if let Some(pseudonym) = pseudonym {
-                let at = forgotten[&fingerprint];
-                forget_everywhere(db, metrics, player, fingerprint, pseudonym, at, None).await?;
-                info!(fingerprint = %hex(&fingerprint), "a forgotten player a backup brought back was forgotten again");
+    let file = file.to_path_buf();
+    let listed = tokio::task::spawn_blocking(move || read_forgotten(&file))
+        .await
+        .map_err(|_| Error::from(ErrorCode::Internal))??;
+    if !listed.is_empty() {
+        db.write(move |tx| -> Result<(), StoreError> {
+            for (fingerprint, at) in listed {
+                stored::remember_forgotten(tx, fingerprint, at)?;
             }
+            Ok(())
+        })
+        .await?;
+    }
+    let forgotten = db.read(stored::forgotten).await?;
+    let Some(latest) = forgotten.values().max().copied() else {
+        return Ok(());
+    };
+    let players = db.read(move |conn| stored::seen_until(conn, latest)).await?;
+    let fingerprints = fingerprints.clone();
+    let found = tokio::task::spawn_blocking(move || -> Vec<(i64, [u8; 16], Timestamp)> {
+        players
+            .into_iter()
+            .filter_map(|(player, license, last_seen)| {
+                let fingerprint = fingerprints.license(&license);
+                let at = *forgotten.get(&fingerprint)?;
+                (last_seen <= at).then_some((player, fingerprint, at))
+            })
+            .collect()
+    })
+    .await
+    .map_err(|_| Error::from(ErrorCode::Internal))?;
+    for (player, fingerprint, at) in found {
+        let pseudonym = db
+            .read(move |conn| stored::profile(conn, player, ""))
+            .await?
+            .map(|profile| profile.pseudonym);
+        if let Some(pseudonym) = pseudonym {
+            forget_everywhere(db, metrics, player, fingerprint, pseudonym, at, None).await?;
+            info!(fingerprint = %hex(&fingerprint), "a forgotten player a backup brought back was forgotten again");
         }
     }
     Ok(())
@@ -1301,6 +1373,37 @@ async fn forget_everywhere(
     Ok(())
 }
 
+/// The key of the keyed fingerprints. It lives in the state database and in a file outside the
+/// backups, which wins: restoring a backup made before players existed, or starting a new
+/// database, keeps the key, so forgotten licences stay forgotten and addresses keep matching.
+async fn fingerprint_key(db: &Database, file: &Path) -> Result<[u8; 32], Error> {
+    let kept = match fs::read_to_string(file) {
+        Ok(text) => unhex::<32>(text.trim()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error.into()),
+    };
+    let key = if let Some(key) = kept {
+        db.write(move |tx| stored::set_fingerprint_key(tx, key)).await?;
+        key
+    } else {
+        let fresh = random::<32>()?;
+        db.write(move |tx| stored::fingerprint_key(tx, fresh)).await?
+    };
+    if kept != Some(key) {
+        if let Some(folder) = file.parent() {
+            fs::create_dir_all(folder)?;
+        }
+        let mut written = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(file)?;
+        writeln!(written, "{}", hex(&key))?;
+        written.sync_all()?;
+    }
+    Ok(key)
+}
+
 fn read_forgotten(file: &Path) -> Result<Vec<([u8; 16], Timestamp)>, Error> {
     let text = match fs::read_to_string(file) {
         Ok(text) => text,
@@ -1312,7 +1415,7 @@ fn read_forgotten(file: &Path) -> Result<Vec<([u8; 16], Timestamp)>, Error> {
         let Some((fingerprint, at)) = line.split_once(' ') else {
             continue;
         };
-        let (Some(fingerprint), Ok(at)) = (unhex(fingerprint), at.parse::<Timestamp>()) else {
+        let (Some(fingerprint), Ok(at)) = (unhex::<16>(fingerprint), at.parse::<Timestamp>()) else {
             warn!("a line of {} is malformed and was skipped", file.display());
             continue;
         };
@@ -1328,11 +1431,11 @@ fn append_forgotten(file: &Path, fingerprint: [u8; 16], at: Timestamp) -> Result
     Ok(())
 }
 
-fn unhex(text: &str) -> Option<[u8; 16]> {
-    if text.len() != 32 {
+fn unhex<const N: usize>(text: &str) -> Option<[u8; N]> {
+    if text.len() != N * 2 {
         return None;
     }
-    let mut bytes = [0; 16];
+    let mut bytes = [0; N];
     for (index, byte) in bytes.iter_mut().enumerate() {
         *byte = u8::from_str_radix(text.get(index * 2..index * 2 + 2)?, 16).ok()?;
     }

@@ -41,6 +41,7 @@ CREATE TABLE player_open_session (
     session      INTEGER NOT NULL
 ) STRICT, WITHOUT ROWID;
 
+CREATE INDEX player_open_session_by_player ON player_open_session (player);
 CREATE INDEX player_day_by_day ON player_day (day, player, play_ms);
 CREATE INDEX player_by_play ON player ((play_ms + imported_ms), id);
 CREATE INDEX player_by_first_seen ON player (first_seen, id);

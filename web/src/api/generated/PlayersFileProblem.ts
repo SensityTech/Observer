@@ -3,4 +3,4 @@
 /**
  * Why a players database was refused, whole.
  */
-export type PlayersFileProblem = "missing" | "notAFile" | "tooLarge" | "unreadable" | "notPlayersDatabase" | "unsupportedVersion";
+export type PlayersFileProblem = "missing" | "notAFile" | "tooLarge" | "unreadable" | "notPlayersDatabase" | "unsupportedVersion" | "notLocal";

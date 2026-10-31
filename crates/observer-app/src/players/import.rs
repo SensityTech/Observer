@@ -1,18 +1,30 @@
 //! txAdmin's players database, read and checked whole before anything is written: one malformed
 //! file is refused rather than half imported. Only players are read; notes, bans, warnings and
-//! whitelist entries are left alone.
+//! whitelist entries are skipped as they stream past.
+//!
+//! The file is read as a stream, each player turned into a [`Record`] as it comes, its strings
+//! and lists capped: what Observer holds stays in proportion to the players it keeps, whatever the
+//! file holds. The folder it is in can be written by FXServer's resources.
 
+use std::fmt;
 use std::fs::File;
-use std::io::Read;
+use std::io::{BufReader, Read};
 use std::path::Path;
 
 use jiff::Timestamp;
 use observer_domain::players::{IdentifierKind, Identifiers, PlayersFileProblem, clean_name};
 use serde::Deserialize;
-use serde_json::Value;
+use serde::de::{DeserializeSeed, Deserializer, IgnoredAny, MapAccess, SeqAccess, Visitor};
 
 /// More than any server's players database: txAdmin keeps about 1 KiB per player.
 const MAX_BYTES: u64 = 512 * 1024 * 1024;
+const MAX_PLAYERS: usize = 1_000_000;
+/// Identifiers and tokens kept per player; FiveM shows about twenty.
+const MAX_IDS: usize = 64;
+/// No identifier, token or licence is longer; a name longer is cut by [`clean_name`] anyway.
+const MAX_STRING_BYTES: usize = 1024;
+/// A century, in minutes: more is not play time.
+const MAX_MINUTES: f64 = 100.0 * 365.25 * 24.0 * 60.0;
 /// The versions whose players have `ids` and `hwids`.
 const VERSIONS: [u64; 2] = [4, 5];
 
@@ -35,62 +47,267 @@ pub(super) struct Parsed {
     pub(super) invalid: u64,
 }
 
-#[derive(Deserialize)]
-struct Database {
-    version: u64,
-    players: Vec<Entry>,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct Entry {
-    #[serde(default)]
-    license: Value,
-    #[serde(default)]
-    ids: Vec<Value>,
-    #[serde(default)]
-    hwids: Vec<Value>,
-    #[serde(default)]
-    display_name: Value,
-    #[serde(default)]
-    play_time: Value,
-    #[serde(default)]
-    ts_joined: Value,
-    #[serde(default)]
-    ts_last_connection: Value,
-}
-
-/// Reads the file at `path`, a regular file of at most 512 MiB, and checks every player. Dates
-/// are clamped to `now`, so that one in the future cannot make a profile or a link immortal.
+/// Reads the file at `path`, a regular local file of at most 512 MiB, and checks every player.
+/// Dates are clamped to `now`, so that one in the future cannot make a profile or a link immortal.
 pub(super) fn read(path: &Path, now: Timestamp) -> Result<Parsed, PlayersFileProblem> {
+    if !path.is_absolute() || remote(path) {
+        return Err(PlayersFileProblem::NotLocal);
+    }
     let (file, metadata) = open(path)?;
     if metadata.len() > MAX_BYTES {
         return Err(PlayersFileProblem::TooLarge);
     }
-    let mut bytes = Vec::new();
-    file.take(MAX_BYTES + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|_| PlayersFileProblem::Unreadable)?;
-    if bytes.len() as u64 > MAX_BYTES {
-        return Err(PlayersFileProblem::TooLarge);
-    }
-    let database: Database =
-        serde_json::from_slice(&bytes).map_err(|_| PlayersFileProblem::NotPlayersDatabase)?;
-    if !VERSIONS.contains(&database.version) {
-        return Err(PlayersFileProblem::UnsupportedVersion);
-    }
-    let mut parsed = Parsed {
-        bytes: bytes.len() as u64,
-        records: Vec::with_capacity(database.players.len()),
-        invalid: 0,
-    };
-    for entry in &database.players {
-        match record(entry, now) {
-            Some(record) => parsed.records.push(record),
-            None => parsed.invalid += 1,
+    let mut source = serde_json::Deserializer::from_reader(BufReader::new(file.take(MAX_BYTES)));
+    let database = DatabaseSeed { now }.deserialize(&mut source).map_err(|error| {
+        if error.is_io() {
+            PlayersFileProblem::Unreadable
+        } else if error.to_string().starts_with(TOO_MANY) {
+            PlayersFileProblem::TooLarge
+        } else {
+            PlayersFileProblem::NotPlayersDatabase
         }
+    })?;
+    source.end().map_err(|_| PlayersFileProblem::NotPlayersDatabase)?;
+    let (version, records, invalid) = database;
+    match version {
+        Some(version) if VERSIONS.contains(&version) => Ok(Parsed {
+            bytes: metadata.len(),
+            records,
+            invalid,
+        }),
+        Some(_) => Err(PlayersFileProblem::UnsupportedVersion),
+        None => Err(PlayersFileProblem::NotPlayersDatabase),
     }
-    Ok(parsed)
+}
+
+/// A UNC or device path: on Windows, opening one reaches another host, or a pipe that could act
+/// as Observer.
+fn remote(path: &Path) -> bool {
+    let text = path.to_string_lossy();
+    text.starts_with(r"\\") || text.starts_with("//")
+}
+
+const TOO_MANY: &str = "more players than";
+
+/// The top-level object: its `version`, and its `players` turned into records as they come.
+struct DatabaseSeed {
+    now: Timestamp,
+}
+
+impl<'de> DeserializeSeed<'de> for DatabaseSeed {
+    type Value = (Option<u64>, Vec<Record>, u64);
+
+    fn deserialize<D: Deserializer<'de>>(self, deserializer: D) -> Result<Self::Value, D::Error> {
+        deserializer.deserialize_map(self)
+    }
+}
+
+impl<'de> Visitor<'de> for DatabaseSeed {
+    type Value = (Option<u64>, Vec<Record>, u64);
+
+    fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("txAdmin's players database")
+    }
+
+    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
+        let mut version = None;
+        let mut players = None;
+        while let Some(key) = map.next_key::<String>()? {
+            match key.as_str() {
+                "version" => version = Some(map.next_value::<u64>()?),
+                "players" => players = Some(map.next_value_seed(PlayersSeed { now: self.now })?),
+                _ => {
+                    map.next_value::<IgnoredAny>()?;
+                }
+            }
+        }
+        let (records, invalid) = players.ok_or_else(|| serde::de::Error::missing_field("players"))?;
+        Ok((version, records, invalid))
+    }
+}
+
+struct PlayersSeed {
+    now: Timestamp,
+}
+
+impl<'de> DeserializeSeed<'de> for PlayersSeed {
+    type Value = (Vec<Record>, u64);
+
+    fn deserialize<D: Deserializer<'de>>(self, deserializer: D) -> Result<Self::Value, D::Error> {
+        deserializer.deserialize_seq(self)
+    }
+}
+
+impl<'de> Visitor<'de> for PlayersSeed {
+    type Value = (Vec<Record>, u64);
+
+    fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("a list of players")
+    }
+
+    fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
+        let mut records = Vec::new();
+        let mut invalid = 0;
+        while let Some(entry) = seq.next_element::<Entry>()? {
+            if records.len() + usize::try_from(invalid).unwrap_or(usize::MAX) >= MAX_PLAYERS {
+                return Err(serde::de::Error::custom(format!("{TOO_MANY} {MAX_PLAYERS}")));
+            }
+            match record(&entry, self.now) {
+                Some(record) => records.push(record),
+                None => invalid += 1,
+            }
+        }
+        Ok((records, invalid))
+    }
+}
+
+/// A player as txAdmin writes it, each field taken only if it has the expected type.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Entry {
+    #[serde(default)]
+    license: Text,
+    #[serde(default)]
+    ids: Texts,
+    #[serde(default)]
+    hwids: Texts,
+    #[serde(default)]
+    display_name: Text,
+    #[serde(default)]
+    play_time: Number,
+    #[serde(default)]
+    ts_joined: Number,
+    #[serde(default)]
+    ts_last_connection: Number,
+}
+
+/// A string of at most [`MAX_STRING_BYTES`]; anything else is skipped as it streams past.
+#[derive(Default)]
+struct Text(Option<String>);
+
+/// The first [`MAX_IDS`] strings of a list.
+#[derive(Default)]
+struct Texts(Vec<String>);
+
+#[derive(Default)]
+struct Number(Option<f64>);
+
+impl<'de> Deserialize<'de> for Text {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        deserializer
+            .deserialize_any(Lenient::Text)
+            .map(|value| match value {
+                Found::Text(text) => Self(Some(text)),
+                _ => Self(None),
+            })
+    }
+}
+
+impl<'de> Deserialize<'de> for Number {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        deserializer
+            .deserialize_any(Lenient::Number)
+            .map(|value| match value {
+                Found::Number(number) => Self(Some(number)),
+                _ => Self(None),
+            })
+    }
+}
+
+impl<'de> Deserialize<'de> for Texts {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        deserializer
+            .deserialize_any(Lenient::Texts)
+            .map(|value| match value {
+                Found::Texts(texts) => Self(texts),
+                _ => Self(Vec::new()),
+            })
+    }
+}
+
+/// What a field was expected to be.
+#[derive(Clone, Copy)]
+enum Lenient {
+    Text,
+    Number,
+    Texts,
+}
+
+enum Found {
+    Text(String),
+    Number(f64),
+    Texts(Vec<String>),
+    Nothing,
+}
+
+impl<'de> Visitor<'de> for Lenient {
+    type Value = Found;
+
+    fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("any JSON value")
+    }
+
+    fn visit_str<E: serde::de::Error>(self, text: &str) -> Result<Found, E> {
+        Ok(match self {
+            Self::Text if text.len() <= MAX_STRING_BYTES => Found::Text(text.to_owned()),
+            _ => Found::Nothing,
+        })
+    }
+
+    #[expect(clippy::cast_precision_loss, reason = "dates and minutes are far below 2^52")]
+    fn visit_u64<E: serde::de::Error>(self, number: u64) -> Result<Found, E> {
+        Ok(match self {
+            Self::Number => Found::Number(number as f64),
+            _ => Found::Nothing,
+        })
+    }
+
+    #[expect(clippy::cast_precision_loss, reason = "dates and minutes are far below 2^52")]
+    fn visit_i64<E: serde::de::Error>(self, number: i64) -> Result<Found, E> {
+        Ok(match self {
+            Self::Number => Found::Number(number as f64),
+            _ => Found::Nothing,
+        })
+    }
+
+    fn visit_f64<E: serde::de::Error>(self, number: f64) -> Result<Found, E> {
+        Ok(match self {
+            Self::Number => Found::Number(number),
+            _ => Found::Nothing,
+        })
+    }
+
+    fn visit_bool<E: serde::de::Error>(self, _: bool) -> Result<Found, E> {
+        Ok(Found::Nothing)
+    }
+
+    fn visit_unit<E: serde::de::Error>(self) -> Result<Found, E> {
+        Ok(Found::Nothing)
+    }
+
+    fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Found, A::Error> {
+        let mut texts = Vec::new();
+        loop {
+            if matches!(self, Self::Texts) && texts.len() < MAX_IDS {
+                match seq.next_element::<Text>()? {
+                    Some(Text(Some(text))) => texts.push(text),
+                    Some(Text(None)) => {}
+                    None => break,
+                }
+            } else if seq.next_element::<IgnoredAny>()?.is_none() {
+                break;
+            }
+        }
+        Ok(match self {
+            Self::Texts => Found::Texts(texts),
+            _ => Found::Nothing,
+        })
+    }
+
+    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Found, A::Error> {
+        while map.next_entry::<IgnoredAny, IgnoredAny>()?.is_some() {}
+        Ok(Found::Nothing)
+    }
 }
 
 /// Opens the file itself, never a link in its place, and checks from the open handle that it is a
@@ -125,28 +342,28 @@ fn reparse_point(_: &std::fs::Metadata) -> bool {
 }
 
 fn record(entry: &Entry, now: Timestamp) -> Option<Record> {
-    let license = entry.license.as_str()?.trim().to_ascii_lowercase();
+    let license = entry.license.0.as_deref()?.trim().to_ascii_lowercase();
     let hex = license.strip_prefix("license:").unwrap_or(&license);
     if hex.len() != 40 || !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return None;
     }
     let license = format!("license:{hex}");
-    let minutes = entry
-        .play_time
-        .as_f64()
-        .filter(|minutes| minutes.is_finite() && *minutes > 0.0);
     #[expect(
         clippy::cast_possible_truncation,
-        reason = "checked against the range of i64 just before"
+        reason = "below a century of minutes, checked just before"
     )]
-    let play_ms = match minutes {
-        Some(minutes) if minutes < 9.2e18 => (minutes.floor() as i64).checked_mul(60_000)?,
+    let play_ms = match entry
+        .play_time
+        .0
+        .filter(|minutes| minutes.is_finite() && *minutes > 0.0)
+    {
+        Some(minutes) if minutes <= MAX_MINUTES => (minutes.floor() as i64) * 60_000,
         Some(_) => return None,
         None => 0,
     };
-    let date = |value: &Value| {
+    let date = |value: &Number| {
         value
-            .as_f64()
+            .0
             .filter(|seconds| seconds.is_finite() && *seconds > 0.0 && *seconds < 2.0e11)
             .and_then(|seconds| {
                 #[expect(clippy::cast_possible_truncation, reason = "within the range checked above")]
@@ -159,24 +376,16 @@ fn record(entry: &Entry, now: Timestamp) -> Option<Record> {
         (Some(one), None) | (None, Some(one)) => (one, one),
         (None, None) => (now, now),
     };
-    let strings = |values: &[Value]| -> Vec<String> {
-        values
-            .iter()
-            .filter_map(Value::as_str)
-            .map(str::to_owned)
-            .collect()
-    };
-    let ids: Vec<String> = strings(&entry.ids)
-        .into_iter()
-        .filter(|id| {
-            !id.trim().eq_ignore_ascii_case(&license) && !id.trim().to_ascii_lowercase().starts_with("ip:")
-        })
-        .collect();
-    let hwids = strings(&entry.hwids);
-    let shown = Identifiers::parse(ids.iter().map(String::as_str), hwids.iter().map(String::as_str));
+    let ids = entry
+        .ids
+        .0
+        .iter()
+        .map(|id| id.trim())
+        .filter(|id| !id.eq_ignore_ascii_case(&license) && !id.to_ascii_lowercase().starts_with("ip:"));
+    let shown = Identifiers::parse(ids, entry.hwids.0.iter().map(String::as_str));
     Some(Record {
         license,
-        name: entry.display_name.as_str().and_then(clean_name),
+        name: entry.display_name.0.as_deref().and_then(clean_name),
         play_ms,
         joined,
         last,
@@ -192,7 +401,7 @@ fn record(entry: &Entry, now: Timestamp) -> Option<Record> {
 mod tests {
     use std::fs;
 
-    use serde_json::json;
+    use serde_json::{Value, json};
 
     use super::*;
 
@@ -304,6 +513,46 @@ mod tests {
             Err(PlayersFileProblem::Missing)
         );
         assert_eq!(read(dir.path(), now()), Err(PlayersFileProblem::NotAFile));
+    }
+
+    #[test]
+    fn odd_values_are_skipped_and_lists_are_capped() {
+        let mut odd = player();
+        odd["ids"] = Value::from(vec![Value::from(0); 10_000]);
+        odd["displayName"] = json!({ "nested": ["anything"] });
+        odd["hwids"] = Value::from(vec![Value::from(format!("4:{}", "cd".repeat(32))); 500]);
+        let (_dir, path) = written(&json!({ "players": [odd], "version": 5, "extra": [[[1]]] }));
+
+        let parsed = read(&path, now()).unwrap();
+
+        assert_eq!(parsed.invalid, 0);
+        assert_eq!(parsed.records[0].name, None);
+        assert_eq!(parsed.records[0].others.len(), 1);
+    }
+
+    #[test]
+    fn a_century_of_play_time_or_more_is_not_play_time() {
+        let mut absurd = player();
+        absurd["playTime"] = json!(60_000_000);
+        let (_dir, path) = written(&json!({ "version": 5, "players": [absurd] }));
+
+        assert_eq!(read(&path, now()).unwrap().invalid, 1);
+    }
+
+    #[test]
+    fn a_network_or_relative_path_is_refused_before_anything_is_opened() {
+        for path in [
+            r"\\host\share\playersDB.json",
+            r"\\.\pipe\players",
+            "//host/share/playersDB.json",
+            "playersDB.json",
+        ] {
+            assert_eq!(
+                read(Path::new(path), now()),
+                Err(PlayersFileProblem::NotLocal),
+                "{path}"
+            );
+        }
     }
 
     #[cfg(unix)]

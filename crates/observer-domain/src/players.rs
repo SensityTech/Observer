@@ -541,6 +541,8 @@ pub enum PlayersFileProblem {
     /// Written by a txAdmin whose format Observer does not read: open it once with a current
     /// txAdmin, then import it again.
     UnsupportedVersion,
+    /// Not an absolute path on this host: a network share or a relative path is refused.
+    NotLocal,
 }
 
 /// How long player data is kept, in days. A profile kept for good has `None`.

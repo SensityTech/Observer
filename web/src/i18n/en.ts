@@ -153,6 +153,7 @@ const playersFileProblems = {
     notPlayersDatabase: "This file is not txAdmin's players database.",
     unsupportedVersion:
         'txAdmin wrote this file in a format Observer does not read. Open it once with a current txAdmin, then import it again.',
+    notLocal: 'Give the full path of a file on this host, not a network share or a relative path.',
 } satisfies Record<PlayersFileProblem, string>;
 
 const isPlayersFileProblem = (key: string): key is PlayersFileProblem =>

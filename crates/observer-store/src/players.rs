@@ -57,12 +57,12 @@ pub fn record_seen(tx: &Transaction<'_>, seen: &Seen<'_>) -> Result<(i64, [u8; 1
     )?;
     for (kind, value) in seen.others {
         let identifier = identifier_id(tx, *kind, value)?;
-        tx.execute(
+        tx.prepare_cached(
             "INSERT INTO player_identifier (player, identifier, first_seen, last_seen, times) VALUES (?1, ?2, ?3, ?3, 1)
              ON CONFLICT (player, identifier) DO UPDATE SET
                  last_seen = max(last_seen, excluded.last_seen), times = times + 1, source = 'seen'",
-            params![player, identifier, at],
-        )?;
+        )?
+        .execute(params![player, identifier, at])?;
     }
     if let Some(name) = seen.name {
         record_name(tx, player, name, seen.at, seen.at)?;
@@ -71,12 +71,13 @@ pub fn record_seen(tx: &Transaction<'_>, seen: &Seen<'_>) -> Result<(i64, [u8; 1
 }
 
 fn identifier_id(tx: &Transaction<'_>, kind: IdentifierKind, value: &str) -> Result<i64, StoreError> {
-    Ok(tx.query_row(
-        "INSERT INTO identifier (kind, value) VALUES (?1, ?2)
-         ON CONFLICT (kind, value) DO UPDATE SET kind = excluded.kind RETURNING id",
-        params![kind.as_str(), value],
-        |row| row.get(0),
-    )?)
+    tx.prepare_cached(
+        "INSERT INTO identifier (kind, value) VALUES (?1, ?2) ON CONFLICT (kind, value) DO NOTHING",
+    )?
+    .execute(params![kind.as_str(), value])?;
+    Ok(tx
+        .prepare_cached("SELECT id FROM identifier WHERE kind = ?1 AND value = ?2")?
+        .query_row(params![kind.as_str(), value], |row| row.get(0))?)
 }
 
 fn record_name(
@@ -170,23 +171,19 @@ pub fn credit(tx: &Transaction<'_>, credit: &Credit) -> Result<bool, StoreError>
     Ok(true)
 }
 
-/// A crediting record still there.
+/// A crediting record still there, and the metrics session it credits.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OpenRecord {
     pub key: [u8; 16],
-    pub player: i64,
-    pub started: Timestamp,
     pub session: i64,
 }
 
 pub fn open_records(conn: &Connection) -> Result<Vec<OpenRecord>, StoreError> {
-    let mut statement = conn.prepare("SELECT key, player, started, session FROM player_open_session")?;
+    let mut statement = conn.prepare("SELECT key, session FROM player_open_session")?;
     let rows = statement.query_map([], |row| {
         Ok(OpenRecord {
             key: row.get(0)?,
-            player: row.get(1)?,
-            started: row.get::<_, Utc>(2)?.0,
-            session: row.get(3)?,
+            session: row.get(1)?,
         })
     })?;
     Ok(rows.collect::<Result<_, _>>()?)
@@ -423,7 +420,9 @@ pub fn links(conn: &Connection, player: i64) -> Result<Vec<LinkedLicence>, Store
                 shared.entry(other).or_default().push(link);
             }
             let mut others: Vec<_> = shared.into_iter().collect();
-            others.sort_by_key(|(other, _)| *other);
+            // Strong links fill the cap first: fifty licences behind one café's address must not
+            // hide an alternate account linked by its Discord.
+            others.sort_by_key(|(other, through)| (!through.iter().any(|link| link.strong), *other));
             for (other, through) in others {
                 if !seen.insert(other) || found.len() >= MOST_LINKED {
                     continue;
@@ -451,18 +450,25 @@ pub fn links(conn: &Connection, player: i64) -> Result<Vec<LinkedLicence>, Store
     Ok(found)
 }
 
-/// The other licences that share an identifier with `player`, each with that identifier.
+/// The other licences that share an identifier with `player`, each with that identifier. An
+/// identifier more than [`MOST_LINKED`] licences show, a proxy's address for one, links nobody in
+/// particular: the profile counts its holders instead.
 fn neighbours(conn: &Connection, player: i64) -> Result<Vec<(i64, Link)>, StoreError> {
     let mut statement = conn.prepare_cached(
-        "SELECT other.player, i.kind, i.value, mine.source = 'seen' AND other.source = 'seen'
-                 AND i.kind <> 'ip'
-                 AND (SELECT count(*) FROM player_identifier holders WHERE holders.identifier = i.id) <= ?2
-         FROM player_identifier mine
-         JOIN player_identifier other ON other.identifier = mine.identifier AND other.player <> mine.player
-         JOIN identifier i ON i.id = mine.identifier
-         WHERE mine.player = ?1",
+        "WITH mine AS (
+             SELECT pi.identifier, pi.source, i.kind, i.value,
+                 (SELECT count(*) FROM player_identifier holders WHERE holders.identifier = pi.identifier)
+                     AS holders
+             FROM player_identifier pi JOIN identifier i ON i.id = pi.identifier
+             WHERE pi.player = ?1
+         )
+         SELECT other.player, mine.kind, mine.value,
+             mine.source = 'seen' AND other.source = 'seen' AND mine.kind <> 'ip' AND mine.holders <= ?2
+         FROM mine JOIN player_identifier other ON other.identifier = mine.identifier AND other.player <> ?1
+         WHERE mine.holders <= ?3",
     )?;
-    let rows = statement.query_map(params![player, STRONG_UP_TO], |row| {
+    let fan_out = i64::try_from(MOST_LINKED).unwrap_or(i64::MAX) + 1;
+    let rows = statement.query_map(params![player, STRONG_UP_TO, fan_out], |row| {
         let kind = identifier_kind(row, 1)?;
         Ok((
             row.get(0)?,
@@ -485,6 +491,20 @@ pub fn days_played(conn: &Connection, from: &str, to: &str) -> Result<Vec<(Strin
         Ok((row.get(0)?, row.get(1)?, row.get(2)?))
     })?;
     Ok(rows.collect::<Result<_, _>>()?)
+}
+
+/// The days from `from` on that `players` already have play time on.
+pub fn days_of(conn: &Connection, players: &[i64], from: &str) -> Result<Vec<(i64, String)>, StoreError> {
+    let mut statement =
+        conn.prepare_cached("SELECT player, day FROM player_day WHERE player = ?1 AND day >= ?2")?;
+    let mut days = Vec::new();
+    for player in players {
+        let rows = statement.query_map(params![player, from], |row| Ok((row.get(0)?, row.get(1)?)))?;
+        for row in rows {
+            days.push(row?);
+        }
+    }
+    Ok(days)
 }
 
 /// The players who played between `from` and `to`, both included.
@@ -515,12 +535,14 @@ pub fn settings(conn: &Connection) -> Result<PlayersSettings, StoreError> {
         Some(value) => value.parse().ok().or(defaults.profile_days),
         None => defaults.profile_days,
     };
-    Ok(PlayersSettings {
+    let stored = PlayersSettings {
         link_days: days(LINK_DAYS, defaults.link_days)?,
         address_days: days(ADDRESS_DAYS, defaults.address_days)?,
         day_days: days(DAY_DAYS, defaults.day_days)?,
         profile_days,
-    })
+    };
+    // Values edited by hand out of their ranges are not trusted.
+    Ok(if stored.check().is_ok() { stored } else { defaults })
 }
 
 pub fn save_settings(tx: &Transaction<'_>, retention: &PlayersSettings) -> Result<(), StoreError> {
@@ -538,6 +560,19 @@ pub fn save_settings(tx: &Transaction<'_>, retention: &PlayersSettings) -> Resul
             params![key, value],
         )?;
     }
+    Ok(())
+}
+
+/// Keeps `key` as the key of the keyed fingerprints.
+pub fn set_fingerprint_key(tx: &Transaction<'_>, key: [u8; 32]) -> Result<(), StoreError> {
+    let hex = key.iter().fold(String::new(), |mut hex, byte| {
+        let _ = write!(hex, "{byte:02x}");
+        hex
+    });
+    tx.execute(
+        "INSERT INTO settings (key, value) VALUES (?1, ?2) ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+        params![ADDRESS_KEY, hex],
+    )?;
     Ok(())
 }
 
@@ -582,42 +617,70 @@ pub fn expire(
     retention: &PlayersSettings,
     day_cutoff: &str,
 ) -> Result<Expired, StoreError> {
-    let before = |days: u32| Utc(now - jiff::SignedDuration::from_hours(24 * i64::from(days)));
-    let mut expired = Expired {
-        links: tx.execute(
+    let before = |days: u32| {
+        Utc(now
+            .checked_sub(jiff::SignedDuration::from_hours(24 * i64::from(days)))
+            .unwrap_or(Timestamp::MIN))
+    };
+    let mut released: HashSet<i64> = HashSet::new();
+    for (kinds, days) in [("<>", retention.link_days), ("=", retention.address_days)] {
+        let mut statement = tx.prepare(&format!(
             "DELETE FROM player_identifier WHERE last_seen < ?1
-                 AND identifier IN (SELECT id FROM identifier WHERE kind <> 'ip')",
-            [before(retention.link_days)],
-        )?,
+                 AND (SELECT kind FROM identifier WHERE id = player_identifier.identifier) {kinds} 'ip'
+             RETURNING identifier"
+        ))?;
+        let rows = statement.query_map([before(days)], |row| row.get(0))?;
+        for identifier in rows {
+            released.insert(identifier?);
+        }
+    }
+    let mut expired = Expired {
+        links: released.len(),
         ..Expired::default()
     };
-    expired.links += tx.execute(
-        "DELETE FROM player_identifier WHERE last_seen < ?1
-             AND identifier IN (SELECT id FROM identifier WHERE kind = 'ip')",
-        [before(retention.address_days)],
-    )?;
     expired.names = tx.execute(
         "DELETE FROM player_name WHERE last_seen < ?1",
         [before(retention.link_days)],
     )?;
     expired.days = tx.execute("DELETE FROM player_day WHERE day < ?1", [day_cutoff])?;
     if let Some(days) = retention.profile_days {
+        let gone: Vec<i64> = tx
+            .prepare(
+                "SELECT id FROM player WHERE last_seen < ?1
+                     AND NOT EXISTS (SELECT 1 FROM player_open_session o WHERE o.player = player.id)",
+            )?
+            .query_map([before(days)], |row| row.get(0))?
+            .collect::<Result<_, _>>()?;
         // A player online now has a crediting record, and keeps their profile.
-        expired.players = tx.execute(
-            "DELETE FROM player WHERE last_seen < ?1
-                 AND NOT EXISTS (SELECT 1 FROM player_open_session o WHERE o.player = player.id)",
-            [before(days)],
-        )?;
+        for player in gone {
+            released.extend(identifiers_of(tx, player)?);
+            expired.players += tx.execute("DELETE FROM player WHERE id = ?1", [player])?;
+        }
     }
-    expired.identifiers = drop_unheld_identifiers(tx)?;
+    expired.identifiers = drop_unheld(tx, &released)?;
     Ok(expired)
 }
 
-fn drop_unheld_identifiers(tx: &Transaction<'_>) -> Result<usize, StoreError> {
-    Ok(tx.execute(
-        "DELETE FROM identifier WHERE NOT EXISTS (SELECT 1 FROM player_identifier pi WHERE pi.identifier = identifier.id)",
-        [],
-    )?)
+fn identifiers_of(tx: &Transaction<'_>, player: i64) -> Result<Vec<i64>, StoreError> {
+    let mut statement = tx.prepare_cached("SELECT identifier FROM player_identifier WHERE player = ?1")?;
+    let rows = statement.query_map([player], |row| row.get(0))?;
+    Ok(rows.collect::<Result<_, _>>()?)
+}
+
+/// Deletes those of `identifiers` no link holds any more.
+fn drop_unheld<'a>(
+    tx: &Transaction<'_>,
+    identifiers: impl IntoIterator<Item = &'a i64>,
+) -> Result<usize, StoreError> {
+    let mut statement = tx.prepare_cached(
+        "DELETE FROM identifier WHERE id = ?1
+             AND NOT EXISTS (SELECT 1 FROM player_identifier pi WHERE pi.identifier = ?1)",
+    )?;
+    let mut dropped = 0;
+    for identifier in identifiers {
+        dropped += statement.execute([identifier])?;
+    }
+    Ok(dropped)
 }
 
 /// What forgetting a player left behind to blank elsewhere.
@@ -636,6 +699,7 @@ pub fn forget(
     fingerprint: [u8; 16],
     at: Timestamp,
 ) -> Result<Option<Forgotten>, StoreError> {
+    let held = identifiers_of(tx, player)?;
     let forgotten = tx
         .query_row(
             "DELETE FROM player WHERE id = ?1 RETURNING license, pseudonym",
@@ -649,7 +713,7 @@ pub fn forget(
         )
         .optional()?;
     if forgotten.is_some() {
-        drop_unheld_identifiers(tx)?;
+        drop_unheld(tx, &held)?;
         remember_forgotten(tx, fingerprint, at)?;
     }
     Ok(forgotten)
@@ -674,11 +738,13 @@ pub fn forgotten(conn: &Connection) -> Result<HashMap<[u8; 16], Timestamp>, Stor
     Ok(rows.collect::<Result<_, _>>()?)
 }
 
-/// Every player's id, licence and last visit, to find forgotten licences a restored backup brought
-/// back.
-pub fn licenses(conn: &Connection) -> Result<Vec<(i64, String, Timestamp)>, StoreError> {
-    let mut statement = conn.prepare("SELECT id, license, last_seen FROM player")?;
-    let rows = statement.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get::<_, Utc>(2)?.0)))?;
+/// The id, licence and last visit of every player not seen after `until`: those a restored
+/// backup may have brought back after they were forgotten.
+pub fn seen_until(conn: &Connection, until: Timestamp) -> Result<Vec<(i64, String, Timestamp)>, StoreError> {
+    let mut statement = conn.prepare("SELECT id, license, last_seen FROM player WHERE last_seen <= ?1")?;
+    let rows = statement.query_map([Utc(until)], |row| {
+        Ok((row.get(0)?, row.get(1)?, row.get::<_, Utc>(2)?.0))
+    })?;
     Ok(rows.collect::<Result<_, _>>()?)
 }
 

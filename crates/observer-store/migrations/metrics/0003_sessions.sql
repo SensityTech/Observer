@@ -40,7 +40,8 @@ CREATE TABLE player_session (
 
 -- Net ids wrap within a long run: only an open session is unique per id.
 CREATE UNIQUE INDEX player_session_open ON player_session (run, net_id) WHERE ended_ms IS NULL;
-CREATE INDEX player_session_ended ON player_session (ended_ms);
+-- Covers the crash rate over the sessions kept.
+CREATE INDEX player_session_ended ON player_session (ended_ms, category, length_ms);
 CREATE INDEX player_session_category ON player_session (category, ended_ms);
 CREATE INDEX player_session_resource ON player_session (resource, ended_ms) WHERE resource IS NOT NULL;
 CREATE INDEX player_session_player ON player_session (player, ended_ms) WHERE player IS NOT NULL;
