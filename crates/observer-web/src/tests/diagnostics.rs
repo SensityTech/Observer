@@ -76,7 +76,7 @@ impl Server {
         page.json()["entries"].as_array().unwrap().clone()
     }
 
-    async fn reauthenticate(&self, session: &super::Session) {
+    pub(super) async fn reauthenticate(&self, session: &super::Session) {
         let reply = self
             .call(
                 Method::POST,

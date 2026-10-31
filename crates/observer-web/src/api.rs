@@ -8,6 +8,7 @@ mod artifacts;
 mod audit;
 mod auth;
 mod diagnostics;
+mod drops;
 mod files;
 mod metrics;
 mod players;
@@ -41,6 +42,7 @@ pub(crate) struct Route {
 }
 
 #[rustfmt::skip]
+#[expect(clippy::too_many_lines, reason = "every route of the API, read best as one table")]
 pub(crate) fn routes() -> Vec<Route> {
     use Gate::{Account, Owner, Permission, Public, Reauthenticated, ReauthenticatedOwner, Session, Ticket};
     use Method as M;
@@ -81,6 +83,8 @@ pub(crate) fn routes() -> Vec<Route> {
     // too, which the service checks on what is asked. Retentions and erasures are the owner's.
     let players = Permission(P::PLAYERS_VIEW);
     let erase = ReauthenticatedOwner;
+    // Statistics name nobody; the log, its export and reason groups are `PLAYERS_VIEW`'s.
+    let drops = Permission(P::DROPS_VIEW);
     vec![
         route(M::GET,    "/health",                     Public,       health),
         route(M::GET,    "/setup",                      Public,       setup::status),
@@ -157,6 +161,18 @@ pub(crate) fn routes() -> Vec<Route> {
         route(M::GET,    "/servers/default/players/import",    Owner,   players::import_status),
         route(M::POST,   "/servers/default/players/import",    erase,   players::import),
         route(M::GET,    "/servers/default/players/{id}",      players, players::profile),
+        route(M::GET,    "/servers/default/drops/summary",     drops,   drops::summary),
+        route(M::GET,    "/servers/default/drops/series",      drops,   drops::series),
+        route(M::GET,    "/servers/default/drops/signatures",  drops,   drops::signatures),
+        route(M::GET,    "/servers/default/drops/resources",   drops,   drops::resources),
+        route(M::GET,    "/servers/default/drops/changes",     drops,   drops::changes),
+        route(M::GET,    "/servers/default/drops/uptime",      drops,   drops::uptime),
+        route(M::GET,    "/servers/default/drops/rates.csv",   drops,   drops::export_rates),
+        route(M::GET,    "/servers/default/drops/crash",       drops,   drops::crash),
+        route(M::GET,    "/servers/default/drops/log",         players, drops::log),
+        route(M::GET,    "/servers/default/drops/log.csv",     players, drops::export_log),
+        route(M::GET,    "/servers/default/drops/settings",    Owner,   drops::settings),
+        route(M::PUT,    "/servers/default/drops/settings",    erase,   drops::change_settings),
         route(M::DELETE, "/servers/default/players/{id}",      erase,   players::forget),
     ]
 }

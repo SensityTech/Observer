@@ -32,7 +32,7 @@ use tracing::warn;
 
 pub use self::compute::DayRates;
 use crate::audit::Record;
-use crate::{Caller, Clock, Error, Players, Servers};
+use crate::{Caller, Clock, Error, Metrics, Players, Servers};
 
 const CACHED_FOR: Duration = Duration::from_secs(30);
 const LOG_PAGE: u32 = 100;
@@ -42,7 +42,7 @@ const EXPORT_DAYS: i64 = 400;
 
 pub struct DropsSetup {
     pub db: Database,
-    pub metrics: MetricsDatabase,
+    pub metrics: Metrics,
     pub clock: Clock,
     /// The schedule's status, whose time zone days start in.
     pub schedule: watch::Receiver<ScheduleStatus>,
@@ -131,7 +131,7 @@ impl Drops {
         } = setup;
         let inner = Arc::new(Inner {
             db,
-            metrics,
+            metrics: metrics.database().clone(),
             clock,
             schedule,
             players,

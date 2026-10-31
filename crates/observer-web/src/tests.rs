@@ -3,6 +3,7 @@
 
 mod artifacts;
 mod diagnostics;
+mod drops;
 mod files;
 mod live;
 mod metrics;
@@ -22,8 +23,8 @@ use http_body_util::BodyExt;
 use jiff::SignedDuration;
 use observer_app::{
     Accounts, Artifacts, ArtifactsSetup, ArtifactsTask, AuditLog, Clock, Diagnostics, DiagnosticsSetup,
-    DiagnosticsTask, Metrics, MetricsSetup, PasswordCost, Players, PlayersSetup, PlayersTask, Running,
-    Schedule, ScheduleSetup, ScheduleTask, Servers, Setup, Supervision,
+    DiagnosticsTask, Drops, DropsSetup, DropsTask, Metrics, MetricsSetup, PasswordCost, Players,
+    PlayersSetup, PlayersTask, Running, Schedule, ScheduleSetup, ScheduleTask, Servers, Setup, Supervision,
 };
 use observer_artifacts::Http;
 use observer_artifacts::catalog::{Catalog, Listing};
@@ -63,6 +64,7 @@ struct Server {
     _building: ArtifactsTask,
     _diagnosing: DiagnosticsTask,
     _playing: PlayersTask,
+    _dropping: DropsTask,
     cookie_name: String,
 }
 
@@ -202,6 +204,13 @@ impl Server {
         })
         .await
         .unwrap();
+        let (drops, dropping) = Drops::start(DropsSetup {
+            db: db.clone(),
+            metrics: metrics.clone(),
+            clock: clock.clone(),
+            schedule: schedule.status(),
+            players: players.clone(),
+        });
         let instance_id = db.instance_id().await.unwrap();
         let services = Services {
             accounts: accounts.clone(),
@@ -214,6 +223,7 @@ impl Server {
             diagnostics,
             files: observer_app::Files::new(db.clone(), clock.clone(), accounts.clone()),
             players,
+            drops,
         };
         let state = AppState::new(
             BUILD,
@@ -240,6 +250,7 @@ impl Server {
             _building: building,
             _diagnosing: diagnosing,
             _playing: playing,
+            _dropping: dropping,
             cookie_name: format!("observer_session_{instance_id}"),
         }
     }
