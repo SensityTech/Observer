@@ -12,8 +12,8 @@ use std::time::{Duration, Instant};
 use jiff::{SignedDuration, Timestamp, Unit};
 use observer_app::{
     Accounts, AuditLog, Caller, Client, Clock, DatabaseFiles, Diagnostics, DiagnosticsSetup, DiagnosticsTask,
-    Error, Metrics, MetricsSetup, PasswordCost, Players, PlayersSetup, Running, Schedule, ScheduleSetup,
-    ScheduleTask, Servers, Setup, Sources, Supervision,
+    Error, Metrics, MetricsSetup, PasswordCost, Players, PlayersSetup, PlayersTask, Running, Sampling,
+    Schedule, ScheduleSetup, ScheduleTask, Servers, Setup, Sources, Supervision,
 };
 use observer_domain::audit::{ActorKind, AuditAction, AuditEntry, AuditFilter, Outcome};
 use observer_domain::diagnostics::{
@@ -1408,9 +1408,8 @@ fn files_holding(dir: &Path, needle: &[u8]) -> Vec<PathBuf> {
     found
 }
 
-#[tokio::test]
-async fn players_are_confirmed_followed_and_credited_and_their_address_is_kept_nowhere() {
-    let mut observer = Observer::new(false).await;
+/// The statistics and the players service over `observer`'s data, as `observer run` starts them.
+async fn follow_players(observer: &Observer) -> (Metrics, Sampling, Players, PlayersTask) {
     let path = observer.dir.path().join("metrics.sqlite3");
     let metrics = Metrics::open(MetricsSetup {
         path: path.clone(),
@@ -1438,6 +1437,13 @@ async fn players_are_confirmed_followed_and_credited_and_their_address_is_kept_n
     })
     .await
     .unwrap();
+    (metrics, sampling, players, playing)
+}
+
+#[tokio::test]
+async fn players_are_confirmed_followed_and_credited_and_their_address_is_kept_nowhere() {
+    let mut observer = Observer::new(false).await;
+    let (metrics, sampling, players, playing) = follow_players(&observer).await;
     let confirmed = |count: usize| {
         let players = players.clone();
         async move {
