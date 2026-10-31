@@ -277,7 +277,27 @@ function NamesCard({ profile }: { profile: PlayerProfile }) {
     const visit = useVisit(profile.zone);
     return (
         <Card id="player-names" icon={Signature} title={words.title} flush>
-            <div className={table.scroll}>
+            <ul className="flex flex-col md:hidden">
+                {profile.names.map((name) => (
+                    <li
+                        key={`${name.name}-${name.firstSeen}`}
+                        className="flex flex-col gap-1.5 border-b border-line px-4 py-3 last:border-b-0"
+                    >
+                        <span className="text-ui text-ink [overflow-wrap:anywhere]">{name.name}</span>
+                        <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-small">
+                            <div className="flex min-w-0 flex-col">
+                                <dt className="text-meta text-ink-3">{words.firstSeen}</dt>
+                                <dd className="font-mono text-ink">{visit(name.firstSeen)}</dd>
+                            </div>
+                            <div className="flex min-w-0 flex-col">
+                                <dt className="text-meta text-ink-3">{words.lastSeen}</dt>
+                                <dd className="font-mono text-ink">{visit(name.lastSeen)}</dd>
+                            </div>
+                        </dl>
+                    </li>
+                ))}
+            </ul>
+            <div className={cn(table.scroll, 'max-md:hidden')}>
                 <table className={table.table}>
                     <caption className="sr-only">{words.caption}</caption>
                     <thead>
@@ -313,6 +333,7 @@ function NamesCard({ profile }: { profile: PlayerProfile }) {
 function DropsCard({ profile }: { profile: PlayerProfile }) {
     const { t, format } = useI18n();
     const words = t.players.profile.drops;
+    const visit = useVisit(profile.zone);
     return (
         <Card id="player-drops" icon={OctagonX} title={words.title} flush>
             <div className="flex flex-col gap-1 border-b border-line px-5 py-4 max-md:px-4">
@@ -335,57 +356,94 @@ function DropsCard({ profile }: { profile: PlayerProfile }) {
             {profile.drops.length === 0 ? (
                 <p className="px-6 py-4 text-center text-ui text-ink-3">{words.empty}</p>
             ) : (
-                <div className={table.scroll}>
-                    <table className={table.table}>
-                        <caption className="sr-only">{words.caption}</caption>
-                        <thead>
-                            <tr>
-                                <th scope="col" className={table.th}>
-                                    {words.when}
-                                </th>
-                                <th scope="col" className={table.th}>
-                                    {words.what}
-                                </th>
-                                <th scope="col" className={cn(table.th, 'text-right')}>
-                                    {words.length}
-                                </th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {profile.drops.map((drop) => (
-                                <DropRow key={drop.endedAt} drop={drop} zone={profile.zone} />
-                            ))}
-                        </tbody>
-                    </table>
-                </div>
+                <>
+                    <ul className="flex flex-col md:hidden">
+                        {profile.drops.map((drop) => (
+                            <li
+                                key={drop.endedAt}
+                                className="flex flex-col gap-1.5 border-b border-line px-4 py-3 last:border-b-0"
+                            >
+                                <DropWhat drop={drop} />
+                                <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-small">
+                                    <Term term={words.when}>
+                                        <span className="font-mono">{visit(drop.endedAt)}</span>
+                                    </Term>
+                                    <Term term={words.length}>
+                                        {drop.lengthMs === null ? '' : format.playTime(drop.lengthMs)}
+                                    </Term>
+                                </dl>
+                            </li>
+                        ))}
+                    </ul>
+                    <div className={cn(table.scroll, 'max-md:hidden')}>
+                        <table className={table.table}>
+                            <caption className="sr-only">{words.caption}</caption>
+                            <thead>
+                                <tr>
+                                    <th scope="col" className={table.th}>
+                                        {words.when}
+                                    </th>
+                                    <th scope="col" className={table.th}>
+                                        {words.what}
+                                    </th>
+                                    <th scope="col" className={cn(table.th, 'text-right')}>
+                                        {words.length}
+                                    </th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {profile.drops.map((drop) => (
+                                    <DropRow key={drop.endedAt} drop={drop} zone={profile.zone} />
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                </>
             )}
         </Card>
     );
 }
 
 function DropRow({ drop, zone }: { drop: PlayerDrop; zone: string }) {
-    const { t, format } = useI18n();
-    const words = t.players.profile.drops;
+    const { format } = useI18n();
     const visit = useVisit(zone);
     return (
         <tr className={table.row}>
             <td className={cn(table.td, table.mono, 'align-top')}>{visit(drop.endedAt)}</td>
             <td className={cn(table.td, 'align-top')}>
-                <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1">
-                    <Chip icon={DROP_ICONS[drop.category]}>{words.categories[drop.category]}</Chip>
-                    {drop.resource !== null ? (
-                        <span>
-                            {words.by} <code className="code-inline">{drop.resource}</code>
-                        </span>
-                    ) : (
-                        drop.kind !== null && <span>{words.kinds[drop.kind]}</span>
-                    )}
-                </div>
+                <DropWhat drop={drop} />
             </td>
             <td className={cn(table.td, 'text-right align-top whitespace-nowrap')}>
                 {drop.lengthMs === null ? '' : format.playTime(drop.lengthMs)}
             </td>
         </tr>
+    );
+}
+
+function DropWhat({ drop }: { drop: PlayerDrop }) {
+    const { t } = useI18n();
+    const words = t.players.profile.drops;
+    return (
+        <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1">
+            <Chip icon={DROP_ICONS[drop.category]}>{words.categories[drop.category]}</Chip>
+            {drop.resource !== null ? (
+                <span>
+                    {words.by} <code className="code-inline">{drop.resource}</code>
+                </span>
+            ) : (
+                drop.kind !== null && <span>{words.kinds[drop.kind]}</span>
+            )}
+        </div>
+    );
+}
+
+/** A figure of a phone card, with its term above it. */
+function Term({ term, children }: { term: string; children: ReactNode }) {
+    return (
+        <div className="flex min-w-0 flex-col">
+            <dt className="text-meta text-ink-3">{term}</dt>
+            <dd className="text-ink">{children}</dd>
+        </div>
     );
 }
 
@@ -404,70 +462,103 @@ function IdentifiersCard({
             {identifiers.length === 0 ? (
                 <p className="px-6 py-4 text-center text-ui text-ink-3">{words.empty}</p>
             ) : (
-                <div className={table.scroll}>
-                    <table className={table.table}>
-                        <caption className="sr-only">{words.caption}</caption>
-                        <thead>
-                            <tr>
-                                <th scope="col" className={table.th}>
-                                    {words.kind}
-                                </th>
-                                <th scope="col" className={table.th}>
-                                    {words.value}
-                                </th>
-                                <th scope="col" className={table.th}>
-                                    {words.firstSeen}
-                                </th>
-                                <th scope="col" className={table.th}>
-                                    {words.lastSeen}
-                                </th>
-                                <th scope="col" className={cn(table.th, 'text-right')}>
-                                    {words.seen}
-                                </th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {identifiers.map((identifier) => (
-                                <tr
-                                    key={`${identifier.kind}:${identifier.value ?? identifier.firstSeen}`}
-                                    className={table.row}
-                                >
-                                    <td className={cn(table.td, 'align-top whitespace-nowrap text-ink')}>
-                                        {words.kinds[identifier.kind]}
-                                    </td>
-                                    <td className={cn(table.td, 'align-top')}>
-                                        <IdentifierValue identifier={identifier} />
-                                        {(identifier.imported ||
-                                            (identifier.kind !== 'ip' && identifier.otherLicences > 0)) && (
-                                            <div className={table.sub}>
-                                                {identifier.imported && (
-                                                    <span title={words.importedHint}>
-                                                        <Chip>{words.imported}</Chip>
-                                                        <span className="sr-only">{words.importedHint}</span>
-                                                    </span>
-                                                )}
-                                                {identifier.kind !== 'ip' &&
-                                                    identifier.otherLicences > 0 &&
-                                                    words.sharedWith(identifier.otherLicences)}
-                                            </div>
-                                        )}
-                                    </td>
-                                    <td className={cn(table.td, table.mono, 'align-top')}>
-                                        {visit(identifier.firstSeen)}
-                                    </td>
-                                    <td className={cn(table.td, table.mono, 'align-top')}>
-                                        {visit(identifier.lastSeen)}
-                                    </td>
-                                    <td className={cn(table.td, 'text-right align-top whitespace-nowrap')}>
-                                        {words.times(identifier.times)}
-                                    </td>
+                <>
+                    <ul className="flex flex-col md:hidden">
+                        {identifiers.map((identifier) => (
+                            <li
+                                key={`${identifier.kind}:${identifier.value ?? identifier.firstSeen}`}
+                                className="flex flex-col gap-1.5 border-b border-line px-4 py-3 last:border-b-0"
+                            >
+                                <span className="text-ui text-ink">{words.kinds[identifier.kind]}</span>
+                                <IdentifierValue identifier={identifier} />
+                                <IdentifierNotes identifier={identifier} />
+                                <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-small">
+                                    <Term term={words.firstSeen}>
+                                        <span className="font-mono">{visit(identifier.firstSeen)}</span>
+                                    </Term>
+                                    <Term term={words.lastSeen}>
+                                        <span className="font-mono">{visit(identifier.lastSeen)}</span>
+                                    </Term>
+                                    <Term term={words.seen}>{words.times(identifier.times)}</Term>
+                                </dl>
+                            </li>
+                        ))}
+                    </ul>
+                    <div className={cn(table.scroll, 'max-md:hidden')}>
+                        <table className={table.table}>
+                            <caption className="sr-only">{words.caption}</caption>
+                            <thead>
+                                <tr>
+                                    <th scope="col" className={table.th}>
+                                        {words.kind}
+                                    </th>
+                                    <th scope="col" className={table.th}>
+                                        {words.value}
+                                    </th>
+                                    <th scope="col" className={table.th}>
+                                        {words.firstSeen}
+                                    </th>
+                                    <th scope="col" className={table.th}>
+                                        {words.lastSeen}
+                                    </th>
+                                    <th scope="col" className={cn(table.th, 'text-right')}>
+                                        {words.seen}
+                                    </th>
                                 </tr>
-                            ))}
-                        </tbody>
-                    </table>
-                </div>
+                            </thead>
+                            <tbody>
+                                {identifiers.map((identifier) => (
+                                    <tr
+                                        key={`${identifier.kind}:${identifier.value ?? identifier.firstSeen}`}
+                                        className={table.row}
+                                    >
+                                        <td className={cn(table.td, 'align-top whitespace-nowrap text-ink')}>
+                                            {words.kinds[identifier.kind]}
+                                        </td>
+                                        <td className={cn(table.td, 'align-top')}>
+                                            <IdentifierValue identifier={identifier} />
+                                            <IdentifierNotes identifier={identifier} />
+                                        </td>
+                                        <td className={cn(table.td, table.mono, 'align-top')}>
+                                            {visit(identifier.firstSeen)}
+                                        </td>
+                                        <td className={cn(table.td, table.mono, 'align-top')}>
+                                            {visit(identifier.lastSeen)}
+                                        </td>
+                                        <td
+                                            className={cn(table.td, 'text-right align-top whitespace-nowrap')}
+                                        >
+                                            {words.times(identifier.times)}
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                </>
             )}
         </Card>
+    );
+}
+
+/** Whether the identifier came from txAdmin, and how many other licences showed it. */
+function IdentifierNotes({ identifier }: { identifier: ShownIdentifier }) {
+    const { t } = useI18n();
+    const words = t.players.profile.identifiers;
+    const shared = identifier.kind !== 'ip' && identifier.otherLicences > 0;
+    if (!identifier.imported && !shared) {
+        return null;
+    }
+    return (
+        <div className={table.sub}>
+            {identifier.imported && (
+                <span title={words.importedHint}>
+                    <Chip>{words.imported}</Chip>
+                    <span className="sr-only">{words.importedHint}</span>
+                </span>
+            )}
+            {shared && words.sharedWith(identifier.otherLicences)}
+        </div>
     );
 }
 
@@ -491,83 +582,111 @@ function IdentifierValue({ identifier }: { identifier: ShownIdentifier }) {
 function LinkedCard({ linked }: { linked: LinkedLicence[] }) {
     const { t } = useI18n();
     const words = t.players.profile.linked;
-    const kinds = t.players.profile.identifiers.kinds;
     return (
         <Card id="player-linked" icon={Link2} title={words.title} flush>
             {linked.length === 0 ? (
                 <p className="px-6 py-4 text-center text-ui text-ink-3">{words.empty}</p>
             ) : (
-                <div className={table.scroll}>
-                    <table className={table.table}>
-                        <caption className="sr-only">{words.caption}</caption>
-                        <thead>
-                            <tr>
-                                <th scope="col" className={table.th}>
-                                    {words.player}
-                                </th>
-                                <th scope="col" className={table.th}>
-                                    {words.through}
-                                </th>
-                                <th scope="col" className={table.th}>
-                                    {words.link}
-                                </th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {linked.map((other) => (
-                                <tr key={other.player} className={table.row}>
-                                    <td className={cn(table.td, 'min-w-40 align-top')}>
-                                        <Link
-                                            to="/players/$id"
-                                            params={{ id: String(other.player) }}
-                                            className="font-medium text-ink underline-offset-2 [overflow-wrap:anywhere] hover:underline"
-                                        >
-                                            {other.name}
-                                        </Link>
-                                        <div className={cn(table.sub, 'font-mono')}>
-                                            {shortLicence(other.license)}
-                                        </div>
-                                    </td>
-                                    <td className={cn(table.td, 'align-top')}>
-                                        <ul className="flex flex-col gap-0.5">
-                                            {other.through.map((link) => (
-                                                <li
-                                                    key={`${link.kind}:${link.value ?? ''}`}
-                                                    className="flex flex-wrap gap-x-1.5"
-                                                >
-                                                    <span className="text-ink">{kinds[link.kind]}</span>
-                                                    {link.value !== null && (
-                                                        <span className="font-mono text-small">
-                                                            {link.kind === 'token'
-                                                                ? shortToken(link.value)
-                                                                : link.value}
-                                                        </span>
-                                                    )}
-                                                    <span className="text-ink-3">
-                                                        · {link.strong ? words.strong : words.weak}
-                                                    </span>
-                                                </li>
-                                            ))}
-                                        </ul>
-                                    </td>
-                                    <td className={cn(table.td, 'align-top whitespace-nowrap')}>
-                                        <span className="text-ink">
-                                            {other.strong ? words.strong : words.weak}
-                                        </span>
-                                        <div className={table.sub}>
-                                            {other.steps > 1 ? words.indirect : words.direct}
-                                        </div>
-                                    </td>
+                <>
+                    <ul className="flex flex-col md:hidden">
+                        {linked.map((other) => (
+                            <li
+                                key={other.player}
+                                className="flex flex-col gap-1.5 border-b border-line px-4 py-3 last:border-b-0"
+                            >
+                                <LinkedName other={other} />
+                                <LinkedThrough other={other} />
+                                <LinkStrength other={other} />
+                            </li>
+                        ))}
+                    </ul>
+                    <div className={cn(table.scroll, 'max-md:hidden')}>
+                        <table className={table.table}>
+                            <caption className="sr-only">{words.caption}</caption>
+                            <thead>
+                                <tr>
+                                    <th scope="col" className={table.th}>
+                                        {words.player}
+                                    </th>
+                                    <th scope="col" className={table.th}>
+                                        {words.through}
+                                    </th>
+                                    <th scope="col" className={table.th}>
+                                        {words.link}
+                                    </th>
                                 </tr>
-                            ))}
-                        </tbody>
-                    </table>
-                </div>
+                            </thead>
+                            <tbody>
+                                {linked.map((other) => (
+                                    <tr key={other.player} className={table.row}>
+                                        <td className={cn(table.td, 'min-w-40 align-top')}>
+                                            <LinkedName other={other} />
+                                        </td>
+                                        <td className={cn(table.td, 'align-top')}>
+                                            <LinkedThrough other={other} />
+                                        </td>
+                                        <td className={cn(table.td, 'align-top whitespace-nowrap')}>
+                                            <LinkStrength other={other} />
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                </>
             )}
             <p className="rounded-b-card border-t border-line bg-bg-subtle px-5 py-2.5 text-meta text-ink-3 max-md:px-4">
                 {words.note}
             </p>
         </Card>
+    );
+}
+
+function LinkedName({ other }: { other: LinkedLicence }) {
+    return (
+        <div>
+            <Link
+                to="/players/$id"
+                params={{ id: String(other.player) }}
+                className="font-medium text-ink underline-offset-2 [overflow-wrap:anywhere] hover:underline"
+            >
+                {other.name}
+            </Link>
+            <div className={cn(table.sub, 'font-mono')}>{shortLicence(other.license)}</div>
+        </div>
+    );
+}
+
+/** The identifiers shared with the licence it was reached from, each strong or weak. */
+function LinkedThrough({ other }: { other: LinkedLicence }) {
+    const { t } = useI18n();
+    const words = t.players.profile.linked;
+    const kinds = t.players.profile.identifiers.kinds;
+    return (
+        <ul className="flex flex-col gap-0.5">
+            {other.through.map((link) => (
+                <li key={`${link.kind}:${link.value ?? ''}`} className="flex flex-wrap gap-x-1.5">
+                    <span className="text-ink">{kinds[link.kind]}</span>
+                    {link.value !== null && (
+                        <span className="font-mono text-small [overflow-wrap:anywhere]">
+                            {link.kind === 'token' ? shortToken(link.value) : link.value}
+                        </span>
+                    )}
+                    <span className="text-ink-3">· {link.strong ? words.strong : words.weak}</span>
+                </li>
+            ))}
+        </ul>
+    );
+}
+
+function LinkStrength({ other }: { other: LinkedLicence }) {
+    const { t } = useI18n();
+    const words = t.players.profile.linked;
+    return (
+        <div>
+            <span className="text-ink">{other.strong ? words.strong : words.weak}</span>
+            <div className={table.sub}>{other.steps > 1 ? words.indirect : words.direct}</div>
+        </div>
     );
 }
 

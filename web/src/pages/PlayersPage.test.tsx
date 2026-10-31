@@ -290,8 +290,9 @@ describe('PlayerPage', () => {
         expect(screen.queryByRole('heading', { name: en.players.profile.identifiers.title })).toBeNull();
         expect(screen.queryByRole('heading', { name: en.players.profile.linked.title })).toBeNull();
         expect(screen.queryByRole('button', { name: en.players.profile.forget.button })).toBeNull();
-        expect(screen.getByText(en.players.profile.drops.categories.crash)).not.toBeNull();
-        expect(screen.getByText('afk_kick')).not.toBeNull();
+        // Each drop shows twice: in the table, and as a card at phone width.
+        expect(screen.getAllByText(en.players.profile.drops.categories.crash)).toHaveLength(2);
+        expect(screen.getAllByText('afk_kick')).toHaveLength(2);
     });
 
     it('should never show an address, only how many other licences shared it', async () => {
@@ -329,9 +330,9 @@ describe('PlayerPage', () => {
         );
 
         const identifiers = card('player-identifiers');
-        expect(identifiers.getByText(en.players.profile.identifiers.sameAddress(2))).not.toBeNull();
-        expect(identifiers.getByText('3:c4c4c4c4c4c4…')).not.toBeNull();
-        expect(identifiers.getByText(en.players.profile.identifiers.imported)).not.toBeNull();
+        expect(identifiers.getAllByText(en.players.profile.identifiers.sameAddress(2))).toHaveLength(2);
+        expect(identifiers.getAllByText('3:c4c4c4c4c4c4…')).toHaveLength(2);
+        expect(identifiers.getAllByText(en.players.profile.identifiers.imported)).toHaveLength(2);
         expect(card('player-linked').getByText(en.players.profile.linked.empty)).not.toBeNull();
     });
 
