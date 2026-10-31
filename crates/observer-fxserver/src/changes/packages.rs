@@ -33,19 +33,21 @@ pub fn read(node_modules: &Path, found: &mut Vec<Package>, limit: usize) {
     }
 }
 
+/// The folders of `path` in name order: the file system's order changes from one listing to the
+/// next, and the limit must keep the same packages each time.
 fn folders(path: &Path) -> impl Iterator<Item = (String, std::path::PathBuf)> {
-    fs::read_dir(path)
+    let mut entries: Vec<(String, std::path::PathBuf)> = fs::read_dir(path)
         .into_iter()
         .flatten()
         .filter_map(Result::ok)
-        .take(MAX_ENTRIES)
-        .filter_map(|entry| {
-            let name = entry.file_name().into_string().ok()?;
-            // pnpm links its packages, so a link is followed to see whether it is a folder.
-            fs::metadata(entry.path())
-                .is_ok_and(|metadata| metadata.is_dir())
-                .then(|| (name, entry.path()))
-        })
+        .filter_map(|entry| Some((entry.file_name().into_string().ok()?, entry.path())))
+        .collect();
+    entries.sort_unstable();
+    entries.truncate(MAX_ENTRIES);
+    // pnpm links its packages, so a link is followed to see whether it is a folder.
+    entries
+        .into_iter()
+        .filter(|(_, path)| fs::metadata(path).is_ok_and(|metadata| metadata.is_dir()))
 }
 
 fn package_json(folder: &Path) -> Option<Package> {
@@ -134,6 +136,7 @@ mod tests {
         let mut found = Vec::new();
         read(dir.path(), &mut found, 3);
 
-        assert_eq!(found.len(), 3);
+        let names: Vec<&str> = found.iter().map(|package| package.name.as_str()).collect();
+        assert_eq!(names, ["p0", "p1", "p2"]);
     }
 }

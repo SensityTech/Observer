@@ -116,6 +116,15 @@ pub(crate) fn renames(
             .into_iter()
             .filter_map(|index| Some((index, entries(false, index)?)))
             .collect();
+        // Each side's files by digest, once: every removed resource meets every added one.
+        let removed: Vec<(usize, Sizes)> = removed
+            .iter()
+            .map(|(r, entries)| (*r, Sizes::of(entries)))
+            .collect();
+        let added: Vec<(usize, Sizes)> = added
+            .iter()
+            .map(|(a, entries)| (*a, Sizes::of(entries)))
+            .collect();
         let mut scores = Vec::new();
         for (r, before) in &removed {
             for (a, after) in &added {
@@ -139,24 +148,34 @@ pub(crate) fn renames(
     }
 }
 
-/// The share of the larger side's bytes found, by digest, on both sides.
-fn shared(before: &[TreeEntry], after: &[TreeEntry]) -> f64 {
-    let sizes = |entries: &[TreeEntry]| -> HashMap<String, u64> {
-        entries
+/// A resource's files by keyed digest, and their total size.
+struct Sizes<'a> {
+    by_key: HashMap<&'a str, u64>,
+    total: u64,
+}
+
+impl<'a> Sizes<'a> {
+    fn of(entries: &'a [TreeEntry]) -> Self {
+        let by_key: HashMap<&str, u64> = entries
             .iter()
             .filter(|entry| !entry.key.is_empty())
-            .map(|entry| (entry.key.clone(), entry.size))
-            .collect()
-    };
-    let (before, after) = (sizes(before), sizes(after));
-    let total = |sizes: &HashMap<String, u64>| sizes.values().sum::<u64>();
-    let largest = total(&before).max(total(&after));
+            .map(|entry| (entry.key.as_str(), entry.size))
+            .collect();
+        let total = by_key.values().sum();
+        Self { by_key, total }
+    }
+}
+
+/// The share of the larger side's bytes found, by digest, on both sides.
+fn shared(before: &Sizes, after: &Sizes) -> f64 {
+    let largest = before.total.max(after.total);
     if largest == 0 {
         return 0.0;
     }
     let common: u64 = before
+        .by_key
         .iter()
-        .filter(|(key, _)| after.contains_key(*key))
+        .filter(|(key, _)| after.by_key.contains_key(*key))
         .map(|(_, size)| size)
         .sum();
     #[allow(

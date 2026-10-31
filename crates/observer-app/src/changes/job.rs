@@ -10,7 +10,8 @@ use std::time::Duration;
 use jiff::Timestamp;
 use observer_domain::artifacts::BuildPlatform;
 use observer_domain::changes::{
-    ChangesSettings, FileFlag, FileKind, PartialReason, SnapshotKind, SnapshotState, StartCause,
+    ChangesSettings, FileFlag, FileKind, LiveChangeKind, PartialReason, SnapshotKind, SnapshotState,
+    StartCause,
 };
 use observer_domain::launch::LaunchSettings;
 use observer_fxserver::changes::mask::{self, Redaction};
@@ -20,7 +21,7 @@ use observer_store::changes::index::{self, IndexEntry};
 use observer_store::changes::resources;
 use observer_store::changes::snapshots::{self, NewSnapshot};
 use observer_store::changes::texts::{self, NewText};
-use observer_store::changes::{trees, upkeep};
+use observer_store::changes::{live, trees, upkeep};
 use serde_json::{Value, json};
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
@@ -730,6 +731,9 @@ struct Batch {
     chain_texts: Vec<NewText>,
     index: Vec<(String, IndexEntry)>,
     flags: Vec<(String, FileFlag)>,
+    /// Files modified after the start, with when: a live restart of their resource since then
+    /// reloaded them, though it came before they were read.
+    after_start: Vec<(String, i64)>,
     attached: Vec<(String, String)>,
 }
 
@@ -744,6 +748,7 @@ impl Batch {
             chain_texts: Vec::new(),
             index: Vec::new(),
             flags: Vec::new(),
+            after_start: Vec::new(),
             attached: Vec::new(),
         }
     }
@@ -767,6 +772,8 @@ impl Batch {
                 .is_some_and(|started| read.read.stat.modified_ns > started)
             {
                 self.flags.push((read.path.clone(), FileFlag::AfterStart));
+                self.after_start
+                    .push((read.path.clone(), read.read.stat.modified_ns));
             }
             if read.read.unsettled {
                 self.flags.push((read.path.clone(), FileFlag::Unsettled));
@@ -802,6 +809,42 @@ impl Batch {
         index::save(tx, &self.index, now)?;
         for (path, flag) in &self.flags {
             snapshots::flag(tx, self.id, path, *flag)?;
+        }
+        self.reloaded(tx)?;
+        Ok(())
+    }
+
+    /// Flags the files a live start or restart of their resource reloaded: one that came after
+    /// they were last modified.
+    fn reloaded(&self, tx: &observer_store::Transaction<'_>) -> Result<(), Error> {
+        if self.after_start.is_empty() {
+            return Ok(());
+        }
+        let reloads: Vec<(String, i128)> = live::list(tx, self.id, u32::MAX)?
+            .into_iter()
+            .filter(|change| change.change != LiveChangeKind::Stopped)
+            .map(|change| (change.name, change.at.as_nanosecond()))
+            .collect();
+        if reloads.is_empty() {
+            return Ok(());
+        }
+        let Some(snapshot) = snapshots::get(tx, self.id)? else {
+            return Ok(());
+        };
+        let rows = resources::rows(tx, snapshot.holder())?;
+        for (path, modified_ns) in &self.after_start {
+            let Some(row) = rows.iter().find(|row| {
+                path.strip_prefix(row.path.as_str())
+                    .is_some_and(|rest| rest.starts_with('/'))
+            }) else {
+                continue;
+            };
+            let reloaded = reloads
+                .iter()
+                .any(|(name, at)| *name == row.name && *at > i128::from(*modified_ns));
+            if reloaded {
+                snapshots::flag(tx, self.id, path, FileFlag::ReloadedLive)?;
+            }
         }
         Ok(())
     }
