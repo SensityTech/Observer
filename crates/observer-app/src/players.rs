@@ -53,7 +53,7 @@ const DROPS_SHOWN: u32 = 20;
 const ACTIVITY_DAYS: i64 = 90;
 const REQUESTS: usize = 16;
 /// An import writes this many players per transaction, so that logins never wait long.
-const IMPORT_BATCH: usize = 500;
+const IMPORT_BATCH: usize = 200;
 const IMPORT_EVERY: Duration = Duration::from_millis(100);
 /// Licences forgotten on request, as keyed fingerprints and dates: outside the backups, so that a
 /// restored backup cannot bring a forgotten player back.
