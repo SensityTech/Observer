@@ -5,11 +5,11 @@
 use std::net::IpAddr;
 use std::sync::Arc;
 
-use observer_domain::audit::{AuditAction, Outcome};
+use observer_domain::audit::{ActorKind, AuditAction, Outcome};
 use observer_domain::delegation::Account;
 use observer_domain::error::{ApiError, ErrorCode};
 use observer_domain::files::{self, AccessChange, AccessHolder, Reach, Rule};
-use observer_store::files::{self as store, FileAccessRow, FileGroupRow};
+use observer_store::files::{self as store, FileAccessRow, FileGroupRow, HostKeyRow};
 use observer_store::login_failures::FILES;
 use observer_store::{Connection, Database, StoreError, launch, users};
 use serde_json::{Value, json};
@@ -358,6 +358,64 @@ impl Files {
             .await
     }
 
+    pub async fn host_key(&self) -> Result<Option<HostKeyRow>, Error> {
+        Ok(self.db.read(store::host_key).await?)
+    }
+
+    /// Stores the SFTP server's key at its first start, and audits it. Returns the key in force,
+    /// which is another start's when one stored a key first.
+    pub async fn store_host_key(&self, key: HostKeyRow) -> Result<HostKeyRow, Error> {
+        let now = self.clock.now();
+        self.db
+            .write(move |tx| {
+                if store::insert_host_key(tx, &key)? {
+                    Record::operator(ActorKind::System, AuditAction::FileHostKeyCreated)
+                        .details(json!({ "fingerprint": key.fingerprint }))
+                        .write(tx, now)?;
+                    return Ok(key);
+                }
+                store::host_key(tx)?.ok_or_else(|| StoreError::Sqlite(rusqlite_missing()).into())
+            })
+            .await
+    }
+
+    /// Records a temporary upload file before it is created, so that a crash leaves nothing behind
+    /// the next start does not remove.
+    pub async fn record_upload(&self, root: String, folder: String, name: String) -> Result<i64, Error> {
+        let now = self.clock.now();
+        Ok(self
+            .db
+            .write(move |tx| store::record_upload(tx, SERVER, &root, &folder, &name, now))
+            .await?)
+    }
+
+    pub async fn forget_upload(&self, id: i64) -> Result<(), Error> {
+        Ok(self.db.write(move |tx| store::forget_upload(tx, id)).await?)
+    }
+
+    /// The temporary files a crash may have left, for the start's sweep.
+    pub async fn uploads(&self) -> Result<Vec<store::UploadRow>, Error> {
+        Ok(self.db.read(store::uploads).await?)
+    }
+
+    /// Writes one audit entry for what a session did or was refused.
+    pub async fn record_session(
+        &self,
+        grant: &Grant,
+        ip: String,
+        action: AuditAction,
+        outcome: Outcome,
+        target: String,
+        details: Value,
+    ) -> Result<(), Error> {
+        let now = self.clock.now();
+        let record = Record::file_session(grant.user_id, grant.access_id, &grant.login, &ip, action)
+            .outcome(outcome)
+            .target(target)
+            .details(details);
+        Ok(self.db.write(move |tx| record.write(tx, now)).await?)
+    }
+
     async fn group(&self, id: i64) -> Result<Group, Error> {
         let row = self.db.read(move |conn| store::group(conn, id)).await?;
         row.map(group).ok_or_else(|| ErrorCode::NotFound.into())
@@ -413,6 +471,10 @@ fn access_for_login(
         return Ok(None);
     };
     Ok(store::user_access(conn, user.id)?.map(|access| (access, Some(user))))
+}
+
+fn rusqlite_missing() -> observer_store::RusqliteError {
+    observer_store::RusqliteError::QueryReturnedNoRows
 }
 
 fn group(row: FileGroupRow) -> Group {

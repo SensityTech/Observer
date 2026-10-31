@@ -22,4 +22,4 @@ pub mod users;
 pub use backup::BackupKind;
 pub use database::{Database, Inspection, StoreError};
 pub use metrics::MetricsDatabase;
-pub use rusqlite::{Connection, Transaction};
+pub use rusqlite::{Connection, Error as RusqliteError, Transaction};

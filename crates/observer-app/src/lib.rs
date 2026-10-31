@@ -30,7 +30,7 @@ pub use audit::AuditLog;
 pub use clock::Clock;
 pub use diagnostics::{Diagnostics, DiagnosticsSetup, DiagnosticsTask, MAX_DOWNLOAD};
 pub use error::Error;
-pub use files::{Files, Grant, Group, Login};
+pub use files::{Files, Grant, Group, Login, SERVER as FILES_SERVER};
 pub use metrics::{DatabaseFiles, Metrics, MetricsSetup, Sampling, Sources};
 pub use passwords::PasswordCost;
 pub use schedule::{Schedule, ScheduleSetup, ScheduleTask, ScheduleTimings};
