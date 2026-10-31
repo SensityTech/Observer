@@ -247,17 +247,23 @@ fn check_integrity(conn: &Connection) -> Result<(), StoreError> {
 /// Writes the WAL back into the database file and truncates it, waiting while a reader holds it:
 /// what was deleted must leave both files.
 pub(crate) fn checkpoint(conn: &Connection) -> Result<(), StoreError> {
-    for _ in 0..50 {
-        let busy: bool = conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| row.get(0))?;
+    conn.busy_timeout(Duration::from_millis(100))?;
+    let mut busy = true;
+    for _ in 0..10 {
+        busy = conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| row.get(0))?;
         if !busy {
-            return Ok(());
+            break;
         }
         std::thread::sleep(Duration::from_millis(100));
     }
-    Err(StoreError::Sqlite(rusqlite::Error::SqliteFailure(
-        rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_BUSY),
-        Some("the WAL could not be checkpointed".to_owned()),
-    )))
+    conn.busy_timeout(Duration::from_secs(5))?;
+    if busy {
+        return Err(StoreError::Sqlite(rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_BUSY),
+            Some("the WAL could not be checkpointed".to_owned()),
+        )));
+    }
+    Ok(())
 }
 
 /// A migrated in-memory database, for the repositories' tests.

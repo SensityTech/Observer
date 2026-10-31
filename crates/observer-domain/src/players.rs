@@ -581,6 +581,21 @@ impl Default for PlayersSettings {
 pub struct OutOfRange;
 
 impl PlayersSettings {
+    /// The settings brought into their ranges, each as close as it can stay to what was stored.
+    #[must_use]
+    pub fn clamped(self) -> Self {
+        const MOST: u32 = 36_500;
+        let profile_days = self.profile_days.map(|days| days.clamp(365, MOST));
+        let profile = profile_days.unwrap_or(MOST);
+        let link_days = self.link_days.clamp(30, profile);
+        Self {
+            profile_days,
+            link_days,
+            address_days: self.address_days.clamp(7, link_days),
+            day_days: self.day_days.clamp(30, profile),
+        }
+    }
+
     /// None outlives what it hangs on.
     pub fn check(&self) -> Result<(), OutOfRange> {
         const MOST: u32 = 36_500;
@@ -638,6 +653,29 @@ mod tests {
             ..defaults
         };
         assert_eq!(kept.check(), Ok(()));
+    }
+
+    #[test]
+    fn a_setting_out_of_its_range_is_brought_back_without_shortening_what_was_kept() {
+        let edited = PlayersSettings {
+            link_days: 4_000_000_000,
+            address_days: 1,
+            day_days: 10,
+            profile_days: None,
+        };
+
+        let clamped = edited.clamped();
+
+        assert_eq!(
+            clamped,
+            PlayersSettings {
+                link_days: 36_500,
+                address_days: 7,
+                day_days: 30,
+                profile_days: None,
+            }
+        );
+        assert_eq!(clamped.check(), Ok(()));
     }
 
     const LICENSE: &str = "license:0123456789abcdef0123456789abcdef01234567";

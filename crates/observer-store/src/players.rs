@@ -542,8 +542,9 @@ pub fn settings(conn: &Connection) -> Result<PlayersSettings, StoreError> {
         day_days: days(DAY_DAYS, defaults.day_days)?,
         profile_days,
     };
-    // Values edited by hand out of their ranges are not trusted.
-    Ok(if stored.check().is_ok() { stored } else { defaults })
+    // Values edited by hand out of their ranges are brought into them, never shortened below
+    // what the owner chose.
+    Ok(stored.clamped())
 }
 
 pub fn save_settings(tx: &Transaction<'_>, retention: &PlayersSettings) -> Result<(), StoreError> {
@@ -700,6 +701,9 @@ pub fn forget(
     fingerprint: [u8; 16],
     at: Timestamp,
 ) -> Result<Option<Forgotten>, StoreError> {
+    // FAST, the connection's setting, leaves whole pages freed as they were: one player's days fill
+    // whole pages of `player_day`.
+    tx.pragma_update(None, "secure_delete", true)?;
     let held = identifiers_of(tx, player)?;
     let forgotten = tx
         .query_row(
@@ -717,6 +721,7 @@ pub fn forget(
         drop_unheld(tx, &held)?;
         remember_forgotten(tx, fingerprint, at)?;
     }
+    tx.pragma_update(None, "secure_delete", "FAST")?;
     Ok(forgotten)
 }
 

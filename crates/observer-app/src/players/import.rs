@@ -87,6 +87,16 @@ fn remote(path: &Path) -> bool {
     text.starts_with(r"\\") || text.starts_with("//")
 }
 
+/// The path the file system took to the file: on Windows `\\?\C:\...` when it is local, and
+/// `\\?\UNC\...` when a folder link led it to a share.
+fn remote_resolved(resolved: &Path) -> bool {
+    let text = resolved.to_string_lossy();
+    match text.strip_prefix(r"\\?\") {
+        Some(rest) => rest.starts_with(r"UNC\") || rest.starts_with("GLOBALROOT"),
+        None => remote(resolved),
+    }
+}
+
 const TOO_MANY: &str = "more players than";
 
 /// The top-level object: its `version`, and its `players` turned into records as they come.
@@ -313,7 +323,7 @@ impl<'de> Visitor<'de> for Lenient {
 /// Opens the file itself, never a link in its place, and checks from the open handle that it is a
 /// regular file.
 fn open(path: &Path) -> Result<(File, std::fs::Metadata), PlayersFileProblem> {
-    let (file, _) = observer_platform::open_resolved(path).map_err(|error| {
+    let (file, resolved) = observer_platform::open_resolved(path).map_err(|error| {
         if error.kind() == std::io::ErrorKind::NotFound {
             PlayersFileProblem::Missing
         } else if std::fs::symlink_metadata(path).is_ok_and(|metadata| !metadata.is_file()) {
@@ -322,6 +332,10 @@ fn open(path: &Path) -> Result<(File, std::fs::Metadata), PlayersFileProblem> {
             PlayersFileProblem::Unreadable
         }
     })?;
+    // A folder link on the way may lead to another host's share.
+    if remote_resolved(&resolved) {
+        return Err(PlayersFileProblem::NotLocal);
+    }
     let metadata = file.metadata().map_err(|_| PlayersFileProblem::Unreadable)?;
     if !metadata.is_file() || metadata.is_symlink() || reparse_point(&metadata) {
         return Err(PlayersFileProblem::NotAFile);

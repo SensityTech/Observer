@@ -237,11 +237,14 @@ pub fn expire(tx: &Transaction<'_>, before_ms: i64) -> Result<usize, StoreError>
 /// Takes a forgotten player's pseudonym and texts off their sessions: they no longer belong
 /// together, and say nothing the player wrote.
 pub fn forget(tx: &Transaction<'_>, pseudonym: [u8; 16]) -> Result<usize, StoreError> {
-    Ok(tx.execute(
+    tx.pragma_update(None, "secure_delete", true)?;
+    let blanked = tx.execute(
         "UPDATE player_session SET player = NULL, credit = NULL, crash_text = NULL, reason_text = NULL
          WHERE player = ?1",
         [pseudonym],
-    )?)
+    )?;
+    tx.pragma_update(None, "secure_delete", "FAST")?;
+    Ok(blanked)
 }
 
 #[cfg(test)]
