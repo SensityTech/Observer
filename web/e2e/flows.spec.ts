@@ -1,9 +1,16 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Locator, type Page } from '@playwright/test';
 
 import { en } from '../src/i18n/en';
 
 const PASSWORD = 'e2e-owner-passphrase';
 const setup = en.serverSetup;
+const artifacts = en.artifacts;
+const windows = process.platform === 'win32';
+/** The one build the test catalog lists, which the fake serves as an archive of itself. */
+const CATALOG_BUILD = '99001';
+
+/** The step a job's card marks as the one it is at. */
+const currentStep = (job: Locator) => job.locator('li[aria-current="step"]');
 
 const env = (name: string) => {
     const value = process.env[name];
@@ -35,6 +42,28 @@ test.describe.serial('Observer in a browser', () => {
     const overview = async () => {
         await page.getByRole('link', { name: en.nav.overview, exact: true }).click();
         await expect(page.getByRole('heading', { level: 1 })).toContainText(en.overview.title);
+    };
+    const buildCell = () =>
+        status()
+            .locator('.status-cell', { has: page.getByText(en.status.build, { exact: true }) })
+            .locator('dd');
+    /** Starts the install of the catalog's build and sees its download under way. */
+    const installFromCatalog = async () => {
+        await page.getByRole('link', { name: en.nav.artifacts, exact: true }).click();
+        await expect(page.getByRole('heading', { level: 1 })).toContainText(artifacts.title);
+        await page
+            .getByRole('region', { name: artifacts.available.title, exact: true })
+            .getByRole('row', { name: new RegExp(CATALOG_BUILD) })
+            .getByRole('button', { name: artifacts.available.install })
+            .click();
+        const dialog = page.getByRole('dialog', { name: artifacts.install.title(CATALOG_BUILD) });
+        await dialog.getByRole('button', { name: artifacts.install.confirm, exact: true }).click();
+
+        const job = page.getByRole('region', { name: artifacts.job.install(CATALOG_BUILD) });
+        // The fake spreads its archive over a few seconds, as a real download takes them.
+        await expect(currentStep(job)).toHaveText(artifacts.job.steps.download);
+        await expect(job.getByRole('progressbar', { name: artifacts.job.progress })).toBeVisible();
+        return job;
     };
 
     test('the owner sets up Observer from the printed link, then the server through its setup', async () => {
@@ -158,5 +187,56 @@ test.describe.serial('Observer in a browser', () => {
             timeout: 100_000,
         });
         await expect(status()).toContainText(en.server_state.states.online);
+    });
+
+    test('a build from the catalog downloads, unpacks and installs', async () => {
+        test.skip(windows, 'Windows refuses the unsigned fake at validation, as the next flow shows');
+        const job = await installFromCatalog();
+
+        await expect(job.getByText(artifacts.job.installed, { exact: true })).toBeVisible();
+        const steps = artifacts.job.steps;
+        await expect(job.getByRole('list', { name: artifacts.job.title }).getByRole('listitem')).toHaveText([
+            steps.preCheck,
+            steps.download,
+            steps.verify,
+            steps.extract,
+            steps.validate,
+            steps.commit,
+        ]);
+        await expect(currentStep(job)).toHaveText(steps.commit);
+    });
+
+    test('Windows refuses a build from the catalog whose FXServer.exe Rockstar Games did not sign', async () => {
+        test.skip(!windows, 'Linux builds carry no signature');
+        const job = await installFromCatalog();
+
+        const words = artifacts.job;
+        await expect(
+            job.getByText(words.failed(words.during.validate, words.failures.signature)),
+        ).toBeVisible();
+        await expect(currentStep(job)).toHaveText(words.steps.validate);
+    });
+
+    test('the installed build starts at the next start, on probation', async () => {
+        test.skip(windows, 'Windows refuses the unsigned fake at validation');
+        // Wide enough for the status bar to say why the build is shown.
+        await page.setViewportSize({ width: 1680, height: 900 });
+        const job = page.getByRole('region', { name: artifacts.job.install(CATALOG_BUILD) });
+        await job.getByRole('button', { name: artifacts.job.use }).click();
+        const dialog = page.getByRole('dialog', { name: artifacts.use.title(CATALOG_BUILD) });
+        await dialog.getByRole('radio', { name: new RegExp(artifacts.use.nextStart) }).check();
+        await dialog.getByRole('button', { name: artifacts.use.confirm, exact: true }).click();
+        await expect(page.getByText(artifacts.use.done.nextStart(CATALOG_BUILD))).toBeVisible();
+        await expect(buildCell()).toHaveText(`${env('E2E_BUILD')} · ${en.status.nextBuild(CATALOG_BUILD)}`, {
+            useInnerText: true,
+        });
+
+        await controls().getByRole('button', { name: en.controls.restart, exact: true }).click();
+        await confirm(en.controls.restartTitle, en.controls.confirmRestart);
+        await expect(buildCell()).toHaveText(`${CATALOG_BUILD} · ${en.status.probation}`, {
+            useInnerText: true,
+        });
+        await expect(status()).toContainText(en.server_state.states.online);
+        await page.setViewportSize({ width: 1440, height: 900 });
     });
 });

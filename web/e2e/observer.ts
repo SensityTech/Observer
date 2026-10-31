@@ -1,6 +1,7 @@
 // The Observer the browser tests run against: the debug binary on a data folder of its own, with
-// the fake FXServer installed as a build no one has selected yet. Global setup starts it; the
-// function it returns stops it.
+// the fake FXServer installed as a build no one has selected yet, and the test catalog in place of
+// Cfx.re's, whose one build the fake serves as an archive of itself. Global setup starts both; the
+// function it returns stops them.
 import { spawn } from 'node:child_process';
 import {
     chmodSync,
@@ -20,10 +21,13 @@ import { setTimeout as sleep } from 'node:timers/promises';
 const windows = process.platform === 'win32';
 const port = Number(process.env.E2E_PORT ?? 41966);
 const fxserverPort = Number(process.env.E2E_FXSERVER_PORT ?? 30153);
+const catalogPort = Number(process.env.E2E_CATALOG_PORT ?? 41955);
 const web = resolve(import.meta.dirname, '..');
 const results = join(import.meta.dirname, 'results');
 const patience = 30_000;
 const SETUP_LINK = /http:\/\/\S+\/setup#\S+/;
+/** What Observer logs when it lists and downloads builds from the test catalog. */
+const TEST_CATALOG = 'builds come from the test catalog';
 /** The build the fake stands for: the one it reports in `/info.json`. */
 const BUILD = 35245;
 
@@ -34,7 +38,7 @@ const binary = (variable: string, name: string) => {
         process.env[variable] ?? resolve(web, '..', 'target', 'debug', windows ? `${name}.exe` : name);
     if (!existsSync(path)) {
         throw new Error(
-            `${path} is missing: run \`cargo build -p observer -p fake-fxserver\` first, or set ${variable}`,
+            `${path} is missing: run \`cargo xtask e2e\`, or \`cargo build -p observer -p fake-fxserver --features observer/test-catalog\` first, or set ${variable}`,
         );
     }
     return path;
@@ -94,6 +98,16 @@ const answers = async () => {
     }
 };
 
+/** Any answer will do: the fake listens once its archive is made. */
+const serves = async () => {
+    try {
+        await fetch(`http://127.0.0.1:${catalogPort}/`);
+        return true;
+    } catch {
+        return false;
+    }
+};
+
 export default async function setup() {
     const observer = binary('OBSERVER_BIN', 'observer');
     const fake = binary('FAKE_FXSERVER_BIN', 'fake-fxserver');
@@ -117,7 +131,31 @@ export default async function setup() {
     writeFileSync(config, `data_dir = "data"\n\n[http]\nlisten = "127.0.0.1:${port}"\n`);
 
     mkdirSync(results, { recursive: true });
-    const env = { ...process.env };
+    const archive = spawn(fake, ['--fake-archive', String(catalogPort)], {
+        stdio: ['ignore', 'ignore', 'pipe'],
+    });
+    archive.stderr.pipe(createWriteStream(join(results, 'archive.err')));
+    const served: { exit: number | null } = { exit: null };
+    archive.on('exit', (code) => {
+        served.exit = code ?? -1;
+    });
+    if (!(await until(async () => served.exit !== null || (await serves()), Date.now() + patience))) {
+        archive.kill();
+        throw new Error(`the fake did not serve its archive on port ${catalogPort}`);
+    }
+    if (served.exit !== null) {
+        throw new Error(
+            `the fake could not serve its archive (exit ${served.exit}), see e2e/results/archive.err`,
+        );
+    }
+    const stopArchive = async () => {
+        if (served.exit === null) {
+            archive.kill();
+            await until(() => served.exit !== null, Date.now() + patience);
+        }
+    };
+
+    const env: NodeJS.ProcessEnv = { ...process.env, OBSERVER_TEST_CATALOG: String(catalogPort) };
     // Under systemd Observer prints no setup link.
     delete env.INVOCATION_ID;
     delete env.NOTIFY_SOCKET;
@@ -143,11 +181,21 @@ export default async function setup() {
     const link = SETUP_LINK.exec(output)?.[0];
     if (link === undefined) {
         child.kill();
+        await stopArchive();
         throw new Error(`Observer printed no setup link (exit ${ran.exit}):\n${output}`);
     }
     if (!(await until(answers, deadline))) {
         child.kill();
+        await stopArchive();
         throw new Error(`the panel did not answer on ${panelUrl}`);
+    }
+    // Logged before the panel listens.
+    if (!output.includes(TEST_CATALOG)) {
+        child.kill();
+        await stopArchive();
+        throw new Error(
+            'Observer was built without the test catalog: run `cargo xtask e2e`, or build it with --features observer/test-catalog',
+        );
     }
 
     process.env.E2E_URL = panelUrl;
@@ -159,6 +207,7 @@ export default async function setup() {
     const removeDir = () => rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
 
     return async () => {
+        await stopArchive();
         if (ran.exit === null && windows) {
             // No signal to send: the graceful stop is the console's or the window's, tested apart.
             child.kill();
