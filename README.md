@@ -434,13 +434,14 @@ is online, at 64 MB/s at most. The first start reads everything once, in the bac
 read only what changed.
 
 The **Changes** page compares the last two starts, any two, or the last start with the disk now
-(**Check the disk**: what the next restart will apply). It shows what txAdmin cannot: a resource whose
+(**Check the disk**: what the next restart will apply). When a restart cut the previous start's reading
+short, the last start is compared with the latest one that was read in full. It shows what txAdmin cannot: a resource whose
 files changed while its version did not. Text files (Lua, JS, JSON, cfg, YAML and the like, up to
 1 MiB) get line diffs; escrow-encrypted, binary and minified files are compared by size and hash.
 
 - **Secrets.** Contents are masked before they are stored: convar secrets, webhook URLs, bot tokens,
-  API keys, credentials in connection strings and string values given to names such as `password` or
-  `token` become `[REDACTED]`, and the diff only says when one changed. `.env`, key files and
+  API keys, private keys, `Authorization` headers, credentials in connection strings and values given
+  to names such as `password` or `token` (in code, JSON, YAML, TOML or XML) become `[REDACTED]`, and the diff only says when one changed. `.env`, key files and
   `txData` are never stored. A secret in a shape no rule knows stays visible to whoever may read
   contents, so the owner can hide more files with patterns and purge what a file left in the history.
 - **Who sees what.** *View changes* shows the history, versions, files and counts; *Read changed
