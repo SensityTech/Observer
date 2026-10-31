@@ -17,8 +17,9 @@ use crate::{build_panel, built, cargo, root};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const LICENCES: &str = "THIRD-PARTY-LICENCES.txt";
-/// What a Windows executable imports when it needs the Visual C++ redistributable.
-const CRT_IMPORTS: [&str; 3] = ["vcruntime140.dll", "msvcp140.dll", "api-ms-win-crt-"];
+/// How the DLLs start that a Windows executable imports when it needs the Visual C++
+/// redistributable.
+const CRT_IMPORTS: [&str; 3] = ["vcruntime140", "msvcp140", "api-ms-win-crt-"];
 /// The variable only a binary built with the browser tests' catalog reads.
 const TEST_CATALOG: &[u8] = b"OBSERVER_TEST_CATALOG";
 
@@ -54,7 +55,9 @@ pub fn dist(target: &str, max_glibc: Option<&str>) -> anyhow::Result<()> {
     }
     match system {
         System::Windows => {
-            if let Some(import) = crt_import(&bytes) {
+            let imports = imports(&bytes)
+                .with_context(|| format!("cannot read the imports of {}", binary.display()))?;
+            if let Some(import) = crt_import(&imports) {
                 bail!(
                     "{} imports {import}: the C runtime must be linked in (+crt-static)",
                     binary.display()
@@ -172,15 +175,96 @@ fn source() -> anyhow::Result<Source> {
     })
 }
 
-/// The first C runtime DLL the executable names, if any. The import table spells its DLLs out
-/// in ASCII, in whatever case the linker wrote.
-fn crt_import(binary: &[u8]) -> Option<&'static str> {
-    let lower = binary.to_ascii_lowercase();
-    CRT_IMPORTS.into_iter().find(|import| {
-        lower
-            .windows(import.len())
-            .any(|window| window == import.as_bytes())
+/// The first C runtime DLL among the imports, if any, in whatever case the linker wrote it.
+fn crt_import(imports: &[String]) -> Option<&str> {
+    imports.iter().map(String::as_str).find(|dll| {
+        let dll = dll.to_ascii_lowercase();
+        CRT_IMPORTS.iter().any(|prefix| dll.starts_with(prefix))
     })
+}
+
+/// The DLLs a Windows executable names in its import and delay-load tables. The same names
+/// elsewhere in the file, such as the system libraries the hang analysis looks past, are data.
+fn imports(binary: &[u8]) -> anyhow::Result<Vec<String>> {
+    if binary.get(..2) != Some(b"MZ".as_slice()) {
+        bail!("not a Windows executable");
+    }
+    let header = usize::try_from(u32_at(binary, 0x3c)?)?;
+    if binary.get(header..).and_then(|rest| rest.get(..4)) != Some(b"PE\0\0".as_slice()) {
+        bail!("not a Windows executable");
+    }
+    let sections = usize::from(u16_at(binary, header + 6)?);
+    let optional = header + 24;
+    let table = optional + usize::from(u16_at(binary, header + 20)?);
+    // The data directories follow fields that are wider in PE32+ than in PE32.
+    let directories = match u16_at(binary, optional)? {
+        0x10b => optional + 96,
+        0x20b => optional + 112,
+        magic => bail!("unknown optional header {magic:#x}"),
+    };
+    let count = usize::try_from(u32_at(binary, directories - 4)?)?;
+    // An address in the loaded image, as an offset in the file through the section that maps it.
+    let offset = |address: u32| -> anyhow::Result<usize> {
+        for section in (0..sections).map(|index| table + index * 40) {
+            let start = u32_at(binary, section + 12)?;
+            let size = u32_at(binary, section + 8)?.max(u32_at(binary, section + 16)?);
+            if address >= start && address - start < size {
+                return Ok(
+                    usize::try_from(u32_at(binary, section + 20)?)? + usize::try_from(address - start)?
+                );
+            }
+        }
+        bail!("no section maps the address {address:#x}")
+    };
+
+    let mut names = Vec::new();
+    // The import table's entries are 20 bytes and name their DLL at byte 12; the delay-load
+    // table's are 32 bytes and name it at byte 4. An entry without a name ends its table.
+    for (directory, entry, name) in [(1, 20, 12), (13, 32, 4)] {
+        if directory >= count {
+            continue;
+        }
+        let start = u32_at(binary, directories + directory * 8)?;
+        if start == 0 {
+            continue;
+        }
+        let mut at = offset(start)?;
+        loop {
+            match u32_at(binary, at + name)? {
+                0 => break,
+                address => names.push(c_string(binary, offset(address)?)?),
+            }
+            at += entry;
+        }
+    }
+    Ok(names)
+}
+
+fn u16_at(binary: &[u8], at: usize) -> anyhow::Result<u16> {
+    binary
+        .get(at..)
+        .and_then(|rest| rest.get(..2))
+        .and_then(|bytes| bytes.try_into().ok())
+        .map(u16::from_le_bytes)
+        .context("the executable ends early")
+}
+
+fn u32_at(binary: &[u8], at: usize) -> anyhow::Result<u32> {
+    binary
+        .get(at..)
+        .and_then(|rest| rest.get(..4))
+        .and_then(|bytes| bytes.try_into().ok())
+        .map(u32::from_le_bytes)
+        .context("the executable ends early")
+}
+
+fn c_string(binary: &[u8], at: usize) -> anyhow::Result<String> {
+    let rest = binary.get(at..).context("the executable ends early")?;
+    let end = rest
+        .iter()
+        .position(|byte| *byte == 0)
+        .context("the executable ends early")?;
+    Ok(String::from_utf8_lossy(&rest[..end]).into_owned())
 }
 
 fn test_catalog(binary: &[u8]) -> bool {
@@ -302,17 +386,72 @@ fn size(bytes: usize) -> String {
 mod tests {
     use super::*;
 
+    /// A PE32+ executable that imports KERNEL32.dll and delay-loads the DLL named at `delayed`,
+    /// with the C runtime's name lying unreferenced in its data.
+    fn executable(delayed: u32) -> Vec<u8> {
+        let mut file = vec![0; 0x400];
+        let mut put = |at: usize, bytes: &[u8]| file[at..at + bytes.len()].copy_from_slice(bytes);
+        put(0, b"MZ");
+        put(0x3c, &0x40_u32.to_le_bytes());
+        put(0x40, b"PE\0\0");
+        put(0x46, &1_u16.to_le_bytes());
+        put(0x54, &240_u16.to_le_bytes());
+        put(0x58, &0x20b_u16.to_le_bytes());
+        put(0xc4, &16_u32.to_le_bytes());
+        put(0xd0, &0x1000_u32.to_le_bytes());
+        put(0x130, &0x1040_u32.to_le_bytes());
+        // The one section maps the image from 0x1000 to the file from 0x200.
+        put(0x150, &0x200_u32.to_le_bytes());
+        put(0x154, &0x1000_u32.to_le_bytes());
+        put(0x158, &0x200_u32.to_le_bytes());
+        put(0x15c, &0x200_u32.to_le_bytes());
+        put(0x20c, &0x1100_u32.to_le_bytes());
+        put(0x244, &delayed.to_le_bytes());
+        put(0x300, b"KERNEL32.dll\0");
+        put(0x320, b"dbghelp.dll\0");
+        put(0x380, b"vcruntime140.dll\0");
+        file
+    }
+
+    #[test]
+    fn the_imports_are_read_from_the_tables_not_from_the_data() {
+        let found = imports(&executable(0x1120)).unwrap();
+
+        assert_eq!(found, ["KERNEL32.dll", "dbghelp.dll"]);
+        assert_eq!(crt_import(&found), None);
+        assert!(imports(b"MZ, then nothing").is_err());
+        assert!(imports(b"no executable").is_err());
+    }
+
     #[test]
     fn an_executable_that_imports_the_c_runtime_is_found_out() {
+        let delayed = imports(&executable(0x1180)).unwrap();
+        assert_eq!(crt_import(&delayed), Some("vcruntime140.dll"));
+
+        let names = |dlls: &[&str]| dlls.iter().map(ToString::to_string).collect::<Vec<_>>();
         assert_eq!(
-            crt_import(b"\0KERNEL32.dll\0VCRUNTIME140.dll\0"),
-            Some("vcruntime140.dll")
+            crt_import(&names(&["KERNEL32.dll", "VCRUNTIME140_1.dll"])),
+            Some("VCRUNTIME140_1.dll")
         );
         assert_eq!(
-            crt_import(b"\0api-ms-win-crt-runtime-l1-1-0.dll\0"),
-            Some("api-ms-win-crt-")
+            crt_import(&names(&["api-ms-win-crt-runtime-l1-1-0.dll"])),
+            Some("api-ms-win-crt-runtime-l1-1-0.dll")
         );
-        assert_eq!(crt_import(b"\0KERNEL32.dll\0USER32.dll\0ws2_32.dll\0"), None);
+        assert_eq!(
+            crt_import(&names(&["KERNEL32.dll", "USER32.dll", "ws2_32.dll"])),
+            None
+        );
+    }
+
+    /// The tests are built like the release, with the C runtime linked in.
+    #[cfg(windows)]
+    #[test]
+    fn this_test_binary_imports_the_kernel_and_no_c_runtime() {
+        let binary = fs::read(std::env::current_exe().unwrap()).unwrap();
+        let found = imports(&binary).unwrap();
+
+        assert!(found.iter().any(|dll| dll.eq_ignore_ascii_case("kernel32.dll")));
+        assert_eq!(crt_import(&found), None);
     }
 
     #[test]
