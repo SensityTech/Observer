@@ -10,7 +10,11 @@ export type DropLogRow = { id: number, at: string,
 /**
  * `None` when the identity was never confirmed, or the player was forgotten.
  */
-player: DropPlayer | null, category: DropCategory, kind: DropKind | null, resource: string | null, signature: string | null, label: string | null, 
+player: DropPlayer | null, category: DropCategory, kind: DropKind | null, resource: string | null, 
+/**
+ * The signature's id, for the log's own filter, and its text.
+ */
+signatureId: number | null, signature: string | null, label: string | null, 
 /**
  * The redacted reason a resource gave, or an unknown drop's text.
  */

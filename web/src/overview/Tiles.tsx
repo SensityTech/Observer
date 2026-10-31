@@ -1,25 +1,32 @@
 import { useQuery } from '@tanstack/react-query';
+import { Link } from '@tanstack/react-router';
 import {
     Activity,
+    ArrowRight,
     Cpu,
     Gauge,
     MemoryStick,
     Server,
     TriangleAlert,
+    Unplug,
     Users,
     type LucideIcon,
 } from 'lucide-react';
-import { useMemo, type ReactNode } from 'react';
+import { use, useMemo, type ReactNode } from 'react';
 
+import { summaryQuery } from '../api/drops';
+import { Permission } from '../api/generated/Permission';
 import { healthQuery } from '../api/health';
 import type { LiveSample } from '../api/generated/LiveSample';
 import type { MetricsSeries } from '../api/generated/MetricsSeries';
 import type { RunGrowth } from '../api/generated/RunGrowth';
 import type { Series } from '../api/generated/Series';
 import { growthQuery, seriesQuery } from '../api/metrics';
+import { allows, MeContext } from '../auth/me';
 import { Chip } from '../components/Chip';
 import { Distribution } from '../components/Distribution';
 import { Sparkline } from '../components/Sparkline';
+import { formatRate, trendWindows, VerdictChip } from '../drops/words';
 import { useI18n } from '../i18n/I18nProvider';
 import { useSnapshot } from '../live/context';
 import { cn } from '../lib/cn';
@@ -59,7 +66,10 @@ export const total = (values: readonly (number | null)[]) =>
         ? values.reduce<number>((sum, value) => sum + (value ?? 0), 0)
         : null;
 
-/** The six tiles of the Overview: the latest sample, and the last hour for the trends. */
+/**
+ * The six tiles of the Overview: the latest sample, and the last hour for the trends; then the
+ * players' drops of the last 24 hours, for who sees them.
+ */
 export function Tiles() {
     const { recent, latest } = useLiveMetrics();
     const hour = useQuery(seriesQuery('1h', TILE_SERIES));
@@ -75,6 +85,7 @@ export function Tiles() {
             <MemoryTile latest={latest} trend={trend} growth={growth.data ?? null} />
             <HostTile latest={latest} trend={trend} />
             <ObserverTile latest={latest} trend={trend} />
+            <DropsTile />
         </div>
     );
 }
@@ -129,7 +140,7 @@ export function Tile({
             className="row-span-4 grid min-w-0 grid-rows-subgrid items-start gap-y-2.5 rounded-card border border-line bg-surface px-4 pt-3.75 pb-3.5"
             aria-label={label}
         >
-            <h2 className="flex min-h-5.5 items-center gap-1.5 text-small text-ink-3">
+            <h2 className="flex min-h-5.5 flex-wrap items-center gap-x-1.5 gap-y-1 text-small text-ink-3">
                 <Icon size={14} strokeWidth={1.75} aria-hidden="true" />
                 {label}
                 {aside}
@@ -534,6 +545,66 @@ function ObserverTile({ latest, trend }: TileProps) {
                     values={trend('observerWorkingSet')}
                     label={t.tiles.observer.trend}
                 />
+            }
+        />
+    );
+}
+
+/**
+ * Unexpected drops per 100 player-hours over the last 24 hours, today against yesterday's same
+ * hours, and the way to the page: for who sees drop statistics, and read only for them.
+ */
+function DropsTile() {
+    const me = use(MeContext);
+    return me !== null && allows(me, Permission.DropsView) ? <DropsTileShown /> : null;
+}
+
+function DropsTileShown() {
+    const { t, locale, format } = useI18n();
+    const words = t.drops.overview;
+    const summary = useQuery(summaryQuery('24h'));
+    const data = summary.data;
+    const tile = data?.tiles.find((each) => each.kind === 'unexpected');
+    const rising = tile?.trend.verdict === 'rising';
+    return (
+        <Tile
+            icon={Unplug}
+            label={words.label}
+            aside={
+                data !== undefined &&
+                tile !== undefined && (
+                    <VerdictChip
+                        trend={tile.trend}
+                        windows={trendWindows(t, locale, data)}
+                        className="ml-auto"
+                    />
+                )
+            }
+            value={tile?.rate == null ? t.drops.unknown : formatRate(locale, tile.rate)}
+            unit={tile?.rate == null ? undefined : t.drops.unit}
+            warning={rising}
+            facts={[
+                {
+                    term: words.ended,
+                    detail: tile?.oneIn == null ? t.drops.unknown : t.drops.tiles.oneIn(tile.oneIn),
+                },
+                {
+                    term: words.drops,
+                    detail: tile === undefined ? t.drops.unknown : format.number(tile.drops),
+                },
+            ]}
+            trend={
+                <div className="flex flex-col gap-2 self-end">
+                    <Sparkline values={tile?.spark ?? []} label={words.trend} warning={rising} />
+                    <Link
+                        to="/drops"
+                        search={{ range: '24h' }}
+                        className="inline-flex items-center gap-1.5 self-start rounded-xs text-small font-medium text-ink-2 underline-offset-2 hover:text-ink hover:underline max-md:min-h-11"
+                    >
+                        {words.open}
+                        <ArrowRight size={14} strokeWidth={1.5} aria-hidden="true" />
+                    </Link>
+                </div>
             }
         />
     );

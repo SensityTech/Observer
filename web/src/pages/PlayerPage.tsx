@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate, useParams } from '@tanstack/react-router';
 import {
     ArrowLeft,
+    ArrowRight,
     ChartColumn,
     Clock,
     Fingerprint,
@@ -30,7 +31,7 @@ import {
 import { useMe } from '../auth/me';
 import { ActivityChart } from '../charts/ActivityChart';
 import { ATTRIBUTION } from '../charts/PlayersChart';
-import { Button } from '../components/Button';
+import { Button, buttonVariants } from '../components/Button';
 import { Card } from '../components/Card';
 import { Chip } from '../components/Chip';
 import { CopyValue } from '../components/CopyValue';
@@ -347,7 +348,23 @@ function DropsCard({ profile }: { profile: PlayerProfile }) {
     const words = t.players.profile.drops;
     const visit = useVisit(profile.zone);
     return (
-        <Card id="player-drops" icon={OctagonX} title={words.title} flush>
+        <Card
+            id="player-drops"
+            icon={OctagonX}
+            title={words.title}
+            aside={
+                // The drop log keeps them over its longest range, with what each one said.
+                <Link
+                    to="/drops"
+                    search={{ range: '90d', profile: profile.id }}
+                    className={cn(buttonVariants({ tone: 'ghost', size: 'sm' }), 'md:-my-1.5')}
+                >
+                    {t.drops.profileLog}
+                    <ArrowRight size={14} strokeWidth={1.5} aria-hidden="true" />
+                </Link>
+            }
+            flush
+        >
             <div className="flex flex-col gap-1 border-b border-line px-5 py-4 max-md:px-4">
                 <dl className="flex flex-wrap gap-x-7 gap-y-2">
                     {(

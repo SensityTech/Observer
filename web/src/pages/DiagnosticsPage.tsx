@@ -19,6 +19,7 @@ import { Notice } from '../components/Notice';
 import { table } from '../components/table';
 import { applyEvent } from '../diagnostics/store';
 import { Code, exceptionWords, exitWords, threadWord } from '../diagnostics/words';
+import { CrashDrops } from '../drops/CrashDrops';
 import type { Messages } from '../i18n/en';
 import { errorMessage } from '../i18n/errors';
 import { useI18n } from '../i18n/I18nProvider';
@@ -316,6 +317,7 @@ function CrashRow({
                         <span className="[overflow-wrap:anywhere]">{crashSentence(t, crash)}</span>
                     </div>
                     {facts.length > 0 && <div className={table.sub}>{facts.join(' · ')}</div>}
+                    <CrashDrops crash={crash} />
                 </td>
                 <td className={cn(table.td, 'align-top whitespace-nowrap')}>
                     {crash.group !== null && crash.group.count > 1

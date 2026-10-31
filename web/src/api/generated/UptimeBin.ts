@@ -5,4 +5,8 @@ export type UptimeBin = {
 /**
  * Hours since the run started.
  */
-fromHours: number, toHours: number | null, drops: number, playedMs: number, rate: number | null, verdict: UptimeVerdict, };
+fromHours: number, toHours: number | null, 
+/**
+ * Unexpected drops, a burst counting once.
+ */
+drops: number, playedMs: number, rate: number | null, verdict: UptimeVerdict, };

@@ -1,17 +1,20 @@
-import { OctagonX, Play, RotateCw, type LucideIcon } from 'lucide-react';
+import { OctagonX, Package, Play, RotateCw, type LucideIcon } from 'lucide-react';
 import { useLayoutEffect, useRef, useState } from 'react';
 
-import type { MarkerKind } from '../api/generated/MarkerKind';
-import type { RunMarker } from '../api/generated/RunMarker';
 import { useI18n } from '../i18n/I18nProvider';
 import type { Messages } from '../i18n/en';
 import { cn } from '../lib/cn';
-import { chartTime, clock, clusters, sides, type Cluster, type Side } from './markers';
+import { chartTime, clock, clusters, sides, type ChartMarker, type Cluster, type Side } from './markers';
 
-const MARKER_ICONS = { start: Play, restart: RotateCw, crash: OctagonX } satisfies Record<
-    MarkerKind,
-    LucideIcon
->;
+const MARKER_ICONS = {
+    start: Play,
+    restart: RotateCw,
+    crash: OctagonX,
+    build: Package,
+} satisfies Record<ChartMarker['kind'], LucideIcon>;
+
+/** Placed first when labels compete for room: a crash, then a build change, then the rest. */
+const WEIGHTS = { crash: 2, build: 1, start: 0, restart: 0 } satisfies Record<ChartMarker['kind'], number>;
 
 /** Plots narrower than this, phones, show the markers' icons without their labels. */
 const LABELS_FROM = 560;
@@ -23,9 +26,13 @@ const HALF_ICON = 6;
 const WORDED = 5;
 
 /** A marker and where its instant falls on the plot, in pixels from the plot's left edge. */
-export type PlacedMarker = { marker: RunMarker; x: number };
+export type PlacedMarker = { marker: ChartMarker; x: number };
 
-const key = (marker: RunMarker) => `${marker.kind}-${marker.at}`;
+const key = (marker: ChartMarker) => `${marker.kind}-${marker.at}`;
+
+/** A marker's word: `Crash`, or the build it changed to, `Build 12400`. */
+const markerLabel = (t: Messages, marker: ChartMarker) =>
+    marker.kind === 'build' ? t.charts.markers.build(marker.build) : t.charts.markers[marker.kind];
 
 type Layout = { width: number; wide: boolean; sides: Side[]; clusters: Cluster[] };
 
@@ -48,7 +55,7 @@ export function MarkerBand({ markers }: { markers: readonly PlacedMarker[] }) {
                 markers.map(({ marker, x }, index) => ({
                     x,
                     width: labels.current[index]?.offsetWidth ?? 0,
-                    weight: marker.kind === 'crash' ? 1 : 0,
+                    weight: WEIGHTS[marker.kind],
                 })),
                 width,
             ),
@@ -96,7 +103,7 @@ export function MarkerBand({ markers }: { markers: readonly PlacedMarker[] }) {
                             strokeWidth={2}
                             className={marker.kind === 'crash' ? 'text-danger' : 'text-ink-3'}
                         />
-                        {t.charts.markers[marker.kind]}
+                        {markerLabel(t, marker)}
                         {!right && <span className="font-mono text-[11px] text-ink-3">{time}</span>}
                         {back}
                     </span>
@@ -148,7 +155,7 @@ export function MarkerLines({ markers }: { markers: readonly PlacedMarker[] }) {
  * online 14:04 · Restart 12:31`, with their days over buckets of `step` seconds as long as a week's.
  * `null` without any.
  */
-export const markerWords = (t: Messages, markers: readonly RunMarker[], step: number) => {
+export const markerWords = (t: Messages, markers: readonly ChartMarker[], step: number) => {
     if (markers.length === 0) {
         return null;
     }
@@ -157,7 +164,7 @@ export const markerWords = (t: Messages, markers: readonly RunMarker[], step: nu
         .slice(0, WORDED)
         .map((marker) =>
             t.charts.markers.inWords(
-                t.charts.markers[marker.kind],
+                markerLabel(t, marker),
                 chartTime(marker.at, step),
                 marker.kind === 'crash' && marker.backOnlineAt !== null
                     ? chartTime(marker.backOnlineAt, step)

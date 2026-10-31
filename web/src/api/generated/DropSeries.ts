@@ -13,6 +13,10 @@ export type DropSeries = { range: DropsRange, category: ChartCategory,
  */
 from: number, step: number, 
 /**
+ * Each bucket's start, Unix seconds: days of the schedule's time zone are not all 24 hours.
+ */
+starts: Array<number>, 
+/**
  * Drops per 100 player-hours; `null` where nobody played, which the chart leaves as a gap.
  */
 rates: Array<number | null>, 

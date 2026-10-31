@@ -5,4 +5,8 @@ import type { UptimeBin } from "./UptimeBin";
 /**
  * `GET /servers/default/drops/uptime`.
  */
-export type DropUptime = { range: DropsRange, bins: Array<UptimeBin>, };
+export type DropUptime = { range: DropsRange, bins: Array<UptimeBin>, 
+/**
+ * The sessions kept since then are the ones binned.
+ */
+keptFrom: string, };

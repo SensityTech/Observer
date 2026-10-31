@@ -13,7 +13,11 @@ expected: boolean, drops: number,
 /**
  * Of every drop in the range.
  */
-share: number, rate: number | null, trend: Trend, 
+share: number, 
+/**
+ * `None` for the server's own stops and crashes: no player rate.
+ */
+rate: number | null, trend: Trend | null, 
 /**
  * Of these drops, the share of players still loading, when FXServer could tell.
  */

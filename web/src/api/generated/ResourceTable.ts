@@ -5,4 +5,8 @@ import type { ResourceEntry } from "./ResourceEntry";
 /**
  * `GET /servers/default/drops/resources`.
  */
-export type ResourceTable = { range: DropsRange, kicks: number, resources: Array<ResourceEntry>, };
+export type ResourceTable = { range: DropsRange, kicks: number, resources: Array<ResourceEntry>, 
+/**
+ * Players and reasons are read from the sessions kept since then.
+ */
+keptFrom: string, };

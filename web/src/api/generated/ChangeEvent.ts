@@ -9,9 +9,13 @@ export type ChangeEvent = { at: string, kind: ChangeKind,
  */
 run: number, generation: number, buildFrom: number | null, buildTo: number | null, 
 /**
- * The players the server's crash, or the incident, dropped.
+ * The players the server's crash dropped.
  */
-playersDropped: number | null, hang: boolean, 
+playersDropped: number | null, 
+/**
+ * An incident's drops.
+ */
+drops: number | null, hang: boolean, 
 /**
  * An incident's drops by category, and the longest hitch of its seconds.
  */

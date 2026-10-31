@@ -21,4 +21,9 @@ trendFrom: string, beforeFrom: string, beforeTo: string, tiles: Array<DropTile>,
 /**
  * Players with at least 3 crashes in the last 7 days.
  */
-repeatCrashers: Array<RepeatCrasher>, coverage: Coverage, };
+repeatCrashers: Array<RepeatCrasher>, coverage: Coverage, 
+/**
+ * What counts players reads only the sessions kept since then: later than `from` when the
+ * session retention is shorter than the range.
+ */
+keptFrom: string, };
