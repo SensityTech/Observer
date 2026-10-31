@@ -14,9 +14,11 @@ use crate::bridge::NAME;
 use crate::health::is_address;
 use crate::trace::TraceKind;
 
-/// More than any player shows: FiveM gives about ten identifiers and a dozen tokens.
+/// More than any player shows: FiveM gives about ten identifiers and a dozen tokens, none longer
+/// than 70 bytes.
 const MAX_IDENTIFIERS: usize = 64;
 const MAX_TOKENS: usize = 64;
+const MAX_IDENTIFIER_BYTES: usize = 128;
 /// The longest text kept before Observer's own limits apply.
 const MAX_TEXT_BYTES: usize = 4096;
 /// The bridge sends at most 100 players a page.
@@ -188,6 +190,7 @@ fn shown(entry: &Value) -> Shown {
         .flatten()
     {
         match value.as_str() {
+            Some(identifier) if identifier.len() > MAX_IDENTIFIER_BYTES => shown.dropped += 1,
             Some(identifier) if is_address(identifier) && shown.address.is_none() => {
                 shown.address = Some(Address(identifier.to_owned()));
             }
@@ -204,7 +207,9 @@ fn shown(entry: &Value) -> Shown {
         .flatten()
     {
         match value.as_str() {
-            Some(token) if shown.tokens.len() < MAX_TOKENS => shown.tokens.push(token.to_owned()),
+            Some(token) if token.len() <= MAX_IDENTIFIER_BYTES && shown.tokens.len() < MAX_TOKENS => {
+                shown.tokens.push(token.to_owned());
+            }
             _ => shown.dropped += 1,
         }
     }

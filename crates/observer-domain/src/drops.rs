@@ -6,6 +6,8 @@ use ts_rs::TS;
 
 /// The resource name FXServer gives the drops it makes itself: no resource dropped the player.
 const INTERNAL_RESOURCE: &str = "__cfx_internal:server";
+/// The longest kicking resource's name kept, in bytes.
+pub const MAX_RESOURCE_BYTES: usize = 256;
 
 /// The crash prefix, as the client translates it in the 14 languages it ships the most.
 const CRASH_PREFIXES: [&str; 14] = [
@@ -285,10 +287,15 @@ pub fn classify(drop: ReportedDrop<'_>) -> Classified {
                 .resource
                 .map(str::trim)
                 .filter(|resource| !resource.is_empty() && *resource != INTERNAL_RESOURCE)
-                .map(str::to_owned),
+                .map(|resource| cut(resource, MAX_RESOURCE_BYTES).to_owned()),
             keeps_reason: true,
             ..simple(DropCategory::Kick, Some(DropKind::Resource))
         },
+        // A player's own quit message is a quit, whatever it says: "Quit: Game crashed: ..." is
+        // not a crash.
+        2 if QUIT_TEXTS.iter().any(|(text, _)| lower.starts_with(text)) => {
+            simple(DropCategory::Quit, Some(quit_kind(&lower)))
+        }
         2 => match crash_text(drop.reason, &lower) {
             Some(text) => Classified {
                 crash_text: Some(text),
@@ -353,6 +360,14 @@ fn classify_text(reason: &str, lower: &str) -> Classified {
         keeps_reason: true,
         ..classified(DropCategory::Unknown, DropKind::Other)
     }
+}
+
+fn cut(text: &str, bytes: usize) -> &str {
+    let mut end = text.len().min(bytes);
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    &text[..end]
 }
 
 fn quit_kind(lower: &str) -> DropKind {
@@ -598,6 +613,27 @@ mod tests {
             assert_eq!(crash.category, DropCategory::Crash, "{reason}");
             assert!(!crash.crash_text.unwrap().contains(": "), "{reason}");
         }
+    }
+
+    #[test]
+    fn a_quit_message_that_mentions_a_crash_is_a_quit() {
+        let quit = drop("Quit: Game crashed: you all suck", Some(2));
+
+        assert_eq!(summary(&quit), (DropCategory::Quit, Some(DropKind::QuitMessage)));
+        assert_eq!(quit.crash_text, None);
+    }
+
+    #[test]
+    fn a_long_kicking_resource_name_is_cut_on_a_character_boundary() {
+        let name = "é".repeat(300);
+
+        let kick = classify(ReportedDrop {
+            reason: "Kicked",
+            resource: Some(&name),
+            category: Some(1),
+        });
+
+        assert_eq!(kick.kicker.unwrap().len(), MAX_RESOURCE_BYTES);
     }
 
     #[test]
