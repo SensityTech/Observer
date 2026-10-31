@@ -1,4 +1,4 @@
-// DESIGN.md's table recipe. A wide table scrolls inside its card, never the page.
+// The classes every table of the panel shares. A wide table scrolls inside its card, never the page.
 export const table = {
     scroll: 'relative overflow-x-auto rounded-b-card',
     table: 'w-full border-separate border-spacing-0 text-ui',

@@ -205,7 +205,8 @@ mod tests {
 
     use super::*;
 
-    /// Two endpoints and a key: a cfg the scan has nothing to say about.
+    /// Two endpoints and a key: a cfg the scan has nothing to say about. The key is a test fixture,
+    /// not a real one.
     const QUIET: &str = "endpoint_add_tcp \"0.0.0.0:30140\"\n\
                          endpoint_add_udp \"0.0.0.0:30140\"\n\
                          sv_licenseKey cfxk_ObserverLabFixture_k3y\n";

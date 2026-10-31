@@ -1,7 +1,7 @@
 // FXServer colours its output with SGR sequences (`ESC [ … m`), its channel prefixes with the 256
 // colour palette, and resources' `^n` codes arrive already turned into SGR. Observer keeps nothing
-// else of the escapes. The panel reads them into spans of the console's closed palette (DESIGN.md
-// §2.8), which components render as text, never as markup.
+// else of the escapes. The panel reads them into spans of the console's closed palette (eight
+// tones, one --term-* token each), which components render as text, never as markup.
 
 /** A colour of the console's palette: `bright` is the ink, `dim` the console's grey. */
 export type Tone = 'red' | 'green' | 'yellow' | 'blue' | 'magenta' | 'cyan' | 'bright' | 'dim';

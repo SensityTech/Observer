@@ -1,6 +1,6 @@
 /*
- * The application shell and the few shared pieces every page uses, ported from the validated mockup
- * (docs/design/mockups/style-a-client.html). Page content uses Tailwind utilities on the same tokens.
+ * The application shell and the few shared pieces every page uses, ported from the panel's design
+ * mockup. Page content uses Tailwind utilities on the same tokens.
  */
 
 @layer components {
@@ -318,7 +318,7 @@
         color: var(--ink);
     }
 
-    /* Start, Stop and Restart, at the right of the status bar (DESIGN.md §7.3). */
+    /* Start, Stop and Restart, at the right of the status bar. */
     .controls {
         display: flex;
         align-items: center;

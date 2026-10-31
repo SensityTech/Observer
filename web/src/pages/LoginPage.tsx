@@ -176,7 +176,7 @@ export function LoginPage() {
     );
 }
 
-/** The note "Forgot your password?" folds open, as Aperture's does: 250 ms on height and padding. */
+/** The note "Forgot your password?" folds open: 250 ms on height and padding. */
 function ForgotHelp({ open, onClose }: { open: boolean; onClose: () => void }) {
     const { t } = useI18n();
     const note = useRef<HTMLDivElement>(null);

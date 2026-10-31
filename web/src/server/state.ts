@@ -3,7 +3,7 @@ import type { ServerState } from '../api/generated/ServerState';
 import type { ServerStatus } from '../api/generated/ServerStatus';
 import type { Messages } from '../i18n/en';
 
-/** DESIGN.md §2.5: the LED and the colour of the word, never one without the other. */
+/** A state shows as its LED and the colour of its word, never one without the other. */
 export const STATE_LED = {
     online: 'led-live',
     degraded: 'led-warning',

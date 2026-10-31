@@ -1,12 +1,11 @@
 /*
  * The sign-in, setup and new-password pages: a ruled form rail on the left that follows the theme,
- * an always dark stage on the right with the dither iris around the mark. Ported from the validated
- * sign-in mockup (docs/design/mockups/login.html), itself a port of Aperture's sign-in; sizes,
- * spacing and motion are the mockup's, colours its tokens.
+ * an always dark stage on the right with the dither iris around the mark. Ported from the panel's
+ * sign-in mockup: sizes, spacing and motion are the mockup's, colours the shared tokens.
  */
 
 @layer base {
-    /* The few values the sign-in reads that the panel never needs (Aperture's kit). */
+    /* The few values the sign-in reads that the panel never needs. */
     :root {
         --r-panel: 20px;
         /* The Union Jack's own colours, fixed in both themes: a recoloured flag is no longer the flag. */
