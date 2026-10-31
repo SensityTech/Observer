@@ -464,9 +464,14 @@ fn block_scalar(text: &str, start: usize, line_end: usize) -> Option<Range<usize
 /// or the line break right after them, to its `END` marker. The block may span lines, fit on one,
 /// or sit in a string with its line breaks escaped (`\n`).
 fn private_keys(text: &str, found: &mut Vec<Range<usize>>) {
+    // A block hidden to the end of the text covers every marker after it: none is read again.
+    let mut covered = 0;
     for (begin, marker) in text.match_indices("-----BEGIN ") {
+        if begin < covered {
+            continue;
+        }
         let label = begin + marker.len();
-        let Some(close) = text[label..].find("-----").map(|end| label + end) else {
+        let Some(close) = find_near(text, label, "-----") else {
             continue;
         };
         let name = &text[label..close];
@@ -482,6 +487,7 @@ fn private_keys(text: &str, found: &mut Vec<Range<usize>>) {
         let body = text.len() - body_rest.len();
         let end = text[body..].find("-----END").map_or(text.len(), |end| body + end);
         found.push(body..end);
+        covered = end;
     }
 }
 
@@ -534,6 +540,19 @@ fn credentials(text: &str, value: Range<usize>) -> Range<usize> {
 /// the `value` attribute of such an element, and the `value` of a tag whose `key` or `name` is a
 /// secret's (`<add key="ApiKey" value="…"/>`). Attributes named like a secret are assignments. An
 /// element named `key`, as in a property list, names something rather than holds it.
+/// How far a quoted attribute value or a CDATA section is looked for: a text with many `<` and
+/// no closing quote would otherwise be read again from each of them.
+const MAX_MARKUP_VALUE: usize = 16 * 1024;
+
+/// Where `needle` first appears in `text` from `start`, within [`MAX_MARKUP_VALUE`] bytes.
+fn find_near(text: &str, start: usize, needle: &str) -> Option<usize> {
+    let mut limit = text.len().min(start + MAX_MARKUP_VALUE);
+    while !text.is_char_boundary(limit) {
+        limit -= 1;
+    }
+    text[start..limit].find(needle).map(|offset| start + offset)
+}
+
 fn xml(text: &str, found: &mut Vec<Range<usize>>) {
     for (open, _) in text.match_indices('<') {
         let from = open + 1;
@@ -604,7 +623,7 @@ impl<'a> Tag<'a> {
             let value = value.trim_start();
             let quote = value.chars().next().filter(|c| matches!(c, '"' | '\''))?;
             let start = text.len() - value.len() + 1;
-            let end = start + text[start..].find(quote)?;
+            let end = find_near(text, start, if quote == '"' { "\"" } else { "'" })?;
             attributes.push((&rest[..name_len], start..end));
             at = end + 1;
         }
@@ -620,7 +639,7 @@ fn element_text(text: &str, name: &str, start: usize) -> Option<Range<usize>> {
             return None;
         }
         let open = text.len() - cdata.len();
-        let close = open + cdata.find("]]>")?;
+        let close = find_near(text, open, "]]>")?;
         (open..close, close + "]]>".len())
     } else {
         let content = &text[start..next];
@@ -1151,6 +1170,24 @@ mod tests {
             masked(cfg, "server.cfg"),
             "# set mysql_connection_string [REDACTED]\n// setr steam_webApiKey [REDACTED]\n\
              #set discord_bot_token [REDACTED]\n  ## sets my_api_key [REDACTED]\n"
+        );
+    }
+
+    #[test]
+    fn markup_that_never_closes_is_read_quickly() {
+        let text = "<a x=\"".repeat(200_000);
+        let keys = "-----BEGIN PRIVATE KEY-----".repeat(40_000);
+        let started = std::time::Instant::now();
+
+        let found = secrets(&text, "resources/a/data.xml", false);
+        let hidden = secrets(&keys, "resources/a/keys.txt", false);
+
+        assert_eq!(found, []);
+        assert_eq!(hidden.len(), 1);
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "{:?}",
+            started.elapsed()
         );
     }
 
