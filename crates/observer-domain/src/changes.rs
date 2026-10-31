@@ -250,6 +250,82 @@ pub struct Package {
     pub version: Option<String>,
 }
 
+/// A piece of a line as the diff shows it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct Segment {
+    pub text: String,
+    /// Part of what changed in a line paired with its other version: a word, or a hidden secret.
+    pub changed: bool,
+    /// A hidden secret, whose text is `[REDACTED]`. Changed, it is a secret that changed.
+    pub redacted: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum DiffLineKind {
+    Context,
+    Added,
+    Removed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct DiffLine {
+    pub kind: DiffLineKind,
+    /// The line's number in the earlier version, from 1; none for an added line.
+    pub from: Option<u32>,
+    /// Its number in the later version; none for a removed line.
+    pub to: Option<u32>,
+    pub segments: Vec<Segment>,
+}
+
+/// A run of changed lines with the context around them, as `@@ -from,fromLines +to,toLines @@`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct Hunk {
+    pub from_start: u32,
+    pub from_lines: u32,
+    pub to_start: u32,
+    pub to_lines: u32,
+    pub lines: Vec<DiffLine>,
+}
+
+/// The lines of a text that changed between two versions, a page of them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct TextDiff {
+    pub added: u32,
+    pub removed: u32,
+    /// The versions differ in their line endings only.
+    pub line_endings_only: bool,
+    /// Lines on either side, which "Show more lines" reaches up to.
+    pub from_total: u32,
+    pub to_total: u32,
+    pub hunks: Vec<Hunk>,
+    /// From 0.
+    pub page: u32,
+    pub pages: u32,
+}
+
+/// A page of a whole text, masked.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct TextPage {
+    /// The number of the first line of the page, from 1.
+    pub first: u32,
+    pub lines: Vec<Vec<Segment>>,
+    pub total: u32,
+    pub page: u32,
+    pub pages: u32,
+}
+
 /// Whether one of the owner's globs covers `path`. A glob with `/` is a path from the data folder,
 /// matched one component at a time, and covers what lies below it; one without `/` matches a file
 /// or folder name anywhere. `*` and `?` are the only wildcards and `[` `]` stand for themselves,

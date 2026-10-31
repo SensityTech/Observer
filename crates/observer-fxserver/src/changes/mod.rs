@@ -4,6 +4,7 @@
 //! Nothing here writes to the server folder or runs anything from it.
 
 mod content;
+pub mod diff;
 mod git;
 mod manifest;
 pub mod mask;
