@@ -106,6 +106,10 @@ pub async fn run(config: Config, args: RunArgs) -> anyhow::Result<()> {
         .with_context(|| format!("cannot listen on {}", config.http.listen))?;
     announce(&config.http);
     let files = observer_app::Files::new(db.clone(), clock.clone(), accounts.clone());
+    // Whether or not SFTP is on now, a crash may have left uploads from when it was.
+    if let Err(error) = observer_sftp::sweep_uploads(&files).await {
+        warn!(%error, "the temporary SFTP uploads could not all be removed");
+    }
     // Right after the panel's port, so that a port taken stops Observer before FXServer starts.
     let sftp_listener = match &config.sftp {
         Some(sftp) => {

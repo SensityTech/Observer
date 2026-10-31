@@ -220,6 +220,12 @@ impl russh::server::Handler for Connection {
         session
             .channel_success(id)
             .map_err(|error| Error::Io(std::io::Error::other(error.to_string())))?;
+        tokio::spawn(revoke_on_change(
+            self.files.clone(),
+            grant.clone(),
+            self.ip,
+            session.handle(),
+        ));
         let handler = handler::Sftp::new(self.files.clone(), grant, self.ip.to_string(), tree);
         russh_sftp::server::run(channel.into_stream(), handler).await;
         Ok(())
@@ -266,6 +272,73 @@ impl russh::server::Handler for Connection {
         refuse(session, id);
         Ok(())
     }
+}
+
+/// How often a session checks its access again, for changes made from the command line, which
+/// no in-process signal reports.
+const RECHECK: Duration = Duration::from_secs(15);
+
+/// Ends the session once its access changes: a group or a rule, a key removed, the access
+/// disabled or expired, the server folder moved.
+async fn revoke_on_change(files: Files, grant: Grant, ip: IpAddr, handle: russh::server::Handle) {
+    let mut changes = files.changes();
+    let mut recheck = tokio::time::interval(RECHECK);
+    recheck.tick().await;
+    loop {
+        tokio::select! {
+            changed = changes.changed() => {
+                if changed.is_err() {
+                    return;
+                }
+            }
+            _ = recheck.tick() => {}
+        }
+        match files.still_granted(&grant, ip).await {
+            Ok(true) => {}
+            Ok(false) => {
+                tracing::info!(login = %grant.login, "an SFTP session ended: its access changed");
+                let _ = handle
+                    .disconnect(
+                        russh::Disconnect::ByApplication,
+                        "access changed, reconnect".to_owned(),
+                        "en".to_owned(),
+                    )
+                    .await;
+                return;
+            }
+            Err(error) => tracing::warn!(%error, "an SFTP session's access could not be checked again"),
+        }
+    }
+}
+
+/// Removes the temporary upload files a crash left, each under the root it was made in, and
+/// forgets them. Only an exact upload name is removed, never through a link.
+pub async fn sweep_uploads(files: &Files) -> Result<(), Error> {
+    for upload in files.uploads().await? {
+        let name = upload.name.clone();
+        let folder = upload.folder.clone();
+        let root = upload.root.clone();
+        let removed = tokio::task::spawn_blocking(move || {
+            if !name.starts_with(observer_domain::files::UPLOAD_PREFIX) {
+                return Ok(());
+            }
+            let tree = ConfinedTree::open(Path::new(&root)).map_err(observer_platform::TreeError::Io)?;
+            let folder =
+                observer_platform::RelativePath::new(folder.split('/').filter(|part| !part.is_empty()))
+                    .map_err(|_| observer_platform::TreeError::Escaped)?;
+            match tree.remove_file(&tree.open_folder(&folder)?, &name) {
+                Ok(()) | Err(observer_platform::TreeError::NotFound) => Ok(()),
+                Err(error) => Err(error),
+            }
+        })
+        .await
+        .map_err(std::io::Error::other)?;
+        if let Err(error) = removed {
+            tracing::warn!(%error, root = %upload.root, "a temporary upload file could not be removed");
+        }
+        files.forget_upload(upload.id).await?;
+    }
+    Ok(())
 }
 
 /// Answers a channel request with a failure, so that a client never waits for a reply.

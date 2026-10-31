@@ -27,6 +27,8 @@ struct Lab {
     address: std::net::SocketAddr,
     stop: CancellationToken,
     key: Arc<PrivateKey>,
+    files: Files,
+    linus: i64,
 }
 
 struct Client;
@@ -80,75 +82,81 @@ impl Lab {
             PrivateKey::new(KeypairData::Ed25519(Ed25519Keypair::from_seed(&[7; 32])), "linus").unwrap();
         let fingerprint = key.fingerprint(HashAlg::Sha256).to_string();
         let data_path = root.to_string_lossy().into_owned();
-        db.write(move |tx| {
-            let now = jiff::Timestamp::now();
-            let user = users::insert(
-                tx,
-                &NewUser {
-                    username: "linus",
-                    password_hash: "unused",
-                    is_owner: false,
-                    permissions: Permissions::NONE,
-                    must_change_password: false,
-                    password_expires_at: None,
-                    created_at: now,
-                },
-            )?
-            .unwrap();
-            let rules = vec![
-                rule(Effect::Allow, "resources", &[], Rights::FULL),
-                rule(
-                    Effect::Deny,
-                    "",
-                    &["*.cfg"],
-                    Rights::of(&[Right::Read, Right::Modify]),
-                ),
-            ];
-            let group = file_store::insert_group(tx, "default", "Developers", "", &rules, now)?.unwrap();
-            let access = file_store::user_access_or_new(tx, user, now)?;
-            file_store::set_access_groups(tx, access.id, &[group])?;
-            file_store::insert_key(
-                tx,
-                &FileKeyRow {
-                    id: 0,
-                    access_id: access.id,
-                    algorithm: "ssh-ed25519".to_owned(),
-                    public_key: Vec::new(),
-                    fingerprint,
-                    comment: String::new(),
-                    created_at: now,
-                    expires_at: None,
-                    last_used_at: None,
-                    last_used_ip: None,
-                },
-            )?;
-            launch::save(
-                tx,
-                "default",
-                &StoredLaunch {
-                    settings: LaunchSettings {
-                        data_path,
-                        cfg_file: "server.cfg".to_owned(),
-                        onesync: OneSync::On,
-                        auto_start: false,
-                        txadmin_events: false,
-                        extra_arguments: Vec::new(),
+        let linus = db
+            .write(move |tx| {
+                let now = jiff::Timestamp::now();
+                let user = users::insert(
+                    tx,
+                    &NewUser {
+                        username: "linus",
+                        password_hash: "unused",
+                        is_owner: false,
+                        permissions: Permissions::NONE,
+                        must_change_password: false,
+                        password_expires_at: None,
+                        created_at: now,
                     },
-                    version: 1,
-                    legacy_build_path: None,
-                },
-                now,
-            )?;
-            Ok::<_, StoreError>(())
-        })
-        .await
-        .unwrap();
+                )?
+                .unwrap();
+                let rules = vec![
+                    rule(Effect::Allow, "resources", &[], Rights::FULL),
+                    rule(
+                        Effect::Deny,
+                        "",
+                        &["*.cfg"],
+                        Rights::of(&[Right::Read, Right::Modify]),
+                    ),
+                ];
+                let group = file_store::insert_group(tx, "default", "Developers", "", &rules, now)?.unwrap();
+                let access = file_store::user_access_or_new(tx, user, now)?;
+                file_store::set_access_groups(tx, access.id, &[group])?;
+                file_store::insert_key(
+                    tx,
+                    &FileKeyRow {
+                        id: 0,
+                        access_id: access.id,
+                        algorithm: "ssh-ed25519".to_owned(),
+                        public_key: Vec::new(),
+                        fingerprint,
+                        comment: String::new(),
+                        created_at: now,
+                        expires_at: None,
+                        last_used_at: None,
+                        last_used_ip: None,
+                    },
+                )?;
+                launch::save(
+                    tx,
+                    "default",
+                    &StoredLaunch {
+                        settings: LaunchSettings {
+                            data_path,
+                            cfg_file: "server.cfg".to_owned(),
+                            onesync: OneSync::On,
+                            auto_start: false,
+                            txadmin_events: false,
+                            extra_arguments: Vec::new(),
+                        },
+                        version: 1,
+                        legacy_build_path: None,
+                    },
+                    now,
+                )?;
+                Ok::<_, StoreError>(user)
+            })
+            .await
+            .unwrap();
 
         let host_key = observer_sftp::host_key(&files).await.unwrap();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let stop = CancellationToken::new();
-        tokio::spawn(observer_sftp::serve(listener, files, host_key, stop.clone()));
+        tokio::spawn(observer_sftp::serve(
+            listener,
+            files.clone(),
+            host_key,
+            stop.clone(),
+        ));
         Self {
             _dir: dir,
             root,
@@ -156,6 +164,8 @@ impl Lab {
             address,
             stop,
             key: Arc::new(key),
+            files,
+            linus,
         }
     }
 
@@ -263,5 +273,50 @@ async fn a_key_login_reads_writes_and_renames_within_its_rules_and_nothing_else(
 
     assert_eq!(lab.entries(AuditAction::FileWritten).await, 1);
     assert_eq!(lab.entries(AuditAction::FileRenamed).await, 1);
+    lab.stop.cancel();
+}
+
+#[tokio::test]
+async fn a_session_ends_as_soon_as_its_groups_are_taken_away() {
+    let lab = Lab::new().await;
+    let sftp = lab.connect("linus", Arc::clone(&lab.key)).await.unwrap();
+    assert!(
+        sftp.read("/resources/[maps]/harbour/fxmanifest.lua")
+            .await
+            .is_ok()
+    );
+    let owner = observer_app::Caller {
+        session_id: 0,
+        user_id: 0,
+        username: "ada".to_owned(),
+        is_owner: true,
+        permissions: Permissions::NONE,
+        must_change_password: false,
+        reauthenticated_at: None,
+        client: observer_app::Client {
+            ip: "127.0.0.1".parse().unwrap(),
+            user_agent: None,
+        },
+    };
+
+    lab.files
+        .set_user_groups(&owner, lab.linus, Vec::new())
+        .await
+        .unwrap();
+
+    let mut ended = false;
+    for _ in 0..50 {
+        if sftp
+            .read("/resources/[maps]/harbour/fxmanifest.lua")
+            .await
+            .is_err()
+        {
+            ended = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert!(ended, "the session still reads after its groups were taken away");
+    assert!(lab.connect("linus", Arc::clone(&lab.key)).await.is_none());
     lab.stop.cancel();
 }

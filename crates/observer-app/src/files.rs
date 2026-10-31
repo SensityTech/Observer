@@ -429,6 +429,43 @@ impl Files {
         Ok(self.db.write(move |tx| record.write(tx, now)).await?)
     }
 
+    /// Whether a session may go on as it logged in: the same access, key and groups, still
+    /// usable. Any change ends the session rather than changing its rights mid-transfer.
+    pub async fn still_granted(&self, grant: &Grant, ip: IpAddr) -> Result<bool, Error> {
+        let now = self.clock.now();
+        let grant = grant.clone();
+        Ok(self
+            .db
+            .read(move |conn| {
+                let Some(access) = store::access(conn, grant.access_id)? else {
+                    return Ok::<_, StoreError>(false);
+                };
+                let Some(key) = store::keys(conn, access.id)?
+                    .into_iter()
+                    .find(|key| key.id == grant.key_id)
+                else {
+                    return Ok(false);
+                };
+                let groups: Vec<(i64, Vec<Rule>)> = store::access_groups(conn, access.id)?
+                    .into_iter()
+                    .map(|group| (group.id, group.rules))
+                    .collect();
+                let user_usable = match access.user_id {
+                    Some(id) => users::get(conn, id)?.is_some_and(|user| !user.must_change_password),
+                    None => true,
+                };
+                let root = launch::get(conn, SERVER)?.map(|launch| launch.settings.data_path);
+                Ok(access.enabled
+                    && access.expires_at.is_none_or(|end| end > now)
+                    && key.expires_at.is_none_or(|end| end > now)
+                    && files::network_allows(&access.networks, ip)
+                    && user_usable
+                    && groups == grant.groups
+                    && root.as_deref() == Some(grant.root.as_str()))
+            })
+            .await?)
+    }
+
     /// The signed-in account's login, keys and groups.
     pub async fn my_access(&self, caller: &Caller) -> Result<MyFileAccess, Error> {
         let user_id = caller.user_id;
