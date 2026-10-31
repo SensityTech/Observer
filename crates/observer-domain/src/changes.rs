@@ -48,8 +48,6 @@ pub struct ChangesSettings {
     pub hash_rate: u64,
     /// Days between two full verifications; 0 for none.
     pub verify_days: u32,
-    /// Minutes between two checks of the disk while the server runs; 0 for none.
-    pub drift_minutes: u32,
     /// Raise `observer:startChanges` once per run.
     pub start_event: bool,
 }
@@ -69,7 +67,6 @@ impl Default for ChangesSettings {
             retention_days: 180,
             hash_rate: 64_000_000,
             verify_days: 7,
-            drift_minutes: 0,
             start_event: true,
         }
     }

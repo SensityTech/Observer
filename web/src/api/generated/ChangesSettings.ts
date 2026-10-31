@@ -37,10 +37,6 @@ hashRate: number,
  */
 verifyDays: number, 
 /**
- * Minutes between two checks of the disk while the server runs; 0 for none.
- */
-driftMinutes: number, 
-/**
  * Raise `observer:startChanges` once per run.
  */
 startEvent: boolean, };

@@ -737,7 +737,6 @@ fn checked(mut settings: ChangesSettings) -> Result<ChangesSettings, Error> {
             (1_000_000..=10_000_000_000).contains(&settings.hash_rate),
         ),
         ("verifyDays", settings.verify_days <= 365),
-        ("driftMinutes", settings.drift_minutes <= 1440),
     ];
     if let Some((field, _)) = ranges.into_iter().find(|(_, valid)| !valid) {
         return Err(invalid(field).into());
