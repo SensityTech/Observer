@@ -267,7 +267,7 @@ fn changed_resources(
 }
 
 /// What a read of a diff is audited with: the path before only when the file moved.
-fn diff_details(from: i64, to: i64, from_path: Option<String>, resource: Option<String>) -> Value {
+fn diff_details(from: i64, to: i64, from_path: Option<String>, resource: Option<&str>) -> Value {
     let mut details = json!({ "from": from, "to": to, "resource": resource, "view": "diff" });
     if let (Some(from_path), Value::Object(fields)) = (from_path, &mut details) {
         fields.insert("fromPath".to_owned(), Value::String(from_path));
@@ -957,7 +957,7 @@ impl Changes {
                 caller,
                 &path,
                 chain,
-                diff_details(from_id, to_id, asked_from.filter(|_| !chain), resource),
+                diff_details(from_id, to_id, asked_from.filter(|_| !chain), resource.as_deref()),
             )
             .await?;
         }
