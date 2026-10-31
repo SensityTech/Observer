@@ -869,7 +869,9 @@ export const isSnapshotSummary = (value: unknown): value is SnapshotSummary =>
     orNull(isCount)(value.files) &&
     orNull(isCount)(value.bytes) &&
     orNull(isChangeCounts)(value.counts) &&
-    isFlag(value.crashed);
+    isFlag(value.crashed) &&
+    orNull(isTimestamp)(value.runStarted) &&
+    orNull(isCount)(value.generation);
 
 export const isChangesLive = (value: unknown): value is ChangesLive =>
     isRecord(value) && orNull(isSnapshotSummary)(value.latest) && orNull(isSnapshotSummary)(value.check);

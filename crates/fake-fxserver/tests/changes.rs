@@ -471,7 +471,7 @@ async fn the_restart_compares_with_the_start_before_and_tells_resources_what_cha
     let client = "resources/chat/client.lua".to_owned();
     let diff = lab
         .changes
-        .diff(&lab.owner, None, None, client, DiffOptions::default())
+        .diff(&lab.owner, None, None, (client, None), DiffOptions::default())
         .await
         .unwrap();
     let added = &diff.diff.unwrap().hunks[0].lines[1];
@@ -483,7 +483,7 @@ async fn the_restart_compares_with_the_start_before_and_tells_resources_what_cha
             &lab.owner,
             None,
             None,
-            "server.cfg".to_owned(),
+            ("server.cfg".to_owned(), None),
             DiffOptions::default(),
         )
         .await
@@ -589,7 +589,7 @@ async fn a_check_shows_at_once_and_is_audited_and_the_cfg_chain_stays_the_owners
             &member,
             Some(first.id),
             start,
-            "server.cfg".to_owned(),
+            ("server.cfg".to_owned(), None),
             DiffOptions::default(),
         )
         .await

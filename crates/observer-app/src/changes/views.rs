@@ -834,31 +834,35 @@ impl Changes {
             .await
     }
 
-    /// A file's diff between two snapshots, masked. The owner alone reads the cfg exec chain;
-    /// hidden files never; each read is audited once an hour per account, file and pair.
+    /// A file's diff between two snapshots, masked: `path` in `to`, and `from_path` in `from` when
+    /// the file or its resource moved. The owner alone reads the cfg exec chain; hidden files
+    /// never; each read is audited once an hour per account, file and pair.
     pub async fn diff(
         &self,
         caller: &Caller,
         from: Option<i64>,
         to: Option<ComparedTo>,
-        path: String,
+        (path, from_path): (String, Option<String>),
         options: DiffOptions,
     ) -> Result<FileDiff, Error> {
         let hidden_globs = self.settings().hidden;
-        if hidden(&path, &hidden_globs) {
-            return Err(ApiError::new(ErrorCode::ContentHidden)
-                .with("glob", compare::hidden_by(&path, &hidden_globs))
-                .into());
+        for path in std::iter::once(&path).chain(&from_path) {
+            if hidden(path, &hidden_globs) {
+                return Err(ApiError::new(ErrorCode::ContentHidden)
+                    .with("glob", compare::hidden_by(path, &hidden_globs))
+                    .into());
+            }
         }
         let owner = caller.is_owner;
         let lookup = path.clone();
+        let earlier = from_path.unwrap_or_else(|| path.clone());
         let (from_id, to_id, resource, chain, file, diff) = self
             .inner
             .shared
             .store
             .read(move |conn| -> Result<_, Error> {
                 let (from, to) = snapshots_of(conn, from, to)?;
-                let (before, after) = (located(conn, &from, &lookup)?, located(conn, &to, &lookup)?);
+                let (before, after) = (located(conn, &from, &earlier)?, located(conn, &to, &lookup)?);
                 if before.is_none() && after.is_none() {
                     return Err(ErrorCode::NotFound.into());
                 }

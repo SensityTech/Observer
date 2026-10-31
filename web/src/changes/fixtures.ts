@@ -26,6 +26,8 @@ export const BASELINE: SnapshotSummary = {
     bytes: 4_812_000_000,
     counts: null,
     crashed: true,
+    runStarted: '2026-10-29T07:59:58Z',
+    generation: 1,
 };
 
 export const RESTART: SnapshotSummary = {

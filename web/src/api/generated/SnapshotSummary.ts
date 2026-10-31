@@ -16,4 +16,8 @@ counts: ChangeCounts | null,
 /**
  * The run it started ended in a crash.
  */
-crashed: boolean, };
+crashed: boolean, 
+/**
+ * The run it started, by which a crash finds the start before it.
+ */
+runStarted: string | null, generation: number | null, };

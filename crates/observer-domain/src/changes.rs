@@ -320,6 +320,9 @@ pub struct SnapshotSummary {
     pub counts: Option<ChangeCounts>,
     /// The run it started ended in a crash.
     pub crashed: bool,
+    /// The run it started, by which a crash finds the start before it.
+    pub run_started: Option<Timestamp>,
+    pub generation: Option<u32>,
 }
 
 /// `GET /servers/default/changes/starts`: starts newest first, a page of them.

@@ -45,6 +45,9 @@ pub(crate) struct DiffQuery {
     from: Option<String>,
     to: Option<String>,
     path: String,
+    /// The file's path in `from`, when it or its resource moved.
+    #[serde(rename = "fromPath")]
+    from_path: Option<String>,
     page: Option<String>,
     context: Option<String>,
     whitespace: Option<String>,
@@ -164,8 +167,12 @@ pub(crate) async fn diff(
         },
         page: number("page", query.page.as_deref(), 0, usize::MAX)?,
     };
+    let from_path = query.from_path.map(path).transpose()?;
     let path = path(query.path)?;
-    let diff = state.changes.diff(&caller, from, to, path, options).await;
+    let diff = state
+        .changes
+        .diff(&caller, from, to, (path, from_path), options)
+        .await;
     Ok(Json(
         owner_only(&state, &caller, "/api/servers/default/changes/diff", diff).await?,
     ))

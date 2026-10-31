@@ -305,7 +305,11 @@ fn change(before: Option<&TreeEntry>, after: Option<&TreeEntry>, hidden_globs: &
     };
     FileChange {
         path: shown.path.clone(),
-        from_path: None,
+        // A file of a resource that moved, or a file found under another path.
+        from_path: before
+            .zip(after)
+            .filter(|(a, b)| a.path != b.path)
+            .map(|(a, _)| a.path.clone()),
         kind,
         change,
         from_size: before.map(|entry| entry.size),
@@ -439,10 +443,11 @@ pub(crate) fn summary(snapshot: &Snapshot, counts: Option<ChangeCounts>, crashed
         bytes: snapshot.bytes,
         counts,
         crashed,
+        run_started: snapshot.run_started,
+        generation: snapshot.generation,
     }
 }
 
-/// Whether the snapshot's job is over: a resource still without a tree then stays unknown.
 /// Whether the listing left resources out, at a limit or in a category it could not read: one
 /// missing from it is not known to be gone.
 pub(crate) fn shortened(snapshot: &Snapshot) -> bool {
@@ -452,6 +457,7 @@ pub(crate) fn shortened(snapshot: &Snapshot) -> bool {
     )
 }
 
+/// Whether the snapshot's job is over: a resource still without a tree then stays unknown.
 pub(crate) fn settled(snapshot: &Snapshot) -> bool {
     snapshot.settled() && !(snapshot.kind == SnapshotKind::Start && snapshot.state == SnapshotState::Listing)
 }
@@ -713,6 +719,9 @@ mod tests {
             ]
         );
         assert_eq!(files[4].from_path.as_deref(), Some("resources/a/old.lua"));
+        // The resource moved: each file says where it was, which its diff reads.
+        assert_eq!(files[2].from_path.as_deref(), Some("resources/a/edit.lua"));
+        assert_eq!(files[3].from_path.as_deref(), Some("resources/a/keep.lua"));
         assert_eq!(
             file_counts(&files),
             FileCounts {
