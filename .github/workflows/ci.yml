@@ -58,6 +58,7 @@ jobs:
       - run: cargo fmt --all --check
         if: runner.os == 'Linux'
       - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo clippy -p observer --features test-catalog --all-targets -- -D warnings
       - run: cargo test --workspace
       - name: TypeScript bindings are up to date
         if: runner.os == 'Linux'
@@ -88,7 +89,8 @@ jobs:
           shared-key: e2e
       - name: The icons are drawn from the mark
         run: cargo xtask icons --check
-      - run: cargo build --locked -p observer -p fake-fxserver
+      # The test catalog lets the flows install a build from the fake instead of Cfx.re.
+      - run: cargo build --locked -p observer -p fake-fxserver --features observer/test-catalog
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
