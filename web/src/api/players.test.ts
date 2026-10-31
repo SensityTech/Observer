@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
 import type { Community } from './generated/Community';
+import type { PlayersImport } from './generated/PlayersImport';
 import {
     dayBefore,
     fillDays,
+    importQuery,
     playersSearch,
     retentionIssues,
     shortLicence,
@@ -93,5 +95,32 @@ describe('weeklyPoints', () => {
         expect(weeks.map((week) => week.newPlayers)).toEqual([3, 4, 3, 4]);
         expect(weeks.every((week) => week.playMs === 7 * 3_600_000)).toBe(true);
         expect(weeks.map((week) => week.today)).toEqual([false, false, false, true]);
+    });
+});
+
+/** An import as the API reports it, in `state`. */
+const job = (state: PlayersImport['state']): PlayersImport => ({
+    state,
+    startedAt: '2026-10-30T20:00:00Z',
+    finishedAt: state === 'writing' ? null : '2026-10-30T20:01:00Z',
+    bytes: 1_024,
+    read: 10,
+    written: 4,
+    imported: 0,
+    updated: 0,
+    forgotten: 0,
+    invalid: 0,
+});
+
+describe('importQuery', () => {
+    it('should read the import again every 2 s while it writes, and stop once it ended', () => {
+        const every = importQuery.refetchInterval as (query: {
+            state: { data: PlayersImport | null | undefined };
+        }) => number | false;
+
+        expect(every({ state: { data: job('writing') } })).toBe(2_000);
+        expect(every({ state: { data: job('finished') } })).toBe(false);
+        expect(every({ state: { data: job('failed') } })).toBe(false);
+        expect(every({ state: { data: null } })).toBe(false);
     });
 });

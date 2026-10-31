@@ -23,8 +23,8 @@ import { SetupPage } from './pages/SetupPage';
 import { AppShell } from './shell/AppShell';
 
 // Pages beyond the Overview load when someone opens them: the console's virtual list and colour
-// parser, the restart schedule, the diagnostics, the owner's launch settings and server setup, the
-// accounts and the audit log are no one's landing page.
+// parser, the restart schedule, the diagnostics, the players, the owner's launch settings and
+// server setup, the accounts and the audit log are no one's landing page.
 const ConsolePage = lazyCode(() =>
     import('./pages/ConsolePage').then((page) => ({ default: page.ConsolePage })),
 );
@@ -45,6 +45,12 @@ const AuditPage = lazyCode(() => import('./pages/AuditPage').then((page) => ({ d
 const AboutPage = lazyCode(() => import('./pages/AboutPage').then((page) => ({ default: page.AboutPage })));
 const DiagnosticsPage = lazyCode(() =>
     import('./pages/DiagnosticsPage').then((page) => ({ default: page.DiagnosticsPage })),
+);
+const PlayersPage = lazyCode(() =>
+    import('./pages/PlayersPage').then((page) => ({ default: page.PlayersPage })),
+);
+const PlayerPage = lazyCode(() =>
+    import('./pages/PlayerPage').then((page) => ({ default: page.PlayerPage })),
 );
 
 type RouterContext = { queryClient: QueryClient };
@@ -178,6 +184,26 @@ const diagnosticsRoute = createRoute({
     ),
 });
 
+const playersRoute = createRoute({
+    getParentRoute: () => panelRoute,
+    path: '/players',
+    component: () => (
+        <RequirePermission name="PlayersView">
+            <PlayersPage />
+        </RequirePermission>
+    ),
+});
+
+const playerRoute = createRoute({
+    getParentRoute: () => panelRoute,
+    path: '/players/$id',
+    component: () => (
+        <RequirePermission name="PlayersView">
+            <PlayerPage />
+        </RequirePermission>
+    ),
+});
+
 const serverRoute = createRoute({
     getParentRoute: () => panelRoute,
     path: '/server',
@@ -241,6 +267,8 @@ const routeTree = rootRoute.addChildren([
         scheduleRoute,
         artifactsRoute,
         diagnosticsRoute,
+        playersRoute,
+        playerRoute,
         serverRoute,
         serverSetupRoute,
         usersRoute,
@@ -262,5 +290,9 @@ export const createPanelRouter = (queryClient: QueryClient) =>
 declare module '@tanstack/react-router' {
     interface Register {
         router: ReturnType<typeof createPanelRouter>;
+    }
+    interface HistoryState {
+        /** Set on the way back to the players list from a profile just forgotten. */
+        forgotten?: boolean;
     }
 }
