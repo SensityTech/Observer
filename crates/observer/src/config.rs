@@ -16,7 +16,16 @@ pub struct Config {
     /// started from anywhere finds the same data.
     pub data_dir: PathBuf,
     pub http: HttpConfig,
+    /// SFTP opens a new network service, so it stays off until the owner adds this section.
+    pub sftp: Option<SftpConfig>,
     pub log: LogConfig,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SftpConfig {
+    /// Such as `0.0.0.0:40126`.
+    pub listen: SocketAddr,
 }
 
 #[derive(Debug, Deserialize)]
@@ -44,6 +53,7 @@ impl Default for Config {
         Self {
             data_dir: PathBuf::from("data"),
             http: HttpConfig::default(),
+            sftp: None,
             log: LogConfig::default(),
         }
     }
@@ -161,6 +171,33 @@ mod tests {
             .collect();
         assert_eq!(config.http.trusted_proxies, proxies);
         assert_eq!(config.log.level, "info");
+    }
+
+    #[test]
+    fn sftp_stays_off_until_its_section_names_where_to_listen() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("observer.toml");
+        assert!(Config::load(&path).unwrap().sftp.is_none());
+
+        fs::write(
+            &path,
+            "[sftp]
+listen = \"0.0.0.0:40126\"
+",
+        )
+        .unwrap();
+        let sftp = Config::load(&path).unwrap().sftp.unwrap();
+        assert_eq!(sftp.listen.port(), 40126);
+
+        fs::write(
+            &path, "[sftp]
+",
+        )
+        .unwrap();
+        assert!(
+            Config::load(&path).is_err(),
+            "a section without listen is a mistake, not SFTP off"
+        );
     }
 
     #[test]

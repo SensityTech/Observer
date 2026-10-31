@@ -21,6 +21,9 @@ use russh::{Channel, ChannelId, MethodKind, MethodSet, Preferred, cipher, kex, m
 use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
 
+/// How fingerprints are shown, as OpenSSH prints them.
+pub const FINGERPRINT: HashAlg = HashAlg::Sha256;
+
 /// The user key algorithms accepted, and the host key's.
 const KEY_ALGORITHMS: [Algorithm; 3] = [
     Algorithm::Ed25519,
