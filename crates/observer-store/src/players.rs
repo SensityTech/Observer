@@ -100,16 +100,18 @@ fn record_name(
     Ok(())
 }
 
-/// The record that the session `key` of `player` is open and not credited yet.
+/// The record that the metrics database's `session` of `player`, credited under `key`, is open
+/// and not credited yet.
 pub fn open_credit(
     tx: &Transaction<'_>,
     key: [u8; 16],
     player: i64,
     started: Timestamp,
+    session: i64,
 ) -> Result<(), StoreError> {
     tx.execute(
-        "INSERT OR IGNORE INTO player_open_session (key, player, started) VALUES (?1, ?2, ?3)",
-        params![key, player, Utc(started)],
+        "INSERT OR IGNORE INTO player_open_session (key, player, started, session) VALUES (?1, ?2, ?3, ?4)",
+        params![key, player, Utc(started), session],
     )?;
     Ok(())
 }
@@ -174,15 +176,17 @@ pub struct OpenRecord {
     pub key: [u8; 16],
     pub player: i64,
     pub started: Timestamp,
+    pub session: i64,
 }
 
 pub fn open_records(conn: &Connection) -> Result<Vec<OpenRecord>, StoreError> {
-    let mut statement = conn.prepare("SELECT key, player, started FROM player_open_session")?;
+    let mut statement = conn.prepare("SELECT key, player, started, session FROM player_open_session")?;
     let rows = statement.query_map([], |row| {
         Ok(OpenRecord {
             key: row.get(0)?,
             player: row.get(1)?,
             started: row.get::<_, Utc>(2)?.0,
+            session: row.get(3)?,
         })
     })?;
     Ok(rows.collect::<Result<_, _>>()?)
@@ -623,16 +627,15 @@ pub struct Forgotten {
     pub pseudonym: [u8; 16],
 }
 
-/// Deletes a player with everything that hangs on them, and the identifiers nobody else holds,
-/// with SQLite's secure delete on so that the rows do not stay readable in free pages. Records
-/// the licence's fingerprint as forgotten.
+/// Deletes a player with everything that hangs on them, and the identifiers nobody else holds, and
+/// records the licence's fingerprint as forgotten. Both databases overwrite what they delete
+/// (`secure_delete`), so the rows do not stay readable in free space.
 pub fn forget(
     tx: &Transaction<'_>,
     player: i64,
     fingerprint: [u8; 16],
     at: Timestamp,
 ) -> Result<Option<Forgotten>, StoreError> {
-    tx.pragma_update(None, "secure_delete", true)?;
     let forgotten = tx
         .query_row(
             "DELETE FROM player WHERE id = ?1 RETURNING license, pseudonym",
@@ -649,7 +652,6 @@ pub fn forget(
         drop_unheld_identifiers(tx)?;
         remember_forgotten(tx, fingerprint, at)?;
     }
-    tx.pragma_update(None, "secure_delete", false)?;
     Ok(forgotten)
 }
 
@@ -682,8 +684,7 @@ pub fn licenses(conn: &Connection) -> Result<Vec<(i64, String, Timestamp)>, Stor
 
 /// Writes the WAL back into the database file, so that deleted rows leave it too.
 pub fn checkpoint(conn: &Connection) -> Result<(), StoreError> {
-    conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))?;
-    Ok(())
+    crate::database::checkpoint(conn)
 }
 
 /// A player of txAdmin's players database.

@@ -90,6 +90,12 @@ impl MetricsDatabase {
         call(&self.reader, move |conn| function(conn)).await
     }
 
+    /// Writes the log back into the file and truncates it, so that what was overwritten leaves
+    /// both.
+    pub async fn checkpoint(&self) -> Result<(), StoreError> {
+        call(&self.conn, |conn| crate::database::checkpoint(conn)).await
+    }
+
     pub async fn close(self) -> Result<(), StoreError> {
         // The writer goes last: closing it checkpoints the log into the file.
         self.reader.close().await.map_err(|_| StoreError::Closed)?;
@@ -122,6 +128,8 @@ fn open_blocking(path: &Path) -> Result<Connection, StoreError> {
     conn.pragma_update(None, "synchronous", "NORMAL")?;
     conn.pragma_update(None, "trusted_schema", false)?;
     conn.pragma_update(None, "journal_size_limit", 64 * 1024 * 1024)?;
+    // A forgotten player's texts are overwritten, not only unlinked, where that costs no I/O.
+    conn.pragma_update(None, "secure_delete", "FAST")?;
     conn.busy_timeout(Duration::from_secs(5))?;
     let verdict: String = conn.query_row("PRAGMA quick_check", [], |row| row.get(0))?;
     if verdict != "ok" {

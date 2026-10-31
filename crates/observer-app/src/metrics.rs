@@ -1,7 +1,7 @@
 //! The statistics: a sample of FXServer, the host and Observer at the end of every five-second
 //! slot, kept in the metrics database with its aggregates, and sent live to the dashboards.
 
-mod runs;
+pub(crate) mod runs;
 mod sampler;
 mod upkeep;
 

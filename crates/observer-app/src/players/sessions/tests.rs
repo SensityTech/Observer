@@ -6,6 +6,7 @@ use super::*;
 
 const LICENSE: &str = "license:0123456789abcdef0123456789abcdef01234567";
 const OTHER: &str = "license:ffffffffffffffffffffffffffffffffffffffff";
+const DISCORD: &str = "discord:123456789012345678";
 const START_MS: i64 = 1_761_900_000_000;
 const RUN: RunKey = RunKey {
     observer_started: START_MS,
@@ -18,6 +19,9 @@ struct Bench {
     origin: Instant,
 }
 
+/// A closure as the tests look at it: session, category, kind, length, synthesized.
+type Summary = (i64, DropCategory, Option<DropKind>, Option<i64>, bool);
+
 impl Bench {
     fn new() -> Self {
         let mut next = 0u8;
@@ -28,11 +32,12 @@ impl Bench {
                 [next; 16]
             }),
         );
-        sessions.spawned(RUN, START_MS);
+        let origin = Instant::now();
+        sessions.spawned(RUN, origin);
         Self {
             sessions,
             fingerprints: Fingerprints::new([1; 32]),
-            origin: Instant::now(),
+            origin,
         }
     }
 
@@ -87,7 +92,7 @@ impl Bench {
                 .iter()
                 .map(|(id, license, name)| Listed {
                     id: *id,
-                    identifiers: vec![(*license).to_owned(), "discord:123456789012345678".to_owned()],
+                    identifiers: vec![(*license).to_owned(), DISCORD.to_owned()],
                     name: Some((*name).to_owned()),
                 })
                 .collect(),
@@ -96,35 +101,68 @@ impl Bench {
         self.sessions.listed(1, &list, list_ms, at);
     }
 
-    fn closures(&mut self) -> Vec<ClosureWrite> {
-        mem::take(&mut self.sessions.writes.closures)
+    fn exit(&mut self, second: u64, expected: bool) {
+        let (at_ms, now) = self.at(second);
+        self.sessions.exited(1, at_ms, expected, now);
     }
+
+    fn closes(&mut self) -> Vec<Summary> {
+        closes(&self.sessions.take_writes())
+            .iter()
+            .map(|(closure, _)| summary(closure))
+            .collect()
+    }
+}
+
+fn opens(writes: &Writes) -> Vec<&NewSession> {
+    writes
+        .sessions
+        .iter()
+        .filter_map(|write| match write {
+            SessionWrite::Open(session) => Some(session),
+            _ => None,
+        })
+        .collect()
+}
+
+fn closes(writes: &Writes) -> Vec<(&Closure, Option<[u8; 16]>)> {
+    writes
+        .sessions
+        .iter()
+        .filter_map(|write| match write {
+            SessionWrite::Close { closure, credit } => Some((closure, *credit)),
+            _ => None,
+        })
+        .collect()
+}
+
+fn reclassified(writes: &Writes) -> Vec<&Closure> {
+    writes
+        .sessions
+        .iter()
+        .filter_map(|write| match write {
+            SessionWrite::Reclassify(closure) => Some(closure),
+            _ => None,
+        })
+        .collect()
 }
 
 fn shown(license: &str, name: &str) -> Shown {
     Shown {
-        identifiers: vec![license.to_owned(), "discord:123456789012345678".to_owned()],
+        identifiers: vec![license.to_owned(), DISCORD.to_owned()],
         tokens: vec![format!("4:{}", "ab".repeat(32))],
         name: Some(name.to_owned()),
         ..Shown::default()
     }
 }
 
-fn listed_shown(license: &str, name: &str) -> Shown {
-    Shown {
-        identifiers: vec![license.to_owned()],
-        name: Some(name.to_owned()),
-        ..Shown::default()
-    }
-}
-
-fn summary(write: &ClosureWrite) -> (i64, DropCategory, Option<DropKind>, Option<i64>, bool) {
+fn summary(closure: &Closure) -> Summary {
     (
-        write.closure.id,
-        write.closure.category,
-        write.closure.kind,
-        write.closure.length_ms,
-        write.closure.synthesized,
+        closure.id,
+        closure.category,
+        closure.kind,
+        closure.length_ms,
+        closure.synthesized,
     )
 }
 
@@ -132,35 +170,22 @@ fn summary(write: &ClosureWrite) -> (i64, DropCategory, Option<DropKind>, Option
 fn a_confirmed_join_writes_its_identity_and_its_drop_credits_the_session() {
     let mut bench = Bench::new();
     bench.join(10, 7, LICENSE, "Ada");
-    let list = |bench: &mut Bench, second| {
-        let (list_ms, at) = bench.at(second);
-        let list = PlayerList {
-            players: vec![(7, Some(40))],
-            shown: vec![Listed {
-                id: 7,
-                identifiers: vec![LICENSE.to_owned(), "discord:123456789012345678".to_owned()],
-                name: Some("Ada".to_owned()),
-            }],
-            anonymous: false,
-        };
-        bench.sessions.listed(1, &list, list_ms, at);
-    };
 
-    list(&mut bench, 15);
+    bench.list(15, &[(7, LICENSE, "Ada")]);
     bench.drop(3610, 7, Some(3_610_000), 2, "Exiting");
 
     let writes = bench.sessions.take_writes();
-    assert_eq!(writes.inserts.len(), 1);
-    assert_eq!(writes.inserts[0].joined_ms, Some(START_MS + 10_000));
+    assert_eq!(opens(&writes).len(), 1);
+    assert_eq!(opens(&writes)[0].joined_ms, Some(START_MS + 10_000));
     assert_eq!(writes.identities.len(), 1);
     let identity = &writes.identities[0];
     assert_eq!(identity.license, LICENSE);
     assert_eq!(identity.name.as_deref(), Some("Ada"));
     let kinds: Vec<IdentifierKind> = identity.others.iter().map(|(kind, _)| *kind).collect();
     assert_eq!(kinds, [IdentifierKind::Discord, IdentifierKind::Token]);
-    assert_eq!(writes.closures.len(), 1);
+    let closed = closes(&writes);
     assert_eq!(
-        summary(&writes.closures[0]),
+        summary(closed[0].0),
         (
             1,
             DropCategory::Quit,
@@ -169,8 +194,8 @@ fn a_confirmed_join_writes_its_identity_and_its_drop_credits_the_session() {
             false
         )
     );
-    assert_eq!(writes.closures[0].credit, Some(identity.credit));
-    assert_eq!(writes.closures[0].closure.loading, Some(false));
+    assert_eq!(closed[0].1, Some(identity.credit));
+    assert_eq!(closed[0].0.loading, Some(false));
 }
 
 #[test]
@@ -183,7 +208,7 @@ fn a_join_the_list_contradicts_gets_no_identity_and_no_credit() {
 
     let writes = bench.sessions.take_writes();
     assert_eq!(writes.identities, []);
-    assert_eq!(writes.closures[0].credit, None);
+    assert_eq!(closes(&writes)[0].1, None);
     assert_eq!(bench.sessions.counts.unconfirmed, 1);
 }
 
@@ -195,7 +220,7 @@ fn a_list_asked_before_the_join_neither_confirms_nor_counts_it_missing() {
     bench.list(11, &[]);
     bench.list(12, &[(7, OTHER, "Grace")]);
 
-    assert_eq!(bench.sessions.take_writes().closures, []);
+    assert_eq!(bench.closes(), []);
     assert!(matches!(
         bench.sessions.open().next().unwrap().identity,
         Identity::Confirming(_)
@@ -209,8 +234,7 @@ fn a_forged_drop_cannot_claim_more_than_observer_measured() {
 
     bench.drop(70, 7, Some(10_000 + 5 * 3_600_000), 2, "Exiting");
 
-    let closures = bench.closures();
-    assert_eq!(closures[0].closure.length_ms, Some(61_000));
+    assert_eq!(bench.closes()[0].3, Some(61_000));
     assert_eq!(bench.sessions.counts.clamped, 1);
 }
 
@@ -237,7 +261,7 @@ fn the_game_timer_keeps_a_length_true_when_the_wall_clock_jumps() {
         &bench.fingerprints,
     );
 
-    assert_eq!(bench.closures()[0].closure.length_ms, Some(60_000));
+    assert_eq!(bench.closes()[0].3, Some(60_000));
 }
 
 #[test]
@@ -248,27 +272,37 @@ fn a_drop_before_its_join_opens_and_closes_one_session_and_the_late_join_is_igno
     bench.join(12, 7, LICENSE, "Ada");
 
     let writes = bench.sessions.take_writes();
-    assert_eq!(writes.inserts.len(), 1);
-    assert_eq!(writes.inserts[0].joined_ms, None);
+    assert_eq!(opens(&writes).len(), 1);
+    assert_eq!(opens(&writes)[0].joined_ms, None);
+    let closed = closes(&writes)[0].0;
     assert_eq!(
-        summary(&writes.closures[0]),
+        summary(closed),
         (1, DropCategory::Kick, Some(DropKind::Resource), None, false)
     );
-    assert_eq!(writes.closures[0].closure.resource.as_deref(), Some("anticheat"));
-    assert_eq!(writes.closures[0].closure.reason_text.as_deref(), Some("Banned"));
+    assert_eq!(closed.resource.as_deref(), Some("anticheat"));
+    assert_eq!(closed.reason_text.as_deref(), Some("Banned"));
     assert_eq!(bench.sessions.open().count(), 0);
 }
 
 #[test]
-fn a_join_on_a_net_id_still_open_closes_the_old_session_as_missed() {
+fn a_join_on_a_net_id_still_open_closes_the_old_session_before_the_new_one_opens() {
     let mut bench = Bench::new();
     bench.join(10, 7, LICENSE, "Ada");
+    bench.sessions.take_writes();
 
     bench.join(100, 7, OTHER, "Grace");
 
-    let closures = bench.closures();
+    let writes = bench.sessions.take_writes();
+    assert!(
+        matches!(
+            &writes.sessions[..],
+            [SessionWrite::Close { closure, .. }, SessionWrite::Open(opened)]
+                if closure.id == 1 && opened.id == 2
+        ),
+        "{writes:?}"
+    );
     assert_eq!(
-        summary(&closures[0]),
+        summary(closes(&writes)[0].0),
         (
             1,
             DropCategory::Unknown,
@@ -277,7 +311,6 @@ fn a_join_on_a_net_id_still_open_closes_the_old_session_as_missed() {
             true
         )
     );
-    assert_eq!(bench.sessions.open().next().unwrap().id, 2);
 }
 
 #[test]
@@ -289,27 +322,65 @@ fn a_session_gone_from_three_lists_ends_at_its_last_sighting_and_a_late_drop_com
     for second in [25, 30] {
         bench.list(second, &[]);
     }
-    assert_eq!(bench.closures(), []);
+    assert_eq!(bench.closes(), []);
     bench.list(35, &[]);
-    let closures = bench.closures();
+    let closed = bench.closes();
     bench.drop(60, 7, Some(60_000), 5, "Server->client connection timed out.");
 
     assert_eq!(
-        summary(&closures[0]),
-        (
+        closed,
+        [(
             1,
             DropCategory::Unknown,
             Some(DropKind::Missed),
             Some(10_000),
             true
-        )
+        )]
     );
-    let reclassified = bench.sessions.take_writes().reclassified;
-    assert_eq!(reclassified.len(), 1);
+    let writes = bench.sessions.take_writes();
+    let late = reclassified(&writes);
+    assert_eq!((late[0].id, late[0].category), (1, DropCategory::Timeout));
+}
+
+#[test]
+fn a_player_the_list_keeps_showing_without_a_session_is_followed_again() {
+    let mut bench = Bench::new();
+
+    bench.list(20, &[(4, LICENSE, "Ada")]);
+    bench.list(25, &[(4, LICENSE, "Ada")]);
+    let opened = bench.sessions.take_writes();
+    bench.list(30, &[(4, LICENSE, "Ada")]);
+
+    let session = opens(&opened);
+    assert_eq!(session.len(), 1);
     assert_eq!(
-        (reclassified[0].id, reclassified[0].category),
-        (1, DropCategory::Timeout)
+        (session[0].net_id, session[0].joined_ms, session[0].seen_ms),
+        (4, None, START_MS + 20_000)
     );
+    let confirmed = bench.sessions.take_writes();
+    assert_eq!(confirmed.identities.len(), 1);
+    assert_eq!(confirmed.identities[0].license, LICENSE);
+    assert!(
+        confirmed.identities[0]
+            .others
+            .iter()
+            .all(|(kind, _)| *kind == IdentifierKind::Discord),
+        "the list shows no token and no address: {confirmed:?}"
+    );
+    assert_eq!(bench.sessions.counts.untracked, 1);
+}
+
+#[test]
+fn a_player_who_just_dropped_is_not_opened_again_from_a_list_asked_before() {
+    let mut bench = Bench::new();
+    bench.join(10, 4, LICENSE, "Ada");
+    bench.drop(20, 4, Some(20_000), 2, "Exiting");
+    bench.sessions.take_writes();
+
+    bench.list(21, &[(4, LICENSE, "Ada")]);
+    bench.list(22, &[(4, LICENSE, "Ada")]);
+
+    assert_eq!(opens(&bench.sessions.take_writes()), Vec::<&NewSession>::new());
 }
 
 #[test]
@@ -326,14 +397,17 @@ fn the_roster_opens_listed_players_and_closes_sessions_it_no_longer_shows() {
         })
     };
 
-    bench.send(50, page(1, false, vec![(7, listed_shown(LICENSE, "Ada"))]));
+    bench.send(50, page(1, false, vec![(7, shown(LICENSE, "Ada"))]));
     bench.drop(51, 8, Some(51_000), 2, "Exiting");
-    bench.send(51, page(2, true, vec![(8, listed_shown(LICENSE, "Bob"))]));
+    bench.send(51, page(2, true, vec![(8, shown(LICENSE, "Bob"))]));
 
     let writes = bench.sessions.take_writes();
-    let missed: Vec<_> = writes.closures.iter().map(summary).collect();
+    let closed: Vec<Summary> = closes(&writes)
+        .iter()
+        .map(|(closure, _)| summary(closure))
+        .collect();
     assert_eq!(
-        missed,
+        closed,
         [
             (2, DropCategory::Quit, Some(DropKind::Exit), None, false),
             (
@@ -345,10 +419,9 @@ fn the_roster_opens_listed_players_and_closes_sessions_it_no_longer_shows() {
             ),
         ]
     );
-    let opened: Vec<(u32, Option<i64>, i64)> = writes
-        .inserts
+    let opened: Vec<(u32, Option<i64>, i64)> = opens(&writes)
         .iter()
-        .map(|insert| (insert.net_id, insert.joined_ms, insert.seen_ms))
+        .map(|session| (session.net_id, session.joined_ms, session.seen_ms))
         .collect();
     assert_eq!(
         opened,
@@ -361,7 +434,29 @@ fn the_roster_opens_listed_players_and_closes_sessions_it_no_longer_shows() {
 }
 
 #[test]
-fn a_roster_with_a_missing_page_is_given_up() {
+fn a_roster_never_closes_a_session_the_latest_list_still_showed() {
+    let mut bench = Bench::new();
+    bench.join(10, 3, LICENSE, "Ada");
+    bench.list(20, &[(3, LICENSE, "Ada")]);
+    bench.sessions.take_writes();
+
+    bench.send(
+        30,
+        PlayerReportKind::Roster(RosterPage {
+            timer_ms: Some(30_000),
+            page: 1,
+            last: true,
+            players: Vec::new(),
+            dropped: 0,
+        }),
+    );
+
+    assert_eq!(bench.closes(), []);
+    assert_eq!(bench.sessions.open().count(), 1);
+}
+
+#[test]
+fn a_roster_with_a_missing_page_or_too_many_pages_is_given_up() {
     let mut bench = Bench::new();
     bench.join(10, 3, OTHER, "Grace");
     let page = |page, last| {
@@ -369,18 +464,22 @@ fn a_roster_with_a_missing_page_is_given_up() {
             timer_ms: Some(50_000),
             page,
             last,
-            players: vec![(7, listed_shown(LICENSE, "Ada"))],
+            players: vec![(7, shown(LICENSE, "Ada"))],
             dropped: 0,
         })
     };
 
     bench.send(50, page(1, false));
     bench.send(51, page(3, true));
+    bench.send(52, page(1, false));
+    for number in 2..=40 {
+        bench.send(53, page(number, false));
+    }
 
     let writes = bench.sessions.take_writes();
-    assert_eq!(writes.inserts.len(), 1);
-    assert_eq!(writes.closures, []);
-    assert_eq!(bench.sessions.counts.rosters_given_up, 1);
+    assert_eq!(opens(&writes).len(), 1);
+    assert_eq!(closes(&writes), []);
+    assert_eq!(bench.sessions.counts.rosters_given_up, 9);
 }
 
 #[test]
@@ -391,11 +490,10 @@ fn a_stop_closes_what_fxserver_did_not_report_with_the_stop_reason() {
 
     bench.sessions.stopping(1, DropKind::Restart);
     bench.drop(100, 1, Some(100_000), 7, "Server shutting down: restart");
-    bench.sessions.exited(1, START_MS + 101_000, true);
+    bench.exit(101, true);
 
-    let closures: Vec<_> = bench.closures().iter().map(summary).collect();
     assert_eq!(
-        closures,
+        bench.closes(),
         [
             (
                 1,
@@ -417,19 +515,40 @@ fn a_stop_closes_what_fxserver_did_not_report_with_the_stop_reason() {
 }
 
 #[test]
+fn a_drop_fxserver_reported_just_before_it_exited_still_counts_when_it_comes_after() {
+    let mut bench = Bench::new();
+    bench.join(10, 1, LICENSE, "Ada");
+    bench.exit(101, false);
+    bench.sessions.take_writes();
+
+    bench.drop(101, 1, Some(100_000), 5, "Server->client connection timed out.");
+    bench.join(101, 2, OTHER, "Grace");
+
+    let writes = bench.sessions.take_writes();
+    let late = reclassified(&writes);
+    assert_eq!((late[0].id, late[0].category), (1, DropCategory::Timeout));
+    assert_eq!(opens(&writes), Vec::<&NewSession>::new());
+}
+
+#[test]
 fn a_crash_and_a_hang_close_every_session_as_the_servers() {
-    for (hung, kind) in [(false, DropKind::ServerCrashed), (true, DropKind::Hang)] {
+    for (hung, expected, kind) in [
+        (false, false, DropKind::ServerCrashed),
+        (true, false, DropKind::Hang),
+        (true, true, DropKind::Hang),
+    ] {
         let mut bench = Bench::new();
         bench.join(10, 1, LICENSE, "Ada");
         if hung {
             bench.sessions.hung(1);
         }
 
-        bench.sessions.exited(1, START_MS + 20_000, false);
+        bench.exit(20, expected);
 
         assert_eq!(
-            bench.closures().iter().map(summary).collect::<Vec<_>>(),
-            [(1, DropCategory::ServerCrash, Some(kind), Some(10_000), true)]
+            bench.closes(),
+            [(1, DropCategory::ServerCrash, Some(kind), Some(10_000), true)],
+            "{hung} {expected}"
         );
     }
 }
@@ -439,9 +558,36 @@ fn an_operators_quit_is_a_console_stop() {
     let mut bench = Bench::new();
     bench.join(10, 1, LICENSE, "Ada");
 
-    bench.sessions.exited(1, START_MS + 20_000, true);
+    bench.exit(20, true);
 
-    assert_eq!(bench.closures()[0].closure.kind, Some(DropKind::Console));
+    assert_eq!(bench.closes()[0].2, Some(DropKind::Console));
+}
+
+#[test]
+fn a_clock_step_adds_nothing_to_a_session_observer_closes() {
+    let mut bench = Bench::new();
+    bench.join(10, 1, LICENSE, "Ada");
+    let (_, now) = bench.at(20);
+
+    bench.sessions.exited(1, START_MS + 10 * 3_600_000, false, now);
+
+    assert_eq!(bench.closes()[0].3, Some(11_000));
+}
+
+#[test]
+fn sessions_a_missed_exit_left_open_end_where_they_were_last_seen() {
+    let mut bench = Bench::new();
+    bench.join(10, 1, LICENSE, "Ada");
+    bench.list(20, &[(1, LICENSE, "Ada")]);
+    bench.sessions.take_writes();
+    let (_, now) = bench.at(8 * 3600);
+
+    bench.sessions.spawned(RunKey { generation: 2, ..RUN }, now);
+
+    assert_eq!(
+        bench.closes(),
+        [(1, DropCategory::Unknown, Some(DropKind::Lost), Some(10_000), true)]
+    );
 }
 
 #[test]
@@ -476,7 +622,7 @@ fn a_forgotten_licence_earns_nothing_more_in_this_run() {
     bench.sessions.forget(LICENSE);
     bench.drop(70, 7, Some(70_000), 2, "Exiting");
 
-    assert_eq!(bench.closures()[0].credit, None);
+    assert_eq!(closes(&bench.sessions.take_writes())[0].1, None);
 }
 
 #[test]
@@ -492,7 +638,8 @@ fn a_crash_keeps_its_redacted_text() {
         r"Game crashed: Recursive error in C:\Users\jdupont\FiveM\cars.meta",
     );
 
-    let closure = &bench.closures()[0].closure;
+    let writes = bench.sessions.take_writes();
+    let closure = closes(&writes)[0].0;
     assert_eq!(closure.category, DropCategory::Crash);
     assert_eq!(
         closure.crash_text.as_deref(),

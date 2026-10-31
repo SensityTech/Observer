@@ -48,7 +48,7 @@ fn see(
 
 fn credit_session(conn: &mut Connection, player: i64, key: u8, length_ms: i64, days: &[(&str, i64)]) -> bool {
     let tx = conn.transaction().unwrap();
-    open_credit(&tx, [key; 16], player, at("2026-10-30T20:00:00Z")).unwrap();
+    open_credit(&tx, [key; 16], player, at("2026-10-30T20:00:00Z"), i64::from(key)).unwrap();
     let credited = credit(
         &tx,
         &Credit {
@@ -320,7 +320,7 @@ fn a_profile_goes_after_its_retention_unless_the_player_is_online() {
     let gone = see(&mut conn, ADA, "Ada", &[], "2024-01-01T00:00:00Z").0;
     let online = see(&mut conn, GRACE, "Grace", &[], "2024-01-01T00:00:00Z").0;
     let tx = conn.transaction().unwrap();
-    open_credit(&tx, [7; 16], online, at("2024-01-01T00:00:00Z")).unwrap();
+    open_credit(&tx, [7; 16], online, at("2024-01-01T00:00:00Z"), 1).unwrap();
     let expired = expire(
         &tx,
         at("2026-10-31T00:00:00Z"),

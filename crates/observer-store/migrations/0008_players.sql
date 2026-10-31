@@ -32,11 +32,13 @@ CREATE TABLE player_day (
 ) STRICT, WITHOUT ROWID;
 
 -- A confirmed session not credited to its profile yet: deleted in the transaction that credits
--- it. The metrics session carries the same key.
+-- it. The metrics session carries the same key, once it is written there.
 CREATE TABLE player_open_session (
     key          BLOB    PRIMARY KEY CHECK (length(key) = 16),
     player       INTEGER NOT NULL REFERENCES player (id) ON DELETE CASCADE,
-    started      TEXT    NOT NULL
+    started      TEXT    NOT NULL,
+    -- The metrics database's session id.
+    session      INTEGER NOT NULL
 ) STRICT, WITHOUT ROWID;
 
 CREATE INDEX player_day_by_day ON player_day (day, player, play_ms);

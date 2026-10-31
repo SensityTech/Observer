@@ -105,7 +105,7 @@ impl Lab {
                         pseudonym: [7; 16],
                     },
                 )?;
-                stored::open_credit(tx, [9; 16], player, at)?;
+                stored::open_credit(tx, [9; 16], player, at, 1)?;
                 Ok(player)
             })
             .await

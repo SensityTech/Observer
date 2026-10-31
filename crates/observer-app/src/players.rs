@@ -27,8 +27,8 @@ use observer_domain::players::{
 };
 use observer_domain::schedule::ScheduleStatus;
 use observer_fxserver::players::PlayerReport;
-use observer_fxserver::supervisor::{Cause, Event, EventKind, Readings, State};
-use observer_store::metrics::runs::RunKey;
+use observer_fxserver::supervisor::{Cause, Event, EventKind, Readings, State, Status};
+use observer_store::metrics::runs::{self, RunKey, StartCause};
 use observer_store::metrics::sessions::{self as stored_sessions, Closure};
 use observer_store::players::{self as stored, Credit, Imported, PlayerFilter, PlayerQuery, Seen};
 use observer_store::{Database, MetricsDatabase, StoreError};
@@ -40,11 +40,14 @@ use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 use self::identity::{Fingerprints, Keys, hex, split_days};
-use self::sessions::{ClosureWrite, Identity, IdentityWrite, Sessions};
+use self::sessions::{Identity, IdentityWrite, SessionWrite, Sessions};
 use crate::audit::Record;
+use crate::metrics::runs::Change;
 use crate::{Caller, Clock, Error, Metrics, Servers, Supervision};
 
 const FLUSH_EVERY: Duration = Duration::from_secs(1);
+/// Sessions wait this long for their run before the wait is logged.
+const RUN_MISSING: Duration = Duration::from_secs(10);
 const UPKEEP_EVERY: Duration = Duration::from_hours(1);
 /// Sessions are kept this long after they end.
 const SESSION_DAYS: i64 = 90;
@@ -104,6 +107,7 @@ enum Request {
     Online(oneshot::Sender<Vec<Connected>>),
     Forget {
         player: i64,
+        caller: Caller,
         reply: oneshot::Sender<Result<Option<[u8; 16]>, Error>>,
     },
     Import {
@@ -143,7 +147,7 @@ impl Players {
         let metrics_db = metrics.database().clone();
         let zone = zone_of(&schedule.borrow());
 
-        recover(&db, &metrics_db, &zone).await?;
+        recover(&db, &metrics_db, &zone, metrics.observer_started()).await?;
         apply_forgotten(&db, &metrics_db, &fingerprints, &forgotten_file).await?;
         let next_id = metrics_db.read(stored_sessions::next_id).await?;
 
@@ -168,7 +172,9 @@ impl Players {
             credits: Vec::new(),
             later: Later::default(),
             failing: false,
+            missing_run: None,
             last_list: None,
+            status: supervisor.status(),
             importing: None,
             import: Arc::clone(&import),
         };
@@ -483,16 +489,17 @@ impl Players {
         let (reply, answer) = oneshot::channel();
         self.inner
             .requests
-            .send(Request::Forget { player, reply })
+            .send(Request::Forget {
+                player,
+                caller: caller.clone(),
+                reply,
+            })
             .await
             .map_err(|_| Error::from(ErrorCode::ShuttingDown))?;
-        let fingerprint = answer
+        answer
             .await
             .map_err(|_| Error::from(ErrorCode::ShuttingDown))??
             .ok_or(ErrorCode::PlayerNotFound)?;
-        let record = Record::by(caller, AuditAction::PlayerForgotten).target(hex(&fingerprint));
-        let now = self.inner.clock.now();
-        self.inner.db.write(move |tx| record.write(tx, now)).await?;
         Ok(())
     }
 
@@ -543,21 +550,18 @@ impl Players {
     }
 }
 
-/// What was written to the state database and waits for the metrics one.
+/// What was written to the state database and waits for the metrics one: the run the sessions
+/// belong to, the sessions in the order they were decided, then their pseudonyms.
 #[derive(Default)]
 struct Later {
-    inserts: Vec<stored_sessions::NewSession>,
+    run: Option<(RunKey, i64, StartCause)>,
+    sessions: Vec<SessionWrite>,
     attaches: Vec<(i64, [u8; 16], [u8; 16])>,
-    closures: Vec<Closure>,
-    reclassified: Vec<Closure>,
 }
 
 impl Later {
     fn is_empty(&self) -> bool {
-        self.inserts.is_empty()
-            && self.attaches.is_empty()
-            && self.closures.is_empty()
-            && self.reclassified.is_empty()
+        self.sessions.is_empty() && self.attaches.is_empty()
     }
 }
 
@@ -576,7 +580,10 @@ struct Worker {
     credits: Vec<Credit>,
     later: Later,
     failing: bool,
+    /// Since when the sessions wait for their run to be written.
+    missing_run: Option<Instant>,
     last_list: Option<Instant>,
+    status: watch::Receiver<Status>,
     importing: Option<Importing>,
     import: Arc<Mutex<Option<PlayersImport>>>,
 }
@@ -608,13 +615,16 @@ impl Worker {
                 report = reports.recv() => match report {
                     Ok(report) => self.sessions.report(&report, &self.fingerprints),
                     Err(RecvError::Lagged(missed)) => {
-                        warn!(missed, "the players service missed reports from the bridge; sessions are reconciled from the player list");
+                        warn!(missed, "the players service missed reports from the bridge; the player list fills the gaps");
                     }
                     Err(RecvError::Closed) => break,
                 },
                 event = events.recv() => match event {
                     Ok(event) => self.event(&event),
-                    Err(RecvError::Lagged(missed)) => warn!(missed, "the players service missed supervisor events"),
+                    Err(RecvError::Lagged(missed)) => {
+                        warn!(missed, "the players service missed supervisor events; it follows the supervisor's status");
+                        self.resync();
+                    }
                     Err(RecvError::Closed) => break,
                 },
                 changed = readings.changed() => {
@@ -649,14 +659,14 @@ impl Worker {
     }
 
     fn event(&mut self, event: &Event) {
+        if let Some(Change::Started { at_ms, cause }) = Change::of(event) {
+            self.later.run = Some((self.run_key(event.generation), at_ms, cause));
+        }
         match &event.kind {
-            EventKind::Spawned { .. } => self.sessions.spawned(
-                RunKey {
-                    observer_started: self.observer_started,
-                    generation: event.generation,
-                },
-                event.at_ms,
-            ),
+            EventKind::Spawned { .. } => {
+                self.sessions
+                    .spawned(self.run_key(event.generation), Instant::now());
+            }
             EventKind::State {
                 to: State::Stopping,
                 cause,
@@ -671,9 +681,35 @@ impl Worker {
                 ..
             } => self.sessions.hung(event.generation),
             EventKind::Exited { expected, .. } => {
-                self.sessions.exited(event.generation, event.at_ms, *expected);
+                self.sessions
+                    .exited(event.generation, event.at_ms, *expected, Instant::now());
             }
             _ => {}
+        }
+    }
+
+    fn run_key(&self, generation: u32) -> RunKey {
+        RunKey {
+            observer_started: self.observer_started,
+            generation,
+        }
+    }
+
+    /// After missed events, follows the run the supervisor says is under way: a run whose end was
+    /// missed closes its sessions where they were last seen.
+    fn resync(&mut self) {
+        let (generation, running) = {
+            let status = self.status.borrow();
+            (status.generation, status.pid.is_some())
+        };
+        let followed = self.sessions.generation();
+        if running && followed == Some(generation) {
+            return;
+        }
+        if running {
+            self.sessions.spawned(self.run_key(generation), Instant::now());
+        } else if followed.is_some() {
+            self.sessions.end_lost(Instant::now());
         }
     }
 
@@ -699,8 +735,12 @@ impl Worker {
             Request::Online(reply) => {
                 let _ = reply.send(self.connected());
             }
-            Request::Forget { player, reply } => {
-                let _ = reply.send(self.forget(player).await);
+            Request::Forget {
+                player,
+                caller,
+                reply,
+            } => {
+                let _ = reply.send(self.forget(player, &caller).await);
             }
             Request::Import {
                 parsed,
@@ -873,20 +913,31 @@ impl Worker {
     }
 
     /// Writes what the sessions decided: identities and play time first, in the state database,
-    /// which alone says what was credited; then the sessions, in the metrics database.
+    /// which alone says what was credited; then the sessions, in the metrics database, in the
+    /// order they were decided.
     async fn flush(&mut self) {
         let writes = self.sessions.take_writes();
         let zone = zone_of(&self.schedule.borrow());
         self.state.extend(writes.identities);
-        for ClosureWrite { closure, credit } in writes.closures {
-            if let Some(key) = credit {
-                self.credits.push(credit_for(key, &closure, &zone));
+        for write in writes.sessions {
+            if let SessionWrite::Close {
+                closure,
+                credit: Some(key),
+            } = &write
+            {
+                self.credits.push(credit_for(*key, closure, &zone));
             }
-            self.later.closures.push(closure);
+            self.later.sessions.push(write);
         }
-        self.later.inserts.extend(writes.inserts);
-        self.later.reclassified.extend(writes.reclassified);
 
+        if self.flush_identities().await {
+            self.flush_sessions().await;
+        }
+    }
+
+    /// Identities, crediting records and credits, in one state transaction. `false` while they
+    /// cannot be written: the sessions wait, since a session is closed only once credited.
+    async fn flush_identities(&mut self) -> bool {
         if !self.state.is_empty() || !self.credits.is_empty() {
             let identities = self.state.clone();
             let credits = self.credits.clone();
@@ -908,7 +959,7 @@ impl Worker {
                                 pseudonym,
                             },
                         )?;
-                        stored::open_credit(tx, identity.credit, player, at)?;
+                        stored::open_credit(tx, identity.credit, player, at, identity.session)?;
                         identified.push((identity.session, player, pseudonym, identity.credit));
                     }
                     for credit in &credits {
@@ -931,46 +982,57 @@ impl Worker {
                         &error,
                         "the players' identities and play time could not be written",
                     );
-                    return;
+                    return false;
                 }
             }
         }
+        true
+    }
 
+    async fn flush_sessions(&mut self) {
         if self.later.is_empty() {
             return;
         }
-        let later = Later {
-            inserts: self.later.inserts.clone(),
-            attaches: self.later.attaches.clone(),
-            closures: self.later.closures.clone(),
-            reclassified: self.later.reclassified.clone(),
-        };
+        let run = self.later.run;
+        let sessions = self.later.sessions.clone();
+        let attaches = self.later.attaches.clone();
         let written = self
             .metrics
             .write(move |tx| -> Result<(), FlushError> {
-                for session in &later.inserts {
-                    if !stored_sessions::insert(tx, session)? {
-                        return Err(FlushError::RunMissing);
+                if let Some((key, started_ms, cause)) = run {
+                    runs::start(tx, key, started_ms, cause)?;
+                }
+                for write in &sessions {
+                    match write {
+                        SessionWrite::Open(session) => {
+                            if !stored_sessions::insert(tx, session)? {
+                                return Err(FlushError::RunMissing);
+                            }
+                        }
+                        SessionWrite::Close { closure, .. } => stored_sessions::close(tx, closure)?,
+                        SessionWrite::Reclassify(closure) => stored_sessions::reclassify(tx, closure)?,
                     }
                 }
-                for (session, pseudonym, credit) in &later.attaches {
+                for (session, pseudonym, credit) in &attaches {
                     stored_sessions::attach(tx, *session, *pseudonym, *credit)?;
-                }
-                for closure in &later.closures {
-                    stored_sessions::close(tx, closure)?;
-                }
-                for closure in &later.reclassified {
-                    stored_sessions::reclassify(tx, closure)?;
                 }
                 Ok(())
             })
             .await;
         match written {
             Ok(()) => {
-                self.later = Later::default();
+                self.later.sessions.clear();
+                self.later.attaches.clear();
                 self.failing = false;
+                self.missing_run = None;
             }
-            Err(FlushError::RunMissing) => {}
+            Err(FlushError::RunMissing) => {
+                let since = *self.missing_run.get_or_insert_with(Instant::now);
+                if since.elapsed() > RUN_MISSING && !self.failing {
+                    self.failing = true;
+                    warn!("the players' sessions wait for a run of FXServer the statistics never recorded");
+                }
+            }
             Err(FlushError::Store(error)) => {
                 self.failed(&error, "the players' sessions could not be written");
             }
@@ -984,9 +1046,12 @@ impl Worker {
         }
     }
 
-    async fn forget(&mut self, player: i64) -> Result<Option<[u8; 16]>, Error> {
+    /// Forgets a player. The metrics database goes first: blanking a pseudonym can be done again,
+    /// while the player's row, once deleted, is the key to it. The deletion and its audit entry
+    /// share one transaction.
+    async fn forget(&mut self, player: i64, caller: &Caller) -> Result<Option<[u8; 16]>, Error> {
         self.flush().await;
-        if !self.state.is_empty() || !self.credits.is_empty() || !self.later.is_empty() {
+        if !self.state.is_empty() || !self.credits.is_empty() {
             return Err(ErrorCode::Internal.into());
         }
         let Some((license, pseudonym)) = self
@@ -1002,10 +1067,28 @@ impl Worker {
             return Ok(None);
         };
         self.sessions.forget(&license);
+        self.later
+            .attaches
+            .retain(|(_, attached, _)| *attached != pseudonym);
+        if let Some(importing) = self.importing.as_mut() {
+            let before = importing.records.len();
+            importing.records.retain(|record| record.license != license);
+            importing.status.forgotten += (before - importing.records.len()) as u64;
+        }
         let fingerprint = self.fingerprints.license(&license);
         let at = self.clock.now();
         append_forgotten(&self.forgotten_file, fingerprint, at)?;
-        forget_everywhere(&self.db, &self.metrics, player, fingerprint, pseudonym, at).await?;
+        let record = Record::by(caller, AuditAction::PlayerForgotten).target(hex(&fingerprint));
+        forget_everywhere(
+            &self.db,
+            &self.metrics,
+            player,
+            fingerprint,
+            pseudonym,
+            at,
+            Some(record),
+        )
+        .await?;
         info!(fingerprint = %hex(&fingerprint), "a player was forgotten");
         Ok(Some(fingerprint))
     }
@@ -1087,17 +1170,22 @@ fn stop_kind(cause: &Cause) -> Option<DropKind> {
 /// Closes the sessions an earlier Observer left open, at the end of their run. A session whose
 /// crediting record is still in the state database is credited first, once; the record goes
 /// whether it was or not.
-async fn recover(db: &Database, metrics: &MetricsDatabase, zone: &TimeZone) -> Result<(), Error> {
+async fn recover(
+    db: &Database,
+    metrics: &MetricsDatabase,
+    zone: &TimeZone,
+    observer_started: i64,
+) -> Result<(), Error> {
     let left = metrics.read(stored_sessions::left_open).await?;
     let records = db.read(stored::open_records).await?;
     if left.is_empty() && records.is_empty() {
         return Ok(());
     }
-    let closures: Vec<Closure> = left
+    let closures: HashMap<i64, Closure> = left
         .iter()
         .map(|session| {
-            let ended_ms = stored_sessions::lost_end(session);
-            Closure {
+            let ended_ms = stored_sessions::lost_end(session, observer_started);
+            let closure = Closure {
                 id: session.id,
                 ended_ms,
                 length_ms: Some(ended_ms - session.seen_ms),
@@ -1109,13 +1197,19 @@ async fn recover(db: &Database, metrics: &MetricsDatabase, zone: &TimeZone) -> R
                 reason_text: None,
                 loading: None,
                 synthesized: true,
-            }
+            };
+            (session.id, closure)
         })
         .collect();
-    let credits: Vec<Credit> = left
+    // A record names its session: one whose key never reached the metrics database, because
+    // Observer died in between, is still credited.
+    let credits: Vec<Credit> = records
         .iter()
-        .zip(&closures)
-        .filter_map(|(session, closure)| session.credit.map(|key| credit_for(key, closure, zone)))
+        .filter_map(|record| {
+            closures
+                .get(&record.session)
+                .map(|closure| credit_for(record.key, closure, zone))
+        })
         .collect();
     let keys: Vec<[u8; 16]> = records.iter().map(|record| record.key).collect();
     db.write(move |tx| -> Result<(), StoreError> {
@@ -1131,7 +1225,7 @@ async fn recover(db: &Database, metrics: &MetricsDatabase, zone: &TimeZone) -> R
     let closed = closures.len();
     metrics
         .write(move |tx| -> Result<(), StoreError> {
-            for closure in &closures {
+            for closure in closures.values() {
                 stored_sessions::close(tx, closure)?;
             }
             Ok(())
@@ -1174,7 +1268,7 @@ async fn apply_forgotten(
                 .map(|profile| profile.pseudonym);
             if let Some(pseudonym) = pseudonym {
                 let at = forgotten[&fingerprint];
-                forget_everywhere(db, metrics, player, fingerprint, pseudonym, at).await?;
+                forget_everywhere(db, metrics, player, fingerprint, pseudonym, at, None).await?;
                 info!(fingerprint = %hex(&fingerprint), "a forgotten player a backup brought back was forgotten again");
             }
         }
@@ -1189,13 +1283,21 @@ async fn forget_everywhere(
     fingerprint: [u8; 16],
     pseudonym: [u8; 16],
     at: Timestamp,
+    record: Option<Record>,
 ) -> Result<(), Error> {
-    db.write(move |tx| stored::forget(tx, player, fingerprint, at))
-        .await?;
-    db.read(stored::checkpoint).await?;
     metrics
         .write(move |tx| stored_sessions::forget(tx, pseudonym))
         .await?;
+    metrics.checkpoint().await?;
+    db.write(move |tx| -> Result<(), StoreError> {
+        stored::forget(tx, player, fingerprint, at)?;
+        if let Some(record) = record {
+            record.write(tx, at)?;
+        }
+        Ok(())
+    })
+    .await?;
+    db.read(stored::checkpoint).await?;
     Ok(())
 }
 

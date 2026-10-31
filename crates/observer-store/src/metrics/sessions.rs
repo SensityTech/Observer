@@ -4,7 +4,7 @@ use jiff::Timestamp;
 use observer_domain::drops::{DropCategory, DropKind};
 use observer_domain::players::PlayerDrop;
 use rusqlite::types::Type;
-use rusqlite::{Connection, OptionalExtension, Row, Transaction, params};
+use rusqlite::{Connection, Row, Transaction, params};
 
 use super::runs::RunKey;
 use crate::database::StoreError;
@@ -165,22 +165,14 @@ pub fn left_open(conn: &Connection) -> Result<Vec<LeftOpen>, StoreError> {
     Ok(rows.collect::<Result<_, _>>()?)
 }
 
-/// When a session closed by Observer ends: at its run's end, never before it was seen.
-pub fn lost_end(session: &LeftOpen) -> i64 {
+/// When a session an earlier Observer left open ends: at its run's end, never before it was seen
+/// and never after `now`, which a clock set back could put the run's last sample past.
+pub fn lost_end(session: &LeftOpen, now: i64) -> i64 {
     session
         .run_ended_ms
         .unwrap_or(session.seen_ms)
+        .min(now)
         .max(session.seen_ms)
-}
-
-/// The key of a session's crediting record, whether it is open or not.
-pub fn credit_of(conn: &Connection, id: i64) -> Result<Option<[u8; 16]>, StoreError> {
-    Ok(conn
-        .query_row("SELECT credit FROM player_session WHERE id = ?1", [id], |row| {
-            row.get(0)
-        })
-        .optional()?
-        .flatten())
 }
 
 /// The player's last sessions that ended, newest first.
@@ -432,6 +424,7 @@ mod tests {
         let left = left_open(&tx).unwrap();
 
         assert_eq!(left.len(), 1);
-        assert_eq!(lost_end(&left[0]), RUN.observer_started + 1000);
+        assert_eq!(lost_end(&left[0], i64::MAX), RUN.observer_started + 1000);
+        assert_eq!(lost_end(&left[0], 0), RUN.observer_started + 1000);
     }
 }

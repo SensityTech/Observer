@@ -8,7 +8,7 @@ use tracing::warn;
 
 /// What one event changes in a run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum Change {
+pub(crate) enum Change {
     Started {
         at_ms: i64,
         cause: StartCause,
@@ -29,7 +29,7 @@ pub(super) enum Change {
 }
 
 impl Change {
-    pub(super) fn of(event: &Event) -> Option<Self> {
+    pub(crate) fn of(event: &Event) -> Option<Self> {
         match &event.kind {
             EventKind::State {
                 to: State::Starting,
