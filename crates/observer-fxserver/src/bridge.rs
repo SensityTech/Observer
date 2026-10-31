@@ -167,8 +167,15 @@ pub enum Report {
     /// Every three seconds while the main loop runs.
     #[serde(rename = "hb")]
     Heartbeat,
-    /// The resources started now, after any change.
-    Resources { started: Vec<String> },
+    /// The resources started now, after any change, and the starts and stops since the last
+    /// report once the cfg has run, as `[name, "start" | "stop"]`, past 64 only counted.
+    Resources {
+        started: Vec<String>,
+        #[serde(default)]
+        events: Vec<(String, String)>,
+        #[serde(default)]
+        dropped: u32,
+    },
     /// The memory of the Node runtime shared by JS resources, in bytes.
     Heap {
         heap_used: u64,
@@ -401,6 +408,42 @@ mod tests {
         assert_eq!(
             Report::from_trace(&trace("observer", json!({ "type": "other", "kind": "hb" }))),
             None
+        );
+    }
+
+    #[test]
+    fn a_resources_report_carries_its_starts_and_stops_when_it_has_some() {
+        let trace = |payload: Value| TraceKind::Script {
+            resource: "observer".to_owned(),
+            payload,
+        };
+
+        assert_eq!(
+            Report::from_trace(&trace(json!({
+                "type": "observer",
+                "kind": "resources",
+                "started": ["chat", "qb-core"],
+                "events": [["qb-core", "stop"], ["qb-core", "start"]],
+                "dropped": 2
+            }))),
+            Some(Report::Resources {
+                started: vec!["chat".to_owned(), "qb-core".to_owned()],
+                events: vec![
+                    ("qb-core".to_owned(), "stop".to_owned()),
+                    ("qb-core".to_owned(), "start".to_owned())
+                ],
+                dropped: 2
+            })
+        );
+        assert_eq!(
+            Report::from_trace(&trace(
+                json!({ "type": "observer", "kind": "resources", "started": ["chat"] })
+            )),
+            Some(Report::Resources {
+                started: vec!["chat".to_owned()],
+                events: Vec::new(),
+                dropped: 0
+            })
         );
     }
 }

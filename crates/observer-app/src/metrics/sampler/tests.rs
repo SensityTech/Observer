@@ -915,6 +915,14 @@ fn hitches_and_barks_are_counted_per_slot_while_a_run_exists() {
                 pid: 4,
                 probe: "127.0.0.1:30120".parse().unwrap(),
                 build: "/srv/observer/artifacts/35245".into(),
+                launch: Box::new(observer_domain::launch::LaunchSettings {
+                    data_path: "/srv/fivem".to_owned(),
+                    cfg_file: "server.cfg".to_owned(),
+                    onesync: observer_domain::launch::OneSync::On,
+                    auto_start: false,
+                    txadmin_events: false,
+                    extra_arguments: Vec::new(),
+                }),
             },
         ),
         start,
@@ -1005,7 +1013,17 @@ fn the_heap_and_resources_are_the_run_s_latest_reports_and_the_heap_goes_stale()
         start,
     );
     let started = vec!["hardcap".to_owned(), "observer".to_owned(), "chat".to_owned()];
-    assembler.event(&event(1, EventKind::Resources { started }), start);
+    assembler.event(
+        &event(
+            1,
+            EventKind::Resources {
+                started,
+                events: Vec::new(),
+                dropped: 0,
+            },
+        ),
+        start,
+    );
     let running = |generation| Some(run(generation, no_readings()));
 
     let fresh = sample_at(&mut assembler, start, 1, running(1), Measures::default());

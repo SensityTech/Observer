@@ -23,4 +23,8 @@ onesync: OneSync | null,
 /**
  * `sv_hostname` without its control characters, at most 128 characters.
  */
-hostname: string | null, licence: LicenceState, };
+hostname: string | null, licence: LicenceState, 
+/**
+ * `sv_enforceGameBuild` as the chain sets it, the last setter winning.
+ */
+gameBuild: number | null, };

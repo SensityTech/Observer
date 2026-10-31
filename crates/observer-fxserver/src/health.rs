@@ -195,8 +195,8 @@ pub enum Probe {
     /// The tick time histograms.
     Perf(Result<TickReport, ProbeError>),
     Players(Result<PlayerList, ProbeError>),
-    /// The build number, from `/info.json`.
-    Info(Result<u32, ProbeError>),
+    /// The build and the enforced game build, from `/info.json`.
+    Info(Result<Info, ProbeError>),
 }
 
 /// What `/dynamic.json` says about the players.
@@ -369,14 +369,22 @@ async fn dynamic(address: SocketAddr) -> Result<Players, ProbeError> {
     parse_dynamic(&body)
 }
 
-/// Only the build is read: the rest of `/info.json` lists the server's convars, one of them derived
-/// from the licence key.
-async fn info(address: SocketAddr) -> Result<u32, ProbeError> {
+/// What `/info.json` says that Observer keeps.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Info {
+    pub build: u32,
+    /// `sv_enforceGameBuild`, when the server sets it.
+    pub game_build: Option<u32>,
+}
+
+/// Only the build and the enforced game build are read: the rest of `/info.json` lists the server's
+/// convars, one of them derived from the licence key.
+async fn info(address: SocketAddr) -> Result<Info, ProbeError> {
     let (status, body) = get(address, "/info.json", &[], MAX_BODY).await?;
     if status != StatusCode::OK {
         return Err(ProbeError::Status(status.as_u16()));
     }
-    parse_build(&body)
+    parse_info(&body)
 }
 
 async fn perf(address: SocketAddr, authorization: &str) -> Result<TickReport, ProbeError> {
@@ -460,22 +468,29 @@ fn parse_dynamic(body: &[u8]) -> Result<Players, ProbeError> {
     Ok(Players { clients, max_clients })
 }
 
-/// `"server": "FXServer-master SERVER v1.0.0.35245 win32"`: the last part of the version.
-fn parse_build(body: &[u8]) -> Result<u32, ProbeError> {
+/// `"server": "FXServer-master SERVER v1.0.0.35245 win32"`: the last part of the version; and
+/// `vars.sv_enforceGameBuild`, which FXServer lists among the convars it shows.
+fn parse_info(body: &[u8]) -> Result<Info, ProbeError> {
     let invalid = || ProbeError::Invalid("/info.json names no build".to_owned());
     let value: serde_json::Value = serde_json::from_slice(body).map_err(|_| invalid())?;
     let server = value
         .get("server")
         .and_then(serde_json::Value::as_str)
         .ok_or_else(invalid)?;
-    server
+    let build = server
         .split_whitespace()
         .find_map(|word| {
             let version = word.strip_prefix('v')?;
             version.contains('.').then(|| version.rsplit('.').next())?
         })
         .and_then(|build| build.parse().ok())
-        .ok_or_else(invalid)
+        .ok_or_else(invalid)?;
+    let game_build = value
+        .get("vars")
+        .and_then(|vars| vars.get("sv_enforceGameBuild"))
+        .and_then(serde_json::Value::as_str)
+        .and_then(|game_build| game_build.trim().parse().ok());
+    Ok(Info { build, game_build })
 }
 
 /// A JSON array of players, each with a numeric `id` and `ping`. The public list FXServer answers
@@ -786,11 +801,20 @@ mod tests {
         let info = br#"{"enhancedHostSupport":true,"resources":["hardcap","observer"],"server":"FXServer-master SERVER v1.0.0.35245 win32","vars":{"sv_maxClients":"8"},"version":311736622}"#;
         let linux = br#"{"server":"FXServer-master SERVER v1.0.0.37872 linux"}"#;
 
-        assert_eq!(parse_build(info), Ok(35245));
-        assert_eq!(parse_build(linux), Ok(37872));
+        assert_eq!(parse_info(info).map(|info| info.build), Ok(35245));
+        assert_eq!(parse_info(linux).map(|info| info.build), Ok(37872));
         for invalid in [&br#"{"server":"FXServer"}"#[..], br#"{"version":1}"#, b"<html>"] {
-            assert!(parse_build(invalid).is_err());
+            assert!(parse_info(invalid).is_err());
         }
+    }
+
+    #[test]
+    fn the_game_build_is_the_one_the_server_enforces() {
+        let enforced = br#"{"server":"FXServer-master SERVER v1.0.0.35245 win32","vars":{"sv_enforceGameBuild":"3095"}}"#;
+        let default = br#"{"server":"FXServer-master SERVER v1.0.0.35245 win32","vars":{}}"#;
+
+        assert_eq!(parse_info(enforced).unwrap().game_build, Some(3095));
+        assert_eq!(parse_info(default).unwrap().game_build, None);
     }
 
     #[test]

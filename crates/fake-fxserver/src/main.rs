@@ -290,14 +290,18 @@ impl Fake {
             ("endpoint_add_tcp", Some(address)) => self.endpoint = Some(address.to_owned()),
             ("endpoint_add_udp", _) => {}
             ("ensure" | "start", Some(resource)) => {
+                let restarted = self.started.iter().any(|started| started == resource);
                 if self.bridge.is_some() && resource == "observer" {
                     stop(resource);
                 }
                 self.start(resource);
+                let events: &[&str] = if restarted { &["stop", "start"] } else { &["start"] };
+                self.resources_changed(resource, events);
             }
             ("restart", Some(resource)) => {
                 stop(resource);
                 self.start(resource);
+                self.resources_changed(resource, &["stop", "start"]);
             }
             ("stop", Some(resource)) => {
                 stop(resource);
@@ -305,6 +309,7 @@ impl Fake {
                 if resource == "observer" {
                     self.bridge = None;
                 }
+                self.resources_changed(resource, &["stop"]);
             }
             ("quit", reason) => self.quit(reason),
             ("fake_crash", code) => self.crash(code.and_then(|code| code.parse().ok())),
@@ -376,6 +381,18 @@ impl Fake {
                 ready: false,
             });
         }
+    }
+
+    /// The bridge's report of a resource started or stopped once the cfg has run.
+    fn resources_changed(&mut self, resource: &str, changes: &[&str]) {
+        if !self.bridge.as_ref().is_some_and(|bridge| bridge.ready) {
+            return;
+        }
+        let events: Vec<[&str; 2]> = changes.iter().map(|change| [resource, *change]).collect();
+        self.traces.script(
+            "observer",
+            &json!({ "type": "observer", "kind": "resources", "started": self.started, "events": events }),
+        );
     }
 
     /// The bridge's traces. They come from the main loop, so they stop while it is hung.

@@ -155,6 +155,8 @@ pub struct CfgFacts {
     /// `sv_hostname` without its control characters, at most 128 characters.
     pub hostname: Option<String>,
     pub licence: LicenceState,
+    /// `sv_enforceGameBuild` as the chain sets it, the last setter winning.
+    pub game_build: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
@@ -472,6 +474,7 @@ mod tests {
             onesync: Some(OneSync::On),
             hostname: Some("Lab".to_owned()),
             licence: LicenceState::Placeholder,
+            game_build: Some(3095),
         };
 
         assert_eq!(
@@ -504,6 +507,7 @@ mod tests {
                 "onesync": "on",
                 "hostname": "Lab",
                 "licence": "placeholder",
+                "gameBuild": 3095,
             })
         );
         assert_eq!(serde_json::to_value(Game::Gta5).unwrap(), "gta5");
