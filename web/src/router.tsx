@@ -41,6 +41,7 @@ const ServerSetupPage = lazyCode(() =>
     import('./pages/ServerSetupPage').then((page) => ({ default: page.ServerSetupPage })),
 );
 const UsersPage = lazyCode(() => import('./pages/UsersPage').then((page) => ({ default: page.UsersPage })));
+const FilesPage = lazyCode(() => import('./pages/FilesPage').then((page) => ({ default: page.FilesPage })));
 const AuditPage = lazyCode(() => import('./pages/AuditPage').then((page) => ({ default: page.AuditPage })));
 const AboutPage = lazyCode(() => import('./pages/AboutPage').then((page) => ({ default: page.AboutPage })));
 const DiagnosticsPage = lazyCode(() =>
@@ -208,6 +209,16 @@ const usersRoute = createRoute({
     ),
 });
 
+const filesRoute = createRoute({
+    getParentRoute: () => panelRoute,
+    path: '/files',
+    component: () => (
+        <RequirePermission name="FilesManage">
+            <FilesPage />
+        </RequirePermission>
+    ),
+});
+
 const auditRoute = createRoute({
     getParentRoute: () => panelRoute,
     path: '/audit',
@@ -244,6 +255,7 @@ const routeTree = rootRoute.addChildren([
         serverRoute,
         serverSetupRoute,
         usersRoute,
+        filesRoute,
         auditRoute,
         accountRoute,
         aboutRoute,

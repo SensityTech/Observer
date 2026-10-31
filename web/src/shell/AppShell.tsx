@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Link, Outlet } from '@tanstack/react-router';
 import {
     CalendarClock,
+    FolderLock,
     LayoutDashboard,
     Menu as MenuIcon,
     Package,
@@ -37,7 +38,16 @@ import { ThemeSwitch } from './ThemeSwitch';
 import { UserMenu } from './UserMenu';
 
 type NavEntry = {
-    to: '/' | '/console' | '/schedule' | '/artifacts' | '/diagnostics' | '/server' | '/users' | '/audit';
+    to:
+        | '/'
+        | '/console'
+        | '/schedule'
+        | '/artifacts'
+        | '/diagnostics'
+        | '/server'
+        | '/users'
+        | '/files'
+        | '/audit';
     label: string;
     icon: LucideIcon;
     /** A permission, any one of a list, or the owner alone for what no permission grants. */
@@ -106,6 +116,7 @@ export function AppShell() {
     const administration: NavEntry[] = [
         { to: '/server', label: t.nav.server, icon: Server, access: 'owner' },
         { to: '/users', label: t.nav.users, icon: Users, access: Permission.UsersManage },
+        { to: '/files', label: t.nav.files, icon: FolderLock, access: Permission.FilesManage },
         { to: '/audit', label: t.nav.audit, icon: ScrollText, access: Permission.AuditView },
     ];
 
