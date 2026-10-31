@@ -14,4 +14,5 @@ export const Permission = {
     SettingsManage: 1n << 10n,
     LogsDownload: 1n << 11n,
     DiagnosticsView: 1n << 12n,
+    FilesManage: 1n << 13n,
 } as const;

@@ -94,6 +94,11 @@ const permissions = {
         description:
             'Processes FXServer starts and their command lines, its connections, crash and hang analyses.',
     },
+    filesManage: {
+        name: 'Manage file access',
+        description:
+            "Give accounts Read and Assets groups over the server's files, take access away and end sessions.",
+    },
 } satisfies Record<PermissionKey, { name: string; description: string }>;
 
 const permissionNames = (hex: string) =>
@@ -2042,6 +2047,7 @@ export const en = {
         settings: 'Settings',
         logs: 'Logs',
         diagnostics: 'Diagnostics',
+        files: 'Files',
     } satisfies Record<PermissionArea, string>,
     danger: {
         sensitive: 'Sensitive',
