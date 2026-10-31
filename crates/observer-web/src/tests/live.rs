@@ -249,13 +249,17 @@ async fn a_socket_opens_from_the_https_page_behind_a_trusted_proxy() {
         request
     };
 
-    let ticket = server.ticket(&owner).await;
-    let mut socket = server.handshake(forwarded(&ticket, "https")).await.unwrap();
-    let ticket = server.ticket(&owner).await;
-    let plain = server.handshake(forwarded(&ticket, "http")).await;
-
-    assert_eq!(receive(&mut socket).await["type"], "hello");
-    assert_eq!(plain.err(), Some(StatusCode::FORBIDDEN));
+    // nginx and Caddy say `https`, Traefik says `wss` for a websocket.
+    for scheme in ["https", "wss"] {
+        let ticket = server.ticket(&owner).await;
+        let mut socket = server.handshake(forwarded(&ticket, scheme)).await.unwrap();
+        assert_eq!(receive(&mut socket).await["type"], "hello", "{scheme}");
+    }
+    for scheme in ["http", "ws"] {
+        let ticket = server.ticket(&owner).await;
+        let plain = server.handshake(forwarded(&ticket, scheme)).await;
+        assert_eq!(plain.err(), Some(StatusCode::FORBIDDEN), "{scheme}");
+    }
 }
 
 #[tokio::test]

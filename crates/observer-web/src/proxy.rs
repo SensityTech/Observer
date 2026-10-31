@@ -139,11 +139,12 @@ fn forwarded_for(headers: &HeaderMap, proxies: &[TrustedProxy]) -> Option<IpAddr
     leftmost
 }
 
-/// The last value is the one the nearest proxy wrote.
+/// The last value is the one the nearest proxy wrote. Traefik names the scheme of a websocket
+/// opening `wss` where it would write `https`.
 fn forwarded_https(headers: &HeaderMap) -> bool {
     entries(headers, "x-forwarded-proto")
         .next_back()
-        .is_some_and(|scheme| scheme.eq_ignore_ascii_case(b"https"))
+        .is_some_and(|scheme| scheme.eq_ignore_ascii_case(b"https") || scheme.eq_ignore_ascii_case(b"wss"))
 }
 
 /// The comma-separated entries of every `name` header, in order, trimmed.
@@ -336,7 +337,8 @@ mod tests {
             ("x-forwarded-proto", "https"),
             ("x-forwarded-proto", "http")
         ]));
-        assert!(!https(&[("x-forwarded-proto", "wss")]));
+        assert!(https(&[("x-forwarded-proto", "wss")]), "Traefik's websocket");
+        assert!(!https(&[("x-forwarded-proto", "ws")]));
         assert!(!https(&[]));
         assert_eq!(client(&[("x-forwarded-proto", "https")]).scheme(), "https");
         assert_eq!(client(&[]).scheme(), "http");
