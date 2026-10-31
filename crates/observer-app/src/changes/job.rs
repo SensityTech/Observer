@@ -311,7 +311,7 @@ struct Work {
     rate: Option<Rate>,
     resources: Vec<Planned>,
     shortened: Option<Shortened>,
-    /// Categories the listing could not read: their resources are missing, not removed.
+    /// Folders the listing could not read: what they hold is missing, not removed.
     unreadable: Vec<String>,
     /// The files of the cfg exec chain, masked as cfg files wherever they lie.
     in_chain: Arc<HashSet<String>>,
@@ -458,7 +458,7 @@ impl Work {
         self.shortened = shortened;
         self.in_chain = Arc::new(chain_paths(&chain));
         if !unreadable.is_empty() {
-            warn!(snapshot = self.id, categories = ?unreadable, "some categories could not be read");
+            warn!(snapshot = self.id, folders = ?unreadable, "some folders could not be read");
         }
         self.unreadable = unreadable;
         let mut batch = Batch::new(self.id, self.started_ns, self.floor);
@@ -623,7 +623,7 @@ impl Work {
     }
 
     /// The snapshot is complete, or partial when the listing stopped at a limit or could not read
-    /// a category. A start whose rows all equal the previous complete start's shares its rows.
+    /// a folder. A start whose rows all equal the previous complete start's shares its rows.
     async fn finish(&self) -> Result<(), Error> {
         let reason = if self.shortened.is_some() {
             Some(PartialReason::Limit)
