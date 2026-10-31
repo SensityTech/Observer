@@ -13,10 +13,15 @@ import { table } from '../components/table';
 import { useI18n } from '../i18n/I18nProvider';
 import { cn } from '../lib/cn';
 import { Toggle } from './controls';
+import { escapeInvisible } from './invisible';
 import { FILTERED, RESOURCE_CHIP, changedResources } from './words';
 
 /** Live changes shown before "Show all". */
 const SHORT_LIST = 8;
+
+/** Whether a chip shows the resource: Checking counts those a partial snapshot left unknown too. */
+const shows = (kind: ResourceChangeKind, resource: ResourceChange) =>
+    resource.change === kind || (kind === 'checking' && resource.change === 'unknown');
 
 /**
  * The resources that changed, filtered by kind and searched, then what started and stopped while
@@ -30,16 +35,18 @@ export function ResourcesCard({ comparison }: { comparison: Comparison }) {
     const [query, setQuery] = useState('');
     const { counts, resources, to } = comparison;
     const kinds = FILTERED.filter((kind) => counts[kind] > 0);
+    // A kind picked while the snapshot hashed may have settled into others since.
+    const picked = kinds.filter((kind) => shown.has(kind));
     const needle = query.trim().toLowerCase();
     const visible = resources.filter(
         (resource) =>
-            (shown.size === 0 || shown.has(resource.change)) &&
+            (picked.length === 0 || picked.some((kind) => shows(kind, resource))) &&
             (needle === '' ||
                 resource.name.toLowerCase().includes(needle) ||
                 resource.path.toLowerCase().includes(needle)),
     );
     const toggle = (kind: ResourceChangeKind, pressed: boolean) => {
-        const next = new Set(shown);
+        const next = new Set<ResourceChangeKind>(picked);
         if (pressed) {
             next.add(kind);
         } else {
@@ -79,7 +86,7 @@ export function ResourcesCard({ comparison }: { comparison: Comparison }) {
                             {kinds.map((kind) => (
                                 <Toggle
                                     key={kind}
-                                    pressed={shown.has(kind)}
+                                    pressed={picked.includes(kind)}
                                     onChange={(pressed) => toggle(kind, pressed)}
                                 >
                                     {words.kinds[kind]} <span className="tabular-nums">{counts[kind]}</span>
@@ -149,8 +156,8 @@ function ResourceRow({ comparison, resource }: { comparison: Comparison; resourc
         resource.fromVersion === null ||
         resource.toVersion === null ||
         resource.fromVersion === resource.toVersion
-            ? (resource.toVersion ?? resource.fromVersion ?? '')
-            : t.changes.fromTo(resource.fromVersion, resource.toVersion);
+            ? escapeInvisible(resource.toVersion ?? resource.fromVersion ?? '')
+            : t.changes.fromTo(escapeInvisible(resource.fromVersion), escapeInvisible(resource.toVersion));
     const files = resource.files;
     const sub = cn(table.sub, warning && 'text-ink-2');
     return (
@@ -164,15 +171,24 @@ function ResourceRow({ comparison, resource }: { comparison: Comparison; resourc
             >
                 <Link
                     to="/changes/resource"
-                    search={{ from: comparison.from.id, to: comparison.to.id, path: resource.path }}
+                    search={{
+                        from: comparison.from.id,
+                        // The next check of the disk deletes this one: the link follows the latest.
+                        to: comparison.to.kind === 'check' ? 'disk' : comparison.to.id,
+                        path: resource.path,
+                    }}
                     className={cn(table.mono, 'font-medium underline-offset-2 hover:underline')}
                 >
-                    {resource.name}
+                    {escapeInvisible(resource.name)}
                 </Link>
                 <div className={sub}>
-                    <span className="font-mono [overflow-wrap:anywhere]">{resource.path}</span>
+                    <span className="font-mono [overflow-wrap:anywhere]">
+                        {escapeInvisible(resource.path)}
+                    </span>
                     {resource.fromPath !== null && (
-                        <span className="font-mono">{words.fromPath(resource.fromPath)}</span>
+                        <span className="font-mono [overflow-wrap:anywhere]">
+                            {words.fromPath(escapeInvisible(resource.fromPath))}
+                        </span>
                     )}
                     {resource.escrowed && <Chip icon={Lock}>{words.escrowed}</Chip>}
                     {resource.duplicate && (
@@ -231,9 +247,11 @@ function LiveChanges({ changes }: { changes: LiveChange[] }) {
                             {format.timestamp(change.at)}
                         </time>
                         <Chip>{words.kinds[change.change]}</Chip>
-                        <span className="font-mono text-small text-ink">{change.name}</span>
+                        <span className="font-mono text-small text-ink">{escapeInvisible(change.name)}</span>
                         <span>{change.by === null ? words.byUnknown : words.by(change.by)}</span>
-                        {change.command !== null && <code className="code-inline">{change.command}</code>}
+                        {change.command !== null && (
+                            <code className="code-inline">{escapeInvisible(change.command)}</code>
+                        )}
                     </li>
                 ))}
             </ul>

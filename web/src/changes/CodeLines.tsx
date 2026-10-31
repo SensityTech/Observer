@@ -1,13 +1,14 @@
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { Lock } from 'lucide-react';
-import { useRef } from 'react';
+import { Fragment, useRef } from 'react';
 
 import type { DiffLine } from '../api/generated/DiffLine';
 import type { DiffLineKind } from '../api/generated/DiffLineKind';
 import type { Segment } from '../api/generated/Segment';
 import { useI18n } from '../i18n/I18nProvider';
 import { cn } from '../lib/cn';
-import { hunkHeader, type DiffRow } from './diffRows';
+import { hunkHeader, isFirstLine, type DiffRow } from './diffRows';
+import { escapeOf, invisiblePieces } from './invisible';
 
 /** Both versions' line numbers, or one column: on a phone, and in a whole file. */
 export type Numbering = 'both' | 'one';
@@ -166,50 +167,73 @@ function Line({
                         </span>
                     )}
                 </span>
+                {/* Isolated, a line's direction never runs into the next one's. */}
                 <span
                     className={cn(
-                        'min-w-0 flex-1 pr-4',
+                        'min-w-0 flex-1 pr-4 [unicode-bidi:isolate]',
                         wrap ? 'whitespace-pre-wrap [overflow-wrap:anywhere]' : 'whitespace-pre',
                     )}
                 >
-                    {line !== null && <Segments segments={line.segments} kind={kind} />}
+                    {line !== null && <Segments line={line} kind={kind} />}
                 </span>
             </span>
         </div>
     );
 }
 
-/** A line's pieces: the words that changed against its other version stand out, and a secret is a chip. */
-function Segments({ segments, kind }: { segments: Segment[]; kind: DiffLineKind }) {
+/**
+ * A line's pieces: the words that changed against its other version stand out, a secret is a chip,
+ * and so is each character that reorders or hides code. What only a screen reader says stays out of
+ * a copy of the lines.
+ */
+function Segments({ line, kind }: { line: DiffLine; kind: DiffLineKind }) {
     const { t } = useI18n();
     // Each piece keyed by where it starts in the line, which no two share.
-    const placed = segments.reduce<{ segment: Segment; at: number }[]>((list, segment) => {
+    const placed = line.segments.reduce<{ segment: Segment; at: number }[]>((list, segment) => {
         const last = list.at(-1);
         return [...list, { segment, at: last === undefined ? 0 : last.at + last.segment.text.length }];
     }, []);
     return placed.map(({ segment, at }) => {
         if (segment.redacted) {
+            // The chip never prints what the server sent in the secret's place.
             return (
                 <span key={at} className="whitespace-nowrap">
                     <span className="code-inline inline-flex items-center gap-1 align-baseline">
                         <Lock size={11} strokeWidth={2} aria-hidden="true" />
-                        <span className="sr-only">{t.changes.diff.hiddenSecret}</span>
-                        {segment.text}
+                        <span className="sr-only select-none">{t.changes.diff.hiddenSecret}</span>
+                        {t.changes.diff.redaction}
                     </span>
                     {segment.changed && (
-                        <span className="ml-1.5 font-sans text-term-yellow">
+                        <span className="ml-1.5 font-sans text-term-yellow select-none">
                             {t.changes.diff.secretChanged}
                         </span>
                     )}
                 </span>
             );
         }
+        const text = <Escaped text={segment.text} opensFile={at === 0 && isFirstLine(line)} />;
         return segment.changed && kind !== 'context' ? (
             <span key={at} className={cn('rounded-xs', WORD[kind])}>
-                {segment.text}
+                {text}
             </span>
         ) : (
-            <span key={at}>{segment.text}</span>
+            <span key={at}>{text}</span>
         );
     });
+}
+
+function Escaped({ text, opensFile }: { text: string; opensFile: boolean }) {
+    const { t } = useI18n();
+    return invisiblePieces(text, opensFile).map(({ at, text: piece, invisible }) =>
+        invisible === null ? (
+            <Fragment key={at}>{piece}</Fragment>
+        ) : (
+            <span key={at} className="mx-px rounded-xs bg-warning-soft px-0.5 text-warning">
+                <span aria-hidden="true">{escapeOf(invisible)}</span>
+                <span className="sr-only select-none">
+                    {t.changes.diff.invisible[invisible.kind](invisible.code)}
+                </span>
+            </span>
+        ),
+    );
 }

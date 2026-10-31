@@ -1,16 +1,16 @@
 import { keepPreviousData, useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate, useSearch } from '@tanstack/react-router';
 import { GitCompare, LoaderCircle } from 'lucide-react';
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 
-import { comparisonQuery, startsQuery } from '../api/changes';
+import { comparisonQuery, olderStartsQuery, startsQuery } from '../api/changes';
 import { ApiError } from '../api/client';
 import type { Comparison } from '../api/generated/Comparison';
 import { useMe } from '../auth/me';
 import { Notice } from '../components/Notice';
 import { ComparisonBar } from '../changes/ComparisonBar';
 import { EnvironmentCard } from '../changes/EnvironmentCard';
-import { useChangesLive } from '../changes/live';
+import { refreshMoved, useChangesLive } from '../changes/live';
 import { ResourcesCard } from '../changes/ResourcesCard';
 import type { ChangesSearch } from '../changes/search';
 import { SettingsCard } from '../changes/SettingsCard';
@@ -30,19 +30,27 @@ export function ChangesPage() {
     const navigate = useNavigate();
     const queryClient = useQueryClient();
     // A snapshot still hashing settles resource by resource: what is shown follows it.
-    const live = useChangesLive(() => {
-        void queryClient.invalidateQueries({ queryKey: startsQuery.queryKey });
-        void queryClient.invalidateQueries({ queryKey: ['changes', 'comparison'] });
+    const live = useChangesLive((moved) => refreshMoved(queryClient, moved));
+    const starts = useQuery(startsQuery);
+    // Older starts are read once asked for, from where the newest page stops.
+    const [older, setOlder] = useState(false);
+    const before = starts.data?.next ?? null;
+    const olderStarts = useInfiniteQuery({
+        ...olderStartsQuery(before ?? 0),
+        enabled: older && before !== null,
+        placeholderData: keepPreviousData,
     });
-    const starts = useInfiniteQuery(startsQuery);
     const comparison = useQuery({
         ...comparisonQuery(search.from, search.to),
         placeholderData: keepPreviousData,
     });
     const compare = (next: ChangesSearch) => void navigate({ to: '/changes', search: next });
 
-    const listed = starts.data?.pages.flatMap((page) => page.starts) ?? [];
-    const check = live?.check ?? starts.data?.pages[0]?.check ?? null;
+    const listed = [
+        ...(starts.data?.starts ?? []),
+        ...(older ? (olderStarts.data?.pages.flatMap((page) => page.starts) ?? []) : []),
+    ];
+    const check = live?.check ?? starts.data?.check ?? null;
     const compared = comparison.data;
     const missing = comparison.error instanceof ApiError && comparison.error.code === 'start_not_found';
     const defaults = search.from === undefined && search.to === undefined;
@@ -99,9 +107,9 @@ export function ChangesPage() {
                 <StartsCard
                     starts={listed}
                     current={search.to === 'disk' ? null : (compared?.to.id ?? null)}
-                    more={starts.hasNextPage}
-                    loadingMore={starts.isFetchingNextPage}
-                    onLoadMore={() => void starts.fetchNextPage()}
+                    more={before !== null && (!older || olderStarts.isPending || olderStarts.hasNextPage)}
+                    loadingMore={older && (olderStarts.isPending || olderStarts.isFetchingNextPage)}
+                    onLoadMore={() => (older ? void olderStarts.fetchNextPage() : setOlder(true))}
                     onPick={(start) => compare({ to: start.id })}
                 />
             )}
@@ -130,7 +138,8 @@ function Compared({ comparison, stale }: { comparison: Comparison; stale: boolea
             {to.state === 'failed' && <Notice tone="warning">{t.changes.failed}</Notice>}
             <SummaryBand comparison={comparison} />
             <EnvironmentCard comparison={comparison} />
-            <ResourcesCard comparison={comparison} />
+            {/* Filters picked for one comparison mean nothing for another. */}
+            <ResourcesCard key={`${comparison.from.id}:${comparison.to.id}`} comparison={comparison} />
         </div>
     );
 }

@@ -1,3 +1,4 @@
+import { useQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import {
     Cpu,
@@ -11,6 +12,7 @@ import {
 } from 'lucide-react';
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 
+import { startsQuery } from '../api/changes';
 import { deleteCrashFiles, downloadCrashFile, MAX_DOWNLOAD } from '../api/diagnostics';
 import type { Crash } from '../api/generated/Crash';
 import type { CrashFile } from '../api/generated/CrashFile';
@@ -21,6 +23,7 @@ import type { Frame } from '../api/generated/Frame';
 import type { Listener } from '../api/generated/Listener';
 import { Permission } from '../api/generated/Permission';
 import type { ProcessKind } from '../api/generated/ProcessKind';
+import type { SnapshotSummary } from '../api/generated/SnapshotSummary';
 import type { TreeProcess } from '../api/generated/TreeProcess';
 import { allows, useMe } from '../auth/me';
 import { Button, buttonVariants } from '../components/Button';
@@ -198,6 +201,19 @@ const crashSentence = (t: Messages, crash: Crash): ReactNode => {
     return exit === null ? t.alerts.crashed : t.diagnostics.crashes.exited(exit);
 };
 
+/** The start that began the run a crash ended, among the starts listed. */
+const startOf = (crash: Crash, starts: SnapshotSummary[]) => {
+    const ran = crash.runStarted === null ? null : Date.parse(crash.runStarted);
+    return ran === null
+        ? undefined
+        : starts.find(
+              (start) =>
+                  start.runStarted !== null &&
+                  Date.parse(start.runStarted) === ran &&
+                  start.generation === crash.generation,
+          );
+};
+
 const CRASH_TONE = { crash: 'danger', hang: 'warning', found: 'neutral' } as const;
 const CRASH_ICON = { crash: OctagonX, hang: TriangleAlert, found: undefined } as const;
 
@@ -211,6 +227,10 @@ function CrashesCard({
     onUpdated: (crash: Crash) => void;
 }) {
     const { t, format } = useI18n();
+    const me = useMe();
+    const changes = allows(me, Permission.ChangesView);
+    // The newest starts are the ones recent crashes ended; an older crash opens the latest two.
+    const starts = useQuery({ ...startsQuery, enabled: changes });
     const [open, setOpen] = useState<number | null>(null);
     const [deleting, setDeleting] = useState<Crash | null>(null);
     const [deleted, setDeleted] = useState(0);
@@ -266,6 +286,8 @@ function CrashesCard({
                                 <CrashRow
                                     key={crash.id}
                                     crash={crash}
+                                    changes={changes}
+                                    start={startOf(crash, starts.data?.starts ?? [])}
                                     open={open === crash.id}
                                     onToggle={() => setOpen(open === crash.id ? null : crash.id)}
                                     onDelete={() => setDeleting(crash)}
@@ -292,11 +314,17 @@ function CrashesCard({
 
 function CrashRow({
     crash,
+    changes,
+    start,
     open,
     onToggle,
     onDelete,
 }: {
     crash: Crash;
+    /** The account sees the changes of each start. */
+    changes: boolean;
+    /** The start of the run it ended, when listed. */
+    start: SnapshotSummary | undefined;
     open: boolean;
     onToggle: () => void;
     onDelete: () => void;
@@ -358,9 +386,12 @@ function CrashRow({
                                 {t.diagnostics.crashes.deleteFiles}
                             </Button>
                         )}
-                        {/* A start does not say which run it began, so the page opens on the latest two. */}
-                        {crash.kind !== 'found' && allows(me, Permission.ChangesView) && (
-                            <Link to="/changes" className={buttonVariants({ size: 'sm', tone: 'ghost' })}>
+                        {crash.kind !== 'found' && changes && (
+                            <Link
+                                to="/changes"
+                                search={start === undefined ? {} : { to: start.id }}
+                                className={buttonVariants({ size: 'sm', tone: 'ghost' })}
+                            >
                                 <GitCompare size={14} strokeWidth={1.5} aria-hidden="true" />
                                 {t.diagnostics.crashes.whatChanged}
                             </Link>

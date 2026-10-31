@@ -10,6 +10,7 @@ import { Card } from '../components/Card';
 import { Chip } from '../components/Chip';
 import { useI18n } from '../i18n/I18nProvider';
 import { DiffView } from './DiffView';
+import { escapeInvisible } from './invisible';
 import { FILE_CHIP } from './words';
 
 const LAUNCH_ACTIONS = new Set<string>(['launch_settings_changed']);
@@ -146,7 +147,7 @@ export function EnvironmentCard({ comparison }: { comparison: Comparison }) {
                             <li key={file.path} className="flex flex-col gap-2">
                                 <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                                     <span className="font-mono text-small text-ink [overflow-wrap:anywhere]">
-                                        {file.path}
+                                        {escapeInvisible(file.path)}
                                     </span>
                                     <Chip icon={FILE_CHIP[file.change]}>
                                         {t.changes.diff.fileChanges[file.change]}
@@ -191,7 +192,7 @@ export function EnvironmentCard({ comparison }: { comparison: Comparison }) {
                     <span className="flex flex-wrap gap-1.5">
                         {names.map((name) => (
                             <code key={name} className="code-inline">
-                                {name}
+                                {escapeInvisible(name)}
                             </code>
                         ))}
                     </span>

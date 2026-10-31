@@ -51,6 +51,7 @@ import type { StartCause } from '../api/generated/StartCause';
 import type { StopSource } from '../api/generated/StopSource';
 import type { SupportLevel } from '../api/generated/SupportLevel';
 import { parsePermissions, permissionKeys, type PermissionKey } from '../auth/permissions';
+import type { InvisibleKind } from '../changes/invisible';
 import type { LinkState } from '../live/realtime';
 import type { LaunchStep, SetupStep } from '../setup/state';
 import { formatBytes, formatDuration, formatNumber, plural } from './format';
@@ -1549,9 +1550,15 @@ export const en = {
         },
         resourcesChanged: (value: number) =>
             count(value, { one: 'resource changed', other: 'resources changed' }),
+        // Resources neither changed nor unchanged yet, or left so by a partial snapshot.
+        beingChecked: (value: number) =>
+            `${count(value, { one: 'resource', other: 'resources' })} being checked`,
+        leftUnknown: (value: number) => `${count(value, { one: 'resource', other: 'resources' })} unknown`,
         noChange: 'No change',
         baseline: 'Baseline',
         beingListed: 'Being listed',
+        snapshotFailed: 'Snapshot failed',
+        notCompared: 'No earlier start to compare with',
         build: (build: number) => `build ${build}`,
         lines: (added: string, removed: string) => `+${added} −${removed}`,
         files: (added: string, modified: string, removed: string) => `+${added} ~${modified} −${removed}`,
@@ -1687,6 +1694,8 @@ export const en = {
             root: 'At the root',
             noFile: 'No file changed in this resource.',
             pickFile: 'Pick a file to see what changed in it.',
+            pickFileNoContent:
+                'Pick a file to see its sizes, hashes and who wrote it. Its lines take the permission to read changed files.',
             noContent:
                 'Your account sees which files changed, not their contents: reading them takes the permission to read changed files.',
             sizes: (from: string, to: string) => `${from} → ${to}`,
@@ -1722,7 +1731,14 @@ export const en = {
             added: 'added',
             removed: 'removed',
             hiddenSecret: 'Hidden secret',
+            redaction: '[REDACTED]',
             secretChanged: 'secret changed',
+            invisible: {
+                bidi: (code: string) => `bidirectional control ${code}`,
+                zeroWidth: (code: string) => `zero-width character ${code}`,
+            } satisfies Record<InvisibleKind, (code: string) => string>,
+            invisibleWarning:
+                'This file holds characters that reorder or hide code, as a Trojan Source attack uses them. Each one shows as ⟨U+…⟩ in its place.',
             moreLines: 'Show 20 more lines',
             page: (page: number, pages: number) =>
                 `Page ${formatNumber('en', page)} of ${formatNumber('en', pages)}`,
@@ -1739,6 +1755,8 @@ export const en = {
             hidden: 'Contents never shown: matches',
             generated: 'Generated or minified: compared by size and hash.',
             notKept: 'Contents no longer kept: the change stays listed, without its lines.',
+            beingRead: 'Still being read: its lines show once the files of this snapshot are hashed.',
+            renamed: (from: string) => `Renamed from ${from}; contents identical.`,
             archive: 'Archive: compared by size and time, never read.',
             offline: 'Cloud placeholder: listed by size and time, never read.',
             link: 'Link: compared by where it points.',
@@ -1748,6 +1766,11 @@ export const en = {
                     'Changed while the server was starting: the running server may hold the earlier version.',
                 unsettled: 'Changed while it was being read: no contents kept for this version.',
                 reloadedLive: 'Reloaded live after it changed: the running server holds this version.',
+            } satisfies Record<FileFlag, string>,
+            flagNames: {
+                afterStart: 'changed while starting',
+                unsettled: 'changed while read',
+                reloadedLive: 'reloaded live',
             } satisfies Record<FileFlag, string>,
             shaBefore: 'SHA-256 before',
             shaAfter: 'SHA-256 after',
@@ -1817,6 +1840,8 @@ export const en = {
             baseline: 'Baseline being taken',
             baselineTaken: 'Baseline taken: changes show from the next start',
             listing: 'Changes since the previous start: being listed',
+            failed: 'The snapshot of the latest start failed',
+            notCompared: 'No earlier start to compare the latest with',
         },
     },
     server_state: {
@@ -2640,6 +2665,9 @@ export const en = {
         hostZone: "the host's zone",
         minutes: (value: string) => `${value} min`,
         rate: (value: string) => `${value}/s`,
+        // Change tracking's sizes, in the units its settings are typed in.
+        megabytes: (value: string) => `${value} MB`,
+        gigabytes: (value: string) => `${value} GB`,
         // How a read of changed contents showed them.
         views: { diff: 'the diff', file: 'the whole file' },
         // What a change of the schedule's settings took away with the occurrence it removed.
@@ -2775,8 +2803,9 @@ export const en = {
             crash: 'Crash',
             names: 'Files',
             unrecorded: 'Command lines not kept',
-            fromStart: 'From start',
-            toStart: 'To start',
+            // A read of changed contents compares two snapshots: starts, or a start and a check of the disk.
+            fromSnapshot: 'From snapshot',
+            toSnapshot: 'To snapshot',
             resource: 'Resource',
             view: 'Read',
             versions: 'Versions cleared',

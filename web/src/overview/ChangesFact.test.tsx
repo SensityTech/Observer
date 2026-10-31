@@ -78,6 +78,25 @@ describe('ChangesFact', () => {
         live.stop();
     });
 
+    it('should say a failed snapshot failed, never that it is still listed', async () => {
+        const { say, getByRole, live } = await fact();
+        say('snapshot', { latest: { ...LATEST, state: 'failed', counts: null }, check: null });
+
+        expect(getByRole('link').textContent).toBe(en.changes.overview.failed);
+        live.stop();
+    });
+
+    it('should count the resources still being checked rather than say nothing changed', async () => {
+        const { say, getByRole, live } = await fact();
+        const counts = RESTART.counts && { ...RESTART.counts, updated: 0, checking: 3 };
+        say('snapshot', { latest: { ...RESTART, state: 'hashing', counts }, check: null });
+        expect(getByRole('link').textContent).toBe(en.changes.overview.since('3 resources being checked'));
+
+        say('event', { latest: { ...RESTART, state: 'partial', counts }, check: null });
+        expect(getByRole('link').textContent).toBe(en.changes.overview.since('3 resources unknown'));
+        live.stop();
+    });
+
     it('should say nothing before the first start', async () => {
         const { say, queryByRole, live } = await fact();
         say('snapshot', { latest: null, check: null });

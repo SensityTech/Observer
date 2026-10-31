@@ -19,6 +19,7 @@ import { useI18n } from '../i18n/I18nProvider';
 import { cn } from '../lib/cn';
 import { Toggle } from './controls';
 import { DiffView } from './DiffView';
+import { escapeInvisible } from './invisible';
 import { FILE_CHIP, RESOURCE_CHIP } from './words';
 
 /** A path inside the resource, from its folder on either side. */
@@ -36,8 +37,22 @@ const folderOf = (relative: string) => {
     return slash === -1 ? '' : relative.slice(0, slash);
 };
 
-/** Its files by folder, unchanged ones on request, and the diff of the one picked beside them. */
-export function ResourceView({ detail, from, to }: { detail: ResourceDetail; from: number; to: number }) {
+/**
+ * Its files by folder, unchanged ones on request, and the one picked beside them: its diff, or all
+ * but its lines for an account that cannot read contents.
+ */
+export function ResourceView({
+    detail,
+    from,
+    to,
+    reading,
+}: {
+    detail: ResourceDetail;
+    from: number;
+    to: number;
+    /** The later snapshot is still listed or hashed. */
+    reading: boolean;
+}) {
     const { t, format } = useI18n();
     const me = useMe();
     const content = allows(me, Permission.ChangesContent);
@@ -45,7 +60,8 @@ export function ResourceView({ detail, from, to }: { detail: ResourceDetail; fro
     const [picked, setPicked] = useState<string | null>(null);
     const [purged, setPurged] = useState<{ path: string; result: Purged } | null>(null);
     const shown = detail.files.filter((file) => unchanged || file.change !== 'unchanged');
-    const current = shown.find((file) => file.path === picked) ?? (content ? shown[0] : undefined);
+    // Only a file someone picked: reading its lines writes an audit entry.
+    const current = shown.find((file) => file.path === picked);
     const at = current === undefined ? -1 : shown.indexOf(current);
     const step = (by: number) => {
         const next = shown[at + by];
@@ -58,7 +74,7 @@ export function ResourceView({ detail, from, to }: { detail: ResourceDetail; fro
             {purged !== null && (
                 <Notice tone="success">
                     {t.changes.resource.purged(
-                        inside(detail, purged.path),
+                        escapeInvisible(inside(detail, purged.path)),
                         purged.result.versions,
                         format.bytes(purged.result.bytes),
                     )}
@@ -68,17 +84,19 @@ export function ResourceView({ detail, from, to }: { detail: ResourceDetail; fro
                 <FilesCard
                     detail={detail}
                     files={shown}
-                    current={content ? (current?.path ?? null) : null}
+                    current={current?.path ?? null}
                     unchanged={unchanged}
                     onUnchanged={setUnchanged}
-                    onPick={content ? setPicked : undefined}
+                    onPick={setPicked}
                     onPurged={(path, result) => setPurged({ path, result })}
                 />
-                {!content ? (
-                    <Notice>{t.changes.resource.noContent}</Notice>
-                ) : current === undefined ? (
+                {current === undefined ? (
                     <p className="rounded-card border border-dashed border-line-strong bg-bg-subtle px-6 py-10 text-center text-ui text-ink-3">
-                        {shown.length === 0 ? t.changes.resource.noFile : t.changes.resource.pickFile}
+                        {shown.length === 0
+                            ? t.changes.resource.noFile
+                            : content
+                              ? t.changes.resource.pickFile
+                              : t.changes.resource.pickFileNoContent}
                     </p>
                 ) : (
                     <DiffView
@@ -87,6 +105,8 @@ export function ResourceView({ detail, from, to }: { detail: ResourceDetail; fro
                         to={to}
                         path={current.path}
                         file={current}
+                        content={content}
+                        reading={reading}
                         onPrevious={step(-1)}
                         onNext={step(1)}
                     />
@@ -98,14 +118,18 @@ export function ResourceView({ detail, from, to }: { detail: ResourceDetail; fro
 }
 
 const gitWords = (head: GitHead | null, detached: string) =>
-    head === null ? null : `${head.branch ?? detached} @ ${head.commit?.slice(0, 10) ?? '?'}`;
+    head === null
+        ? null
+        : `${head.branch === null ? detached : escapeInvisible(head.branch)} @ ${head.commit?.slice(0, 10) ?? '?'}`;
 
 function ResourceHead({ detail }: { detail: ResourceDetail }) {
     const { t } = useI18n();
     const words = t.changes.resource;
     const { change } = detail;
     const chip = RESOURCE_CHIP[change.change];
-    const versions = [change.fromVersion, change.toVersion];
+    const versions = [change.fromVersion, change.toVersion].map((version) =>
+        version === null ? null : escapeInvisible(version),
+    );
     const git = [gitWords(detail.fromGit, words.detached), gitWords(detail.toGit, words.detached)];
     const facts: { key: string; label: string; body: ReactNode }[] = [
         {
@@ -113,7 +137,9 @@ function ResourceHead({ detail }: { detail: ResourceDetail }) {
             label: words.path,
             body: (
                 <span className="font-mono text-small text-ink [overflow-wrap:anywhere]">
-                    {change.fromPath === null ? change.path : t.changes.fromTo(change.fromPath, change.path)}
+                    {change.fromPath === null
+                        ? escapeInvisible(change.path)
+                        : t.changes.fromTo(escapeInvisible(change.fromPath), escapeInvisible(change.path))}
                 </span>
             ),
         },
@@ -148,13 +174,16 @@ function ResourceHead({ detail }: { detail: ResourceDetail }) {
                 <ul className="flex flex-col gap-0.5 font-mono text-small text-ink">
                     {detail.packages.map((item) => (
                         <li key={item.name}>
-                            {item.name}{' '}
+                            {escapeInvisible(item.name)}{' '}
                             <span className="text-ink-2">
                                 {item.from === null
-                                    ? words.packageAdded(item.to ?? '?')
+                                    ? words.packageAdded(escapeInvisible(item.to ?? '?'))
                                     : item.to === null
-                                      ? words.packageRemoved(item.from)
-                                      : t.changes.fromTo(item.from, item.to)}
+                                      ? words.packageRemoved(escapeInvisible(item.from))
+                                      : t.changes.fromTo(
+                                            escapeInvisible(item.from),
+                                            escapeInvisible(item.to),
+                                        )}
                             </span>
                         </li>
                     ))}
@@ -163,7 +192,10 @@ function ResourceHead({ detail }: { detail: ResourceDetail }) {
         });
     }
     return (
-        <section className="card flex flex-col gap-4 p-5 max-md:p-4" aria-label={change.name}>
+        <section
+            className="card flex flex-col gap-4 p-5 max-md:p-4"
+            aria-label={escapeInvisible(change.name)}
+        >
             <div className="flex flex-wrap items-center gap-2">
                 <Chip tone={chip.tone} icon={chip.icon}>
                     {t.changes.resources.kinds[change.change]}
@@ -176,7 +208,7 @@ function ResourceHead({ detail }: { detail: ResourceDetail }) {
                 )}
             </div>
             {detail.duplicates.length > 0 && (
-                <Notice tone="warning">{words.duplicate(detail.duplicates)}</Notice>
+                <Notice tone="warning">{words.duplicate(detail.duplicates.map(escapeInvisible))}</Notice>
             )}
             <dl className="grid grid-cols-1 gap-x-6 gap-y-3 text-ui md:grid-cols-[minmax(0,10rem)_minmax(0,1fr)]">
                 {facts.map((fact) => (
@@ -204,8 +236,7 @@ function FilesCard({
     current: string | null;
     unchanged: boolean;
     onUnchanged: (shown: boolean) => void;
-    /** None for an account that cannot read contents: the list is all it gets. */
-    onPick: ((path: string) => void) | undefined;
+    onPick: (path: string) => void;
     onPurged: (path: string, purged: Purged) => void;
 }) {
     const { t } = useI18n();
@@ -236,7 +267,7 @@ function FilesCard({
                     {[...folders].map(([folder, inFolder]) => (
                         <div key={folder}>
                             <h3 className="px-5 pt-2 pb-1 font-mono text-meta text-ink-3 [overflow-wrap:anywhere] max-md:px-4">
-                                {folder === '' ? words.root : `${folder}/`}
+                                {folder === '' ? words.root : `${escapeInvisible(folder)}/`}
                             </h3>
                             <ul className="flex flex-col">
                                 {inFolder.map((file) => (
@@ -282,12 +313,12 @@ function FileRow({
     detail: ResourceDetail;
     file: FileChange;
     current: boolean;
-    onPick: ((path: string) => void) | undefined;
+    onPick: (path: string) => void;
     onPurge: (() => void) | undefined;
 }) {
     const { t, format } = useI18n();
     const words = t.changes;
-    const relative = inside(detail, file.path);
+    const relative = escapeInvisible(inside(detail, file.path));
     const name = relative.slice(relative.lastIndexOf('/') + 1);
     const sizes = [file.fromSize, file.toSize]
         .filter((size) => size !== null)
@@ -299,13 +330,16 @@ function FileRow({
             : file.change === 'modified' && sizes.length === 2
               ? words.resource.sizes(sizes[0] ?? '', sizes[1] ?? '')
               : null,
-        file.fromPath === null ? null : words.resources.fromPath(inside(detail, file.fromPath)),
+        file.fromPath === null
+            ? null
+            : words.resources.fromPath(escapeInvisible(inside(detail, file.fromPath))),
+        ...file.flags.map((flag) => words.diff.flagNames[flag]),
     ].filter((fact) => fact !== null);
     const label = (
         <>
             <span className="flex min-w-0 items-center gap-1.5">
                 <span className="min-w-0 font-mono text-small text-ink [overflow-wrap:anywhere]">{name}</span>
-                {file.flags.length > 0 && (
+                {file.flags.some((flag) => flag !== 'reloadedLive') && (
                     <TriangleAlert
                         size={12}
                         strokeWidth={2}
@@ -327,21 +361,17 @@ function FileRow({
     );
     return (
         <li className="flex items-center gap-1 pr-2">
-            {onPick === undefined ? (
-                <div className="flex min-w-0 flex-1 flex-col gap-1 px-5 py-1.5 max-md:px-4">{label}</div>
-            ) : (
-                <button
-                    type="button"
-                    aria-current={current || undefined}
-                    onClick={() => onPick(file.path)}
-                    className={cn(
-                        'group flex min-w-0 flex-1 flex-col gap-1 px-5 py-1.5 text-left hover:bg-hover max-md:px-4',
-                        current && 'bg-accent-soft shadow-[inset_2px_0_0_var(--accent)]',
-                    )}
-                >
-                    {label}
-                </button>
-            )}
+            <button
+                type="button"
+                aria-current={current || undefined}
+                onClick={() => onPick(file.path)}
+                className={cn(
+                    'group flex min-w-0 flex-1 flex-col gap-1 px-5 py-1.5 text-left hover:bg-hover max-md:px-4',
+                    current && 'bg-accent-soft shadow-[inset_2px_0_0_var(--accent)]',
+                )}
+            >
+                {label}
+            </button>
             {onPurge !== undefined && (
                 <Button
                     size="icon-sm"
@@ -389,7 +419,9 @@ function Purge({
                 </>
             }
         >
-            <p className="font-mono text-small text-ink [overflow-wrap:anywhere]">{file.path}</p>
+            <p className="font-mono text-small text-ink [overflow-wrap:anywhere]">
+                {escapeInvisible(file.path)}
+            </p>
             <p>{t.changes.resource.purgeBody}</p>
             {purge.isError && <Notice tone="danger">{errorMessage(t, purge.error)}</Notice>}
         </Dialog>
@@ -417,13 +449,15 @@ function HistoryCard({ name }: { name: string }) {
                         >
                             <Package size={14} strokeWidth={1.5} className="text-ink-3" aria-hidden="true" />
                             <span className="font-mono text-small text-ink">
-                                {version.version ?? words.noVersion}
+                                {version.version === null
+                                    ? words.noVersion
+                                    : escapeInvisible(version.version)}
                             </span>
                             <span>
                                 {words.since(format.timestamp(version.since.takenAt, { seconds: false }))}
                             </span>
                             <span className="font-mono text-meta text-ink-3 [overflow-wrap:anywhere]">
-                                {version.path}
+                                {escapeInvisible(version.path)}
                             </span>
                         </li>
                     ))}

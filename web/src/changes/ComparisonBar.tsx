@@ -2,7 +2,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { ChevronDown, HardDrive } from 'lucide-react';
 import { useId, type ReactNode } from 'react';
 
-import { checkDisk, startsQuery } from '../api/changes';
+import { checkDisk } from '../api/changes';
 import type { Comparison } from '../api/generated/Comparison';
 import type { SnapshotSummary } from '../api/generated/SnapshotSummary';
 import { Button } from '../components/Button';
@@ -10,6 +10,7 @@ import { inputClass } from '../components/Field';
 import { errorMessage } from '../i18n/errors';
 import { useI18n } from '../i18n/I18nProvider';
 import { cn } from '../lib/cn';
+import { refreshMoved } from './live';
 import type { ChangesSearch } from './search';
 import { countsWords, isBusy, startWords } from './words';
 
@@ -34,7 +35,8 @@ export function ComparisonBar({
     const run = useMutation({
         mutationFn: checkDisk,
         onSuccess: () => {
-            void queryClient.invalidateQueries({ queryKey: startsQuery.queryKey });
+            // The check before is gone: nothing compared with it may stay on screen.
+            refreshMoved(queryClient, { starts: true, to: new Set(['disk']) });
             onCompare({ to: 'disk' });
         },
     });

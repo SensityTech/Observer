@@ -28,14 +28,24 @@ const query = (values: Record<string, string | number | undefined>) => {
     return text === '' ? '' : `?${text}`;
 };
 
-/** Starts newest first, a page at a time, with the latest check of the disk. */
-export const startsQuery = infiniteQueryOptions({
+/**
+ * The newest page of starts, with the latest check of the disk: what moves while a snapshot is
+ * taken, read again on its own.
+ */
+export const startsQuery = queryOptions({
     queryKey: ['changes', 'starts'],
-    queryFn: ({ pageParam, signal }) =>
-        getJson<StartList>(`${PATH}/starts${query({ before: pageParam })}`, signal),
-    initialPageParam: undefined as number | undefined,
-    getNextPageParam: (page) => page.next ?? undefined,
+    queryFn: ({ signal }) => getJson<StartList>(`${PATH}/starts`, signal),
 });
+
+/** The starts older than `before`, the newest page's `next`, a page at a time. */
+export const olderStartsQuery = (before: number) =>
+    infiniteQueryOptions({
+        queryKey: ['changes', 'starts', 'older', before],
+        queryFn: ({ pageParam, signal }) =>
+            getJson<StartList>(`${PATH}/starts${query({ before: pageParam })}`, signal),
+        initialPageParam: before,
+        getNextPageParam: (page) => page.next ?? undefined,
+    });
 
 /** Two snapshots compared; without `to` the latest start, without `from` the start before `to`. */
 export const comparisonQuery = (from: number | undefined, to: ComparedTo | undefined) =>
@@ -61,6 +71,8 @@ export type DiffRequest = {
     from: number;
     to: number;
     path: string;
+    /** The file's path in `from`, when it or its resource moved. */
+    fromPath: string | null;
     page: number;
     /** Unchanged lines around each change. */
     context: number;
@@ -80,6 +92,7 @@ export const diffQuery = (request: DiffRequest) =>
                     from: request.from,
                     to: request.to,
                     path: request.path,
+                    fromPath: request.fromPath ?? undefined,
                     page: request.page,
                     context: request.context,
                     whitespace: request.ignoreWhitespace ? 'ignore' : 'show',

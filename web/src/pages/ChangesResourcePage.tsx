@@ -1,20 +1,39 @@
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useSearch } from '@tanstack/react-router';
 import { ArrowLeft } from 'lucide-react';
 import type { ReactNode } from 'react';
 
-import { comparisonQuery, resourceQuery } from '../api/changes';
+import { comparisonQuery, resourceQuery, type ComparedTo } from '../api/changes';
+import type { ChangesLive } from '../api/generated/ChangesLive';
 import { buttonVariants } from '../components/Button';
 import { Notice } from '../components/Notice';
+import { escapeInvisible } from '../changes/invisible';
+import { refreshMoved, useChangesLive } from '../changes/live';
 import { ResourceView } from '../changes/ResourceView';
+import { isBusy } from '../changes/words';
 import { errorMessage } from '../i18n/errors';
 import { useI18n } from '../i18n/I18nProvider';
 import { cn } from '../lib/cn';
+
+/** Whether the snapshot compared as To is still listed or hashed, as `server.changes` says. */
+const toBusy = (live: ChangesLive | null, to: ComparedTo | undefined) =>
+    [live?.latest, live?.check].some(
+        (snapshot) =>
+            snapshot !== null &&
+            snapshot !== undefined &&
+            isBusy(snapshot) &&
+            (to === snapshot.id ||
+                (to === undefined && snapshot.kind === 'start') ||
+                (to === 'disk' && snapshot.kind === 'check')),
+    );
 
 /** One resource between two snapshots: `/changes/resource?from=&to=&path=`, its search checked by the route. */
 export function ChangesResourcePage() {
     const { t } = useI18n();
     const { from, to, path = '' } = useSearch({ strict: false });
+    const queryClient = useQueryClient();
+    // A To still hashing settles file by file: the list and the file shown follow it.
+    const live = useChangesLive((moved) => refreshMoved(queryClient, moved));
     // The page links with both ids; a link that leaves one to the API's defaults reads which they are.
     const pinned = typeof from === 'number' && typeof to === 'number';
     const comparison = useQuery({ ...comparisonQuery(from, to), enabled: !pinned });
@@ -24,7 +43,7 @@ export function ChangesResourcePage() {
         : comparison.data === undefined
           ? null
           : { from: comparison.data.from.id, to: comparison.data.to.id };
-    const name = detail.data?.change.name ?? path.slice(path.lastIndexOf('/') + 1);
+    const name = escapeInvisible(detail.data?.change.name ?? path.slice(path.lastIndexOf('/') + 1));
 
     let body: ReactNode;
     const failure = detail.error ?? comparison.error;
@@ -38,7 +57,7 @@ export function ChangesResourcePage() {
             </div>
         );
     } else {
-        body = <ResourceView detail={detail.data} from={ids.from} to={ids.to} />;
+        body = <ResourceView detail={detail.data} from={ids.from} to={ids.to} reading={toBusy(live, to)} />;
     }
 
     return (

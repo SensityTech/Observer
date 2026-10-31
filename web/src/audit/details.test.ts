@@ -208,16 +208,21 @@ describe('auditDetails', () => {
         );
     });
 
-    it('should name the two starts a read of changed contents compared, and how it showed them', () => {
+    it('should name the two snapshots a read of changed contents compared, either one a check of the disk, and how it showed them', () => {
         expect(
-            auditDetails(en, format, { from: 41, to: 42, resource: 'resources/[qb]/qb-core', view: 'diff' }),
-        ).toBe('From start: 41 · To start: 42 · Resource: resources/[qb]/qb-core · Read: the diff');
+            auditDetails(
+                en,
+                format,
+                { from: 41, to: 42, resource: 'resources/[qb]/qb-core', view: 'diff' },
+                'change_contents_viewed',
+            ),
+        ).toBe('From snapshot: 41 · To snapshot: 42 · Resource: resources/[qb]/qb-core · Read: the diff');
         expect(auditDetails(en, format, { versions: 3, bytes: 12_288 })).toBe(
             'Versions cleared: 3 · Size: 12 KB',
         );
     });
 
-    it('should word the change tracking settings saved whole as the ones that changed', () => {
+    it('should word the change tracking settings saved whole as the ones that changed, in the units the owner typed', () => {
         const before = {
             enabled: true,
             extensions: ['lua', 'js'],
@@ -233,14 +238,25 @@ describe('auditDetails', () => {
         const after = {
             ...before,
             hidden: ['*.secret'],
+            maxText: 2_621_440,
             budget: 4_000_000_000,
             verifyDays: 1,
             hashRate: 32_000_000,
         };
 
-        expect(auditDetails(en, format, { before, after })).toBe(
-            'Contents never kept: not set → *.secret · Contents kept at most: 1.9 GB → 3.7 GB · ' +
-                'Hashing rate: 61 MB/s → 30.5 MB/s · Full verification every: 7 days → 1 day',
+        expect(auditDetails(en, format, { before, after }, 'change_settings_changed')).toBe(
+            'Contents never kept: not set → *.secret · Largest text kept: 1 MB → 2.5 MB · ' +
+                'Contents kept at most: 2 GB → 4 GB · Hashing rate: 64 MB/s → 32 MB/s · ' +
+                'Full verification every: 7 days → 1 day',
+        );
+    });
+
+    it('should leave a file group changed as the log stores it, not as changed settings', () => {
+        const before = { name: 'scripts', rules: [], reach: 'read' };
+        const after = { name: 'assets', rules: [], reach: 'assets' };
+
+        expect(auditDetails(en, format, { before, after }, 'file_group_changed')).toBe(
+            `Before: ${JSON.stringify(before)} · After: ${JSON.stringify(after)}`,
         );
     });
 });

@@ -24,7 +24,8 @@ import { stringParam } from '../i18n/params';
 import { PHONE, WIDE, useMedia } from '../lib/useMedia';
 import { CodeLines } from './CodeLines';
 import { Segmented, Toggle } from './controls';
-import { splitRows, textRows, unifiedRows } from './diffRows';
+import { holdInvisible, splitRows, textRows, unifiedRows } from './diffRows';
+import { escapeInvisible } from './invisible';
 
 /** Asked to be read more lines at a time, each time "Show 20 more lines" is pressed. */
 const MORE_CONTEXT = 20;
@@ -40,6 +41,8 @@ export function DiffView({
     to,
     path,
     file,
+    content = true,
+    reading = false,
     onPrevious,
     onNext,
 }: {
@@ -48,11 +51,16 @@ export function DiffView({
     path: string;
     /** The file as its resource lists it; a file of the cfg chain is known from its diff alone. */
     file: FileChange | null;
+    /** The account reads contents: without it, all but the lines. */
+    content?: boolean;
+    /** The later snapshot is still listed or hashed, so a text not kept yet may still be. */
+    reading?: boolean;
     onPrevious?: () => void;
     onNext?: () => void;
 }) {
     const { t, format } = useI18n();
     const words = t.changes.diff;
+    const named = escapeInvisible(path);
     const wide = useMedia(WIDE);
     const phone = useMedia(PHONE);
     const [layout, setLayout] = useState<'unified' | 'split'>('unified');
@@ -63,15 +71,19 @@ export function DiffView({
     const [view, setView] = useState<View>('diff');
     const [filePage, setFilePage] = useState(0);
 
-    const readable = file === null || (file.kind === 'text' && file.kept && file.change !== 'unchanged');
+    // A renamed file was paired by its digest and size: the same contents, nothing to diff.
+    const readable =
+        content &&
+        (file === null ||
+            (file.kind === 'text' && file.kept && file.change !== 'unchanged' && file.change !== 'renamed'));
     const diff = useQuery({
-        ...diffQuery({ from, to, path, page, context, ignoreWhitespace }),
+        ...diffQuery({ from, to, path, fromPath: file?.fromPath ?? null, page, context, ignoreWhitespace }),
         enabled: readable && view === 'diff',
         placeholderData: keepPreviousData,
     });
     const shown = diff.data?.file ?? file;
     const sides: View[] =
-        shown === null || shown.kind !== 'text'
+        !content || shown === null || shown.kind !== 'text'
             ? []
             : (['before', 'after'] as const).filter((side) =>
                   side === 'before' ? shown.change !== 'added' : shown.change !== 'removed',
@@ -97,6 +109,7 @@ export function DiffView({
         }
         return split ? splitRows(lines.hunks) : unifiedRows(lines.hunks);
     }, [view, text.data, lines, split]);
+    const invisible = useMemo(() => holdInvisible(rows), [rows]);
 
     const showFile = (side: View) => {
         setView(side);
@@ -113,7 +126,7 @@ export function DiffView({
             <Waiting />
         ) : (
             <>
-                <CodeLines rows={rows} numbering="one" wrap={wrap} label={words.lines(path)} />
+                <CodeLines rows={rows} numbering="one" wrap={wrap} label={words.lines(named)} />
                 <Pages
                     page={text.data.text.page}
                     pages={text.data.text.pages}
@@ -148,7 +161,7 @@ export function DiffView({
                             rows={rows}
                             numbering={phone ? 'one' : 'both'}
                             wrap={wrap || split}
-                            label={words.lines(path)}
+                            label={words.lines(named)}
                             onMore={() => setContext((current) => current + MORE_CONTEXT)}
                         />
                     )}
@@ -164,11 +177,11 @@ export function DiffView({
     }
 
     return (
-        <section className="card" aria-label={words.label(path)}>
+        <section className="card" aria-label={words.label(named)}>
             <div className="sticky top-0 z-(--z-dock) flex flex-col gap-2.5 rounded-t-card border-b border-line bg-surface px-4 py-3 max-xl:top-(--mobilebar-height)">
                 <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
                     <h3 className="min-w-0 font-mono text-small text-ink [overflow-wrap:anywhere] [font-variant-ligatures:none]">
-                        {path}
+                        {named}
                     </h3>
                     {shown !== null && <Chip>{words.fileKinds[shown.kind]}</Chip>}
                     {counts !== null && (
@@ -254,7 +267,14 @@ export function DiffView({
                     )}
                 </div>
             </div>
-            {shown !== null && view === 'diff' && <FileNotices file={shown} />}
+            {invisible && (
+                <BodyNotice>
+                    <Notice tone="warning">{words.invisibleWarning}</Notice>
+                </BodyNotice>
+            )}
+            {shown !== null && view === 'diff' && (
+                <FileNotices file={shown} content={content} reading={reading} />
+            )}
             {body}
         </section>
     );
@@ -333,10 +353,13 @@ function Pages({
 }
 
 /** What can be said of a file besides its lines: its kind, its sizes and hashes, and what happened to it. */
-function FileNotices({ file }: { file: FileChange }) {
+function FileNotices({ file, content, reading }: { file: FileChange; content: boolean; reading: boolean }) {
     const { t, format } = useI18n();
     const words = t.changes.diff;
     const notices: { key: string; tone?: 'warning'; body: ReactNode }[] = [];
+    if (file.change === 'renamed' && file.fromPath !== null) {
+        notices.push({ key: 'renamed', body: words.renamed(escapeInvisible(file.fromPath)) });
+    }
     const sizes = [file.fromSize, file.toSize]
         .filter((size) => size !== null)
         .map((size) => format.bytes(size));
@@ -378,8 +401,10 @@ function FileNotices({ file }: { file: FileChange }) {
         notices.push({ key: file.kind, body: words[file.kind] });
     } else if (file.change === 'unchanged') {
         notices.push({ key: 'unchanged', body: words.unchanged });
-    } else if (!file.kept) {
-        notices.push({ key: 'notKept', body: words.notKept });
+    } else if (file.change !== 'renamed' && !content) {
+        notices.push({ key: 'noContent', body: t.changes.resource.noContent });
+    } else if (file.change !== 'renamed' && !file.kept) {
+        notices.push({ key: 'notKept', body: reading ? words.beingRead : words.notKept });
     }
     for (const flag of file.flags) {
         notices.push({
@@ -392,7 +417,7 @@ function FileNotices({ file }: { file: FileChange }) {
         notices.push({
             key: 'written',
             body: t.changes.resource.writtenBy(
-                file.writtenBy,
+                escapeInvisible(file.writtenBy),
                 format.timestamp(file.writtenAt, { seconds: false }),
             ),
         });

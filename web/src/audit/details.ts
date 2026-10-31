@@ -1,4 +1,6 @@
+import type { AuditAction } from '../api/generated/AuditAction';
 import { parsePermissions, permissionKeys } from '../auth/permissions';
+import { GB, MB, MIB } from '../changes/units';
 import type { Messages } from '../i18n/en';
 
 type Format = {
@@ -44,8 +46,6 @@ const DAYS = new Set<string>([
     'retentionDays',
     'verifyDays',
 ]);
-/** Change tracking's sizes, in bytes. */
-const SIZES = new Set<string>(['bytes', 'maxText', 'budget']);
 
 const has = <T extends object>(record: T, key: unknown): key is keyof T =>
     typeof key === 'string' && Object.hasOwn(record, key);
@@ -74,11 +74,15 @@ const isArgumentChange = (value: unknown): value is { set: string[]; removed: st
 const isRecord = (value: unknown): value is Record<string, unknown> =>
     typeof value === 'object' && value !== null && !Array.isArray(value);
 
-/** Settings the log records whole, before and after, as change tracking's are. */
+/** Settings the log records whole, before and after: change tracking's. */
 const isWholeChange = (
     details: Record<string, unknown>,
+    action: AuditAction | undefined,
 ): details is { before: Record<string, unknown>; after: Record<string, unknown> } =>
-    isChange(details) && isRecord(details.before) && isRecord(details.after);
+    action === 'change_settings_changed' &&
+    isChange(details) &&
+    isRecord(details.before) &&
+    isRecord(details.after);
 
 /** A whole change as the settings it changed, each before and after. */
 const changedSettings = ({
@@ -102,22 +106,32 @@ const HIDDEN = new Set<string>(['buildPath', 'dataPath', 'cfgFile']);
  * rather than masks, local times, catalog names for actions and refusals, `before → after` for a
  * change. A key or a value the catalog does not know reads as the log stores it.
  */
-export const auditDetails = (t: Messages, format: Format, details: Record<string, unknown>) =>
-    pairs(t, format, isWholeChange(details) ? changedSettings(details) : details).join(' · ');
+export const auditDetails = (
+    t: Messages,
+    format: Format,
+    details: Record<string, unknown>,
+    action?: AuditAction,
+) =>
+    pairs(
+        t,
+        format,
+        isWholeChange(details, action) ? changedSettings(details) : details,
+        action === 'change_contents_viewed',
+    ).join(' · ');
 
-const pairs = (t: Messages, format: Format, details: Record<string, unknown>) => {
-    // A read of changed contents names the two starts it compared by their ids.
-    const starts = typeof details.view === 'string';
-    return Object.entries(details).map(
-        ([key, value]) => `${label(t, key, value, starts)}: ${word(t, format, key, value)}`,
+const pairs = (t: Messages, format: Format, details: Record<string, unknown>, snapshots = false) =>
+    Object.entries(details).map(
+        ([key, value]) => `${label(t, key, value, snapshots)}: ${word(t, format, key, value)}`,
     );
-};
 
-/** `from` and `to` name times in most entries, builds in a return to the last healthy one, starts in a read. */
-const label = (t: Messages, key: string, value: unknown, starts: boolean) => {
+/**
+ * `from` and `to` name times in most entries, builds in a return to the last healthy one, and in a
+ * read of changed contents the two snapshots compared: starts, or a start and a check of the disk.
+ */
+const label = (t: Messages, key: string, value: unknown, snapshots: boolean) => {
     if (typeof value === 'number' && (key === 'from' || key === 'to')) {
-        if (starts) {
-            return key === 'from' ? t.audit.detail.fromStart : t.audit.detail.toStart;
+        if (snapshots) {
+            return key === 'from' ? t.audit.detail.fromSnapshot : t.audit.detail.toSnapshot;
         }
         return key === 'from' ? t.audit.detail.fromBuild : t.audit.detail.toBuild;
     }
@@ -171,11 +185,18 @@ const word = (t: Messages, format: Format, key: string, value: unknown): string 
         if (DAYS.has(key)) {
             return t.audit.days(value);
         }
-        if (SIZES.has(key)) {
+        if (key === 'bytes') {
             return format.bytes(value);
         }
+        // Change tracking's settings, in the units its form takes them in.
+        if (key === 'maxText') {
+            return t.audit.megabytes(format.number(value / MIB));
+        }
+        if (key === 'budget') {
+            return t.audit.gigabytes(format.number(value / GB));
+        }
         if (key === 'hashRate') {
-            return t.audit.rate(format.bytes(value));
+            return t.audit.rate(t.audit.megabytes(format.number(value / MB)));
         }
         return IDS.has(key) || BUILDS.has(key) ? String(value) : format.number(value);
     }

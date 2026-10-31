@@ -15,11 +15,7 @@ import { errorMessage } from '../i18n/errors';
 import { useI18n } from '../i18n/I18nProvider';
 import { stringParam } from '../i18n/params';
 import { cn } from '../lib/cn';
-
-// The units Observer's defaults are round in: 1 MB of text, 2 GB of contents, 64 MB/s.
-const MIB = 1024 * 1024;
-const GB = 1_000_000_000;
-const MB = 1_000_000;
+import { GB, MB, MIB } from './units';
 
 type Draft = {
     enabled: boolean;

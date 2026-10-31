@@ -92,19 +92,44 @@ export const startWords = (t: Messages, snapshot: SnapshotSummary) => {
     return snapshot.by === null ? cause : t.changes.startBy(cause, snapshot.by);
 };
 
-/** What changed against the start before, as a start's line says it: `3 resources changed · build`. */
+/** Why a start has no counts: its listing runs, it failed, or no start before it was listed. */
+const uncountedWords = (t: Messages, snapshot: SnapshotSummary) => {
+    if (snapshot.state === 'failed') {
+        return t.changes.snapshotFailed;
+    }
+    return isBusy(snapshot) ? t.changes.beingListed : t.changes.notCompared;
+};
+
+/**
+ * The resources neither changed nor unchanged yet: being checked while the job runs, unknown once
+ * a partial snapshot left them so.
+ */
+export const pendingWords = (t: Messages, snapshot: SnapshotSummary, counts: ChangeCounts) => {
+    if (counts.checking === 0) {
+        return null;
+    }
+    return isBusy(snapshot)
+        ? t.changes.beingChecked(counts.checking)
+        : t.changes.leftUnknown(counts.checking);
+};
+
+/**
+ * What changed against the start before, as a start's line says it: `3 resources changed · build`.
+ * Never "No change" while resources are still being checked.
+ */
 export const countsWords = (t: Messages, snapshot: SnapshotSummary) => {
     if (snapshot.baseline) {
         return t.changes.baseline;
     }
     const counts = snapshot.counts;
     if (counts === null) {
-        return t.changes.beingListed;
+        return uncountedWords(t, snapshot);
     }
     const resources = changedResources(counts);
     const parts = [
         resources > 0 ? t.changes.resourcesChanged(resources) : null,
         ...counts.environment.map((fact) => t.changes.facts[fact]),
+        pendingWords(t, snapshot, counts),
     ].filter((part) => part !== null);
     return parts.length === 0 ? t.changes.noChange : parts.join(' · ');
 };

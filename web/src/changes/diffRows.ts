@@ -1,6 +1,7 @@
 import type { DiffLine } from '../api/generated/DiffLine';
 import type { Hunk } from '../api/generated/Hunk';
 import type { TextPage } from '../api/generated/TextPage';
+import { holdsInvisible } from './invisible';
 
 /** What one row of a code block shows: a hunk's header, a line, or two lines side by side. */
 export type DiffRow =
@@ -63,4 +64,21 @@ export const textRows = (page: TextPage): DiffRow[] =>
             key: `${number}`,
             line: { kind: 'context', from: number, to: number, segments },
         };
+    });
+
+/** Whether a line opens its file, in either version: where a byte order mark belongs. */
+export const isFirstLine = (line: DiffLine) => line.from === 1 || line.to === 1;
+
+/** Whether a line shown holds a character that reorders or hides code. */
+export const holdInvisible = (rows: DiffRow[]) =>
+    rows.some((row) => {
+        const lines = row.type === 'line' ? [row.line] : row.type === 'pair' ? [row.before, row.after] : [];
+        return lines.some(
+            (line) =>
+                line !== null &&
+                line.segments.some(
+                    (segment, index) =>
+                        !segment.redacted && holdsInvisible(segment.text, index === 0 && isFirstLine(line)),
+                ),
+        );
     });

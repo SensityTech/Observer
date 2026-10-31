@@ -3,7 +3,7 @@ import { ArrowRight } from 'lucide-react';
 
 import type { SnapshotSummary } from '../api/generated/SnapshotSummary';
 import { useChangesLive } from '../changes/live';
-import { changedResources, isBusy } from '../changes/words';
+import { changedResources, isBusy, pendingWords } from '../changes/words';
 import type { Messages } from '../i18n/en';
 import { useI18n } from '../i18n/I18nProvider';
 
@@ -14,12 +14,16 @@ const sentence = (t: Messages, latest: SnapshotSummary) => {
         return isBusy(latest) ? words.baseline : words.baselineTaken;
     }
     if (latest.counts === null) {
-        return words.listing;
+        if (latest.state === 'failed') {
+            return words.failed;
+        }
+        return isBusy(latest) ? words.listing : words.notCompared;
     }
     const resources = changedResources(latest.counts);
     const parts = [
         resources > 0 ? words.resources(resources) : null,
         ...latest.counts.environment.map((fact) => t.changes.facts[fact]),
+        pendingWords(t, latest, latest.counts),
     ].filter((part) => part !== null);
     return parts.length === 0 ? words.none : words.since(parts.join(' · '));
 };
