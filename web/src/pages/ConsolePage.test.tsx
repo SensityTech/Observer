@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { act, cleanup, fireEvent, render } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, within, type RenderResult } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ConsoleLine } from '../api/generated/ConsoleLine';
@@ -52,8 +52,15 @@ const resized = (target: Element) =>
 
 const line = (seq: number): ConsoleLine => [seq, Date.now(), 1, 'stdout', null, `line ${seq}`, 0];
 
-/** The console of an operator who reads it, holding `count` lines. */
-const consoleWith = async (count: number) => {
+/** A phone, or a screen wide enough not to be one: jsdom answers no media query. */
+const screenIs = (phone: boolean) =>
+    vi.stubGlobal('matchMedia', (query: string) => ({ matches: phone && query === '(max-width: 760px)' }));
+
+/**
+ * The console of an operator who reads it, holding `count` lines. `meanwhile` is what the reader
+ * does before the first lines come.
+ */
+const consoleWith = async (count: number, meanwhile: (view: RenderResult) => void = () => {}) => {
     let socket: SocketEvents | undefined;
     const live = new Realtime({
         ticket: async () => 'ticket',
@@ -86,9 +93,9 @@ const consoleWith = async (count: number) => {
     );
     live.start();
     await settle();
+    meanwhile(view);
     const lines = Array.from({ length: count }, (_, index) => line(index + 1));
-    act(() => {
-        socket?.message(JSON.stringify({ type: 'hello', connectionId: 1, contract: 1 }));
+    const snapshot = () =>
         socket?.message(
             JSON.stringify({
                 type: 'snapshot',
@@ -96,24 +103,38 @@ const consoleWith = async (count: number) => {
                 data: { lines, gap: false, restarted: false, last: count },
             }),
         );
+    act(() => {
+        socket?.message(JSON.stringify({ type: 'hello', connectionId: 1, contract: 1 }));
+        snapshot();
     });
     await frame();
-    const output = view.getByRole('region', { name: en.console.output(count) });
+    // By its place rather than its name, which counts the lines a paused view holds.
+    const output = within(view.getByRole('region', { name: en.console.card })).getByRole('region');
     // Where the browser leaves the view when something above the card takes some of its height.
     Object.defineProperty(output, 'scrollHeight', { configurable: true, value: 1800 });
     output.scrollTop = 1200;
-    return { ...view, live, output };
+    const more = (batch: ConsoleLine[]) =>
+        act(() =>
+            socket?.message(JSON.stringify({ type: 'event', topic: 'console', data: { lines: batch } })),
+        );
+    return { ...view, live, output, more, resubscribed: () => act(snapshot) };
 };
 
 describe('ConsolePage', () => {
+    const scrollIntoView = vi.fn<(this: Element, options?: ScrollIntoViewOptions) => void>();
+
     beforeEach(() => {
         vi.stubGlobal('ResizeObserver', TestResizeObserver);
+        screenIs(false);
+        // jsdom scrolls nothing: the test reads where the page was asked to go.
+        Element.prototype.scrollIntoView = scrollIntoView;
     });
 
     afterEach(() => {
         cleanup();
         vi.unstubAllGlobals();
         observed.clear();
+        scrollIntoView.mockReset();
     });
 
     it('should keep the newest line in view when the output shrinks while it follows', async () => {
@@ -132,6 +153,59 @@ describe('ConsolePage', () => {
         await resized(output);
 
         expect(output.scrollTop).toBe(1200);
+        live.stop();
+    });
+
+    it('should scroll the page to the card on a phone when the first lines come, and only then', async () => {
+        screenIs(true);
+
+        const { getByRole, resubscribed, live } = await consoleWith(120);
+        resubscribed();
+
+        expect(scrollIntoView).toHaveBeenCalledOnce();
+        expect(scrollIntoView.mock.contexts[0]).toBe(getByRole('region', { name: en.console.card }));
+        expect(scrollIntoView).toHaveBeenCalledWith({ block: 'start' });
+        live.stop();
+    });
+
+    it('should leave the page where it is on a wide screen', async () => {
+        const { live } = await consoleWith(120);
+
+        expect(scrollIntoView).not.toHaveBeenCalled();
+        live.stop();
+    });
+
+    it('should leave the page where the reader moved it before the first lines came', async () => {
+        screenIs(true);
+
+        const { live } = await consoleWith(120, () => vi.stubGlobal('scrollY', 320));
+
+        expect(scrollIntoView).not.toHaveBeenCalled();
+        live.stop();
+    });
+
+    it('should leave the page alone when the reader paused before the first lines came', async () => {
+        screenIs(true);
+
+        const { live } = await consoleWith(120, ({ getByRole }) =>
+            fireEvent.click(getByRole('button', { name: en.console.pause })),
+        );
+
+        expect(scrollIntoView).not.toHaveBeenCalled();
+        live.stop();
+    });
+
+    it('should scroll the page to the card again when the reader jumps to the newest line', async () => {
+        screenIs(true);
+        const { output, more, findByRole, live } = await consoleWith(120);
+        scrollIntoView.mockClear();
+        fireEvent.scroll(output);
+
+        await more([line(121), line(122)]);
+        expect(scrollIntoView).not.toHaveBeenCalled();
+        fireEvent.click(await findByRole('button', { name: en.console.newLines(2) }));
+
+        expect(scrollIntoView).toHaveBeenCalledOnce();
         live.stop();
     });
 });
