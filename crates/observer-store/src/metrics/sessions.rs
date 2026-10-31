@@ -6,6 +6,7 @@ use observer_domain::players::PlayerDrop;
 use rusqlite::types::Type;
 use rusqlite::{Connection, Row, Transaction, params};
 
+use super::drops;
 use super::runs::RunKey;
 use crate::database::StoreError;
 
@@ -98,6 +99,12 @@ pub fn close(tx: &Transaction<'_>, closure: &Closure) -> Result<(), StoreError> 
             closure.synthesized,
         ],
     )?;
+    // A session that ends in an hour already rolled up was counted as playing on: that hour and
+    // every later one are computed again.
+    tx.execute(
+        "DELETE FROM drop_rolled WHERE hour >= ?1",
+        [drops::hour_of(closure.ended_ms)],
+    )?;
     Ok(())
 }
 
@@ -107,7 +114,7 @@ pub fn reclassify(tx: &Transaction<'_>, closure: &Closure) -> Result<(), StoreEr
     let resource = resource_id(tx, closure.resource.as_deref())?;
     tx.execute(
         "UPDATE player_session SET category = ?2, kind = ?3, native_category = ?4, resource = ?5, crash_text = ?6,
-             reason_text = ?7, phase = ?8, synthesized = 0
+             reason_text = ?7, phase = ?8, synthesized = 0, signature = NULL, reason = NULL, classified = 0
          WHERE id = ?1 AND ended_ms IS NOT NULL",
         params![
             closure.id,
@@ -119,6 +126,10 @@ pub fn reclassify(tx: &Transaction<'_>, closure: &Closure) -> Result<(), StoreEr
             closure.reason_text,
             closure.loading.map(phase),
         ],
+    )?;
+    tx.execute(
+        "DELETE FROM drop_rolled WHERE hour = (SELECT ended_ms / 3600000 * 3600 FROM player_session WHERE id = ?1)",
+        [closure.id],
     )?;
     Ok(())
 }
@@ -226,18 +237,24 @@ pub fn per_hundred_hours(count: i64, ms: i64) -> f64 {
     count as f64 * 360_000_000.0 / ms as f64
 }
 
-/// Deletes the sessions that ended before `before_ms`.
+/// Deletes the sessions that ended before `before_ms`, then the incidents and reason groups no
+/// session kept holds. The hourly rollups stay.
 pub fn expire(tx: &Transaction<'_>, before_ms: i64) -> Result<usize, StoreError> {
-    Ok(tx.execute(
+    let sessions = tx.execute(
         "DELETE FROM player_session WHERE ended_ms IS NOT NULL AND ended_ms < ?1",
         [before_ms],
-    )?)
+    )?;
+    if sessions > 0 {
+        drops::sweep(tx)?;
+    }
+    Ok(sessions)
 }
 
 /// Takes a forgotten player's pseudonym and texts off their sessions: they no longer belong
 /// together, and say nothing the player wrote.
 pub fn forget(tx: &Transaction<'_>, pseudonym: [u8; 16]) -> Result<usize, StoreError> {
     tx.pragma_update(None, "secure_delete", true)?;
+    drops::forget(tx, pseudonym)?;
     let blanked = tx.execute(
         "UPDATE player_session SET player = NULL, credit = NULL, crash_text = NULL, reason_text = NULL
          WHERE player = ?1",

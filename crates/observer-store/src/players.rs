@@ -5,6 +5,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 
 use jiff::Timestamp;
+use observer_domain::drops::DropsSettings;
 use observer_domain::players::{
     IdentifierKind, Link, LinkedLicence, PlayDay, PlayerName, PlayerSort, PlayerSummary, PlayersSettings,
     ShownIdentifier,
@@ -28,6 +29,7 @@ const LINK_DAYS: &str = "players.link_days";
 const ADDRESS_DAYS: &str = "players.address_days";
 const DAY_DAYS: &str = "players.day_days";
 const PROFILE_DAYS: &str = "players.profile_days";
+const SESSION_DAYS: &str = "drops.session_days";
 
 /// A join confirmed against FXServer's own player list.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -267,6 +269,76 @@ pub fn page(conn: &Connection, query: &PlayerQuery) -> Result<Vec<(PlayerSummary
     let mut statement = conn.prepare(&sql)?;
     let rows = statement.query_map(params_from_iter(values), |row| Ok((summary(row)?, row.get(9)?)))?;
     Ok(rows.collect::<Result<_, _>>()?)
+}
+
+/// The pseudonyms of the players a filter matches, at most `limit`: what the drop log looks for.
+pub fn pseudonyms(conn: &Connection, filter: &PlayerFilter, limit: u32) -> Result<Vec<[u8; 16]>, StoreError> {
+    let (clause, values): (&str, Vec<Box<dyn ToSql>>) = match filter {
+        PlayerFilter::All => ("1", Vec::new()),
+        PlayerFilter::Name(start) => (
+            "name LIKE ?1 ESCAPE '\\'",
+            vec![Box::new(format!("{}%", like_escaped(start)))],
+        ),
+        PlayerFilter::License(license) => ("license = ?1", vec![Box::new(license.clone())]),
+        PlayerFilter::Identifier(kind, value) => (
+            "id IN (SELECT pi.player FROM player_identifier pi JOIN identifier i ON i.id = pi.identifier
+                    WHERE i.kind = ?1 AND i.value = ?2)",
+            vec![Box::new(kind.as_str()), Box::new(value.clone())],
+        ),
+    };
+    let mut values = values;
+    values.push(Box::new(limit));
+    let mut statement = conn.prepare(&format!(
+        "SELECT pseudonym FROM player WHERE {clause} ORDER BY id LIMIT ?{}",
+        values.len()
+    ))?;
+    let rows = statement.query_map(params_from_iter(values), |row| row.get(0))?;
+    Ok(rows.collect::<Result<_, _>>()?)
+}
+
+/// The profile a pseudonym belongs to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Carrier {
+    pub id: i64,
+    pub license: String,
+    /// The latest name.
+    pub name: String,
+}
+
+/// Who carries each pseudonym.
+pub fn by_pseudonym(
+    conn: &Connection,
+    pseudonyms: &[[u8; 16]],
+) -> Result<HashMap<[u8; 16], Carrier>, StoreError> {
+    let mut statement = conn.prepare_cached("SELECT id, license, name FROM player WHERE pseudonym = ?1")?;
+    let mut found = HashMap::new();
+    for pseudonym in pseudonyms {
+        if let Some(row) = statement
+            .query_row([pseudonym], |row| {
+                Ok(Carrier {
+                    id: row.get(0)?,
+                    license: row.get(1)?,
+                    name: row.get(2)?,
+                })
+            })
+            .optional()?
+        {
+            found.insert(*pseudonym, row);
+        }
+    }
+    Ok(found)
+}
+
+/// The pseudonyms of these profiles.
+pub fn pseudonyms_of(conn: &Connection, players: &[i64]) -> Result<Vec<[u8; 16]>, StoreError> {
+    let mut statement = conn.prepare_cached("SELECT pseudonym FROM player WHERE id = ?1")?;
+    let mut found = Vec::new();
+    for player in players {
+        if let Some(pseudonym) = statement.query_row([player], |row| row.get(0)).optional()? {
+            found.push(pseudonym);
+        }
+    }
+    Ok(found)
 }
 
 fn like_escaped(text: &str) -> String {
@@ -545,6 +617,24 @@ pub fn settings(conn: &Connection) -> Result<PlayersSettings, StoreError> {
     // Values edited by hand out of their ranges are brought into them, never shortened below
     // what the owner chose.
     Ok(stored.clamped())
+}
+
+/// How long players' sessions are kept, which the drops service applies to the metrics database.
+pub fn drops_settings(conn: &Connection) -> Result<DropsSettings, StoreError> {
+    let stored = settings::get(conn, SESSION_DAYS)?
+        .and_then(|value| value.parse().ok())
+        .map_or_else(DropsSettings::default, |session_days| DropsSettings {
+            session_days,
+        });
+    Ok(stored.clamped())
+}
+
+pub fn save_drops_settings(tx: &Transaction<'_>, retention: &DropsSettings) -> Result<(), StoreError> {
+    tx.execute(
+        "INSERT INTO settings (key, value) VALUES (?1, ?2) ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+        params![SESSION_DAYS, retention.session_days.to_string()],
+    )?;
+    Ok(())
 }
 
 pub fn save_settings(tx: &Transaction<'_>, retention: &PlayersSettings) -> Result<(), StoreError> {
