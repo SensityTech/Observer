@@ -131,6 +131,9 @@ pub enum ErrorCode {
     /// The server folder or its cfg keeps FXServer from starting under Observer. Params: `folder`,
     /// a `FolderProblem`; or `cfg`, a `CfgFileProblem`; or `findings`, the blocking `FindingKind`s.
     SetupBlocked,
+    /// A rule of a file group is unusable. Params: `index`, the rule's position; `field`, `folder`,
+    /// `names`, `rights` or `maxFileSize`.
+    InvalidRule,
 }
 
 /// The body of every error response.

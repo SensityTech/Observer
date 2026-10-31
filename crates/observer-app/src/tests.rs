@@ -10,7 +10,7 @@ use serde_json::json;
 use tempfile::TempDir;
 use tokio::task::JoinHandle;
 
-use crate::{Accounts, AuditLog, Caller, Client, Clock, PasswordCost, Servers, SignedIn};
+use crate::{Accounts, AuditLog, Caller, Client, Clock, Files, PasswordCost, Servers, SignedIn};
 
 const OWNER_PASSWORD: &str = "correct horse battery staple";
 
@@ -23,6 +23,7 @@ struct Lab {
     accounts: Accounts,
     audit: AuditLog,
     servers: Servers,
+    files: Files,
 }
 
 /// A signed-in browser: the session's two secrets and where it connects from.
@@ -44,6 +45,7 @@ impl Lab {
             .unwrap();
         let audit = AuditLog::new(db.clone(), clock.clone());
         let servers = Servers::new(db.clone(), clock.clone());
+        let files = Files::new(db.clone(), clock.clone(), accounts.clone());
         Self {
             _dir: dir,
             db,
@@ -51,6 +53,7 @@ impl Lab {
             accounts,
             audit,
             servers,
+            files,
         }
     }
 
@@ -1589,4 +1592,194 @@ async fn a_follower_too_far_behind_is_told_it_missed_entries() {
         slow.try_recv(),
         Err(tokio::sync::broadcast::error::TryRecvError::Lagged(44))
     ));
+}
+
+fn file_rule(
+    effect: observer_domain::files::Effect,
+    names: &[&str],
+    rights: observer_domain::files::Rights,
+) -> observer_domain::files::Rule {
+    observer_domain::files::Rule {
+        effect,
+        folder: "resources".to_owned(),
+        depth: observer_domain::files::Depth::Tree,
+        names: names.iter().map(|name| (*name).to_owned()).collect(),
+        rights,
+        max_file_size: None,
+    }
+}
+
+#[tokio::test]
+async fn only_the_owner_writes_file_groups_and_every_rule_is_checked() {
+    use observer_domain::files::{Effect, Reach, Rights};
+
+    let lab = Lab::new().await;
+    let owner = lab.owner().await;
+    let manager = lab.user(&owner, "grace", P::FILES_MANAGE).await;
+    let owner = lab.caller(&owner).await;
+    let manager = lab.caller(&manager).await;
+
+    let mut broken = file_rule(Effect::Allow, &[], Rights::VIEW);
+    broken.folder = "resources/**".to_owned();
+    let refused = lab
+        .files
+        .create_group(&owner, "Mappers".to_owned(), String::new(), vec![broken])
+        .await
+        .err()
+        .unwrap();
+    let crate::Error::Refused(refusal) = refused else {
+        unreachable!()
+    };
+    assert_eq!(refusal.code, ErrorCode::InvalidRule);
+    assert_eq!(refusal.params["field"], json!("folder"));
+
+    let textures = vec![file_rule(Effect::Allow, &["*.ytd"], Rights::EDIT)];
+    assert_eq!(
+        code(
+            lab.files
+                .create_group(&manager, "Mappers".to_owned(), String::new(), textures.clone())
+                .await
+        ),
+        ErrorCode::OwnerOnly
+    );
+    let group = lab
+        .files
+        .create_group(&owner, "Mappers".to_owned(), String::new(), textures.clone())
+        .await
+        .unwrap();
+    assert_eq!(group.reach, Reach::Assets);
+    assert_eq!(
+        code(
+            lab.files
+                .create_group(&owner, "mappers".to_owned(), String::new(), textures)
+                .await
+        ),
+        ErrorCode::NameTaken
+    );
+    let entries = lab.entries(AuditAction::FileGroupCreated).await;
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].details["reach"], json!("assets"));
+
+    assert_eq!(
+        code(
+            lab.files
+                .update_group(
+                    &owner,
+                    group.row.id,
+                    group.row.version + 1,
+                    "Mappers".to_owned(),
+                    String::new(),
+                    Vec::new()
+                )
+                .await
+        ),
+        ErrorCode::Conflict
+    );
+}
+
+/// A group of textures (Assets), one of everything below resources (Code), and a deny of scripts.
+async fn file_groups(
+    lab: &Lab,
+    owner: &Caller,
+) -> (crate::files::Group, crate::files::Group, crate::files::Group) {
+    use observer_domain::files::{Effect, Right, Rights};
+
+    let mut groups = Vec::new();
+    for (name, rule) in [
+        ("Mappers", file_rule(Effect::Allow, &["*.ytd"], Rights::EDIT)),
+        ("Developers", file_rule(Effect::Allow, &[], Rights::EDIT)),
+        (
+            "No scripts",
+            file_rule(Effect::Deny, &["*.lua"], Rights::of(&[Right::Modify])),
+        ),
+    ] {
+        groups.push(
+            lab.files
+                .create_group(owner, name.to_owned(), String::new(), vec![rule])
+                .await
+                .unwrap(),
+        );
+    }
+    let no_lua = groups.pop().unwrap();
+    let code_group = groups.pop().unwrap();
+    (groups.pop().unwrap(), code_group, no_lua)
+}
+
+#[tokio::test]
+async fn a_file_manager_gives_read_and_assets_groups_while_code_stays_the_owners() {
+    let lab = Lab::new().await;
+    let owner = lab.owner().await;
+    let manager = lab.user(&owner, "grace", P::FILES_MANAGE | P::CONSOLE_VIEW).await;
+    let mapper = lab.user(&owner, "linus", P::CONSOLE_VIEW).await;
+    let operator = lab.user(&owner, "ken", P::SERVER_CONTROL).await;
+    let owner = lab.caller(&owner).await;
+    let manager = lab.caller(&manager).await;
+    let mapper = lab.caller(&mapper).await.user_id;
+    let operator = lab.caller(&operator).await.user_id;
+
+    let (assets, code_group, no_lua) = file_groups(&lab, &owner).await;
+
+    lab.files
+        .set_user_groups(&manager, mapper, vec![assets.row.id])
+        .await
+        .unwrap();
+    assert_eq!(lab.files.user_groups(mapper).await.unwrap().len(), 1);
+    assert_eq!(
+        code(
+            lab.files
+                .set_user_groups(&manager, mapper, vec![assets.row.id, code_group.row.id])
+                .await
+        ),
+        ErrorCode::OwnerOnly
+    );
+    assert_eq!(
+        code(
+            lab.files
+                .set_user_groups(&manager, manager.user_id, vec![assets.row.id])
+                .await
+        ),
+        ErrorCode::SelfEdit
+    );
+    assert_eq!(
+        code(lab.files.set_user_groups(&manager, owner.user_id, vec![]).await),
+        ErrorCode::OwnerProtected
+    );
+    assert_eq!(
+        code(
+            lab.files
+                .set_user_groups(&manager, operator, vec![assets.row.id])
+                .await
+        ),
+        ErrorCode::Hierarchy
+    );
+
+    // The owner gives a deny with the assets; a manager removing the deny would lift it.
+    lab.files
+        .set_user_groups(&owner, mapper, vec![assets.row.id, no_lua.row.id])
+        .await
+        .unwrap();
+    assert_eq!(
+        code(
+            lab.files
+                .set_user_groups(&manager, mapper, vec![assets.row.id])
+                .await
+        ),
+        ErrorCode::OwnerOnly
+    );
+    // Taking everything away needs no more than the bit.
+    lab.files.set_user_groups(&manager, mapper, vec![]).await.unwrap();
+
+    let denied = lab.entries(AuditAction::PermissionDenied).await;
+    assert!(
+        denied
+            .iter()
+            .any(|entry| entry.details["refusal"] == json!("owner_only")
+                && entry.target.as_deref() == Some("linus"))
+    );
+    let changed = lab.entries(AuditAction::FileAccessChanged).await;
+    assert!(
+        changed
+            .iter()
+            .any(|entry| entry.details["groupsAdded"] == json!(["Mappers"]))
+    );
 }

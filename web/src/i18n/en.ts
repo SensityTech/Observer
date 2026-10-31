@@ -2200,6 +2200,10 @@ export const en = {
                 ? 'The cfg now keeps FXServer from starting under Observer, so nothing was saved: the check below says what blocks.'
                 : 'The server folder or its cfg keeps FXServer from starting under Observer. Check them again, fix what blocks, then save.';
         },
+        invalid_rule: (params) =>
+            typeof params.index === 'number'
+                ? `Rule ${params.index + 1} needs fixing: check its ${String(params.field ?? 'fields')}.`
+                : 'A rule needs fixing.',
     } satisfies Record<ErrorCode, ErrorMessage>,
     failure: {
         unknown: 'Something went wrong. Try again.',
