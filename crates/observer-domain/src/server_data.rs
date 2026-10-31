@@ -119,7 +119,7 @@ pub struct CfgFile {
 
 /// Whether a file was read, and if not why. Only `read` files are checked; FXServer still runs
 /// the others it can open.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
 pub enum CfgFileState {

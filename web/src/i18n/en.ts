@@ -99,6 +99,16 @@ const permissions = {
         description:
             "Give accounts Read and Assets groups over the server's files, take access away and end sessions.",
     },
+    changesView: {
+        name: 'View changes',
+        description:
+            'What each start of the server ran from: resources, versions, files, sizes and who changed them.',
+    },
+    changesContent: {
+        name: 'Read changed files',
+        description:
+            "Line diffs and whole files of the server's resources, secrets hidden. The server's code is its most valuable asset.",
+    },
 } satisfies Record<PermissionKey, { name: string; description: string }>;
 
 const permissionNames = (hex: string) =>
@@ -1930,6 +1940,10 @@ export const en = {
             file_session_disconnected: 'File session ended',
             file_settings_changed: 'File settings changed',
             file_host_key_created: 'SFTP host key created',
+            change_contents_viewed: 'Changed file read',
+            change_settings_changed: 'Change tracking settings changed',
+            change_contents_purged: 'Kept contents of a file purged',
+            change_verify_requested: 'Full verification of the files asked for',
         } satisfies Record<AuditAction, string>,
         outcomes: {
             success: 'Success',
@@ -2170,6 +2184,7 @@ export const en = {
         logs: 'Logs',
         diagnostics: 'Diagnostics',
         files: 'Files',
+        changes: 'Changes',
     } satisfies Record<PermissionArea, string>,
     danger: {
         sensitive: 'Sensitive',
@@ -2322,6 +2337,21 @@ export const en = {
                   : 'A pipeline key lasts 1 to 365 days.',
         too_many_keys: (params) =>
             typeof params.max === 'number' ? `An access holds ${params.max} keys at most.` : 'Too many keys.',
+        changes_unavailable: 'The history of changes cannot be read right now. Try again in a moment.',
+        start_not_found: 'This start is no longer in the history.',
+        content_hidden: 'The contents of this file are never shown.',
+        content_not_kept: 'The contents of this version are no longer kept.',
+        diff_too_large: (params) =>
+            typeof params.lines === 'number'
+                ? `This file changed in ${count(params.lines, { one: 'line', other: 'lines' })}, more than a diff shows.`
+                : 'This file changed in more lines than a diff shows.',
+        check_running: 'A check of the files is already running. Wait for it to end.',
+        check_too_soon: (params) =>
+            `The files were checked moments ago. Try again in ${formatDuration('en', numberParam(params, 'retryAfter'))}.`,
+        invalid_glob: (params) =>
+            typeof params.index === 'number'
+                ? `Pattern ${params.index + 1} cannot be used: use * and ? as wildcards, / between folders, and no .. or drive letter.`
+                : 'A pattern cannot be used.',
     } satisfies Record<ErrorCode, ErrorMessage>,
     failure: {
         unknown: 'Something went wrong. Try again.',

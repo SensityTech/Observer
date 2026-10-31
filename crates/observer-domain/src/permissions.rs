@@ -29,6 +29,8 @@ impl Permissions {
     pub const LOGS_DOWNLOAD: Self = Self(1 << 11);
     pub const DIAGNOSTICS_VIEW: Self = Self(1 << 12);
     pub const FILES_MANAGE: Self = Self(1 << 13);
+    pub const CHANGES_VIEW: Self = Self(1 << 14);
+    pub const CHANGES_CONTENT: Self = Self(1 << 15);
 
     /// Every permission in the catalog, which is what the owner holds.
     pub fn all() -> Self {
@@ -193,6 +195,7 @@ pub enum PermissionArea {
     Logs,
     Diagnostics,
     Files,
+    Changes,
 }
 
 /// One permission of the catalog, as `GET /api/permissions` returns it.
@@ -337,6 +340,24 @@ pub const CATALOG: &[PermissionInfo] = &[
         danger: Danger::Critical,
         implies: Permissions::NONE,
     },
+    PermissionInfo {
+        bit: 14,
+        constant: "CHANGES_VIEW",
+        key: "changesView",
+        area: PermissionArea::Changes,
+        // Paths, versions and attributions say who changed what on the server.
+        danger: Danger::Sensitive,
+        implies: Permissions::NONE,
+    },
+    PermissionInfo {
+        bit: 15,
+        constant: "CHANGES_CONTENT",
+        key: "changesContent",
+        area: PermissionArea::Changes,
+        // The server's code: custom scripts and the plain parts of paid ones.
+        danger: Danger::Critical,
+        implies: Permissions::CHANGES_VIEW,
+    },
 ];
 
 #[cfg(test)]
@@ -361,6 +382,8 @@ mod tests {
             (11, "LOGS_DOWNLOAD", Permissions::LOGS_DOWNLOAD),
             (12, "DIAGNOSTICS_VIEW", Permissions::DIAGNOSTICS_VIEW),
             (13, "FILES_MANAGE", Permissions::FILES_MANAGE),
+            (14, "CHANGES_VIEW", Permissions::CHANGES_VIEW),
+            (15, "CHANGES_CONTENT", Permissions::CHANGES_CONTENT),
         ];
 
         assert_eq!(CATALOG.len(), frozen.len());

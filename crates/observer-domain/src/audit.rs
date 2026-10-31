@@ -127,10 +127,16 @@ pub enum AuditAction {
     FileSessionDisconnected,
     FileSettingsChanged,
     FileHostKeyCreated,
+    /// A diff or a full file of the server's contents, once an hour per account, file and pair
+    /// of starts.
+    ChangeContentsViewed,
+    ChangeSettingsChanged,
+    ChangeContentsPurged,
+    ChangeVerifyRequested,
 }
 
 impl AuditAction {
-    pub const ALL: [Self; 70] = [
+    pub const ALL: [Self; 74] = [
         Self::SetupCompleted,
         Self::SetupLinkCreated,
         Self::LoginSucceeded,
@@ -201,6 +207,10 @@ impl AuditAction {
         Self::FileSessionDisconnected,
         Self::FileSettingsChanged,
         Self::FileHostKeyCreated,
+        Self::ChangeContentsViewed,
+        Self::ChangeSettingsChanged,
+        Self::ChangeContentsPurged,
+        Self::ChangeVerifyRequested,
     ];
 
     pub const fn as_str(self) -> &'static str {
@@ -275,6 +285,10 @@ impl AuditAction {
             Self::FileSessionDisconnected => "file_session_disconnected",
             Self::FileSettingsChanged => "file_settings_changed",
             Self::FileHostKeyCreated => "file_host_key_created",
+            Self::ChangeContentsViewed => "change_contents_viewed",
+            Self::ChangeSettingsChanged => "change_settings_changed",
+            Self::ChangeContentsPurged => "change_contents_purged",
+            Self::ChangeVerifyRequested => "change_verify_requested",
         }
     }
 
