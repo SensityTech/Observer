@@ -19,7 +19,7 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
-use crate::config::{Config, DataPaths};
+use crate::config::{Config, DataPaths, HttpConfig};
 use crate::shutdown::{Signals, StopRequest};
 use crate::{BUILD, lock, logging, setup};
 
@@ -104,7 +104,7 @@ pub async fn run(config: Config, args: RunArgs) -> anyhow::Result<()> {
     let listener = TcpListener::bind(config.http.listen)
         .await
         .with_context(|| format!("cannot listen on {}", config.http.listen))?;
-    announce(config.http.listen);
+    announce(&config.http);
     let setup_token = setup::offer_link(&accounts, config.http.listen).await?;
 
     let stop = CancellationToken::new();
@@ -346,7 +346,8 @@ async fn stop_fxserver(
     }
 }
 
-fn announce(listen: SocketAddr) {
+fn announce(http: &HttpConfig) {
+    let listen = http.listen;
     if listen.ip().is_unspecified() {
         info!(
             "panel listening on port {} of every interface (http://localhost:{})",
@@ -355,6 +356,11 @@ fn announce(listen: SocketAddr) {
         );
     } else {
         info!("panel listening on http://{listen}");
+    }
+    if http.exposed_over_plain_http() {
+        warn!(
+            "the panel is served over plain HTTP on {listen}; put it behind an HTTPS proxy or reach it over a VPN"
+        );
     }
 }
 

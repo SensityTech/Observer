@@ -60,6 +60,14 @@ impl Default for HttpConfig {
     }
 }
 
+impl HttpConfig {
+    /// Whether other hosts reach the panel over plain HTTP: it listens past loopback, and no proxy
+    /// is trusted to bring HTTPS in front of it.
+    pub fn exposed_over_plain_http(&self) -> bool {
+        !self.listen.ip().is_loopback() && self.trusted_proxies.is_empty()
+    }
+}
+
 impl Default for LogConfig {
     fn default() -> Self {
         Self {
@@ -180,5 +188,21 @@ mod tests {
             error.contains("`10.0.0.0/33` is not an address or a CIDR block"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn only_a_panel_reached_past_loopback_without_a_trusted_proxy_is_exposed_over_plain_http() {
+        let http = |listen: &str, proxies: &[&str]| HttpConfig {
+            listen: listen.parse().unwrap(),
+            hosts: Vec::new(),
+            trusted_proxies: proxies.iter().map(|proxy| proxy.parse().unwrap()).collect(),
+        };
+
+        assert!(http("0.0.0.0:40125", &[]).exposed_over_plain_http());
+        assert!(http("192.168.1.20:40125", &[]).exposed_over_plain_http());
+        assert!(http("[::]:40125", &[]).exposed_over_plain_http());
+        assert!(!http("127.0.0.1:40125", &[]).exposed_over_plain_http());
+        assert!(!http("[::1]:40125", &[]).exposed_over_plain_http());
+        assert!(!http("0.0.0.0:40125", &["172.18.0.0/16"]).exposed_over_plain_http());
     }
 }
