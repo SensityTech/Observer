@@ -17,4 +17,5 @@ export const Permission = {
     FilesManage: 1n << 13n,
     PlayersView: 1n << 14n,
     PlayerIdentifiersView: 1n << 15n,
+    DropsView: 1n << 16n,
 } as const;

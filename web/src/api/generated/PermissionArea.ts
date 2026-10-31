@@ -3,4 +3,4 @@
 /**
  * The group a permission belongs to in the permission editor.
  */
-export type PermissionArea = "dashboard" | "console" | "server" | "schedule" | "artifacts" | "users" | "audit" | "settings" | "logs" | "diagnostics" | "files" | "players";
+export type PermissionArea = "dashboard" | "console" | "server" | "schedule" | "artifacts" | "users" | "audit" | "settings" | "logs" | "diagnostics" | "files" | "players" | "drops";

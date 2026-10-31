@@ -64,6 +64,8 @@ pub(crate) async fn forget(
     Id(id): Id,
 ) -> Result<StatusCode, Failure> {
     state.players.forget(&caller, id).await?;
+    // The drops' cached statistics may hold what the player wrote.
+    state.drops.clear();
     Ok(StatusCode::NO_CONTENT)
 }
 

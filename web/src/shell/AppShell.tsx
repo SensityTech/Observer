@@ -12,6 +12,7 @@ import {
     SquareTerminal,
     Stethoscope,
     TriangleAlert,
+    Unplug,
     Users,
     X,
     type LucideIcon,
@@ -46,6 +47,7 @@ type NavEntry = {
         | '/artifacts'
         | '/diagnostics'
         | '/players'
+        | '/drops'
         | '/server'
         | '/users'
         | '/files'
@@ -56,7 +58,10 @@ type NavEntry = {
     access: bigint | bigint[] | 'owner';
     /** Shows how many alerts are live. */
     alerts?: boolean;
-    /** Stays current on the pages under it, as a player's profile is under the players. */
+    /**
+     * Stays current on the pages under it, as a player's profile is under the players, and whatever
+     * its address holds, as the drops' filters.
+     */
     nested?: boolean;
 };
 
@@ -117,6 +122,7 @@ export function AppShell() {
             alerts: true,
         },
         { to: '/players', label: t.nav.players, icon: Contact, access: Permission.PlayersView, nested: true },
+        { to: '/drops', label: t.nav.drops, icon: Unplug, access: Permission.DropsView, nested: true },
     ];
     const administration: NavEntry[] = [
         { to: '/server', label: t.nav.server, icon: Server, access: 'owner' },

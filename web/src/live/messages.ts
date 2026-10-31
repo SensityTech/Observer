@@ -216,6 +216,9 @@ const AUDIT_ACTIONS = {
     player_forgotten: true,
     players_imported: true,
     players_retention_changed: true,
+    player_drops_exported: true,
+    drop_rates_exported: true,
+    drops_retention_changed: true,
 } satisfies Record<AuditAction, true>;
 
 const OUTCOMES = { success: true, failure: true, denied: true } satisfies Record<Outcome, true>;

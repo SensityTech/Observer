@@ -100,7 +100,8 @@ fn status(code: ErrorCode) -> StatusCode {
         | ErrorCode::InvalidPublicKey
         | ErrorCode::TooManyKeys
         | ErrorCode::InvalidAccess
-        | ErrorCode::InvalidPlayersFile => StatusCode::UNPROCESSABLE_ENTITY,
+        | ErrorCode::InvalidPlayersFile
+        | ErrorCode::InvalidDropsSettings => StatusCode::UNPROCESSABLE_ENTITY,
         ErrorCode::JsonRequired => StatusCode::UNSUPPORTED_MEDIA_TYPE,
         ErrorCode::UnknownHost => StatusCode::MISDIRECTED_REQUEST,
         ErrorCode::InvalidUsername

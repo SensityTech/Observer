@@ -1,6 +1,8 @@
 // The source catalog. Every other locale is typed against it, so a key missing there fails the type
 // check. Messages that take values are functions; they format with the helpers bound to this locale.
 
+import type { ReactNode } from 'react';
+
 import type { ActorKind } from '../api/generated/ActorKind';
 import type { ApplyMode } from '../api/generated/ApplyMode';
 import type { ArtifactSettingsProblem } from '../api/generated/ArtifactSettingsProblem';
@@ -8,9 +10,12 @@ import type { AuditAction } from '../api/generated/AuditAction';
 import type { BuildPlatform } from '../api/generated/BuildPlatform';
 import type { CfgFileProblem } from '../api/generated/CfgFileProblem';
 import type { CfgFileState } from '../api/generated/CfgFileState';
+import type { ChartCategory } from '../api/generated/ChartCategory';
 import type { CommandRefusal } from '../api/generated/CommandRefusal';
+import type { CrashForm } from '../api/generated/CrashForm';
 import type { DropCategory } from '../api/generated/DropCategory';
 import type { DropKind } from '../api/generated/DropKind';
+import type { DropsRange } from '../api/generated/DropsRange';
 import type { EndpointProtocol } from '../api/generated/EndpointProtocol';
 import type { ErrorCode } from '../api/generated/ErrorCode';
 import type { FindingKind } from '../api/generated/FindingKind';
@@ -40,6 +45,8 @@ import type { Severity } from '../api/generated/Severity';
 import type { SpawnFailure } from '../api/generated/SpawnFailure';
 import type { StopSource } from '../api/generated/StopSource';
 import type { SupportLevel } from '../api/generated/SupportLevel';
+import type { TileKind } from '../api/generated/TileKind';
+import type { TrendVerdict } from '../api/generated/TrendVerdict';
 import { parsePermissions, permissionKeys, type PermissionKey } from '../auth/permissions';
 import type { LinkState } from '../live/realtime';
 import type { LaunchStep, SetupStep } from '../setup/state';
@@ -112,6 +119,10 @@ const permissions = {
         name: 'View player identifiers',
         description:
             'Every identifier a player showed, hardware tokens included, and the other licences they link to.',
+    },
+    dropsView: {
+        name: 'View player drops',
+        description: 'Drop rates, categories, crash signatures and kicking resources, without any player.',
     },
 } satisfies Record<PermissionKey, { name: string; description: string }>;
 
@@ -267,6 +278,7 @@ export const en = {
         files: 'Files',
         diagnostics: 'Diagnostics',
         players: 'Players',
+        drops: 'Drops',
         alertCount: (value: number) => count(value, { one: 'alert', other: 'alerts' }),
     },
     theme: {
@@ -850,6 +862,7 @@ export const en = {
             start: 'Start',
             restart: 'Restart',
             crash: 'Crash',
+            build: (build: number | null) => (build === null ? 'Build changed' : `Build ${build}`),
             backOnline: (time: string) => ` · back online ${time}`,
             inWords: (marker: string, time: string, backOnline: string | null) =>
                 backOnline === null ? `${marker} ${time}` : `${marker} ${time}, back online ${backOnline}`,
@@ -1460,6 +1473,406 @@ export const en = {
             stopped: (at: string, written: number, read: number) =>
                 `The import of ${at} stopped after ${formatNumber('en', written)} of ${count(read, { one: 'player', other: 'players' })}. Import the file again to finish: what was written stays.`,
         },
+    },
+    drops: {
+        title: 'Player drops',
+        gloss: 'How sessions end, and whether it changes.',
+        range: 'Player drops range',
+        ranges: { '24h': '24h', '7d': '7d', '30d': '30d', '90d': '90d' } satisfies Record<DropsRange, string>,
+        over: {
+            '24h': 'the last 24 hours',
+            '7d': 'the last 7 days',
+            '30d': 'the last 30 days',
+            '90d': 'the last 90 days',
+        } satisfies Record<DropsRange, string>,
+        unit: 'per 100 h',
+        rate: (rate: string) => `${rate} per 100 h`,
+        unknown: 'n/a',
+        playersCounted: 'Players counted',
+        since: (day: string) => `since ${day}`,
+        playersSince: (day: string) => `players counted since ${day}`,
+        rates: 'Rates are drops per 100 player-hours, an hour of one player connected: a busier day does not raise them.',
+        exportRates: 'Export rates',
+        exportFailed: 'The export could not be made.',
+        loading: 'Reading the player drops',
+        failed: 'The player drops could not be read. They are read again in 30 s.',
+        coverage: (closed: number, sessions: number, share: string, missed: number, lost: number) =>
+            `Observer closed ${formatNumber('en', closed)} of ${count(sessions, { one: 'session', other: 'sessions' })} itself (${share}): ${formatNumber('en', missed)} left FXServer's player list without a drop, ${formatNumber('en', lost)} were still open when Observer stopped. How they ended is not known, so they stay out of the rates and the breakdown.`,
+        categories: {
+            quit: 'Quits',
+            kick: 'Kicks',
+            timeout: 'Timeouts',
+            crash: 'Crashes',
+            security: 'Security',
+            serverStop: 'Server stops',
+            serverCrash: 'Server crashes',
+            unknown: 'Unknown',
+        } satisfies Record<DropCategory, string>,
+        categoriesInline: {
+            quit: 'quits',
+            kick: 'kicks',
+            timeout: 'timeouts',
+            crash: 'crashes',
+            security: 'security drops',
+            serverStop: 'server stops',
+            serverCrash: 'server crashes',
+            unknown: 'unknown drops',
+        } satisfies Record<DropCategory, string>,
+        kinds: {
+            exit: 'Left the game',
+            disconnect: 'Disconnected',
+            otherServer: 'Joined another server',
+            reconnect: 'Reconnected',
+            editor: 'Opened the Rockstar Editor',
+            reload: 'Reloaded the game',
+            quitMessage: 'Quit with a message',
+            resource: 'By a resource',
+            connection: 'Connection lost',
+            pendingCommands: 'Too many commands waiting',
+            missedFrames: 'Missed frames',
+            replaced: 'Replaced by a new connection',
+            stateBagRate: 'Too many state bag changes',
+            netEventRate: 'Too many net events',
+            latentNetEventRate: 'Too many latent net events',
+            commandRate: 'Too many commands',
+            netGameEventRate: 'Too many game events',
+            serverInitiated: 'Refused by the server',
+            stop: 'Stopped',
+            restart: 'Restarted',
+            scheduled: 'Scheduled restart',
+            shutdown: 'Observer stopped',
+            crashLoop: 'Crash loop',
+            console: 'Quit in the console',
+            crash: 'Server crash',
+            hang: 'Server stopped responding',
+            lost: 'Lost when Observer stopped',
+            missed: 'Missed',
+            other: 'Other',
+        } satisfies Record<DropKind, string>,
+        verdicts: {
+            rising: 'Rising',
+            falling: 'Falling',
+            noClearChange: 'No clear change',
+            notEnoughDrops: 'Not enough drops',
+        } satisfies Record<TrendVerdict, string>,
+        verdict: {
+            interval: (change: string, low: string, high: string) => `${change} (between ${low} and ${high})`,
+            rates: (now: string, before: string) =>
+                `Every drop: ${now} now, ${before} before, per 100 player-hours`,
+            events: (now: number, before: number) =>
+                `The test counts a burst of drops once: ${count(now, { one: 'event', other: 'events' })} now, ${formatNumber('en', before)} before`,
+            notEnough: 'At least 20 events are needed to tell a change from chance.',
+            noClearChange: "Within what this server's days vary by.",
+        },
+        windows: {
+            today: (since: string, from: string, to: string) =>
+                `Today since ${since} against yesterday from ${from} to ${to}.`,
+            day: "Today since midnight against yesterday's same hours.",
+            '7d': 'The last 7 days against the 7 days before.',
+            '30d': 'The last 30 days against the 30 days before.',
+            '90d': 'The last 90 days against the 90 days before.',
+            change: 'The 72 hours before the change against the 72 hours after, cut at the next change.',
+        },
+        tiles: {
+            labels: {
+                crashes: 'Crashes',
+                timeouts: 'Timeouts',
+                kicks: 'Kicks',
+                unexpected: 'Sessions ending unexpectedly',
+            } satisfies Record<TileKind, string>,
+            what: {
+                crashes: 'crashes',
+                timeouts: 'timeouts',
+                kicks: 'kicks',
+                unexpected: 'unexpected drops',
+            } satisfies Record<TileKind, string>,
+            ended: 'Ended this way',
+            oneIn: (sessions: number) => `1 session in ${formatNumber('en', sessions)}`,
+            drops: 'Drops',
+            onePlayer: 'One player',
+            onePlayerShare: (share: string, what: string) => `${share} of ${what}`,
+            trend: (what: string, range: string) => `${what} per 100 player-hours over ${range}`,
+        },
+        chart: {
+            title: 'Drop rate',
+            category: 'Drops the chart shows',
+            categories: {
+                unexpected: 'Unexpected',
+                crash: 'Crashes',
+                timeout: 'Timeouts',
+                kick: 'Kicks',
+                security: 'Security',
+            } satisfies Record<ChartCategory, string>,
+            what: {
+                unexpected: 'unexpected drops',
+                crash: 'crashes',
+                timeout: 'timeouts',
+                kick: 'kicks',
+                security: 'security drops',
+            } satisfies Record<ChartCategory, string>,
+            every: (step: string) => `Every ${step} · per 100 player-hours`,
+            rate: 'Rate',
+            baseline: '4-week baseline',
+            drops: 'Drops',
+            tooltipRate: (rate: string) => `${rate} per 100 h`,
+            tooltipNobody: 'Nobody played',
+            tooltipDrops: (drops: number) => count(drops, { one: 'drop', other: 'drops' }),
+            tooltipBaseline: (rate: string) => `baseline ${rate}`,
+            summary: (drops: number, what: string, range: string, rate: string | null) =>
+                rate === null
+                    ? `${formatNumber('en', drops)} ${what} over ${range}.`
+                    : `${formatNumber('en', drops)} ${what} over ${range}, ${rate} per 100 player-hours.`,
+            peak: (rate: string, at: string) => `Highest ${rate} per 100 h, at ${at}.`,
+            baselineSpan: (low: string, high: string) =>
+                low === high
+                    ? `The 4-week baseline is ${low} per 100 h.`
+                    : `The 4-week baseline runs from ${low} to ${high} per 100 h.`,
+            noBaseline: 'No 4-week baseline yet: the weeks before are not known.',
+            unplayed: (buckets: number, total: number) =>
+                `Nobody played in ${formatNumber('en', buckets)} of its ${formatNumber('en', total)} buckets: the line breaks there.`,
+            empty: 'Nobody played over this range.',
+            loading: 'Loading the drop rate chart',
+            failed: 'The drop rate chart could not be read. It is read again in 30 s.',
+        },
+        breakdown: {
+            title: 'Breakdown',
+            meta: (sessions: number, played: string) =>
+                `${count(sessions, { one: 'session', other: 'sessions' })} ended · ${played} played`,
+            caption: 'Drops by category over the range, unexpected ones first, most drops first',
+            category: 'Category',
+            drops: 'Drops',
+            share: 'Share of all drops',
+            rate: 'Per 100 h',
+            verdict: 'Trend',
+            loading: 'Reading the breakdown',
+            loadingShare: (share: string) => `${share} while loading`,
+            unexpected: 'Unexpected',
+            expected: 'Expected',
+            notPlayers: 'Not a player rate',
+            filterHint:
+                'Pick a category to narrow the log to it. Crashes, timeouts, kicks and security narrow the chart too; unknown drops show it as unexpected ones.',
+            filterHintChart:
+                'Pick crashes, timeouts, kicks or security to narrow the chart to them; unknown drops show it as unexpected ones.',
+            empty: 'No drop over this range.',
+            failed: 'The breakdown could not be read.',
+        },
+        signatures: {
+            title: 'Crash signatures',
+            meta: (crashes: number) => count(crashes, { one: 'crash', other: 'crashes' }),
+            groupBy: 'Group crashes by',
+            tabs: { signatures: 'Signatures', modules: 'Modules', builds: 'Game builds' },
+            caption: 'Crash signatures over the range, most crashes first',
+            modulesCaption: 'Crashes by the module they happened in, most crashes first',
+            buildsCaption: 'Crashes by game build, most crashes first',
+            signature: 'Signature',
+            module: 'Module',
+            build: 'Game build',
+            crashes: 'Crashes',
+            share: 'Share of crashes',
+            players: 'Players',
+            firstSeen: 'First seen',
+            verdict: 'Trend',
+            signaturesCount: 'Signatures',
+            new: 'New',
+            newHint: 'First seen in this range, after 28 days without it.',
+            hidden: 'Hidden until a second player crashes with it.',
+            hiddenHint:
+                'A client can write anything after its crash: a text one player alone wrote is not shown.',
+            gameBuild: (build: number) => `game build ${build}`,
+            playersCount: (players: number) => count(players, { one: 'player', other: 'players' }),
+            forms: {
+                hash: 'Code name',
+                symbol: 'Symbol',
+                error: 'Error code',
+                load: 'Asset load',
+                exception: 'Exception',
+                text: 'Text',
+            } satisfies Record<CrashForm, string>,
+            asset: (resource: string) => `while loading an asset of ${resource}`,
+            examples: 'Examples',
+            hideExamples: 'Hide the examples',
+            examplesTitle: 'Latest crash texts, identifiers taken out',
+            noExamples: 'No crash text is kept for it.',
+            noSharedExample: 'No example shared by two players yet.',
+            loadingShare: (share: string) => `${share} of these crashes happened while loading.`,
+            noModule: 'No module named',
+            noBuild: 'No game build named',
+            showInLog: 'Show in the log',
+            empty: 'No crash over this range.',
+            loading: 'Reading the crash signatures',
+            failed: 'The crash signatures could not be read.',
+            repeat: (players: number) =>
+                `${count(players, { one: 'player', other: 'players' })} crashed 3 times or more in the last 7 days.`,
+            repeatNamed: (names: ReactNode, others: number): ReactNode => [
+                'Crashed 3 times or more in the last 7 days: ',
+                names,
+                others > 0 ? `, and ${count(others, { one: 'other player', other: 'other players' })}.` : '.',
+            ],
+            repeatCrashes: (crashes: number) => count(crashes, { one: 'crash', other: 'crashes' }),
+        },
+        resources: {
+            title: 'Kicking resources',
+            meta: (kicks: number) => count(kicks, { one: 'kick', other: 'kicks' }),
+            caption: 'Resources that kicked players over the range, most kicks first',
+            resource: 'Resource',
+            kicks: 'Kicks',
+            share: 'Share of kicks',
+            players: 'Players',
+            verdict: 'Trend',
+            noResource: 'No resource named',
+            reasons: 'Reasons',
+            hideReasons: 'Hide the reasons',
+            reasonsCaption: (resource: string) => `What ${resource} gave as its reasons, most kicks first`,
+            reasonsNote: 'Numbers, names and quoted words are taken out, so alike reasons group.',
+            reasonKicks: (kicks: number) => count(kicks, { one: 'kick', other: 'kicks' }),
+            playersCount: (players: number) => count(players, { one: 'player', other: 'players' }),
+            noReason: 'No reason is kept for these kicks.',
+            showInLog: 'Show in the log',
+            empty: 'No resource kicked a player over this range.',
+            loading: 'Reading the kicking resources',
+            failed: 'The kicking resources could not be read.',
+        },
+        changes: {
+            title: 'Changes and incidents',
+            caption: 'Restarts, build changes, server crashes and incidents over the range, newest first',
+            chips: {
+                restart: 'Restart',
+                build: 'Build',
+                serverCrash: 'Crash',
+                hang: 'Hang',
+                incident: 'Incident',
+            },
+            restart: 'FXServer started.',
+            build: (from: number | null, to: number | null) =>
+                from === null || to === null
+                    ? `FXServer started on build ${to ?? from ?? '?'}.`
+                    : `FXServer went from build ${from} to ${to}.`,
+            crash: (players: number | null) =>
+                players === null
+                    ? 'FXServer crashed.'
+                    : `FXServer crashed, dropping ${count(players, { one: 'player', other: 'players' })}.`,
+            hang: (players: number | null) =>
+                players === null
+                    ? 'FXServer stopped responding.'
+                    : `FXServer stopped responding, dropping ${count(players, { one: 'player', other: 'players' })}.`,
+            incident: (drops: number | null, hitch: string | null) => {
+                const what =
+                    drops === null ? 'Players dropped' : count(drops, { one: 'drop', other: 'drops' });
+                return hitch === null ? `${what} within 10 s.` : `${what} during a ${hitch} hitch.`;
+            },
+            incidentCategory: (drops: number, category: string) => `${formatNumber('en', drops)} ${category}`,
+            online: (players: number) => `${count(players, { one: 'player', other: 'players' })} online`,
+            after: (category: string, before: string, after: string) =>
+                `After it: ${category} ${before} to ${after} per 100 h`,
+            newSignatures: (signatures: number, named: ReactNode): ReactNode => [
+                `${count(signatures, { one: 'new signature', other: 'new signatures' })} after it: `,
+                named,
+            ],
+            seconds: (seconds: string) => `${seconds} s`,
+            run: (run: number) => `run ${run}`,
+            showInLog: 'Show their drops',
+            snapshots:
+                'Resource, cfg and file changes join this timeline once file changes is installed. Until then it holds restarts, FXServer builds, server crashes and incidents.',
+            empty: 'No restart, build change, server crash or incident over this range.',
+            loading: 'Reading the changes',
+            failed: 'The changes could not be read.',
+        },
+        uptime: {
+            title: 'Uptime',
+            meta: 'Unexpected drops per 100 h, by time since the start',
+            bin: (from: number, to: number | null) => (to === null ? `${from}h+` : `${from}-${to}h`),
+            higher: 'Higher',
+            higherBins: (bins: string[]) => `${list(bins)}, against the other hours since a start.`,
+            notEnough: 'Not enough drops',
+            summary: (bins: readonly string[]) =>
+                `Unexpected drops per 100 player-hours, a burst counting once, by hours since FXServer started: ${bins.join(', ')}.`,
+            summaryBin: (bin: string, rate: string, verdict: string | null) =>
+                verdict === null ? `${bin} ${rate}` : `${bin} ${rate} (${verdict})`,
+            note: 'A burst of drops counts once. A rate that climbs with the hours since the start points to a leak or a resource that degrades.',
+            since: (day: string) => `Sessions counted since ${day}: older ones are no longer kept.`,
+            empty: 'Nobody played over this range.',
+            loading: 'Reading the uptime figures',
+            failed: 'The uptime figures could not be read.',
+        },
+        log: {
+            title: 'Drop log',
+            meta: (range: string) => `Over ${range}, newest first`,
+            filters: 'Filter the log',
+            category: 'Category',
+            anyCategory: 'Any category',
+            kind: 'Kind',
+            anyKind: 'Any kind',
+            resource: 'Resource',
+            signature: 'Crash signature',
+            anySignature: 'Any signature',
+            signatureId: (id: number) => `Signature ${id}`,
+            player: 'Player',
+            playerHint: 'Player: the start of a name, or a licence.',
+            playerHintIdentifiers:
+                'Player: the start of a name, a licence, or any identifier with its prefix, such as discord:. Never an address. A player typed takes the place of a profile kept.',
+            run: 'Run',
+            runInvalid: 'A run is a number, as the log shows it.',
+            apply: 'Apply',
+            clear: 'Clear',
+            export: 'Export CSV',
+            profile: (id: number) => `Player ${id}`,
+            group: (id: number) => `Player ${id} and their linked licences`,
+            removeFilter: (filter: string) => `Remove the filter: ${filter}`,
+            caption: 'Drops over the range under the filters, newest first',
+            time: 'Time',
+            playerColumn: 'Player',
+            categoryColumn: 'Category',
+            detail: 'Detail',
+            session: 'Session',
+            phase: 'Phase',
+            runColumn: 'Run',
+            unconfirmed: 'Unconfirmed',
+            unconfirmedHint: 'Who this was was never confirmed, or the player was forgotten.',
+            noPlayer: 'Not known',
+            loadingPhase: 'Loading',
+            inGame: 'In game',
+            byResource: (resource: ReactNode): ReactNode => ['by ', resource],
+            closedByObserver: 'Closed by Observer',
+            duringIncident: 'During an incident',
+            runValue: (run: number) => `Run ${run}`,
+            filterRun: (run: number) => `Show run ${run} only`,
+            filterSignature: (signature: string) => `Show the signature ${signature} only`,
+            empty: 'No drop over this range.',
+            noMatch: 'No drop matches these filters over this range.',
+            loadMore: 'Load more',
+            shown: (drops: number) => `${count(drops, { one: 'drop', other: 'drops' })} shown`,
+            allShown: (drops: number) => `All ${count(drops, { one: 'drop', other: 'drops' })} shown`,
+            reading: 'Reading the drop log',
+            failed: 'The drop log could not be read.',
+        },
+        settings: {
+            title: 'Drop data',
+            meta: 'Owner only',
+            lead: "How long Observer keeps each player's sessions, with their crash and kick texts. The hourly figures behind the charts and the rates stay.",
+            sessionDays: 'Keep sessions for',
+            hint: 'Days, from 14 to 365.',
+            outOfRange: 'Out of range. Days, from 14 to 365.',
+            changes: (changes: number) => `${count(changes, { one: 'change', other: 'changes' })} not saved`,
+            discard: 'Discard',
+            discarded: 'Changes discarded.',
+            save: 'Save the retention',
+            saved: 'Retention saved. Older sessions go within the hour.',
+            loading: 'Reading the retention',
+            failed: 'The retention could not be read.',
+        },
+        overview: {
+            label: 'Player drops · 24h',
+            failed: 'The player drops could not be read. They are read again in 30 s.',
+            ended: 'Ended unexpectedly',
+            drops: 'Unexpected drops',
+            trend: 'Unexpected drops per 100 player-hours over the last 24 hours',
+            open: 'Open Player drops',
+        },
+        crash: {
+            dropped: (players: number) => `${count(players, { one: 'player', other: 'players' })} dropped`,
+            showInLog: 'Show their drops',
+        },
+        profileLog: 'Open in the drop log',
     },
     server_state: {
         states: {
@@ -2255,6 +2668,9 @@ export const en = {
             player_forgotten: 'Player forgotten',
             players_imported: "txAdmin's players imported",
             players_retention_changed: 'Player retention changed',
+            player_drops_exported: 'Drop log exported',
+            drop_rates_exported: 'Drop rates exported',
+            drops_retention_changed: 'Drop retention changed',
         } satisfies Record<AuditAction, string>,
         outcomes: {
             success: 'Success',
@@ -2511,6 +2927,7 @@ export const en = {
         diagnostics: 'Diagnostics',
         files: 'Files',
         players: 'Players',
+        drops: 'Player drops',
     } satisfies Record<PermissionArea, string>,
     danger: {
         sensitive: 'Sensitive',
@@ -2675,6 +3092,10 @@ export const en = {
                 ? playersFileProblems[problem]
                 : "This file cannot be imported as txAdmin's players database.";
         },
+        invalid_drops_settings: (params) =>
+            typeof params.min === 'number' && typeof params.max === 'number'
+                ? `Keep sessions between ${params.min} and ${params.max} days.`
+                : 'This retention is out of range.',
     } satisfies Record<ErrorCode, ErrorMessage>,
     failure: {
         unknown: 'Something went wrong. Try again.',

@@ -151,11 +151,17 @@ export const knownZone = (zone: string) => {
     }
 };
 
-/** A wall time in `zone` on a 24-hour clock: `04:00`. */
-export const formatClock = (locale: string, instant: string | number, zone: string) =>
+/** A wall time in `zone` on a 24-hour clock: `04:00`, or `04:00:07` with its seconds. */
+export const formatClock = (
+    locale: string,
+    instant: string | number,
+    zone: string,
+    { seconds = false } = {},
+) =>
     new Intl.DateTimeFormat(locale, {
         hour: '2-digit',
         minute: '2-digit',
+        second: seconds ? '2-digit' : undefined,
         hourCycle: 'h23',
         timeZone: knownZone(zone),
     }).format(new Date(instant));
