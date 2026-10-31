@@ -452,6 +452,9 @@ that does.
 - **No Windows service.** Observer starts when someone starts it, in a signed-in session.
 - **The status window's memory.** Once opened, the window keeps its graphics memory until Observer exits,
   even after it is closed. `--no-window` avoids it.
+- **Colour codes in the classic console.** The classic console window (conhost), still the default on
+  Windows 10 and Windows Server 2016 to 2022, prints the log's colour codes as text. Windows Terminal
+  renders them, and `NO_COLOR=1` turns them off.
 - **English only.** The panel, the command line and the logs are in English.
 
 ## Licence
