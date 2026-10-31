@@ -1,0 +1,464 @@
+//! Players as Observer sees them: the identifiers they show, checked and put in one canonical form,
+//! their names made safe to display, and what the panel reads of their profiles.
+//!
+//! The formats are FiveM's, as txAdmin checks them. Anything else is dropped rather than stored as
+//! it came: a resource or a modified client can put anything in a report.
+
+use std::net::IpAddr;
+
+use serde::{Deserialize, Serialize};
+use ts_rs::TS;
+
+/// The longest name kept, in bytes.
+pub const MAX_NAME_BYTES: usize = 256;
+
+/// The kinds of identifier Observer keeps beside the licence, which is the player's key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum IdentifierKind {
+    License2,
+    Steam,
+    Discord,
+    Fivem,
+    Xbl,
+    Live,
+    /// A hardware token from `GetPlayerTokens`, already a one-way hash made by FiveM.
+    Token,
+    /// The keyed fingerprint of an address, never the address.
+    Ip,
+}
+
+impl IdentifierKind {
+    pub const ALL: [Self; 8] = [
+        Self::License2,
+        Self::Steam,
+        Self::Discord,
+        Self::Fivem,
+        Self::Xbl,
+        Self::Live,
+        Self::Token,
+        Self::Ip,
+    ];
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::License2 => "license2",
+            Self::Steam => "steam",
+            Self::Discord => "discord",
+            Self::Fivem => "fivem",
+            Self::Xbl => "xbl",
+            Self::Live => "live",
+            Self::Token => "token",
+            Self::Ip => "ip",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|kind| kind.as_str() == name)
+    }
+}
+
+/// An identifier other than the licence, in canonical form: lowercase and without its `kind:`
+/// prefix. A token keeps its type (`4:<64 hex>`).
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct Identifier {
+    pub kind: IdentifierKind,
+    pub value: String,
+}
+
+/// What a player shows on a connection, checked one by one.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Identifiers {
+    /// `license:` and 40 hex digits, lowercase.
+    pub license: Option<String>,
+    /// Without duplicates, in a stable order.
+    pub others: Vec<Identifier>,
+    /// What was dropped: malformed, of a kind Observer does not keep, or a second licence.
+    pub invalid: usize,
+}
+
+impl Identifiers {
+    /// Sorts the identifiers of a report out of their `kind:value` strings and the player's tokens.
+    /// The `ip:` identifier is not among them: it is fingerprinted apart, and never kept.
+    pub fn parse<'a>(
+        identifiers: impl IntoIterator<Item = &'a str>,
+        tokens: impl IntoIterator<Item = &'a str>,
+    ) -> Self {
+        let mut parsed = Self::default();
+        for text in identifiers {
+            match parse_identifier(text) {
+                Some(Parsed::License(license)) if parsed.license.is_none() => {
+                    parsed.license = Some(license);
+                }
+                Some(Parsed::License(license)) if parsed.license.as_ref() == Some(&license) => {}
+                Some(Parsed::Other(identifier)) => parsed.others.push(identifier),
+                Some(Parsed::License(_)) | None => parsed.invalid += 1,
+            }
+        }
+        for text in tokens {
+            match token(text) {
+                Some(value) => parsed.others.push(Identifier {
+                    kind: IdentifierKind::Token,
+                    value,
+                }),
+                None => parsed.invalid += 1,
+            }
+        }
+        parsed.others.sort();
+        parsed.others.dedup();
+        parsed
+    }
+}
+
+enum Parsed {
+    License(String),
+    Other(Identifier),
+}
+
+fn parse_identifier(text: &str) -> Option<Parsed> {
+    let text = text.trim().to_ascii_lowercase();
+    let (kind, value) = text.split_once(':')?;
+    let other = |kind| {
+        Some(Parsed::Other(Identifier {
+            kind,
+            value: value.to_owned(),
+        }))
+    };
+    match kind {
+        "license" if is_hex(value, 40, 40) => Some(Parsed::License(format!("license:{value}"))),
+        "license2" if is_hex(value, 40, 40) => other(IdentifierKind::License2),
+        "steam" if value.len() == 15 && value.starts_with("1100001") && is_hex(&value[7..], 8, 8) => {
+            other(IdentifierKind::Steam)
+        }
+        "discord" if is_digits(value, 17, 20) => other(IdentifierKind::Discord),
+        "fivem" if is_digits(value, 1, 8) => other(IdentifierKind::Fivem),
+        "xbl" if is_digits(value, 14, 20) => other(IdentifierKind::Xbl),
+        "live" if is_digits(value, 14, 20) => other(IdentifierKind::Live),
+        _ => None,
+    }
+}
+
+/// A hardware token: a one- or two-digit type, a colon, then 64 hex digits.
+fn token(text: &str) -> Option<String> {
+    let text = text.trim().to_ascii_lowercase();
+    let (kind, hash) = text.split_once(':')?;
+    (is_hex(kind, 1, 2) && is_hex(hash, 64, 64)).then_some(text)
+}
+
+fn is_hex(text: &str, min: usize, max: usize) -> bool {
+    (min..=max).contains(&text.len()) && text.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn is_digits(text: &str, min: usize, max: usize) -> bool {
+    (min..=max).contains(&text.len()) && text.bytes().all(|byte| byte.is_ascii_digit())
+}
+
+/// The part of an `ip:` identifier that says "same address as": the IPv4 address, or the /64 of
+/// an IPv6 one, whose privacy addresses change daily inside it. An IPv4-mapped IPv6 address is
+/// its IPv4 address. `None` for anything that does not parse.
+pub fn address_network(text: &str) -> Option<Vec<u8>> {
+    let text = text.trim();
+    let text = text.strip_prefix("ip:").unwrap_or(text);
+    let host = match text.strip_prefix('[') {
+        Some(bracketed) => bracketed.split_once(']')?.0,
+        // One colon is IPv4 with a port; more is IPv6 without brackets, so without a port.
+        None if text.matches(':').count() == 1 => text.split_once(':')?.0,
+        None => text,
+    };
+    match host.parse::<IpAddr>().ok()?.to_canonical() {
+        IpAddr::V4(address) => Some(address.octets().to_vec()),
+        IpAddr::V6(address) => Some(address.octets()[..8].to_vec()),
+    }
+}
+
+/// A name made safe to show: no control characters, no bidirectional overrides or invisible
+/// characters that make one name pass for another, trimmed and cut to 256 bytes. `None` when
+/// nothing is left.
+pub fn clean_name(name: &str) -> Option<String> {
+    let kept: String = name.chars().filter(|&c| !hidden(c)).collect();
+    let kept = kept.trim();
+    let mut end = kept.len().min(MAX_NAME_BYTES);
+    while !kept.is_char_boundary(end) {
+        end -= 1;
+    }
+    let kept = kept[..end].trim_end();
+    (!kept.is_empty()).then(|| kept.to_owned())
+}
+
+fn hidden(c: char) -> bool {
+    c.is_control()
+        || matches!(
+            c,
+            '\u{061C}'
+                | '\u{200B}'..='\u{200F}'
+                | '\u{202A}'..='\u{202E}'
+                | '\u{2060}'..='\u{2064}'
+                | '\u{2066}'..='\u{2069}'
+                | '\u{FEFF}'
+        )
+}
+
+/// What someone typed into a players search.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Search {
+    /// The start of a name.
+    Name(String),
+    License(String),
+    /// Any other identifier, which only those who see identifiers may search by.
+    Identifier(Identifier),
+}
+
+/// Why a search was refused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SearchRefusal {
+    /// An address: the panel must not tell which licences used an address someone already knows.
+    Address,
+    /// A `kind:` prefix Observer knows, with a value that is not of that kind.
+    Malformed,
+}
+
+impl Search {
+    /// Reads a search. A value without its `kind:` prefix is a licence when it is one, never
+    /// another kind: a bare number stays a name rather than turning into a Discord search.
+    pub fn parse(text: &str) -> Result<Option<Self>, SearchRefusal> {
+        let text = text.trim();
+        if text.is_empty() {
+            return Ok(None);
+        }
+        let lower = text.to_ascii_lowercase();
+        if lower.starts_with("ip:") || text.parse::<IpAddr>().is_ok() {
+            return Err(SearchRefusal::Address);
+        }
+        if is_hex(&lower, 40, 40) {
+            return Ok(Some(Self::License(format!("license:{lower}"))));
+        }
+        if let Some((kind, _)) = lower.split_once(':') {
+            let known = kind == "license" || IdentifierKind::from_name(kind).is_some();
+            if token(&lower).is_some() {
+                return Ok(Some(Self::Identifier(Identifier {
+                    kind: IdentifierKind::Token,
+                    value: lower,
+                })));
+            }
+            if known {
+                return match parse_identifier(&lower) {
+                    Some(Parsed::License(license)) => Ok(Some(Self::License(license))),
+                    Some(Parsed::Other(identifier)) => Ok(Some(Self::Identifier(identifier))),
+                    None => Err(SearchRefusal::Malformed),
+                };
+            }
+        }
+        Ok(clean_name(text).map(Self::Name))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const LICENSE: &str = "license:0123456789abcdef0123456789abcdef01234567";
+    const TOKEN: &str = "4:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    fn others(parsed: &Identifiers) -> Vec<(IdentifierKind, &str)> {
+        parsed
+            .others
+            .iter()
+            .map(|identifier| (identifier.kind, identifier.value.as_str()))
+            .collect()
+    }
+
+    #[test]
+    fn each_kind_is_checked_against_its_format_and_lowercased() {
+        let parsed = Identifiers::parse(
+            [
+                "license:0123456789ABCDEF0123456789abcdef01234567",
+                "license2:0123456789abcdef0123456789abcdef01234567",
+                "steam:110000112345ABC",
+                "discord:123456789012345678",
+                "fivem:1234",
+                "xbl:12345678901234",
+                "live:98765432109876",
+            ],
+            [TOKEN],
+        );
+
+        assert_eq!(parsed.license.as_deref(), Some(LICENSE));
+        assert_eq!(
+            others(&parsed),
+            [
+                (
+                    IdentifierKind::License2,
+                    "0123456789abcdef0123456789abcdef01234567"
+                ),
+                (IdentifierKind::Steam, "110000112345abc"),
+                (IdentifierKind::Discord, "123456789012345678"),
+                (IdentifierKind::Fivem, "1234"),
+                (IdentifierKind::Xbl, "12345678901234"),
+                (IdentifierKind::Live, "98765432109876"),
+                (IdentifierKind::Token, TOKEN),
+            ]
+        );
+        assert_eq!(parsed.invalid, 0);
+    }
+
+    #[test]
+    fn malformed_values_are_dropped_and_counted() {
+        let parsed = Identifiers::parse(
+            [
+                "license:0123",
+                "steam:2100001aabbccdd",
+                "discord:1234",
+                "fivem:123456789",
+                "xbl:12",
+                "ip:127.0.0.1",
+                "unknown:abc",
+                "no prefix",
+            ],
+            [
+                "4:abc",
+                "123:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            ],
+        );
+
+        assert_eq!(parsed.license, None);
+        assert_eq!(parsed.others, []);
+        assert_eq!(parsed.invalid, 10);
+    }
+
+    #[test]
+    fn a_token_type_may_have_two_digits() {
+        let two = "12:0123456789ABCDEF0123456789abcdef0123456789abcdef0123456789abcdef";
+
+        let parsed = Identifiers::parse([], [two]);
+
+        assert_eq!(parsed.others[0].value, two.to_ascii_lowercase());
+    }
+
+    #[test]
+    fn duplicates_within_one_report_count_once() {
+        let parsed = Identifiers::parse(
+            [
+                LICENSE,
+                LICENSE,
+                "discord:123456789012345678",
+                "DISCORD:123456789012345678",
+            ],
+            [TOKEN, TOKEN],
+        );
+
+        assert_eq!(parsed.license.as_deref(), Some(LICENSE));
+        assert_eq!(parsed.others.len(), 2);
+        assert_eq!(parsed.invalid, 0);
+    }
+
+    #[test]
+    fn a_second_licence_is_dropped() {
+        let parsed = Identifiers::parse([LICENSE, "license:ffffffffffffffffffffffffffffffffffffffff"], []);
+
+        assert_eq!(parsed.license.as_deref(), Some(LICENSE));
+        assert_eq!(parsed.invalid, 1);
+    }
+
+    #[test]
+    fn ipv4_mapped_and_bracketed_addresses_are_one_network() {
+        let plain = address_network("ip:192.0.2.7");
+
+        assert_eq!(plain, Some(vec![192, 0, 2, 7]));
+        assert_eq!(address_network("ip:::ffff:192.0.2.7"), plain);
+        assert_eq!(address_network("ip:[::ffff:192.0.2.7]:30120"), plain);
+        assert_eq!(address_network("ip:192.0.2.7:30120"), plain);
+    }
+
+    #[test]
+    fn ipv6_addresses_are_kept_to_their_64_bit_network() {
+        let one = address_network("ip:2001:db8:1:2:aaaa:bbbb:cccc:dddd");
+        let other = address_network("ip:[2001:db8:1:2:1111:2222:3333:4444]:30120");
+
+        assert_eq!(one, Some(vec![0x20, 0x01, 0x0d, 0xb8, 0, 1, 0, 2]));
+        assert_eq!(one, other);
+        assert_ne!(one, address_network("ip:2001:db8:1:3::1"));
+    }
+
+    #[test]
+    fn an_address_that_does_not_parse_is_none() {
+        for text in ["ip:", "ip:localhost", "ip:300.1.1.1", "ip:[::1", "ip:1.2.3"] {
+            assert_eq!(address_network(text), None, "{text}");
+        }
+    }
+
+    #[test]
+    fn names_lose_controls_bidi_overrides_and_invisible_characters() {
+        assert_eq!(
+            clean_name("  Ada\u{202E}nim\u{200B}da\u{0007}\n "),
+            Some("Adanimda".to_owned())
+        );
+        assert_eq!(clean_name("\u{200B}\u{FEFF} \t"), None);
+        assert_eq!(clean_name(""), None);
+    }
+
+    #[test]
+    fn a_long_name_is_cut_on_a_character_boundary() {
+        let name = "é".repeat(200);
+
+        let cleaned = clean_name(&name).unwrap();
+
+        assert_eq!(cleaned.len(), MAX_NAME_BYTES);
+        assert_eq!(cleaned, "é".repeat(128));
+    }
+
+    #[test]
+    fn a_bare_number_is_a_name_and_never_a_discord_search() {
+        assert_eq!(
+            Search::parse("123456789012345678"),
+            Ok(Some(Search::Name("123456789012345678".to_owned())))
+        );
+        assert_eq!(
+            Search::parse("discord:123456789012345678"),
+            Ok(Some(Search::Identifier(Identifier {
+                kind: IdentifierKind::Discord,
+                value: "123456789012345678".to_owned()
+            })))
+        );
+    }
+
+    #[test]
+    fn a_licence_is_found_with_or_without_its_prefix() {
+        let bare = "0123456789ABCDEF0123456789abcdef01234567";
+
+        assert_eq!(Search::parse(bare), Ok(Some(Search::License(LICENSE.to_owned()))));
+        assert_eq!(
+            Search::parse(LICENSE),
+            Ok(Some(Search::License(LICENSE.to_owned())))
+        );
+    }
+
+    #[test]
+    fn a_search_never_takes_an_address() {
+        for text in ["ip:192.0.2.7", "192.0.2.7", "2001:db8::1", "IP:10.0.0.1"] {
+            assert_eq!(Search::parse(text), Err(SearchRefusal::Address), "{text}");
+        }
+    }
+
+    #[test]
+    fn a_known_prefix_with_a_wrong_value_is_refused() {
+        assert_eq!(Search::parse("discord:12"), Err(SearchRefusal::Malformed));
+        assert_eq!(Search::parse("license:xyz"), Err(SearchRefusal::Malformed));
+        assert_eq!(Search::parse("   "), Ok(None));
+        assert_eq!(
+            Search::parse("Ada: the first"),
+            Ok(Some(Search::Name("Ada: the first".to_owned())))
+        );
+    }
+
+    #[test]
+    fn a_token_is_searched_as_a_token() {
+        assert_eq!(
+            Search::parse(TOKEN),
+            Ok(Some(Search::Identifier(Identifier {
+                kind: IdentifierKind::Token,
+                value: TOKEN.to_owned()
+            })))
+        );
+    }
+}
