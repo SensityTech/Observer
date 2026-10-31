@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::layout::Layout;
+use crate::stdin::MAX_BRIDGE_JSON;
 use crate::trace::TraceKind;
 
 pub const NAME: &str = "observer";
@@ -128,6 +129,152 @@ pub enum BridgeEvent {
         reason: StopReason,
         by: String,
     },
+    /// Once per run, when the files of its start are hashed: what changed since the start before.
+    StartChanges {
+        at: i64,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        previous_at: Option<i64>,
+        /// The first snapshot of the server, which compares with nothing.
+        baseline: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        build: Option<NumberMoved>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        game_build: Option<NumberMoved>,
+        counts: StartCounts,
+        resources: Vec<StartResource>,
+        /// Resources left out because their name could break a console command.
+        skipped: u32,
+        /// Resources left out to keep the event within what the console takes.
+        truncated: bool,
+    },
+}
+
+/// A number before and after.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct NumberMoved {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub from: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub to: Option<u32>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StartCounts {
+    pub added: u32,
+    pub removed: u32,
+    pub updated: u32,
+    pub same_version: u32,
+    pub renamed: u32,
+    pub moved: u32,
+    pub did_not_start: u32,
+    /// Resources whose files were not all hashed: left out of the list.
+    pub pending: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum StartChange {
+    Added,
+    Removed,
+    Updated,
+    SameVersion,
+    Renamed,
+    Moved,
+    DidNotStart,
+}
+
+/// A resource of `observer:startChanges`. Its name and versions are safe to put in a console
+/// command: one that is not is never sent.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StartResource {
+    pub name: String,
+    pub change: StartChange,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub from: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub to: Option<String>,
+    /// A version that could break a console command, left out; the panel still shows it.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub from_hidden: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub to_hidden: bool,
+}
+
+/// What `observer:startChanges` says before its resources are listed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StartHead {
+    pub at: i64,
+    pub previous_at: Option<i64>,
+    pub baseline: bool,
+    pub build: Option<NumberMoved>,
+    pub game_build: Option<NumberMoved>,
+    pub counts: StartCounts,
+}
+
+/// `observer:startChanges` with as many of `resources` as fit the console's line, in the order
+/// given: added, updated and changed under the same version first is the caller's to sort. A
+/// name outside `[A-Za-z0-9_.-]{1,64}` is counted in `skipped`, never listed; a version outside
+/// `[A-Za-z0-9_.+~-]{1,32}` is left out and marked hidden. The encoded event is measured, never a
+/// count of entries.
+pub fn start_changes(
+    head: StartHead,
+    resources: impl IntoIterator<Item = (String, StartChange, Option<String>, Option<String>)>,
+) -> BridgeEvent {
+    let mut listed = Vec::new();
+    let mut skipped = 0;
+    for (name, change, from, to) in resources {
+        if !safe(&name, 64, b"_.-") {
+            skipped += 1;
+            continue;
+        }
+        let version = |version: Option<String>| match version {
+            Some(version) if safe(&version, 32, b"_.+~-") => (Some(version), false),
+            Some(_) => (None, true),
+            None => (None, false),
+        };
+        let ((from, from_hidden), (to, to_hidden)) = (version(from), version(to));
+        listed.push(StartResource {
+            name,
+            change,
+            from,
+            to,
+            from_hidden,
+            to_hidden,
+        });
+    }
+    let event = |kept: usize| BridgeEvent::StartChanges {
+        at: head.at,
+        previous_at: head.previous_at,
+        baseline: head.baseline,
+        build: head.build,
+        game_build: head.game_build,
+        counts: head.counts,
+        resources: listed[..kept].to_vec(),
+        skipped,
+        truncated: kept < listed.len(),
+    };
+    let fits = |kept: usize| serde_json::to_vec(&event(kept)).is_ok_and(|json| json.len() <= MAX_BRIDGE_JSON);
+    // The event only grows with each resource kept: the longest list that fits is found by halves.
+    let (mut low, mut high) = (0, listed.len());
+    while low < high {
+        let middle = (low + high).div_ceil(2);
+        if fits(middle) {
+            low = middle;
+        } else {
+            high = middle - 1;
+        }
+    }
+    event(low)
+}
+
+/// Whether `text` is 1 to `max` bytes of ASCII letters, digits and `extra`.
+fn safe(text: &str, max: usize, extra: &[u8]) -> bool {
+    (1..=max).contains(&text.len())
+        && text
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || extra.contains(&byte))
 }
 
 impl BridgeEvent {
@@ -137,6 +284,7 @@ impl BridgeEvent {
             Self::RestartSkipped { .. } => "restartSkipped",
             Self::RestartRescheduled { .. } => "restartRescheduled",
             Self::ShuttingDown { .. } => "shuttingDown",
+            Self::StartChanges { .. } => "startChanges",
         }
     }
 
@@ -212,7 +360,7 @@ mod tests {
     const CONTRACT: &str = include_str!("../../../resource/CONTRACT.md");
     const EXAMPLE: &str = include_str!("../../../resource/observer_example/server.lua");
 
-    fn every_event() -> [BridgeEvent; 4] {
+    fn every_event() -> [BridgeEvent; 5] {
         [
             BridgeEvent::RestartScheduled {
                 at: 0,
@@ -235,7 +383,154 @@ mod tests {
                 reason: StopReason::Stop,
                 by: String::new(),
             },
+            BridgeEvent::StartChanges {
+                at: 0,
+                previous_at: Some(0),
+                baseline: false,
+                build: Some(NumberMoved {
+                    from: Some(0),
+                    to: Some(0),
+                }),
+                game_build: Some(NumberMoved {
+                    from: Some(0),
+                    to: Some(0),
+                }),
+                counts: StartCounts::default(),
+                resources: Vec::new(),
+                skipped: 0,
+                truncated: false,
+            },
         ]
+    }
+
+    fn head() -> StartHead {
+        StartHead {
+            at: 1_793_000_000_000,
+            previous_at: Some(1_792_999_000_000),
+            baseline: false,
+            build: Some(NumberMoved {
+                from: Some(25770),
+                to: Some(26100),
+            }),
+            game_build: None,
+            counts: StartCounts {
+                updated: 1,
+                ..StartCounts::default()
+            },
+        }
+    }
+
+    fn resources(event: &BridgeEvent) -> (&[StartResource], u32, bool) {
+        let BridgeEvent::StartChanges {
+            resources,
+            skipped,
+            truncated,
+            ..
+        } = event
+        else {
+            panic!("not a startChanges event: {event:?}");
+        };
+        (resources, *skipped, *truncated)
+    }
+
+    #[test]
+    fn start_changes_list_what_changed_with_versions_safe_for_a_console_command() {
+        let event = start_changes(
+            head(),
+            [
+                (
+                    "qb-core".to_owned(),
+                    StartChange::Updated,
+                    Some("1.2.0".to_owned()),
+                    Some("1.3.0".to_owned()),
+                ),
+                ("evil;quit".to_owned(), StartChange::Added, None, None),
+                (
+                    "shop".to_owned(),
+                    StartChange::SameVersion,
+                    Some("1.0 \"; quit\r\n".to_owned()),
+                    Some("1.0".to_owned()),
+                ),
+            ],
+        );
+
+        assert_eq!(
+            decode(&event.encode()),
+            json!({
+                "event": "startChanges",
+                "payload": {
+                    "at": 1_793_000_000_000_i64,
+                    "previousAt": 1_792_999_000_000_i64,
+                    "baseline": false,
+                    "build": { "from": 25770, "to": 26100 },
+                    "counts": {
+                        "added": 0, "removed": 0, "updated": 1, "sameVersion": 0, "renamed": 0,
+                        "moved": 0, "didNotStart": 0, "pending": 0
+                    },
+                    "resources": [
+                        { "name": "qb-core", "change": "updated", "from": "1.2.0", "to": "1.3.0" },
+                        { "name": "shop", "change": "sameVersion", "to": "1.0", "fromHidden": true }
+                    ],
+                    "skipped": 1,
+                    "truncated": false
+                }
+            })
+        );
+    }
+
+    #[test]
+    fn start_changes_stay_within_what_the_console_takes() {
+        let many = (0..1000).map(|index| {
+            (
+                format!("{index:0>64}"),
+                StartChange::Updated,
+                Some("v".repeat(32)),
+                Some("w".repeat(32)),
+            )
+        });
+
+        let event = start_changes(head(), many);
+
+        let (listed, skipped, truncated) = resources(&event);
+        assert!(truncated);
+        assert_eq!(skipped, 0);
+        assert_ne!(listed.len(), 0);
+        let json = serde_json::to_vec(&event).unwrap();
+        assert!(json.len() <= MAX_BRIDGE_JSON, "{} bytes", json.len());
+        assert!(crate::stdin::allowed(&format!("observer_cmd {}", event.encode())));
+        let one_more = start_changes(
+            head(),
+            (0..=listed.len()).map(|index| {
+                (
+                    format!("{index:0>64}"),
+                    StartChange::Updated,
+                    Some("v".repeat(32)),
+                    Some("w".repeat(32)),
+                )
+            }),
+        );
+        assert_eq!(resources(&one_more).0.len(), listed.len());
+    }
+
+    #[test]
+    fn names_and_versions_past_their_length_are_left_out() {
+        let event = start_changes(
+            head(),
+            [
+                ("n".repeat(65), StartChange::Added, None, None),
+                (
+                    "ok".to_owned(),
+                    StartChange::Updated,
+                    Some("1".repeat(33)),
+                    Some(String::new()),
+                ),
+            ],
+        );
+
+        let (listed, skipped, _) = resources(&event);
+        assert_eq!(skipped, 1);
+        assert!(listed[0].from_hidden && listed[0].to_hidden);
+        assert_eq!((listed[0].from.as_deref(), listed[0].to.as_deref()), (None, None));
     }
 
     fn decode(hex: &str) -> Value {

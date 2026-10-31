@@ -15,6 +15,7 @@ use observer_domain::changes::{
     StartList, glob_covers, hidden,
 };
 use observer_domain::error::{ApiError, ErrorCode};
+use observer_fxserver::bridge::{self, BridgeEvent, NumberMoved, StartChange, StartCounts, StartHead};
 use observer_fxserver::changes::diff::{self, DiffOptions};
 use observer_fxserver::changes::mask::{Masked, Redaction};
 use observer_fxserver::changes::tree::TreeEntry;
@@ -562,6 +563,85 @@ impl Changes {
                 let check =
                     snapshots::latest_check(conn, SERVER)?.map(|check| compare::summary(&check, None, false));
                 Ok(ChangesLive { latest, check })
+            })
+            .await
+    }
+
+    /// `observer:startChanges` for the start `id`: what changed since the start before it, or a
+    /// baseline. Resources still waiting for their files are counted and left out.
+    pub(crate) async fn announcement(&self, id: i64) -> Result<BridgeEvent, Error> {
+        let hidden_globs = self.settings().hidden;
+        self.inner
+            .shared
+            .store
+            .read(move |conn| -> Result<BridgeEvent, Error> {
+                let to = snapshots::get(conn, id)?.ok_or(ErrorCode::StartNotFound)?;
+                let millis = |at: Timestamp| at.as_millisecond();
+                let earlier = snapshots::starts(conn, SERVER, Some(id), 1)?.pop();
+                let Some(from) = earlier.filter(|_| !to.baseline) else {
+                    let head = StartHead {
+                        at: millis(to.taken_at),
+                        previous_at: None,
+                        baseline: true,
+                        build: None,
+                        game_build: None,
+                        counts: StartCounts::default(),
+                    };
+                    return Ok(bridge::start_changes(head, []));
+                };
+                let (a, b) = (side(conn, from.clone())?, side(conn, to.clone())?);
+                let (resources, _) = changed_resources(conn, &a, &b, &hidden_globs, false)?;
+                let moved = |before: Option<u32>, after: Option<u32>| {
+                    (before != after).then_some(NumberMoved {
+                        from: before,
+                        to: after,
+                    })
+                };
+                let mut counts = StartCounts::default();
+                let mut listed = Vec::new();
+                for resource in resources {
+                    let change = match resource.change {
+                        ResourceChangeKind::Added => StartChange::Added,
+                        ResourceChangeKind::Removed => StartChange::Removed,
+                        ResourceChangeKind::Updated => StartChange::Updated,
+                        ResourceChangeKind::SameVersion => StartChange::SameVersion,
+                        ResourceChangeKind::Renamed => StartChange::Renamed,
+                        ResourceChangeKind::Moved => StartChange::Moved,
+                        ResourceChangeKind::DidNotStart => StartChange::DidNotStart,
+                        ResourceChangeKind::Checking | ResourceChangeKind::Unknown => {
+                            counts.pending += 1;
+                            continue;
+                        }
+                        ResourceChangeKind::Unchanged => continue,
+                    };
+                    let counter = match change {
+                        StartChange::Added => &mut counts.added,
+                        StartChange::Removed => &mut counts.removed,
+                        StartChange::Updated => &mut counts.updated,
+                        StartChange::SameVersion => &mut counts.same_version,
+                        StartChange::Renamed => &mut counts.renamed,
+                        StartChange::Moved => &mut counts.moved,
+                        StartChange::DidNotStart => &mut counts.did_not_start,
+                    };
+                    *counter += 1;
+                    listed.push((resource.name, change, resource.from_version, resource.to_version));
+                }
+                let order = |change: StartChange| match change {
+                    StartChange::Added => 0,
+                    StartChange::Updated => 1,
+                    StartChange::SameVersion => 2,
+                    _ => 3,
+                };
+                listed.sort_by_key(|(_, change, _, _)| order(*change));
+                let head = StartHead {
+                    at: millis(to.taken_at),
+                    previous_at: Some(millis(from.taken_at)),
+                    baseline: false,
+                    build: moved(from.build, to.build),
+                    game_build: moved(from.game_build, to.game_build),
+                    counts,
+                };
+                Ok(bridge::start_changes(head, listed))
             })
             .await
     }

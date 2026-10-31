@@ -15,6 +15,7 @@ local EVENTS = {
     restartSkipped = true,
     restartRescheduled = true,
     shuttingDown = true,
+    startChanges = true,
 }
 
 local function report(kind, fields)

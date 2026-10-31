@@ -21,6 +21,7 @@ use observer_domain::changes::{
 use observer_domain::launch::{LaunchSettings, OneSync};
 use observer_domain::server::{ServerState, ServerStatus};
 use observer_fxserver::changes::tree::TreeEntry;
+use observer_fxserver::console::plain;
 use observer_fxserver::health::HealthLimits;
 use observer_fxserver::supervisor::StopTimings;
 use observer_store::artifacts::{self, ArtifactState};
@@ -215,6 +216,25 @@ impl Lab {
         bodies
     }
 
+    /// The first console line of `generation` holding `needle`, once there is one.
+    async fn console_until(&self, generation: u32, needle: &str) -> String {
+        let deadline = Instant::now() + WAIT;
+        loop {
+            let found = self
+                .supervision
+                .console(None)
+                .0
+                .lines
+                .into_iter()
+                .find(|line| line.2 == generation && plain(&line.5).contains(needle));
+            if let Some(line) = found {
+                return plain(&line.5);
+            }
+            assert!(Instant::now() < deadline, "no {needle:?} in run {generation}");
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
+
     async fn command(&self, line: &str) {
         self.supervision
             .command(&self.owner, line, CONSOLE_ROUTE.0, CONSOLE_ROUTE.1)
@@ -356,31 +376,40 @@ async fn the_first_start_is_a_baseline_of_every_resource_with_masked_texts() {
     lab.stop().await;
 }
 
+impl Lab {
+    /// Starts the server, then restarts it after a webhook was planted in `chat`, `qb-core`'s
+    /// version bumped and `qb-housing` added; returns both starts' snapshots.
+    async fn edited_restart(&self) -> (Snapshot, Snapshot) {
+        self.supervision.start_server(&self.owner).await.unwrap();
+        let first = self.settled_start(1).await;
+        self.until(|status| status.state == ServerState::Online).await;
+        let data = self.data();
+        file(
+            &data,
+            "resources/chat/client.lua",
+            &format!("print('chat')\nlocal hook = '{WEBHOOK}'\n"),
+        );
+        file(
+            &data,
+            "resources/[qb]/qb-core/fxmanifest.lua",
+            "version '1.3.0'\n",
+        );
+        file(
+            &data,
+            "resources/[qb]/qb-housing/fxmanifest.lua",
+            "version '0.1.0'\n",
+        );
+        self.supervision.restart_server(&self.owner).await.unwrap();
+        let second = self.settled_start(2).await;
+        (first, second)
+    }
+}
+
 #[tokio::test]
 async fn a_restart_after_an_edit_records_the_new_files_with_their_secrets_hidden() {
     let mut lab = Lab::new().await;
-    lab.supervision.start_server(&lab.owner).await.unwrap();
-    let first = lab.settled_start(1).await;
-    lab.until(|status| status.state == ServerState::Online).await;
 
-    let data = lab.data();
-    file(
-        &data,
-        "resources/chat/client.lua",
-        &format!("print('chat')\nlocal hook = '{WEBHOOK}'\n"),
-    );
-    file(
-        &data,
-        "resources/[qb]/qb-core/fxmanifest.lua",
-        "version '1.3.0'\n",
-    );
-    file(
-        &data,
-        "resources/[qb]/qb-housing/fxmanifest.lua",
-        "version '0.1.0'\n",
-    );
-    lab.supervision.restart_server(&lab.owner).await.unwrap();
-    let second = lab.settled_start(2).await;
+    let (first, second) = lab.edited_restart().await;
 
     assert!(!second.baseline);
     assert_eq!(second.cause, Some(StartCause::Restart));
@@ -406,6 +435,14 @@ async fn a_restart_after_an_edit_records_the_new_files_with_their_secrets_hidden
     for text in lab.every_text().await {
         assert!(!text.contains("PlantedTokenThatMustNeverBeStored"), "{text}");
     }
+    lab.stop().await;
+}
+
+#[tokio::test]
+async fn the_restart_compares_with_the_start_before_and_tells_resources_what_changed() {
+    let mut lab = Lab::new().await;
+
+    let (first, second) = lab.edited_restart().await;
 
     let compared = lab.changes.compare(&lab.owner, None, None).await.unwrap();
     assert_eq!((compared.from.id, compared.to.id), (first.id, second.id));
@@ -423,21 +460,14 @@ async fn a_restart_after_an_edit_records_the_new_files_with_their_secrets_hidden
         ]
     );
     assert_eq!(compared.counts.same_version, 1);
-    assert_eq!(
-        compared.resources[0]
-            .lines
-            .map(|lines| (lines.added, lines.removed)),
-        Some((1, 0))
-    );
+    let lines = compared.resources[0]
+        .lines
+        .map(|lines| (lines.added, lines.removed));
+    assert_eq!(lines, Some((1, 0)));
+    let client = "resources/chat/client.lua".to_owned();
     let diff = lab
         .changes
-        .diff(
-            &lab.owner,
-            None,
-            None,
-            "resources/chat/client.lua".to_owned(),
-            DiffOptions::default(),
-        )
+        .diff(&lab.owner, None, None, client, DiffOptions::default())
         .await
         .unwrap();
     let added = &diff.diff.unwrap().hunks[0].lines[1];
@@ -455,6 +485,13 @@ async fn a_restart_after_an_edit_records_the_new_files_with_their_secrets_hidden
         .await
         .unwrap();
     assert_eq!(cfg.file.change, FileChangeKind::Unchanged);
+    let raised = lab.console_until(2, "observer:startChanges").await;
+    assert!(raised.contains(r#""name":"qb-housing""#), "{raised}");
+    assert!(raised.contains(r#""sameVersion":1"#), "{raised}");
+    assert!(
+        raised.contains(r#""from":"1.2.0""#) && raised.contains(r#""to":"1.3.0""#),
+        "{raised}"
+    );
     lab.stop().await;
 }
 

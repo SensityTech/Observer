@@ -299,6 +299,19 @@ impl Changes {
         Ok(())
     }
 
+    /// Raises `observer:startChanges` for the start `id`, in the run it started. Best effort, as
+    /// every event: a run that ended or a console that is not read gets nothing.
+    async fn announce(&self, id: i64) {
+        match self.announcement(id).await {
+            Ok(event) => {
+                if let Err(error) = self.inner.supervision.supervisor().announce(event).await {
+                    info!(%error, snapshot = id, "observer:startChanges was not raised");
+                }
+            }
+            Err(error) => warn!(%error, snapshot = id, "cannot tell resources what changed"),
+        }
+    }
+
     /// Reads every file again at the capped rate, whatever the index says: what a copy that kept
     /// both size and time hid shows at the next start.
     pub async fn verify(&self, caller: &Caller) -> Result<(), Error> {
@@ -422,6 +435,7 @@ impl Changes {
         let cancel = CancellationToken::new();
         let generation = spawn.generation;
         let launch = spawn.launch.clone();
+        let changes = self.clone();
         let task = tokio::spawn({
             let cancel = cancel.clone();
             async move {
@@ -433,6 +447,11 @@ impl Changes {
                     cancel.clone(),
                 )
                 .await;
+                if let Ok(Ended::Done(id)) = &started
+                    && settings.start_event
+                {
+                    changes.announce(*id).await;
+                }
                 if matches!(started, Ok(Ended::Done(_))) && verification_due(&shared, &settings).await {
                     run_verification(shared, settings, launch, cancel).await;
                 }
