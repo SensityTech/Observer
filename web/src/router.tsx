@@ -12,6 +12,7 @@ import { launchQuery } from './api/launch';
 import { allows, landing } from './auth/me';
 import { ReauthDialog } from './auth/ReauthDialog';
 import { RequireOwner, RequirePermission } from './auth/RequirePermission';
+import { changesSearch, resourceSearch } from './changes/search';
 import { lazyCode } from './lib/lazyCode';
 import { AccountPage } from './pages/AccountPage';
 import { LoginPage } from './pages/LoginPage';
@@ -23,8 +24,8 @@ import { SetupPage } from './pages/SetupPage';
 import { AppShell } from './shell/AppShell';
 
 // Pages beyond the Overview load when someone opens them: the console's virtual list and colour
-// parser, the restart schedule, the diagnostics, the players, the owner's launch settings and
-// server setup, the accounts and the audit log are no one's landing page.
+// parser, the restart schedule, the diagnostics, the players, the changes and their diffs, the
+// owner's launch settings and server setup, the accounts and the audit log are no one's landing page.
 const ConsolePage = lazyCode(() =>
     import('./pages/ConsolePage').then((page) => ({ default: page.ConsolePage })),
 );
@@ -52,6 +53,12 @@ const PlayersPage = lazyCode(() =>
 );
 const PlayerPage = lazyCode(() =>
     import('./pages/PlayerPage').then((page) => ({ default: page.PlayerPage })),
+);
+const ChangesPage = lazyCode(() =>
+    import('./pages/ChangesPage').then((page) => ({ default: page.ChangesPage })),
+);
+const ChangesResourcePage = lazyCode(() =>
+    import('./pages/ChangesResourcePage').then((page) => ({ default: page.ChangesResourcePage })),
 );
 
 type RouterContext = { queryClient: QueryClient };
@@ -205,6 +212,28 @@ const playerRoute = createRoute({
     ),
 });
 
+const changesRoute = createRoute({
+    getParentRoute: () => panelRoute,
+    path: '/changes',
+    validateSearch: changesSearch,
+    component: () => (
+        <RequirePermission name="ChangesView">
+            <ChangesPage />
+        </RequirePermission>
+    ),
+});
+
+const changesResourceRoute = createRoute({
+    getParentRoute: () => panelRoute,
+    path: '/changes/resource',
+    validateSearch: resourceSearch,
+    component: () => (
+        <RequirePermission name="ChangesView">
+            <ChangesResourcePage />
+        </RequirePermission>
+    ),
+});
+
 const serverRoute = createRoute({
     getParentRoute: () => panelRoute,
     path: '/server',
@@ -280,6 +309,8 @@ const routeTree = rootRoute.addChildren([
         diagnosticsRoute,
         playersRoute,
         playerRoute,
+        changesRoute,
+        changesResourceRoute,
         serverRoute,
         serverSetupRoute,
         usersRoute,

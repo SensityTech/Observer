@@ -1,4 +1,14 @@
-import { Cpu, Download, Network, OctagonX, Trash2, TriangleAlert, type LucideIcon } from 'lucide-react';
+import { Link } from '@tanstack/react-router';
+import {
+    Cpu,
+    Download,
+    GitCompare,
+    Network,
+    OctagonX,
+    Trash2,
+    TriangleAlert,
+    type LucideIcon,
+} from 'lucide-react';
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 
 import { deleteCrashFiles, downloadCrashFile, MAX_DOWNLOAD } from '../api/diagnostics';
@@ -9,10 +19,11 @@ import type { Destination } from '../api/generated/Destination';
 import type { DiagnosticsSnapshot } from '../api/generated/DiagnosticsSnapshot';
 import type { Frame } from '../api/generated/Frame';
 import type { Listener } from '../api/generated/Listener';
+import { Permission } from '../api/generated/Permission';
 import type { ProcessKind } from '../api/generated/ProcessKind';
 import type { TreeProcess } from '../api/generated/TreeProcess';
-import { useMe } from '../auth/me';
-import { Button } from '../components/Button';
+import { allows, useMe } from '../auth/me';
+import { Button, buttonVariants } from '../components/Button';
 import { Chip } from '../components/Chip';
 import { Dialog } from '../components/Dialog';
 import { Notice } from '../components/Notice';
@@ -346,6 +357,13 @@ function CrashRow({
                             <Button size="sm" tone="ghost" icon={Trash2} onClick={onDelete}>
                                 {t.diagnostics.crashes.deleteFiles}
                             </Button>
+                        )}
+                        {/* A start does not say which run it began, so the page opens on the latest two. */}
+                        {crash.kind !== 'found' && allows(me, Permission.ChangesView) && (
+                            <Link to="/changes" className={buttonVariants({ size: 'sm', tone: 'ghost' })}>
+                                <GitCompare size={14} strokeWidth={1.5} aria-hidden="true" />
+                                {t.diagnostics.crashes.whatChanged}
+                            </Link>
                         )}
                     </div>
                 </td>

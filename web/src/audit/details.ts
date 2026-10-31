@@ -23,12 +23,29 @@ const TIMES = new Set<string>([
 ]);
 const ACTIONS = new Set<string>(['attempted', 'action']);
 /** The schedule's lists, and the nested entries of its audit details. */
-const LISTS = new Set<string>(['times', 'warnings', 'dropped', 'branches']);
+const LISTS = new Set<string>([
+    'times',
+    'warnings',
+    'dropped',
+    'branches',
+    'extensions',
+    'excluded',
+    'hidden',
+]);
 const NESTED = new Set<string>(['scheduled', 'dropped']);
 /** The schedule's settings counted in minutes. */
 const MINUTES = new Set<string>(['intervalMinutes', 'skipAfterStart', 'warnings']);
-/** The players' retentions, in days. */
-const DAYS = new Set<string>(['linkDays', 'addressDays', 'dayDays', 'profileDays']);
+/** The players' retentions and change tracking's, in days. */
+const DAYS = new Set<string>([
+    'linkDays',
+    'addressDays',
+    'dayDays',
+    'profileDays',
+    'retentionDays',
+    'verifyDays',
+]);
+/** Change tracking's sizes, in bytes. */
+const SIZES = new Set<string>(['bytes', 'maxText', 'budget']);
 
 const has = <T extends object>(record: T, key: unknown): key is keyof T =>
     typeof key === 'string' && Object.hasOwn(record, key);
@@ -57,6 +74,26 @@ const isArgumentChange = (value: unknown): value is { set: string[]; removed: st
 const isRecord = (value: unknown): value is Record<string, unknown> =>
     typeof value === 'object' && value !== null && !Array.isArray(value);
 
+/** Settings the log records whole, before and after, as change tracking's are. */
+const isWholeChange = (
+    details: Record<string, unknown>,
+): details is { before: Record<string, unknown>; after: Record<string, unknown> } =>
+    isChange(details) && isRecord(details.before) && isRecord(details.after);
+
+/** A whole change as the settings it changed, each before and after. */
+const changedSettings = ({
+    before,
+    after,
+}: {
+    before: Record<string, unknown>;
+    after: Record<string, unknown>;
+}) =>
+    Object.fromEntries(
+        Object.keys({ ...before, ...after })
+            .filter((key) => JSON.stringify(before[key]) !== JSON.stringify(after[key]))
+            .map((key) => [key, { before: before[key], after: after[key] }]),
+    );
+
 /** Launch settings the log only says changed. */
 const HIDDEN = new Set<string>(['buildPath', 'dataPath', 'cfgFile']);
 
@@ -66,14 +103,22 @@ const HIDDEN = new Set<string>(['buildPath', 'dataPath', 'cfgFile']);
  * change. A key or a value the catalog does not know reads as the log stores it.
  */
 export const auditDetails = (t: Messages, format: Format, details: Record<string, unknown>) =>
-    pairs(t, format, details).join(' · ');
+    pairs(t, format, isWholeChange(details) ? changedSettings(details) : details).join(' · ');
 
-const pairs = (t: Messages, format: Format, details: Record<string, unknown>) =>
-    Object.entries(details).map(([key, value]) => `${label(t, key, value)}: ${word(t, format, key, value)}`);
+const pairs = (t: Messages, format: Format, details: Record<string, unknown>) => {
+    // A read of changed contents names the two starts it compared by their ids.
+    const starts = typeof details.view === 'string';
+    return Object.entries(details).map(
+        ([key, value]) => `${label(t, key, value, starts)}: ${word(t, format, key, value)}`,
+    );
+};
 
-/** `from` and `to` name times in most entries, and builds in a return to the last healthy one. */
-const label = (t: Messages, key: string, value: unknown) => {
+/** `from` and `to` name times in most entries, builds in a return to the last healthy one, starts in a read. */
+const label = (t: Messages, key: string, value: unknown, starts: boolean) => {
     if (typeof value === 'number' && (key === 'from' || key === 'to')) {
+        if (starts) {
+            return key === 'from' ? t.audit.detail.fromStart : t.audit.detail.toStart;
+        }
         return key === 'from' ? t.audit.detail.fromBuild : t.audit.detail.toBuild;
     }
     // The players' retentions, as they were and as they became.
@@ -126,8 +171,11 @@ const word = (t: Messages, format: Format, key: string, value: unknown): string 
         if (DAYS.has(key)) {
             return t.audit.days(value);
         }
-        if (key === 'bytes') {
+        if (SIZES.has(key)) {
             return format.bytes(value);
+        }
+        if (key === 'hashRate') {
+            return t.audit.rate(format.bytes(value));
         }
         return IDS.has(key) || BUILDS.has(key) ? String(value) : format.number(value);
     }
@@ -203,6 +251,9 @@ const word = (t: Messages, format: Format, key: string, value: unknown): string 
     }
     if (key === 'reason' && has(t.audit.snapshotFailures, value)) {
         return t.audit.snapshotFailures[value];
+    }
+    if (key === 'view' && has(t.audit.views, value)) {
+        return t.audit.views[value];
     }
     if (key === 'mode' && has(t.schedule.modes, value)) {
         return t.schedule.modes[value];

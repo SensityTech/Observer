@@ -227,6 +227,10 @@
     --color-term-red: var(--term-red);
     --color-term-magenta: var(--term-magenta);
     --color-term-blue: var(--term-blue);
+    --color-diff-add-bg: var(--diff-add-bg);
+    --color-diff-del-bg: var(--diff-del-bg);
+    --color-diff-add-word: var(--diff-add-word);
+    --color-diff-del-word: var(--diff-del-word);
     --color-hover: var(--hover);
     --color-active: var(--active);
     --color-chart-muted: var(--chart-muted);
@@ -327,6 +331,13 @@
         --term-red: #f87171;
         --term-magenta: #e879f9;
         --term-blue: #60a5fa; /* added: ANSI blue, 7.74:1 on the console */
+        /* added: diff lines and the words that changed in them, inside code blocks only. --term-fg on
+       each: 10.92 and 11.56 on the lines, 6.80 and 8.25 on the words; the sign in --term-green and
+       --term-red on its line: 9.29 and 6.20. */
+        --diff-add-bg: color-mix(in srgb, var(--term-green) 12%, var(--console-bg));
+        --diff-del-bg: color-mix(in srgb, var(--term-red) 12%, var(--console-bg));
+        --diff-add-word: color-mix(in srgb, var(--term-green) 30%, var(--console-bg));
+        --diff-del-word: color-mix(in srgb, var(--term-red) 30%, var(--console-bg));
         /*
      * Film grain: four tiles of 59, 67, 73 and 89px, prime sides so the stack never repeats on one
      * screen. Dark surfaces only; on white it reads as dirt. Painted by body (the canvas) only:
@@ -385,6 +396,13 @@
         --term-red: #b91c1c;
         --term-magenta: #a21caf;
         --term-blue: #1d4ed8; /* added: ANSI blue, 6.42:1 on the console */
+        /* added: --term-fg on each: 11.77 and 11.47 on the lines, 9.84 and 9.28 on the words; the sign
+       on its line: 4.94 and 5.24. The line numbers stay on --console-bg: --ink-3 on a tint falls
+       under 4.5:1. */
+        --diff-add-bg: color-mix(in srgb, var(--term-green) 10%, var(--console-bg));
+        --diff-del-bg: color-mix(in srgb, var(--term-red) 10%, var(--console-bg));
+        --diff-add-word: color-mix(in srgb, var(--term-green) 22%, var(--console-bg));
+        --diff-del-word: color-mix(in srgb, var(--term-red) 22%, var(--console-bg));
         --grain: none;
     }
 

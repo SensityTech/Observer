@@ -207,4 +207,40 @@ describe('auditDetails', () => {
             'Size: 3 MB · Read: 1,204 · Written: 1,200 · New: 1,150 · Updated: 50 · Skipped as forgotten: 3 · Invalid: 1',
         );
     });
+
+    it('should name the two starts a read of changed contents compared, and how it showed them', () => {
+        expect(
+            auditDetails(en, format, { from: 41, to: 42, resource: 'resources/[qb]/qb-core', view: 'diff' }),
+        ).toBe('From start: 41 · To start: 42 · Resource: resources/[qb]/qb-core · Read: the diff');
+        expect(auditDetails(en, format, { versions: 3, bytes: 12_288 })).toBe(
+            'Versions cleared: 3 · Size: 12 KB',
+        );
+    });
+
+    it('should word the change tracking settings saved whole as the ones that changed', () => {
+        const before = {
+            enabled: true,
+            extensions: ['lua', 'js'],
+            excluded: [],
+            hidden: [],
+            maxText: 1_048_576,
+            budget: 2_000_000_000,
+            retentionDays: 180,
+            hashRate: 64_000_000,
+            verifyDays: 7,
+            startEvent: true,
+        };
+        const after = {
+            ...before,
+            hidden: ['*.secret'],
+            budget: 4_000_000_000,
+            verifyDays: 1,
+            hashRate: 32_000_000,
+        };
+
+        expect(auditDetails(en, format, { before, after })).toBe(
+            'Contents never kept: not set → *.secret · Contents kept at most: 1.9 GB → 3.7 GB · ' +
+                'Hashing rate: 61 MB/s → 30.5 MB/s · Full verification every: 7 days → 1 day',
+        );
+    });
 });
