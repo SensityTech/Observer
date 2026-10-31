@@ -6,6 +6,8 @@ import type { ArtifactsStatus } from '../api/generated/ArtifactsStatus';
 import type { AuditAction } from '../api/generated/AuditAction';
 import type { AuditEntry } from '../api/generated/AuditEntry';
 import type { BrokenReason } from '../api/generated/BrokenReason';
+import type { ChangeCounts } from '../api/generated/ChangeCounts';
+import type { ChangesLive } from '../api/generated/ChangesLive';
 import type { ConsoleLine } from '../api/generated/ConsoleLine';
 import type { Crash } from '../api/generated/Crash';
 import type { CrashFileKind } from '../api/generated/CrashFileKind';
@@ -14,6 +16,7 @@ import type { CrashKind } from '../api/generated/CrashKind';
 import type { Destination } from '../api/generated/Destination';
 import type { DiagnosticsEvent } from '../api/generated/DiagnosticsEvent';
 import type { DiagnosticsSnapshot } from '../api/generated/DiagnosticsSnapshot';
+import type { EnvironmentFact } from '../api/generated/EnvironmentFact';
 import type { HangCause } from '../api/generated/HangCause';
 import type { HealthProblem } from '../api/generated/HealthProblem';
 import type { JobKind } from '../api/generated/JobKind';
@@ -28,6 +31,7 @@ import type { LiveSample } from '../api/generated/LiveSample';
 import type { NoticeKind } from '../api/generated/NoticeKind';
 import type { NoticeReason } from '../api/generated/NoticeReason';
 import type { Outcome } from '../api/generated/Outcome';
+import type { PartialReason } from '../api/generated/PartialReason';
 import type { ProcessKind } from '../api/generated/ProcessKind';
 import type { Protocol } from '../api/generated/Protocol';
 import type { RestartSource } from '../api/generated/RestartSource';
@@ -36,6 +40,10 @@ import type { ScheduleStatus } from '../api/generated/ScheduleStatus';
 import type { Scope } from '../api/generated/Scope';
 import type { Series } from '../api/generated/Series';
 import type { ServerMessage } from '../api/generated/ServerMessage';
+import type { SnapshotKind } from '../api/generated/SnapshotKind';
+import type { SnapshotState } from '../api/generated/SnapshotState';
+import type { SnapshotSummary } from '../api/generated/SnapshotSummary';
+import type { StartCause } from '../api/generated/StartCause';
 import type { ServerState } from '../api/generated/ServerState';
 import type { ServerStatus } from '../api/generated/ServerStatus';
 import type { Service } from '../api/generated/Service';
@@ -60,6 +68,7 @@ const TOPICS = {
     'server.artifacts': true,
     'server.alerts': true,
     'server.diagnostics': true,
+    'server.changes': true,
 } satisfies Record<Topic, true>;
 
 export const SERIES = {
@@ -799,6 +808,67 @@ const isAlert = (value: unknown) =>
 
 export const isAlertList = (value: unknown): value is AlertList =>
     isRecord(value) && Array.isArray(value.alerts) && value.alerts.every(isAlert) && isTimestamp(value.since);
+
+const SNAPSHOT_KINDS = { start: true, check: true } satisfies Record<SnapshotKind, true>;
+const SNAPSHOT_STATES = {
+    listing: true,
+    hashing: true,
+    complete: true,
+    partial: true,
+    failed: true,
+} satisfies Record<SnapshotState, true>;
+const PARTIAL_REASONS = {
+    limit: true,
+    cancelled: true,
+    diskFloor: true,
+    unreadable: true,
+} satisfies Record<PartialReason, true>;
+const START_CAUSES = {
+    requested: true,
+    restart: true,
+    scheduled: true,
+    recovery: true,
+} satisfies Record<StartCause, true>;
+const ENVIRONMENT_FACTS = {
+    build: true,
+    gameBuild: true,
+    launch: true,
+    cfg: true,
+} satisfies Record<EnvironmentFact, true>;
+
+const isChangeCounts = (value: unknown): value is ChangeCounts =>
+    isRecord(value) &&
+    isCount(value.added) &&
+    isCount(value.removed) &&
+    isCount(value.updated) &&
+    isCount(value.sameVersion) &&
+    isCount(value.renamed) &&
+    isCount(value.moved) &&
+    isCount(value.didNotStart) &&
+    isCount(value.checking) &&
+    isCount(value.unchanged) &&
+    isCount(value.files) &&
+    isListOf(oneOf<EnvironmentFact>(ENVIRONMENT_FACTS))(value.environment);
+
+export const isSnapshotSummary = (value: unknown): value is SnapshotSummary =>
+    isRecord(value) &&
+    isId(value.id) &&
+    oneOf<SnapshotKind>(SNAPSHOT_KINDS)(value.kind) &&
+    isTimestamp(value.takenAt) &&
+    orNull(oneOf<StartCause>(START_CAUSES))(value.cause) &&
+    orNull(isText)(value.by) &&
+    oneOf<SnapshotState>(SNAPSHOT_STATES)(value.state) &&
+    orNull(oneOf<PartialReason>(PARTIAL_REASONS))(value.partialReason) &&
+    isFlag(value.baseline) &&
+    orNull(isCount)(value.build) &&
+    orNull(isCount)(value.gameBuild) &&
+    orNull(isCount)(value.files) &&
+    orNull(isCount)(value.bytes) &&
+    orNull(isChangeCounts)(value.counts) &&
+    isFlag(value.crashed);
+
+export const isChangesLive = (value: unknown): value is ChangesLive =>
+    isRecord(value) && orNull(isSnapshotSummary)(value.latest) && orNull(isSnapshotSummary)(value.check);
 const isSnapshotData = (topic: Topic, data: unknown) => {
     if (!isRecord(data)) {
         return false;
@@ -827,6 +897,8 @@ const isSnapshotData = (topic: Topic, data: unknown) => {
             return isAlertList(data);
         case 'server.diagnostics':
             return isDiagnosticsSnapshot(data);
+        case 'server.changes':
+            return isChangesLive(data);
     }
 };
 
@@ -850,6 +922,8 @@ const isEventData = (topic: Topic, data: unknown) => {
             return isAlertList(data);
         case 'server.diagnostics':
             return isDiagnosticsEvent(data);
+        case 'server.changes':
+            return isChangesLive(data);
     }
 };
 

@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 use jiff::{SignedDuration, Timestamp};
 use observer_domain::audit::AuditAction;
 use observer_domain::changes::{
-    ChangesSettings, LiveChangeKind, MAX_TEXT_LIMIT, Purged, StartCause, valid_glob,
+    ChangesLive, ChangesSettings, LiveChangeKind, MAX_TEXT_LIMIT, Purged, StartCause, valid_glob,
 };
 use observer_domain::error::{ApiError, ErrorCode};
 use observer_domain::launch::LaunchSettings;
@@ -58,6 +58,8 @@ const MAX_GLOBS: usize = 200;
 const MAX_EXTENSIONS: usize = 200;
 /// When the last full verification ended, in the state database's settings.
 const VERIFIED_AT: &str = "changes.verified_at";
+/// The live state is read again at most this often while a job writes.
+const LIVE_EVERY: Duration = Duration::from_millis(500);
 
 /// What [`Changes::start`] works with.
 pub struct ChangesSetup {
@@ -86,6 +88,7 @@ struct Inner {
     job: AsyncMutex<Option<Running>>,
     /// When the latest check of the disk began.
     last_check: Mutex<Option<Instant>>,
+    live: watch::Receiver<ChangesLive>,
 }
 
 /// What a job works with, shared by the service and its jobs.
@@ -198,6 +201,7 @@ impl Changes {
             runs: Mutex::new(HashMap::new()),
             feed: broadcast::channel(64).0,
         });
+        let (live_tx, live) = watch::channel(ChangesLive::default());
         let changes = Self {
             inner: Arc::new(Inner {
                 shared,
@@ -205,21 +209,37 @@ impl Changes {
                 settings: Mutex::new(current),
                 job: AsyncMutex::new(None),
                 last_check: Mutex::new(None),
+                live,
             }),
         };
+        changes.refresh(&live_tx).await;
         let stop = CancellationToken::new();
         let driver = Driver {
             changes: changes.clone(),
             causes: HashMap::new(),
             recorded: HashMap::new(),
         };
-        let task = tokio::spawn(driver.run(events, status, stop.clone()));
+        let task = tokio::spawn(driver.run(events, status, live_tx, stop.clone()));
         Ok((changes, ChangesTask { task, stop }))
     }
 
-    /// The ids of snapshots as they change, for the live topic.
-    pub fn follow(&self) -> broadcast::Receiver<i64> {
-        self.inner.shared.feed.subscribe()
+    /// The latest start and check as they change, for the live topic.
+    pub fn live(&self) -> watch::Receiver<ChangesLive> {
+        self.inner.live.clone()
+    }
+
+    /// Reads the live state again and sends it when it moved.
+    async fn refresh(&self, live: &watch::Sender<ChangesLive>) {
+        match self.latest().await {
+            Ok(latest) => {
+                live.send_if_modified(|current| {
+                    let moved = *current != latest;
+                    *current = latest;
+                    moved
+                });
+            }
+            Err(error) => warn!(%error, "cannot read the latest snapshot"),
+        }
     }
 
     pub fn settings(&self) -> ChangesSettings {
@@ -765,14 +785,28 @@ impl Driver {
         mut self,
         mut events: broadcast::Receiver<Event>,
         mut status: watch::Receiver<Status>,
+        live: watch::Sender<ChangesLive>,
         stop: CancellationToken,
     ) {
         let mut upkeep = tokio::time::interval(UPKEEP_EVERY);
         upkeep.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         upkeep.reset();
+        let mut changed = self.changes.inner.shared.feed.subscribe();
+        let mut refresh: Option<tokio::time::Instant> = None;
         loop {
+            let due = refresh.unwrap_or_else(|| tokio::time::Instant::now() + UPKEEP_EVERY);
             tokio::select! {
                 () = stop.cancelled() => break,
+                () = tokio::time::sleep_until(due), if refresh.is_some() => {
+                    refresh = None;
+                    self.changes.refresh(&live).await;
+                }
+                moved = changed.recv() => {
+                    if matches!(moved, Err(RecvError::Closed)) {
+                        break;
+                    }
+                    refresh.get_or_insert_with(|| tokio::time::Instant::now() + LIVE_EVERY);
+                }
                 event = events.recv() => match event {
                     Ok(event) => self.event(event).await,
                     Err(RecvError::Lagged(missed)) => warn!(missed, "file changes missed supervisor events"),

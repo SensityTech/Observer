@@ -8,7 +8,7 @@ use std::collections::{HashMap, HashSet};
 use jiff::{SignedDuration, Timestamp};
 use observer_domain::audit::{AuditAction, AuditEntry};
 use observer_domain::changes::{
-    ArgumentChange, ArgumentChangeKind, Attribution, CfgChange, CfgFileChange, ChangeCounts,
+    ArgumentChange, ArgumentChangeKind, Attribution, CfgChange, CfgFileChange, ChangeCounts, ChangesLive,
     ChangesSettingsView, Comparison, EnvironmentChange, EnvironmentFact, FileChange, FileChangeKind,
     FileDiff, FileFlag, FileKind, FileText, GameChange, LineCounts, LiveChange, NumberChange, PackageChange,
     ResourceChange, ResourceChangeKind, ResourceDetail, ResourceVersion, SettingChange, SnapshotKind,
@@ -527,6 +527,41 @@ impl Changes {
                     next,
                     check,
                 })
+            })
+            .await
+    }
+
+    /// The latest start with what changed against the one before, and the latest check.
+    pub(crate) async fn latest(&self) -> Result<ChangesLive, Error> {
+        let crashed = self.crashed_runs().await?;
+        let hidden_globs = self.settings().hidden;
+        self.inner
+            .shared
+            .store
+            .read(move |conn| -> Result<ChangesLive, Error> {
+                let mut starts = snapshots::starts(conn, SERVER, None, 2)?.into_iter();
+                let latest = starts.next();
+                let earlier = starts.next();
+                let latest = latest
+                    .map(|latest| -> Result<_, StoreError> {
+                        let counts = match &earlier {
+                            Some(earlier) if !latest.baseline && latest.listed_at.is_some() => {
+                                let (a, b) = (side(conn, earlier.clone())?, side(conn, latest.clone())?);
+                                Some(compared(conn, &a, &b, &hidden_globs, false)?.counts)
+                            }
+                            _ => None,
+                        };
+                        let ran = latest.run_started.zip(latest.generation);
+                        Ok(compare::summary(
+                            &latest,
+                            counts,
+                            ran.is_some_and(|run| crashed.contains(&run)),
+                        ))
+                    })
+                    .transpose()?;
+                let check =
+                    snapshots::latest_check(conn, SERVER)?.map(|check| compare::summary(&check, None, false));
+                Ok(ChangesLive { latest, check })
             })
             .await
     }

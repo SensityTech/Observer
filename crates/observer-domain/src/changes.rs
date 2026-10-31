@@ -651,6 +651,16 @@ pub struct ChangesSettingsView {
     pub stored: u64,
 }
 
+/// The `server.changes` topic: the latest start with what changed against the one before, and
+/// the latest check of the disk, whole again whenever either moves.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ChangesLive {
+    pub latest: Option<SnapshotSummary>,
+    pub check: Option<SnapshotSummary>,
+}
+
 /// What a purge cleared.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
