@@ -266,6 +266,15 @@ fn changed_resources(
     Ok((resources, unchanged))
 }
 
+/// What a read of a diff is audited with: the path before only when the file moved.
+fn diff_details(from: i64, to: i64, from_path: Option<String>, resource: Option<String>) -> Value {
+    let mut details = json!({ "from": from, "to": to, "resource": resource, "view": "diff" });
+    if let (Some(from_path), Value::Object(fields)) = (from_path, &mut details) {
+        fields.insert("fromPath".to_owned(), Value::String(from_path));
+    }
+    details
+}
+
 /// Whether the builds of two snapshots compare: a check of the disk runs nothing, so it has none.
 fn builds(from: &Snapshot, to: &Snapshot) -> bool {
     from.kind == SnapshotKind::Start && to.kind == SnapshotKind::Start
@@ -948,13 +957,7 @@ impl Changes {
                 caller,
                 &path,
                 chain,
-                json!({
-                    "from": from_id,
-                    "to": to_id,
-                    "fromPath": asked_from.filter(|_| !chain),
-                    "resource": resource,
-                    "view": "diff",
-                }),
+                diff_details(from_id, to_id, asked_from.filter(|_| !chain), resource),
             )
             .await?;
         }

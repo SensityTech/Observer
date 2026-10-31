@@ -2806,6 +2806,7 @@ export const en = {
             // A read of changed contents compares two snapshots: starts, or a start and a check of the disk.
             fromSnapshot: 'From snapshot',
             toSnapshot: 'To snapshot',
+            fromPath: 'Path before',
             resource: 'Resource',
             view: 'Read',
             versions: 'Versions cleared',
