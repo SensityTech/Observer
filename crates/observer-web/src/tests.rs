@@ -5,6 +5,7 @@ mod artifacts;
 mod diagnostics;
 mod live;
 mod metrics;
+mod proxy;
 mod schedule;
 mod servers;
 mod setup;
@@ -33,7 +34,7 @@ use tower::ServiceExt;
 
 use crate::api::routes;
 use crate::gate::Gate;
-use crate::{AppState, Live, SESSION_KEY_HEADER, Services, router};
+use crate::{AppState, Live, SESSION_KEY_HEADER, Services, TrustedProxy, router};
 
 const HOST: &str = "observer.test:40125";
 const ORIGIN: &str = "http://observer.test:40125";
@@ -105,6 +106,21 @@ fn empty_catalog() -> Catalog {
 
 impl Server {
     async fn new() -> Self {
+        Self::reached_from(SocketAddr::from(([203, 0, 113, 7], 50_000)), &[]).await
+    }
+
+    /// Every connection comes from a reverse proxy at 10.0.0.2, in the block the server trusts.
+    async fn behind_proxy() -> Self {
+        let proxies: [TrustedProxy; 1] = ["10.0.0.0/8".parse().unwrap()];
+        Self::reached_from(SocketAddr::from(([10, 0, 0, 2], 50_000)), &proxies).await
+    }
+
+    /// A server whose every connection comes from `peer`, believing the proxies listed.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "every service the API stands on, started as Observer starts them"
+    )]
+    async fn reached_from(peer: SocketAddr, proxies: &[TrustedProxy]) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let db = Database::open(dir.path().join("observer.sqlite3"), dir.path().join("backups"))
             .await
@@ -184,9 +200,15 @@ impl Server {
             artifacts,
             diagnostics,
         };
-        let state = AppState::new(BUILD, services, &instance_id, &["observer.test".to_owned()]);
+        let state = AppState::new(
+            BUILD,
+            services,
+            &instance_id,
+            &["observer.test".to_owned()],
+            proxies,
+        );
         let live = state.live.clone();
-        let app = router(state).layer(MockConnectInfo(SocketAddr::from(([203, 0, 113, 7], 50_000))));
+        let app = router(state).layer(MockConnectInfo(peer));
         Self {
             dir,
             app,

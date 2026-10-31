@@ -1,5 +1,6 @@
 use std::net::IpAddr;
 
+use axum::Extension;
 use axum::extract::{Request, State};
 use axum::http::uri::Authority;
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, header};
@@ -9,6 +10,7 @@ use observer_domain::error::ErrorCode;
 
 use crate::AppState;
 use crate::error::Failure;
+use crate::proxy::Remote;
 
 /// Everything the panel loads comes from Observer itself. `data:` images carry the grain texture.
 const CONTENT_SECURITY_POLICY: &str = "default-src 'self'; script-src 'self'; style-src 'self'; \
@@ -50,12 +52,19 @@ pub(crate) async fn headers(request: Request, next: Next) -> Response {
 /// panel's own origin, as JSON. A page on another origin, the game server's port on the same host
 /// included, can send neither without a preflight that Observer never answers. Reads change
 /// nothing, and no API answer is ever cached.
-pub(crate) async fn api(State(state): State<AppState>, request: Request, next: Next) -> Response {
+pub(crate) async fn api(
+    State(state): State<AppState>,
+    Extension(remote): Extension<Remote>,
+    request: Request,
+    next: Next,
+) -> Response {
     if !known_host(request.headers(), &state.hosts) {
         return Failure::from(ErrorCode::UnknownHost).into_response();
     }
     let mutation = !matches!(*request.method(), Method::GET | Method::HEAD | Method::OPTIONS);
-    if mutation && let Err(failure) = same_origin(request.headers()).and_then(|()| json(request.headers())) {
+    if mutation
+        && let Err(failure) = same_origin(request.headers(), remote).and_then(|()| json(request.headers()))
+    {
         return failure.into_response();
     }
 
@@ -89,9 +98,9 @@ fn known_host(headers: &HeaderMap, names: &[String]) -> bool {
 
 /// The `Origin` must be this server's exact scheme, host and port. Without one, the browser's own
 /// `Sec-Fetch-Site: same-origin` will do.
-fn same_origin(headers: &HeaderMap) -> Result<(), Failure> {
+fn same_origin(headers: &HeaderMap, remote: Remote) -> Result<(), Failure> {
     let same = match headers.get(header::ORIGIN) {
-        Some(origin) => is_own_origin(origin, headers),
+        Some(origin) => is_own_origin(origin, headers, remote),
         None => headers
             .get("sec-fetch-site")
             .is_some_and(|site| site == "same-origin"),
@@ -106,10 +115,10 @@ fn same_origin(headers: &HeaderMap) -> Result<(), Failure> {
 /// A browser always sends the `Origin` of the page opening a websocket, and it must be this
 /// server's exact one: no other page, the game server's included, opens a socket with the
 /// user's cookie.
-pub(crate) fn own_origin(headers: &HeaderMap) -> Result<(), Failure> {
+pub(crate) fn own_origin(headers: &HeaderMap, remote: Remote) -> Result<(), Failure> {
     if headers
         .get(header::ORIGIN)
-        .is_some_and(|origin| is_own_origin(origin, headers))
+        .is_some_and(|origin| is_own_origin(origin, headers, remote))
     {
         Ok(())
     } else {
@@ -117,11 +126,13 @@ pub(crate) fn own_origin(headers: &HeaderMap) -> Result<(), Failure> {
     }
 }
 
-fn is_own_origin(origin: &HeaderValue, headers: &HeaderMap) -> bool {
+/// The scheme is the one the browser used, which only a trusted proxy can make HTTPS; the host is
+/// the one it asked for, which the proxy passes on unchanged.
+fn is_own_origin(origin: &HeaderValue, headers: &HeaderMap, remote: Remote) -> bool {
     headers
         .get(header::HOST)
         .and_then(|host| host.to_str().ok())
-        .is_some_and(|host| origin.as_bytes() == format!("http://{host}").as_bytes())
+        .is_some_and(|host| origin.as_bytes() == format!("{}://{host}", remote.scheme()).as_bytes())
 }
 
 fn json(headers: &HeaderMap) -> Result<(), Failure> {

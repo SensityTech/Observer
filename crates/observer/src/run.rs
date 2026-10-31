@@ -118,7 +118,13 @@ pub async fn run(config: Config, args: RunArgs) -> anyhow::Result<()> {
         artifacts,
         diagnostics,
     };
-    let state = observer_web::AppState::new(BUILD, services, &instance_id, &config.http.hosts);
+    let state = observer_web::AppState::new(
+        BUILD,
+        services,
+        &instance_id,
+        &config.http.hosts,
+        &config.http.trusted_proxies,
+    );
     let live = state.live.clone();
     // Before FXServer starts with Observer, so that the first samples show its start.
     let sampling = metrics.start(Sources {

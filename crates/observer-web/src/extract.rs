@@ -1,8 +1,7 @@
 //! axum's extractors, with their rejections turned into API error codes like every other failure.
 
-use std::net::SocketAddr;
-
-use axum::extract::{ConnectInfo, FromRequest, FromRequestParts, Path, Query, Request};
+use axum::Extension;
+use axum::extract::{FromRequest, FromRequestParts, Path, Query, Request};
 use axum::http::header;
 use axum::http::request::Parts;
 use observer_app::Client;
@@ -10,6 +9,7 @@ use observer_domain::error::ErrorCode;
 use serde::de::DeserializeOwned;
 
 use crate::error::Failure;
+use crate::proxy::Remote;
 
 /// A JSON request body. A body that does not parse is `invalid_request`.
 pub(crate) struct JsonBody<T>(pub T);
@@ -75,21 +75,21 @@ impl<S: Send + Sync> FromRequestParts<S> for Name {
     }
 }
 
-/// Where the request came from: the peer address, since no proxy is trusted yet, and the
-/// user agent.
+/// Where the request came from, as `proxy::hear` found it past the trusted proxies, and the user
+/// agent.
 pub(crate) struct RemoteClient(pub Client);
 
 impl<S: Send + Sync> FromRequestParts<S> for RemoteClient {
     type Rejection = Failure;
 
     async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Failure> {
-        let ConnectInfo(address) = ConnectInfo::<SocketAddr>::from_request_parts(parts, state)
+        let Extension(remote) = Extension::<Remote>::from_request_parts(parts, state)
             .await
             .map_err(|_| ErrorCode::Internal)?;
         let user_agent = parts
             .headers
             .get(header::USER_AGENT)
             .and_then(|value| value.to_str().ok());
-        Ok(Self(Client::new(address.ip(), user_agent)))
+        Ok(Self(Client::new(remote.ip, user_agent)))
     }
 }
