@@ -1,4 +1,5 @@
 pub mod authenticode;
+pub(crate) mod confined;
 pub mod console;
 pub(crate) mod files;
 pub mod message_loop;
