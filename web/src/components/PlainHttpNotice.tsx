@@ -1,8 +1,9 @@
 import { useI18n } from '../i18n/I18nProvider';
 import { Notice } from './Notice';
 
-// Nothing sent to a loopback address leaves the host, so nobody else can read it on the way.
-const LOOPBACK = /^(?:localhost|127\.\d+\.\d+\.\d+|\[::1\])$/;
+// Nothing sent to a loopback address leaves the host, so nobody else can read it on the way. Browsers
+// send every name under localhost there too, without asking DNS.
+const LOOPBACK = /^(?:(?:.+\.)?localhost|127\.\d+\.\d+\.\d+|\[::1\])$/;
 
 /** Shown, and never dismissed, while the panel is reached over plain HTTP at an address past loopback. */
 export function PlainHttpNotice() {

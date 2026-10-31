@@ -288,9 +288,9 @@ reached over a VPN.
 
 - At start, when `listen` is not a loopback address and no proxy is trusted, Observer logs: `the panel
   is served over plain HTTP on 0.0.0.0:40125; put it behind an HTTPS proxy or reach it over a VPN`.
-- Opened over plain HTTP at a name other than `localhost`, an address in `127.0.0.0/8` or `[::1]`, the
-  panel shows a warning that cannot be dismissed: **Unencrypted connection.** It goes once the page is
-  served over HTTPS.
+- Opened over plain HTTP at a name other than `localhost` or a name under it, such as
+  `observer.localhost`, an address in `127.0.0.0/8` or `[::1]`, the panel shows a warning that cannot
+  be dismissed: **Unencrypted connection.** It goes once the page is served over HTTPS.
 
 Behind a proxy, set three keys:
 

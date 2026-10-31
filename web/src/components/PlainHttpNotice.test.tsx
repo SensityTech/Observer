@@ -48,6 +48,12 @@ describe('PlainHttpNotice', () => {
         expect(queryByRole('alert')).toBeNull();
     });
 
+    it('should stay away on a name under localhost', () => {
+        const { queryByRole } = reachedAt('http://observer.localhost:40125/');
+
+        expect(queryByRole('alert')).toBeNull();
+    });
+
     it('should stay away on any address of 127.0.0.0/8', () => {
         for (const url of ['http://127.0.0.1:40125/', 'http://127.12.0.3:40125/']) {
             const { queryByRole, unmount } = reachedAt(url);
@@ -64,8 +70,11 @@ describe('PlainHttpNotice', () => {
     });
 
     it('should warn on a name that only starts like a loopback address', () => {
-        const { getByRole } = reachedAt('http://127.0.0.1.example.com/');
+        for (const url of ['http://127.0.0.1.example.com/', 'http://localhost.example.com/']) {
+            const { getByRole, unmount } = reachedAt(url);
 
-        expect(getByRole('alert').textContent).toBe(WARNING);
+            expect(getByRole('alert').textContent).toBe(WARNING);
+            unmount();
+        }
     });
 });
