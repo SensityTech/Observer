@@ -644,6 +644,42 @@ impl fmt::Display for Right {
     }
 }
 
+/// A group of rules, as the panel shows it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct FileGroup {
+    pub id: i64,
+    pub name: String,
+    pub description: String,
+    pub rules: Vec<Rule>,
+    pub reach: Reach,
+    pub version: i64,
+}
+
+/// A group to create, or to save at the version it was read at.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct FileGroupRequest {
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    pub rules: Vec<Rule>,
+    /// Required to save an existing group.
+    #[serde(default)]
+    #[ts(optional)]
+    pub version: Option<i64>,
+}
+
+/// The groups an account is to hold, all of them.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct UserGroupsRequest {
+    pub groups: Vec<i64>,
+}
+
 /// Whether a change gives an access more than it had, or only takes some away.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AccessChange {

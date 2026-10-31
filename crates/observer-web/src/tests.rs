@@ -3,6 +3,7 @@
 
 mod artifacts;
 mod diagnostics;
+mod files;
 mod live;
 mod metrics;
 mod proxy;
@@ -199,6 +200,7 @@ impl Server {
             schedule,
             artifacts,
             diagnostics,
+            files: observer_app::Files::new(db.clone(), clock.clone(), accounts.clone()),
         };
         let state = AppState::new(
             BUILD,

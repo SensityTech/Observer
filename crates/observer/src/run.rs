@@ -117,6 +117,7 @@ pub async fn run(config: Config, args: RunArgs) -> anyhow::Result<()> {
         schedule: schedule.clone(),
         artifacts,
         diagnostics,
+        files: observer_app::Files::new(db.clone(), clock.clone(), accounts.clone()),
     };
     let state = observer_web::AppState::new(
         BUILD,

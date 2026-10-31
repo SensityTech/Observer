@@ -8,6 +8,7 @@ mod artifacts;
 mod audit;
 mod auth;
 mod diagnostics;
+mod files;
 mod metrics;
 mod schedule;
 mod servers;
@@ -48,6 +49,10 @@ pub(crate) fn routes() -> Vec<Route> {
     let read_users = Permission(P::USERS_MANAGE);
     let change_users = Reauthenticated(P::USERS_MANAGE);
     let read_audit = Permission(P::AUDIT_VIEW);
+    // Groups decide which parts of the host are reachable, so they are the owner's to write, with
+    // the launch settings' gate; a manager of file access gives and takes them away.
+    let read_files = Permission(P::FILES_MANAGE);
+    let change_files = Reauthenticated(P::FILES_MANAGE);
     // Launch settings choose what the host runs: the owner's alone, and their password again to
     // change them. The setup's checks read the host's folders, which is the owner's alone too.
     let read_launch = Owner;
@@ -93,6 +98,11 @@ pub(crate) fn routes() -> Vec<Route> {
         route(M::POST,   "/users/{id}/revoke-sessions", change_users, users::revoke_sessions),
         route(M::GET,    "/audit",                      read_audit,   audit::page),
         route(M::GET,    "/audit/export.csv",           read_audit,   audit::export),
+        route(M::GET,    "/servers/default/files/groups",      read_files,   files::groups),
+        route(M::POST,   "/servers/default/files/groups",      edit_launch,  files::create_group),
+        route(M::PUT,    "/servers/default/files/groups/{id}", edit_launch,  files::update_group),
+        route(M::DELETE, "/servers/default/files/groups/{id}", edit_launch,  files::delete_group),
+        route(M::PUT,    "/files/accesses/users/{id}",         change_files, files::set_user_groups),
         route(M::GET,    "/servers/default/launch",     read_launch,  servers::launch_settings),
         route(M::PUT,    "/servers/default/launch",     edit_launch,  servers::change_launch_settings),
         route(M::POST,   "/servers/default/setup/folder", read_launch, servers::check_folder),
