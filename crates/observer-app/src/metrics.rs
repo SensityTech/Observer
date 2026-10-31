@@ -136,6 +136,15 @@ impl Metrics {
             .await?)
     }
 
+    pub(crate) fn database(&self) -> &MetricsDatabase {
+        &self.inner.db
+    }
+
+    /// When this service started: runs are numbered from it.
+    pub(crate) fn observer_started(&self) -> i64 {
+        self.inner.started_ms
+    }
+
     /// The newest sample, and the ones that follow it.
     pub fn live(&self) -> (Option<LiveSample>, broadcast::Receiver<LiveSample>) {
         let next = self.inner.live.subscribe();

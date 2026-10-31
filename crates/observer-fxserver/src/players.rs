@@ -66,6 +66,10 @@ pub struct Shown {
 pub struct Address(String);
 
 impl Address {
+    pub fn new(identifier: impl Into<String>) -> Self {
+        Self(identifier.into())
+    }
+
     pub fn expose(&self) -> &str {
         &self.0
     }

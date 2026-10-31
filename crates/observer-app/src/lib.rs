@@ -11,6 +11,7 @@ mod diagnostics;
 mod error;
 mod metrics;
 mod passwords;
+mod players;
 mod schedule;
 mod secrets;
 mod servers;
@@ -31,6 +32,7 @@ pub use diagnostics::{Diagnostics, DiagnosticsSetup, DiagnosticsTask, MAX_DOWNLO
 pub use error::Error;
 pub use metrics::{DatabaseFiles, Metrics, MetricsSetup, Sampling, Sources};
 pub use passwords::PasswordCost;
+pub use players::{Players, PlayersSetup, PlayersTask};
 pub use schedule::{Schedule, ScheduleSetup, ScheduleTask, ScheduleTimings};
 pub use servers::Servers;
 pub use sessions::{Caller, Client, SignedIn};

@@ -24,6 +24,7 @@ clap = { version = "4.6.7", features = ["derive"] }
 eframe = { version = "0.37.0", default-features = false, features = ["accesskit", "clipboard", "default_fonts", "wgpu_no_default_features"] }
 futures-util = { version = "0.3.34", default-features = false }
 getrandom = "0.4.3"
+hmac = "0.13.0"
 jiff = { version = "0.2.38", features = ["serde"] }
 lzma-rust2 = { version = "0.24.0", default-features = false, features = ["std", "xz", "optimization"] }
 memchr = "2.8.3"

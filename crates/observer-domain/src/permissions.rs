@@ -28,6 +28,8 @@ impl Permissions {
     pub const SETTINGS_MANAGE: Self = Self(1 << 10);
     pub const LOGS_DOWNLOAD: Self = Self(1 << 11);
     pub const DIAGNOSTICS_VIEW: Self = Self(1 << 12);
+    pub const PLAYERS_VIEW: Self = Self(1 << 13);
+    pub const PLAYER_IDENTIFIERS_VIEW: Self = Self(1 << 14);
 
     /// Every permission in the catalog, which is what the owner holds.
     pub fn all() -> Self {
@@ -191,6 +193,7 @@ pub enum PermissionArea {
     Settings,
     Logs,
     Diagnostics,
+    Players,
 }
 
 /// One permission of the catalog, as `GET /api/permissions` returns it.
@@ -326,6 +329,25 @@ pub const CATALOG: &[PermissionInfo] = &[
         danger: Danger::Sensitive,
         implies: Permissions::NONE,
     },
+    PermissionInfo {
+        bit: 13,
+        constant: "PLAYERS_VIEW",
+        key: "playersView",
+        area: PermissionArea::Players,
+        // Players' names, licences and play time, and the texts resources wrote when they
+        // dropped someone.
+        danger: Danger::Sensitive,
+        implies: Permissions::NONE,
+    },
+    PermissionInfo {
+        bit: 14,
+        constant: "PLAYER_IDENTIFIERS_VIEW",
+        key: "playerIdentifiersView",
+        area: PermissionArea::Players,
+        // Every other identifier, hardware tokens, and which accounts are linked.
+        danger: Danger::Sensitive,
+        implies: Permissions::PLAYERS_VIEW,
+    },
 ];
 
 #[cfg(test)]
@@ -349,6 +371,12 @@ mod tests {
             (10, "SETTINGS_MANAGE", Permissions::SETTINGS_MANAGE),
             (11, "LOGS_DOWNLOAD", Permissions::LOGS_DOWNLOAD),
             (12, "DIAGNOSTICS_VIEW", Permissions::DIAGNOSTICS_VIEW),
+            (13, "PLAYERS_VIEW", Permissions::PLAYERS_VIEW),
+            (
+                14,
+                "PLAYER_IDENTIFIERS_VIEW",
+                Permissions::PLAYER_IDENTIFIERS_VIEW,
+            ),
         ];
 
         assert_eq!(CATALOG.len(), frozen.len());

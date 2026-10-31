@@ -90,6 +90,15 @@ pub fn hung(tx: &Transaction<'_>, run: RunKey) -> Result<(), StoreError> {
     Ok(())
 }
 
+/// When FXServer's process started: the state database's crashes know the run by it.
+pub fn spawned(tx: &Transaction<'_>, run: RunKey, spawned_ms: i64) -> Result<(), StoreError> {
+    tx.execute(
+        "UPDATE server_run SET spawned_ms = ?3 WHERE observer_started = ?1 AND generation = ?2",
+        params![run.observer_started, run.generation, spawned_ms],
+    )?;
+    Ok(())
+}
+
 pub fn build(tx: &Transaction<'_>, run: RunKey, build: u32) -> Result<(), StoreError> {
     tx.execute(
         "UPDATE server_run SET build = ?3 WHERE observer_started = ?1 AND generation = ?2",

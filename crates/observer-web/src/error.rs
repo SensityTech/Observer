@@ -62,7 +62,8 @@ fn status(code: ErrorCode) -> StatusCode {
         ErrorCode::NotFound
         | ErrorCode::BuildNotListed
         | ErrorCode::CrashNotFound
-        | ErrorCode::CrashFileNotFound => StatusCode::NOT_FOUND,
+        | ErrorCode::CrashFileNotFound
+        | ErrorCode::PlayerNotFound => StatusCode::NOT_FOUND,
         ErrorCode::Conflict
         | ErrorCode::NameTaken
         | ErrorCode::AlreadySetUp
@@ -106,7 +107,10 @@ fn status(code: ErrorCode) -> StatusCode {
         | ErrorCode::InvalidRequest
         | ErrorCode::InvalidSchedule
         | ErrorCode::InvalidArtifactSettings
-        | ErrorCode::InvalidImportFolder => StatusCode::BAD_REQUEST,
+        | ErrorCode::InvalidImportFolder
+        | ErrorCode::AddressSearch
+        | ErrorCode::InvalidSearch
+        | ErrorCode::InvalidPlayersSettings => StatusCode::BAD_REQUEST,
         ErrorCode::TooManyAttempts | ErrorCode::TooManySockets | ErrorCode::TooManyCommands => {
             StatusCode::TOO_MANY_REQUESTS
         }

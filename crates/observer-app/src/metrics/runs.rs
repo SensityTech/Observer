@@ -16,6 +16,9 @@ pub(super) enum Change {
     Ready {
         at_ms: i64,
     },
+    Spawned {
+        at_ms: i64,
+    },
     Ended {
         at_ms: i64,
         cause: EndCause,
@@ -49,6 +52,7 @@ impl Change {
                 cause: Cause::Ready,
                 ..
             } => Some(Self::Ready { at_ms: event.at_ms }),
+            EventKind::Spawned { .. } => Some(Self::Spawned { at_ms: event.at_ms }),
             EventKind::Exited { expected, .. } => Some(Self::Ended {
                 at_ms: event.at_ms,
                 cause: if *expected {
@@ -104,6 +108,7 @@ impl Runs {
                 match change {
                     Change::Started { at_ms, cause } => runs::start(tx, run, at_ms, cause),
                     Change::Ready { at_ms } => runs::ready(tx, run, at_ms),
+                    Change::Spawned { at_ms } => runs::spawned(tx, run, at_ms),
                     Change::Ended { at_ms, cause } => runs::end(tx, run, at_ms, cause),
                     Change::Hung => runs::hung(tx, run),
                     Change::Build(build) => runs::build(tx, run, build),
@@ -174,6 +179,14 @@ mod tests {
             Some(Change::Ready { at_ms })
         );
         assert_eq!(Change::of(&state(State::Online, Cause::Recovered)), None);
+        assert_eq!(
+            Change::of(&event(EventKind::Spawned {
+                pid: 1,
+                probe: "127.0.0.1:30120".parse().unwrap(),
+                build: "builds/1".into(),
+            })),
+            Some(Change::Spawned { at_ms })
+        );
         let exited = |expected| {
             event(EventKind::Exited {
                 code: Some(1),

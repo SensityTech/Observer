@@ -131,6 +131,15 @@ pub enum ErrorCode {
     /// The server folder or its cfg keeps FXServer from starting under Observer. Params: `folder`,
     /// a `FolderProblem`; or `cfg`, a `CfgFileProblem`; or `findings`, the blocking `FindingKind`s.
     SetupBlocked,
+    /// No player has this id: never seen, forgotten, or past the profiles' retention.
+    PlayerNotFound,
+    /// A players search never takes an address: the panel must not tell which licences used an
+    /// address someone already knows.
+    AddressSearch,
+    /// The search names a kind of identifier with a value that is not one of that kind.
+    InvalidSearch,
+    /// A retention is out of its range, or would outlive what it hangs on.
+    InvalidPlayersSettings,
 }
 
 /// The body of every error response.
