@@ -6,9 +6,13 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
+# The archive of itself it serves: a zip on Windows, an xz-compressed tar on Linux.
+lzma-rust2 = { workspace = true, features = ["encoder"] }
 minidump-synth.workspace = true
 serde_json.workspace = true
+tar.workspace = true
 test-assembler.workspace = true
+zip.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 rustix.workspace = true
