@@ -523,14 +523,15 @@ pub enum TrendVerdict {
 #[ts(export)]
 pub struct Trend {
     pub verdict: TrendVerdict,
-    /// The change, `0.38` for +38 %, and its 95 % interval.
+    /// The change, `0.38` for +38 %, and its 95 % interval, tested on the events: a burst of
+    /// drops counts once.
     pub change: Option<f64>,
     pub low: Option<f64>,
     pub high: Option<f64>,
-    /// Drops per 100 player-hours now and before.
+    /// Drops per 100 player-hours now and before, every drop counted.
     pub now: Option<f64>,
     pub before: Option<f64>,
-    /// Drops counted now and before, an incident counting once.
+    /// The events the test counted now and before, an incident counting once per category.
     pub events_now: u64,
     pub events_before: u64,
 }
@@ -575,8 +576,9 @@ pub struct CategoryShare {
     pub drops: i64,
     /// Of every drop in the range.
     pub share: f64,
+    /// `None` for the server's own stops and crashes: no player rate.
     pub rate: Option<f64>,
-    pub trend: Trend,
+    pub trend: Option<Trend>,
     /// Of these drops, the share of players still loading, when FXServer could tell.
     pub loading_share: Option<f64>,
 }
@@ -635,6 +637,9 @@ pub struct DropsSummary {
     /// Players with at least 3 crashes in the last 7 days.
     pub repeat_crashers: Vec<RepeatCrasher>,
     pub coverage: Coverage,
+    /// What counts players reads only the sessions kept since then: later than `from` when the
+    /// session retention is shorter than the range.
+    pub kept_from: Timestamp,
 }
 
 /// What the chart shows.
@@ -683,6 +688,8 @@ pub struct DropSeries {
     /// Unix seconds.
     pub from: i64,
     pub step: i64,
+    /// Each bucket's start, Unix seconds: days of the schedule's time zone are not all 24 hours.
+    pub starts: Vec<i64>,
     /// Drops per 100 player-hours; `null` where nobody played, which the chart leaves as a gap.
     pub rates: Vec<Option<f64>>,
     /// The median rate of the same hour (or weekday) over the 4 weeks before.
@@ -767,7 +774,7 @@ pub struct SignatureEntry {
 #[derive(Debug, Clone, PartialEq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
-pub struct CrashGroup {
+pub struct CrashRollup {
     /// The module's name, or the build's number; `None` for crashes that name none.
     pub key: Option<String>,
     pub drops: i64,
@@ -783,8 +790,10 @@ pub struct SignatureTable {
     pub range: DropsRange,
     pub crashes: i64,
     pub signatures: Vec<SignatureEntry>,
-    pub modules: Vec<CrashGroup>,
-    pub builds: Vec<CrashGroup>,
+    pub modules: Vec<CrashRollup>,
+    pub builds: Vec<CrashRollup>,
+    /// Players are counted over the sessions kept since then.
+    pub kept_from: Timestamp,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
@@ -818,6 +827,8 @@ pub struct ResourceTable {
     pub range: DropsRange,
     pub kicks: i64,
     pub resources: Vec<ResourceEntry>,
+    /// Players and reasons are read from the sessions kept since then.
+    pub kept_from: Timestamp,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
@@ -854,8 +865,10 @@ pub struct ChangeEvent {
     pub generation: u32,
     pub build_from: Option<u32>,
     pub build_to: Option<u32>,
-    /// The players the server's crash, or the incident, dropped.
+    /// The players the server's crash dropped.
     pub players_dropped: Option<i64>,
+    /// An incident's drops.
+    pub drops: Option<i64>,
     pub hang: bool,
     /// An incident's drops by category, and the longest hitch of its seconds.
     pub incident_categories: Vec<CategoryCount>,
@@ -905,6 +918,7 @@ pub struct UptimeBin {
     /// Hours since the run started.
     pub from_hours: u32,
     pub to_hours: Option<u32>,
+    /// Unexpected drops, a burst counting once.
     pub drops: i64,
     pub played_ms: i64,
     pub rate: Option<f64>,
@@ -918,6 +932,8 @@ pub struct UptimeBin {
 pub struct DropUptime {
     pub range: DropsRange,
     pub bins: Vec<UptimeBin>,
+    /// The sessions kept since then are the ones binned.
+    pub kept_from: Timestamp,
 }
 
 /// A row of the drop log.
@@ -932,6 +948,8 @@ pub struct DropLogRow {
     pub category: DropCategory,
     pub kind: Option<DropKind>,
     pub resource: Option<String>,
+    /// The signature's id, for the log's own filter, and its text.
+    pub signature_id: Option<i64>,
     pub signature: Option<String>,
     pub label: Option<String>,
     /// The redacted reason a resource gave, or an unknown drop's text.

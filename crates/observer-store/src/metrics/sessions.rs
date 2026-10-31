@@ -43,6 +43,12 @@ pub fn insert(tx: &Transaction<'_>, session: &NewSession) -> Result<bool, StoreE
             session.seen_ms,
         ],
     )?;
+    if inserted == 1 {
+        tx.execute(
+            "DELETE FROM drop_rolled WHERE hour >= ?1",
+            [drops::hour_of(session.seen_ms)],
+        )?;
+    }
     Ok(inserted == 1)
 }
 
@@ -242,7 +248,7 @@ pub fn per_hundred_hours(count: i64, ms: i64) -> f64 {
 pub fn expire(tx: &Transaction<'_>, before_ms: i64) -> Result<usize, StoreError> {
     let sessions = tx.execute(
         "DELETE FROM player_session WHERE ended_ms IS NOT NULL AND ended_ms < ?1",
-        [before_ms],
+        [drops::hour_of(before_ms) * 1000],
     )?;
     if sessions > 0 {
         drops::sweep(tx)?;
@@ -255,11 +261,13 @@ pub fn expire(tx: &Transaction<'_>, before_ms: i64) -> Result<usize, StoreError>
 pub fn forget(tx: &Transaction<'_>, pseudonym: [u8; 16]) -> Result<usize, StoreError> {
     tx.pragma_update(None, "secure_delete", true)?;
     drops::forget(tx, pseudonym)?;
+    // The reason group goes too: a resource's text can name the player under another name.
     let blanked = tx.execute(
-        "UPDATE player_session SET player = NULL, credit = NULL, crash_text = NULL, reason_text = NULL
+        "UPDATE player_session SET player = NULL, credit = NULL, crash_text = NULL, reason_text = NULL, reason = NULL
          WHERE player = ?1",
         [pseudonym],
     )?;
+    drops::sweep(tx)?;
     tx.pragma_update(None, "secure_delete", "FAST")?;
     Ok(blanked)
 }

@@ -1,6 +1,6 @@
 use observer_domain::drops::stats;
 use observer_store::MetricsDatabase;
-use observer_store::metrics::drops::{Grouping, NewSignature};
+use observer_store::metrics::drops::{Grouping, NewSignature, Unclassified};
 use observer_store::metrics::runs::{EndCause, RunKey, StartCause};
 use observer_store::metrics::sessions::{self, Closure, NewSession};
 use tempfile::TempDir;
@@ -185,7 +185,7 @@ async fn crashes_six_times_as_frequent_as_the_week_before_are_rising_and_one_pla
     }
 
     let summary = lab
-        .read(|conn| summary(conn, DropsRange::Week, now(), &TimeZone::UTC))
+        .read(|conn| summary(conn, DropsRange::Week, now(), &TimeZone::UTC, 0))
         .await
         .summary;
 
@@ -349,7 +349,7 @@ async fn drops_late_in_runs_raise_the_last_uptime_bin() {
     }
 
     let uptime = lab
-        .read(|conn| uptime(conn, DropsRange::Week, now(), &TimeZone::UTC))
+        .read(|conn| uptime(conn, DropsRange::Week, now(), &TimeZone::UTC, 0))
         .await;
 
     let last = uptime.bins.last().unwrap();
@@ -390,4 +390,178 @@ fn a_median_needs_two_values() {
     assert_eq!(median(&mut [3.0, 1.0]), Some(2.0));
     assert_eq!(median(&mut [3.0, 1.0, 2.0]), Some(2.0));
     assert!(stats::per_hundred_hours(1, 0).is_none());
+}
+
+/// 90 days at about 300 players on average: 5,000 sessions a day, with crashes, timeouts and kicks.
+/// `cargo test --release -p observer-app measure_a_season -- --ignored --nocapture`
+#[tokio::test]
+#[ignore = "a measurement, minutes long"]
+#[expect(clippy::too_many_lines, reason = "a measurement reads best in one piece")]
+async fn measure_a_season_of_drops() {
+    let lab = Lab::new().await;
+    let run = lab.run(1, NOW_MS - 91 * DAY_MS, None, 3095).await;
+    let started = std::time::Instant::now();
+    let codes = [
+        "ERR_GFX_D3D_INIT",
+        "ERR_MEM_EMBEDDEDALLOC_ALLOC",
+        "ERR_SYS_PURE_CALL",
+    ];
+    for day in 0..90i64 {
+        lab.metrics
+            .write(move |tx| -> Result<(), StoreError> {
+                for slot in 0..5000i64 {
+                    let id = day * 5000 + slot + 1;
+                    let seen = NOW_MS - (90 - day) * DAY_MS + slot * 17_280;
+                    let category = match slot % 20 {
+                        0 => DropCategory::Crash,
+                        1 | 2 => DropCategory::Timeout,
+                        3 => DropCategory::Kick,
+                        _ => DropCategory::Quit,
+                    };
+                    sessions::insert(
+                        tx,
+                        &NewSession {
+                            id,
+                            run,
+                            net_id: u32::try_from(id).unwrap(),
+                            joined_ms: Some(seen),
+                            seen_ms: seen,
+                        },
+                    )?;
+                    sessions::close(
+                        tx,
+                        &Closure {
+                            id,
+                            ended_ms: seen + 90 * 60_000,
+                            length_ms: Some(90 * 60_000),
+                            category,
+                            kind: (category == DropCategory::Kick).then_some(DropKind::Resource),
+                            native: None,
+                            resource: (category == DropCategory::Kick).then(|| format!("kicker{}", slot % 7)),
+                            crash_text: None,
+                            reason_text: None,
+                            loading: Some(slot % 3 == 0),
+                            synthesized: false,
+                        },
+                    )?;
+                    if category == DropCategory::Crash {
+                        let signature = codes[usize::try_from(slot % 3).unwrap()];
+                        let session = Unclassified {
+                            id,
+                            category,
+                            crash_text: None,
+                            reason_text: None,
+                            player: Some([u8::try_from(slot % 200).unwrap(); 16]),
+                            ended_ms: seen + 90 * 60_000,
+                        };
+                        stored::classify(
+                            tx,
+                            &session,
+                            Grouping::Signature(NewSignature {
+                                signature,
+                                form: "error",
+                                module: None,
+                                game_build: None,
+                                label: None,
+                                resource: None,
+                                normaliser: 1,
+                            }),
+                            1,
+                        )?;
+                    }
+                }
+                Ok(())
+            })
+            .await
+            .unwrap();
+    }
+    println!("450,000 sessions written in {:?}", started.elapsed());
+    let time = |what: &str, started: std::time::Instant| println!("{what}: {:?}", started.elapsed());
+    for pass in ["before any rollup", "after the rollups"] {
+        for range in [DropsRange::Day, DropsRange::Week, DropsRange::Quarter] {
+            let at = std::time::Instant::now();
+            lab.read(move |conn| summary(conn, range, now(), &TimeZone::UTC, 0))
+                .await;
+            time(&format!("{pass}: summary {}", range.name()), at);
+            let at = std::time::Instant::now();
+            lab.read(move |conn| series(conn, range, ChartCategory::Unexpected, now(), &TimeZone::UTC))
+                .await;
+            time(&format!("{pass}: series {}", range.name()), at);
+            let at = std::time::Instant::now();
+            lab.read(move |conn| signatures(conn, range, now(), &TimeZone::UTC, 0))
+                .await;
+            time(&format!("{pass}: signatures {}", range.name()), at);
+            let at = std::time::Instant::now();
+            lab.read(move |conn| uptime(conn, range, now(), &TimeZone::UTC, 0))
+                .await;
+            time(&format!("{pass}: uptime {}", range.name()), at);
+        }
+        if pass == "before any rollup" {
+            let at = std::time::Instant::now();
+            let hours = lab.read(|conn| stored::pending_hours(conn, NOW_MS)).await;
+            for chunk in hours.chunks(24) {
+                let chunk = chunk.to_vec();
+                lab.metrics
+                    .write(move |tx| -> Result<(), StoreError> {
+                        for hour in chunk {
+                            stored::find_incidents(tx, hour * 1000, hour * 1000 + HOUR_MS)?;
+                            stored::roll_up(tx, hour, NOW_MS)?;
+                        }
+                        Ok(())
+                    })
+                    .await
+                    .unwrap();
+            }
+            time(&format!("{} hours rolled up", hours.len()), at);
+        }
+    }
+}
+
+#[tokio::test]
+async fn the_servers_own_stops_and_crashes_get_no_player_rate_and_closures_without_report_no_unknown() {
+    let mut lab = Lab::new().await;
+    let run = lab.run(1, NOW_MS - 3 * DAY_MS, None, 3095).await;
+    for slot in 0..30 {
+        lab.play(
+            run,
+            NOW_MS - DAY_MS + slot * 60_000,
+            HOUR_MS,
+            DropCategory::ServerCrash,
+            None,
+            None,
+        )
+        .await;
+    }
+    lab.metrics
+        .write(|tx| -> Result<usize, StoreError> {
+            Ok(tx.execute(
+                "UPDATE player_session SET category = 'unknown', kind = 'lost' WHERE id <= 10",
+                [],
+            )?)
+        })
+        .await
+        .unwrap();
+
+    let summary = lab
+        .read(|conn| summary(conn, DropsRange::Week, now(), &TimeZone::UTC, 0))
+        .await
+        .summary;
+
+    let row = |category| {
+        summary
+            .categories
+            .iter()
+            .find(|row| row.category == category)
+            .unwrap()
+    };
+    assert_eq!(row(DropCategory::ServerCrash).drops, 20);
+    assert_eq!(
+        (
+            row(DropCategory::ServerCrash).rate,
+            row(DropCategory::ServerCrash).trend
+        ),
+        (None, None)
+    );
+    assert_eq!(row(DropCategory::Unknown).drops, 0);
+    assert_eq!(summary.coverage.lost, 10);
 }

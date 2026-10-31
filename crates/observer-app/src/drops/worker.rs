@@ -100,9 +100,15 @@ pub(super) async fn tick(inner: &Inner, expired_hour: &mut Option<i64>) -> Resul
         let before_ms = (inner.clock.now()
             - SignedDuration::from_hours(24 * i64::from(retention.session_days)))
         .as_millisecond();
+        // Who made a signature only matters for that day's quota.
+        let producers_ms = now_ms - 2 * 24 * HOUR_MS;
         let expired = inner
             .metrics
-            .write(move |tx| stored_sessions::expire(tx, before_ms))
+            .write(move |tx| -> Result<usize, StoreError> {
+                stored::count_crash_drops(tx)?;
+                stored::forget_producers(tx, producers_ms)?;
+                stored_sessions::expire(tx, before_ms)
+            })
             .await?;
         if expired > 0 {
             info!(
@@ -142,7 +148,6 @@ async fn classify(inner: &Inner) -> Result<usize, StoreError> {
                 HashMap::new()
             }
         };
-        let since_ms = (inner.clock.now() - SignedDuration::from_hours(24)).as_millisecond();
         classified += pending.len();
         inner
             .metrics
@@ -152,7 +157,10 @@ async fn classify(inner: &Inner) -> Result<usize, StoreError> {
                         .player
                         .and_then(|player| names.get(&player))
                         .map(String::as_str);
-                    group(tx, session, name, since_ms)?;
+                    // A forget or a late drop since the read changed it: the next round reads it again.
+                    if stored::unchanged(tx, session)? {
+                        group(tx, session, name)?;
+                    }
                 }
                 Ok(())
             })
@@ -161,21 +169,20 @@ async fn classify(inner: &Inner) -> Result<usize, StoreError> {
     Ok(classified)
 }
 
-fn group(
-    tx: &Transaction<'_>,
-    session: &Unclassified,
-    name: Option<&str>,
-    since_ms: i64,
-) -> Result<(), StoreError> {
+fn group(tx: &Transaction<'_>, session: &Unclassified, name: Option<&str>) -> Result<(), StoreError> {
     match (session.category, &session.crash_text, &session.reason_text) {
         (DropCategory::Crash, Some(text), _) => {
             let mut found = signature::signature(text);
             if !stored::signature_known(tx, &found.signature)? {
                 // A modified client can crash with any text: one player makes a few new
-                // signatures a day, and an unconfirmed one no free-text signature at all.
+                // signatures in the day before their crash, an unconfirmed one none at all.
+                let day_before = session.ended_ms - 24 * HOUR_MS;
                 let allowed = match session.player {
-                    Some(player) => stored::signatures_made(tx, player, since_ms)? < NEW_SIGNATURES_A_DAY,
-                    None => !found.form.free_text(),
+                    Some(player) => {
+                        stored::signatures_made(tx, player, day_before, session.ended_ms)?
+                            < NEW_SIGNATURES_A_DAY
+                    }
+                    None => false,
                 };
                 if !allowed {
                     found = other();

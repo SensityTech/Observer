@@ -283,6 +283,7 @@ mod tests {
             category: DropCategory::Kick,
             kind: Some(DropKind::Resource),
             resource: Some("afk".to_owned()),
+            signature_id: None,
             signature: None,
             label: None,
             reason: Some("AFK, too long".to_owned()),

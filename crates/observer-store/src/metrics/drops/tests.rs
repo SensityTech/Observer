@@ -298,7 +298,7 @@ fn a_forgotten_players_free_text_signature_loses_its_text_unless_another_player_
         .collect::<Result<_, _>>()
         .unwrap();
     assert_eq!(left, ["text:forgotten:1", "text:shared"]);
-    let made = signatures_made(&conn, ADA, 0).unwrap();
+    let made = signatures_made(&conn, ADA, 0, i64::MAX).unwrap();
     assert_eq!(made, 0);
 }
 
@@ -383,4 +383,140 @@ fn the_log_pages_newest_first_and_narrows_to_its_filters() {
     assert_eq!(ada.iter().map(|row| row.id).collect::<Vec<_>>(), [3]);
     assert_eq!(nobody, []);
     assert_eq!(first[1].resource.as_deref(), Some("afk"));
+}
+
+#[test]
+fn forgetting_a_player_takes_their_reason_group_away_at_once() {
+    let mut conn = lab();
+    session(&mut conn, 1, 0, Some((30, DropCategory::Kick)));
+    conn.execute("UPDATE player_session SET player = ?1", [ADA])
+        .unwrap();
+    let pending = unclassified(&conn, 10).unwrap();
+    let tx = conn.transaction().unwrap();
+    classify(
+        &tx,
+        &pending[0],
+        Grouping::Reason("Banned: Jean harassed Marie on {n}"),
+        1,
+    )
+    .unwrap();
+    tx.commit().unwrap();
+
+    let tx = conn.transaction().unwrap();
+    sessions::forget(&tx, ADA).unwrap();
+    tx.commit().unwrap();
+
+    assert_eq!(reason_groups(&conn, START_MS, START_MS + HOUR_MS).unwrap(), []);
+    let templates: i64 = conn
+        .query_row("SELECT count(*) FROM drop_reason", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(templates, 0);
+}
+
+#[test]
+fn an_incident_counts_once_in_each_category_whatever_its_kinds_and_hours() {
+    let mut conn = lab();
+    for id in 1..=10 {
+        session(&mut conn, id, 0, None);
+    }
+    // Five timeouts and five crashes, one burst across the hour's end.
+    for id in 1..=5 {
+        close(&mut conn, id, 0, 59, DropCategory::Timeout);
+    }
+    for id in 6..=10 {
+        close(&mut conn, id, 0, 60, DropCategory::Crash);
+    }
+    conn.execute(
+        "UPDATE player_session SET ended_ms = ?1 + (id - 1) * 1000",
+        [START_MS + 59 * MINUTE + 55_000],
+    )
+    .unwrap();
+
+    let tx = conn.transaction().unwrap();
+    find_incidents(&tx, START_MS, START_MS + 2 * HOUR_MS).unwrap();
+    tx.commit().unwrap();
+    let counts = window(&conn, START_MS, START_MS + 2 * HOUR_MS, START_MS + 2 * HOUR_MS).unwrap();
+
+    let events = |category| -> i64 {
+        counts
+            .groups()
+            .iter()
+            .filter(|group| group.category == category)
+            .map(Group::events)
+            .sum()
+    };
+    assert_eq!(
+        incidents(&conn, START_MS, START_MS + 2 * HOUR_MS).unwrap().len(),
+        1
+    );
+    assert_eq!(
+        (events(DropCategory::Timeout), events(DropCategory::Crash)),
+        (1, 1)
+    );
+}
+
+#[test]
+fn a_burst_ends_when_ten_seconds_no_longer_hold_five_drops() {
+    let mut conn = lab();
+    for id in 1..=12 {
+        session(&mut conn, id, 0, None);
+    }
+    for id in 1..=12 {
+        close(&mut conn, id, 0, 30, DropCategory::Timeout);
+    }
+    // Six drops a second apart, then one every eight seconds.
+    conn.execute(
+        "UPDATE player_session SET ended_ms = ?1 + CASE WHEN id <= 6 THEN id * 1000 ELSE 6000 + (id - 6) * 8000 END",
+        [START_MS + 30 * MINUTE],
+    )
+    .unwrap();
+
+    let tx = conn.transaction().unwrap();
+    let joined = find_incidents(&tx, START_MS, START_MS + HOUR_MS).unwrap();
+    tx.commit().unwrap();
+
+    assert_eq!(joined, 6);
+}
+
+#[test]
+fn a_session_written_late_takes_its_hours_out_of_the_rolled_ones() {
+    let mut conn = lab();
+    session(&mut conn, 1, 0, Some((10, DropCategory::Quit)));
+    roll(&mut conn, &[0, 1, 2], 190);
+
+    // Written at 3 h 10 for a join at 0 h 15: the state database could not be written before.
+    session(&mut conn, 2, 15, None);
+
+    assert_eq!(
+        pending_hours(&conn, START_MS + 190 * MINUTE).unwrap(),
+        [START_MS / 1000, START_MS / 1000 + 3600, START_MS / 1000 + 7200]
+    );
+}
+
+#[test]
+fn a_free_text_signature_no_kept_session_holds_loses_its_text() {
+    let mut conn = lab();
+    let tx = conn.transaction().unwrap();
+    signature_id(
+        &tx,
+        &NewSignature {
+            signature: "text:call me on {n}",
+            form: "text",
+            module: None,
+            game_build: None,
+            label: None,
+            resource: None,
+            normaliser: 1,
+        },
+        START_MS,
+        Some(ADA),
+    )
+    .unwrap();
+    sweep(&tx).unwrap();
+    tx.commit().unwrap();
+
+    let left: String = conn
+        .query_row("SELECT signature FROM crash_signature", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(left, "text:expired:1");
 }

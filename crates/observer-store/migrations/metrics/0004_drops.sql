@@ -47,6 +47,10 @@ CREATE TABLE drop_incident (
 
 CREATE INDEX drop_incident_started ON drop_incident (started_ms);
 
+-- The players a crash or a hang of FXServer dropped, counted once its run ended: the sessions
+-- that counted them expire, the run stays.
+ALTER TABLE server_run ADD COLUMN dropped INTEGER;
+
 ALTER TABLE player_session ADD COLUMN signature INTEGER REFERENCES crash_signature (id);
 ALTER TABLE player_session ADD COLUMN reason INTEGER REFERENCES drop_reason (id);
 ALTER TABLE player_session ADD COLUMN incident INTEGER REFERENCES drop_incident (id);
@@ -66,7 +70,8 @@ CREATE TABLE drop_1h (
     category       TEXT    NOT NULL,
     kind           TEXT    NOT NULL,
     subject        INTEGER NOT NULL DEFAULT 0,
-    -- Reported drops, then those of them in an incident, and how many incidents those were.
+    -- Drops, then those of them in an incident, and how many incidents those were: an incident
+    -- counts once per category, in the group of its first drop of that category.
     drops          INTEGER NOT NULL,
     incident_drops INTEGER NOT NULL,
     incidents      INTEGER NOT NULL,

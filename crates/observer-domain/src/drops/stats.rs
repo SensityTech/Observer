@@ -152,7 +152,7 @@ fn judge(comparison: &Comparison, significant: bool) -> Verdict {
         Verdict::NotEnoughDrops
     } else if significant && ratio >= 1.0 + MIN_CHANGE {
         Verdict::Rising
-    } else if significant && ratio <= 1.0 / (1.0 + MIN_CHANGE) {
+    } else if significant && ratio <= 1.0 - MIN_CHANGE {
         Verdict::Falling
     } else {
         Verdict::NoClearChange
@@ -556,7 +556,9 @@ mod tests {
         assert_eq!(verdict(&rise), Verdict::NoClearChange);
         assert_eq!(verdict(&compared(116_000, 100_000, EQUAL)), Verdict::Rising);
         assert_eq!(verdict(&compared(88_000, 100_000, EQUAL)), Verdict::NoClearChange);
-        assert_eq!(verdict(&compared(86_000, 100_000, EQUAL)), Verdict::Falling);
+        // At least 15 % down: 0.86 is not enough, 0.84 is.
+        assert_eq!(verdict(&compared(86_000, 100_000, EQUAL)), Verdict::NoClearChange);
+        assert_eq!(verdict(&compared(84_000, 100_000, EQUAL)), Verdict::Falling);
     }
 
     #[test]

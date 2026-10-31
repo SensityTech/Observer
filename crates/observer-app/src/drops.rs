@@ -25,7 +25,7 @@ use observer_store::metrics::drops::{self as stored, LogFilter, LogRow};
 use observer_store::players as stored_players;
 use observer_store::{Database, MetricsDatabase, StoreError};
 use serde_json::json;
-use tokio::sync::watch;
+use tokio::sync::{OnceCell, watch};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
@@ -64,8 +64,8 @@ struct Inner {
     cache: Mutex<HashMap<String, Cached>>,
 }
 
-/// An answer and when it was computed.
-type Cached = (Instant, Arc<dyn Any + Send + Sync>);
+/// When an answer was asked first, and the answer once computed.
+type Cached = (Instant, Arc<OnceCell<Arc<dyn Any + Send + Sync>>>);
 
 /// The drops' task; [`DropsTask::close`] ends it.
 pub struct DropsTask {
@@ -146,47 +146,67 @@ impl Drops {
         TimeZone::get(&self.inner.schedule.borrow().zone).unwrap_or(TimeZone::UTC)
     }
 
-    /// The answer cached under `key`, or a new one computed on the metrics database's reader.
-    async fn cached<T, F>(&self, key: String, compute: F) -> Result<Arc<T>, Error>
-    where
-        T: Send + Sync + 'static,
-        F: FnOnce(&observer_store::Connection, Timestamp, &TimeZone) -> Result<T, StoreError>
-            + Send
-            + 'static,
-    {
-        {
-            let mut cache = self.inner.cache.lock().unwrap_or_else(PoisonError::into_inner);
-            cache.retain(|_, (at, _)| at.elapsed() < CACHED_FOR);
-            if let Some(hit) = cache
-                .get(&key)
-                .and_then(|(_, value)| Arc::clone(value).downcast::<T>().ok())
-            {
-                return Ok(hit);
-            }
-        }
-        let now = self.inner.clock.now();
-        let zone = self.zone();
-        let value = Arc::new(
-            self.inner
-                .metrics
-                .read(move |conn| compute(conn, now, &zone))
-                .await?,
-        );
-        let shared: Arc<dyn Any + Send + Sync> = value.clone();
+    /// Forgets every cached answer: after a player is forgotten, none of theirs is served again.
+    pub fn clear(&self) {
         self.inner
             .cache
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .insert(key, (Instant::now(), shared));
-        Ok(value)
+            .clear();
+    }
+
+    /// The answer cached under `key`, or a new one computed once on the metrics database's reader,
+    /// however many callers ask for it meanwhile. It reads one snapshot of the database, and the
+    /// sessions kept since `kept_from` as the retention has them.
+    async fn cached<T, F>(&self, key: &str, compute: F) -> Result<Arc<T>, Error>
+    where
+        T: Send + Sync + 'static,
+        F: FnOnce(&observer_store::Connection, Timestamp, &TimeZone, i64) -> Result<T, StoreError>
+            + Send
+            + 'static,
+    {
+        let retention = self.inner.db.read(stored_players::drops_settings).await?;
+        let key = format!("{key}:{}", retention.session_days);
+        let cell = {
+            let mut cache = self.inner.cache.lock().unwrap_or_else(PoisonError::into_inner);
+            cache.retain(|_, (at, _)| at.elapsed() < CACHED_FOR);
+            Arc::clone(
+                &cache
+                    .entry(key)
+                    .or_insert_with(|| (Instant::now(), Arc::new(OnceCell::new())))
+                    .1,
+            )
+        };
+        let value = cell
+            .get_or_try_init(|| async {
+                let now = self.inner.clock.now();
+                let zone = self.zone();
+                let kept_from_ms = now.as_millisecond() - i64::from(retention.session_days) * 86_400_000;
+                let value = self
+                    .inner
+                    .metrics
+                    .read(move |conn| -> Result<T, StoreError> {
+                        let snapshot = conn.unchecked_transaction()?;
+                        let value = compute(&snapshot, now, &zone, kept_from_ms)?;
+                        snapshot.commit()?;
+                        Ok(value)
+                    })
+                    .await?;
+                Ok::<_, Error>(Arc::new(value) as Arc<dyn Any + Send + Sync>)
+            })
+            .await?;
+        Arc::clone(value)
+            .downcast::<T>()
+            .map_err(|_| ErrorCode::Internal.into())
     }
 
     /// The tiles, the breakdown and the repeat crashers, named only for `PLAYERS_VIEW`.
     pub async fn summary(&self, range: DropsRange, held: Permissions) -> Result<DropsSummary, Error> {
         let base = self
-            .cached(format!("summary:{}", range.name()), move |conn, now, zone| {
-                compute::summary(conn, range, now, zone)
-            })
+            .cached(
+                &format!("summary:{}", range.name()),
+                move |conn, now, zone, kept| compute::summary(conn, range, now, zone, kept),
+            )
             .await?;
         let mut summary = base.summary.clone();
         let names = if held.contains(Permissions::PLAYERS_VIEW) {
@@ -211,20 +231,21 @@ impl Drops {
     pub async fn series(&self, range: DropsRange, category: ChartCategory) -> Result<DropSeries, Error> {
         let series = self
             .cached(
-                format!("series:{}:{}", range.name(), category.name()),
-                move |conn, now, zone| compute::series(conn, range, category, now, zone),
+                &format!("series:{}:{}", range.name(), category.name()),
+                move |conn, now, zone, _| compute::series(conn, range, category, now, zone),
             )
             .await?;
         Ok((*series).clone())
     }
 
-    /// The crash signatures. A client's free text only one player produced, which could be
-    /// anything they typed, is shown to `PLAYERS_VIEW` alone.
+    /// The crash signatures. What a client wrote reaches statistics viewers only once two players
+    /// wrote it: a free-text signature, and each example's own text.
     pub async fn signatures(&self, range: DropsRange, held: Permissions) -> Result<SignatureTable, Error> {
         let base = self
-            .cached(format!("signatures:{}", range.name()), move |conn, now, zone| {
-                compute::signatures(conn, range, now, zone)
-            })
+            .cached(
+                &format!("signatures:{}", range.name()),
+                move |conn, now, zone, kept| compute::signatures(conn, range, now, zone, kept),
+            )
             .await?;
         let mut table = base.table.clone();
         if !held.contains(Permissions::PLAYERS_VIEW) {
@@ -233,7 +254,13 @@ impl Drops {
                     entry.signature = None;
                     entry.label = None;
                     entry.examples.clear();
+                    continue;
                 }
+                let players = base.example_players.get(&entry.id).cloned().unwrap_or_default();
+                let mut players = players.into_iter();
+                entry
+                    .examples
+                    .retain(|_| players.next().is_some_and(|players| players >= 2));
             }
         }
         Ok(table)
@@ -242,9 +269,10 @@ impl Drops {
     /// The kicking resources; their reason groups only for `PLAYERS_VIEW`.
     pub async fn resources(&self, range: DropsRange, held: Permissions) -> Result<ResourceTable, Error> {
         let base = self
-            .cached(format!("resources:{}", range.name()), move |conn, now, zone| {
-                compute::resources(conn, range, now, zone)
-            })
+            .cached(
+                &format!("resources:{}", range.name()),
+                move |conn, now, zone, kept| compute::resources(conn, range, now, zone, kept),
+            )
             .await?;
         let mut table = (*base).clone();
         if !held.contains(Permissions::PLAYERS_VIEW) {
@@ -257,7 +285,7 @@ impl Drops {
 
     pub async fn changes(&self, range: DropsRange) -> Result<DropChanges, Error> {
         let changes = self
-            .cached(format!("changes:{}", range.name()), move |conn, now, zone| {
+            .cached(&format!("changes:{}", range.name()), move |conn, now, zone, _| {
                 compute::changes(conn, range, now, zone)
             })
             .await?;
@@ -266,9 +294,10 @@ impl Drops {
 
     pub async fn uptime(&self, range: DropsRange) -> Result<DropUptime, Error> {
         let uptime = self
-            .cached(format!("uptime:{}", range.name()), move |conn, now, zone| {
-                compute::uptime(conn, range, now, zone)
-            })
+            .cached(
+                &format!("uptime:{}", range.name()),
+                move |conn, now, zone, kept| compute::uptime(conn, range, now, zone, kept),
+            )
             .await?;
         Ok((*uptime).clone())
     }
@@ -468,6 +497,7 @@ impl Drops {
                     category: row.category,
                     kind: row.kind,
                     resource: row.resource,
+                    signature_id: row.signature,
                     signature: signature.map(|(signature, _)| signature.clone()),
                     label: signature.and_then(|(_, label)| label.clone()),
                     reason: row.reason_text,

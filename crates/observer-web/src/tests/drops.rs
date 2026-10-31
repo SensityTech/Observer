@@ -298,3 +298,84 @@ async fn the_drop_retention_is_the_owners_with_the_password_again_and_within_its
     assert_eq!(too_short.json()["params"]["min"], 14);
     assert_eq!(changed.json()["sessionDays"], 30);
 }
+
+#[tokio::test]
+async fn an_example_text_only_one_player_crashed_with_stays_with_log_readers() {
+    let server = Server::new().await;
+    let now_ms = server.clock.now().as_millisecond();
+    let metrics = MetricsDatabase::open(server.dir.path().join("metrics.sqlite3"))
+        .await
+        .unwrap();
+    metrics
+        .write(move |tx| -> Result<(), observer_store::StoreError> {
+            let run = RunKey {
+                observer_started: now_ms - 86_400_000,
+                generation: 1,
+            };
+            runs::start(tx, run, now_ms - 86_400_000, StartCause::Requested)?;
+            sessions::insert(
+                tx,
+                &NewSession {
+                    id: 1,
+                    run,
+                    net_id: 1,
+                    joined_ms: Some(now_ms - 3_600_000),
+                    seen_ms: now_ms - 3_600_000,
+                },
+            )?;
+            sessions::close(
+                tx,
+                &Closure {
+                    id: 1,
+                    ended_ms: now_ms - 1_800_000,
+                    length_ms: Some(1_800_000),
+                    category: DropCategory::Crash,
+                    kind: None,
+                    native: Some(2),
+                    resource: None,
+                    crash_text: Some("ERR_GFX_D3D_INIT".to_owned()),
+                    reason_text: None,
+                    loading: None,
+                    synthesized: false,
+                },
+            )?;
+            tx.execute("UPDATE player_session SET player = ?1", [ADA])?;
+            let session = stored_drops::unclassified(tx, 1)?.remove(0);
+            stored_drops::classify(
+                tx,
+                &session,
+                Grouping::Signature(stored_drops::NewSignature {
+                    signature: "error:ERR_GFX_D3D_INIT",
+                    form: "error",
+                    module: None,
+                    game_build: None,
+                    label: None,
+                    resource: None,
+                    normaliser: 1,
+                }),
+                1,
+            )
+        })
+        .await
+        .unwrap();
+    metrics.close().await.unwrap();
+    let owner = server.owner().await;
+    let statistics = server.member(&owner, "grace", DROPS_VIEW).await;
+    let path = "/api/servers/default/drops/signatures?range=7d";
+
+    let for_statistics = server
+        .call(Method::GET, path, Some(&statistics), None)
+        .await
+        .json();
+    let for_owner = server.call(Method::GET, path, Some(&owner), None).await.json();
+
+    assert_eq!(
+        for_statistics["signatures"][0]["signature"],
+        "error:ERR_GFX_D3D_INIT"
+    );
+    assert_eq!(for_statistics["signatures"][0]["examples"], json!([]));
+    assert_eq!(
+        for_owner["signatures"][0]["examples"],
+        json!(["ERR_GFX_D3D_INIT"])
+    );
+}

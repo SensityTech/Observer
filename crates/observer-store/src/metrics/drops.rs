@@ -98,13 +98,37 @@ pub fn signature_known(conn: &Connection, signature: &str) -> Result<bool, Store
         .is_some())
 }
 
-/// How many signatures a player's crashes made since `since_ms`.
-pub fn signatures_made(conn: &Connection, player: [u8; 16], since_ms: i64) -> Result<i64, StoreError> {
+/// How many signatures a player's crashes made from `from_ms` to `to_ms`, both included.
+pub fn signatures_made(
+    conn: &Connection,
+    player: [u8; 16],
+    from_ms: i64,
+    to_ms: i64,
+) -> Result<i64, StoreError> {
     Ok(conn.query_row(
-        "SELECT count(*) FROM crash_signature WHERE first_player = ?1 AND first_seen_ms >= ?2",
-        params![player, since_ms],
+        "SELECT count(*) FROM crash_signature WHERE first_player = ?1 AND first_seen_ms BETWEEN ?2 AND ?3",
+        params![player, from_ms, to_ms],
         |row| row.get(0),
     )?)
+}
+
+/// Whether a session is still as it was read, not classified yet: a forget in between blanks its
+/// player and texts, and what was read of them must not be written into a signature.
+pub fn unchanged(conn: &Connection, session: &Unclassified) -> Result<bool, StoreError> {
+    Ok(conn
+        .query_row(
+            "SELECT 1 FROM player_session WHERE id = ?1 AND classified = 0 AND player IS ?2
+                 AND crash_text IS ?3 AND reason_text IS ?4",
+            params![
+                session.id,
+                session.player,
+                session.crash_text,
+                session.reason_text
+            ],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some())
 }
 
 /// Gives a closed session its group and the normaliser's version, and takes its hour out of the
@@ -199,11 +223,11 @@ pub fn find_incidents(tx: &Transaction<'_>, from_ms: i64, to_ms: i64) -> Result<
     while at < drops.len() {
         let (_, run, started, incident) = drops[at];
         if let Some(incident) = incident {
-            // A burst that goes on: the drops that follow within ten seconds of each other join it.
+            // A burst that goes on: what follows joins it while ten seconds still hold five drops.
             let mut last = started;
             let mut next = at + 1;
             let mut added = Vec::new();
-            while next < drops.len() && drops[next].1 == run && drops[next].2 - last <= BURST_MS {
+            while next < drops.len() && drops[next].1 == run && still_bursting(&drops, next) {
                 if drops[next].3.is_none() {
                     added.push(drops[next].0);
                 }
@@ -247,7 +271,7 @@ pub fn find_incidents(tx: &Transaction<'_>, from_ms: i64, to_ms: i64) -> Result<
         while end + 1 < drops.len()
             && drops[end + 1].1 == run
             && drops[end + 1].3.is_none()
-            && drops[end + 1].2 - drops[end].2 <= BURST_MS
+            && still_bursting(&drops, end + 1)
         {
             end += 1;
         }
@@ -276,6 +300,17 @@ pub fn find_incidents(tx: &Transaction<'_>, from_ms: i64, to_ms: i64) -> Result<
         at = end + 1;
     }
     Ok(joined)
+}
+
+/// Whether the ten seconds that end with drop `at` hold a burst's five drops of its run.
+fn still_bursting(drops: &[(i64, i64, i64, Option<i64>)], at: usize) -> bool {
+    let (_, run, ended, _) = drops[at];
+    drops[..=at]
+        .iter()
+        .rev()
+        .take_while(|drop| drop.1 == run && ended - drop.2 <= BURST_MS)
+        .count()
+        >= BURST_DROPS
 }
 
 /// Puts sessions in an incident, and takes their hours out of the rolled ones.
@@ -326,7 +361,9 @@ impl Group {
 /// Drops and time played over some time.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Counts {
-    pub groups: Vec<Group>,
+    groups: Vec<Group>,
+    /// Where each group is in `groups`.
+    index: HashMap<(DropCategory, Option<DropKind>, i64), usize>,
     /// Time played, every session's overlap with the time.
     pub player_ms: i64,
     /// Sessions that ended in the time.
@@ -334,23 +371,32 @@ pub struct Counts {
 }
 
 impl Counts {
+    pub fn groups(&self) -> &[Group] {
+        &self.groups
+    }
+
+    /// Adds a group's drops to the group of the same category, kind and subject.
+    pub fn push(&mut self, group: Group) {
+        let key = (group.category, group.kind, group.subject);
+        if let Some(&at) = self.index.get(&key) {
+            let known = &mut self.groups[at];
+            known.drops += group.drops;
+            known.incident_drops += group.incident_drops;
+            known.incidents += group.incidents;
+            known.phased += group.phased;
+            known.loading += group.loading;
+        } else {
+            self.index.insert(key, self.groups.len());
+            self.groups.push(group);
+        }
+    }
+
     /// Adds `other` in, group by group.
     pub fn add(&mut self, other: &Self) {
         self.player_ms += other.player_ms;
         self.sessions += other.sessions;
         for group in &other.groups {
-            match self.groups.iter_mut().find(|known| {
-                (known.category, known.kind, known.subject) == (group.category, group.kind, group.subject)
-            }) {
-                Some(known) => {
-                    known.drops += group.drops;
-                    known.incident_drops += group.incident_drops;
-                    known.incidents += group.incidents;
-                    known.phased += group.phased;
-                    known.loading += group.loading;
-                }
-                None => self.groups.push(*group),
-            }
+            self.push(*group);
         }
     }
 }
@@ -361,22 +407,26 @@ pub fn live(conn: &Connection, from_ms: i64, to_ms: i64, now_ms: i64) -> Result<
         "SELECT category, kind,
                 CASE category WHEN 'crash' THEN coalesce(signature, 0) WHEN 'kick' THEN coalesce(resource, 0)
                     ELSE 0 END AS subject,
-                count(*), count(incident), count(DISTINCT incident), count(phase),
-                count(*) FILTER (WHERE phase = 'loading')
-         FROM player_session WHERE ended_ms >= ?1 AND ended_ms < ?2
+                count(*), count(incident),
+                count(*) FILTER (WHERE incident IS NOT NULL AND NOT EXISTS (
+                    SELECT 1 FROM player_session o WHERE o.incident = s.incident AND o.category = s.category
+                        AND (o.ended_ms, o.id) < (s.ended_ms, s.id))),
+                count(phase), count(*) FILTER (WHERE phase = 'loading')
+         FROM player_session s WHERE ended_ms >= ?1 AND ended_ms < ?2
          GROUP BY category, coalesce(kind, ''), subject",
     )?;
-    let groups = statement
-        .query_map(params![from_ms, to_ms], group)?
-        .collect::<Result<_, _>>()?;
+    let mut counts = Counts::default();
+    for group in statement.query_map(params![from_ms, to_ms], group)? {
+        counts.push(group?);
+    }
     // Ended in or after the time, or still open: two index ranges rather than one scan.
     let player_ms: i64 = conn.query_row(
         "SELECT coalesce(sum(played), 0) FROM (
-             SELECT min(ended_ms, ?2) - max(seen_ms, ?1) AS played FROM player_session
-                 WHERE ended_ms > ?1 AND seen_ms < ?2
+             SELECT max(0, min(ended_ms, ?2) - max(seen_ms, ?1)) AS played FROM player_session
+                 WHERE ended_ms > ?1 AND +seen_ms < ?2
              UNION ALL
-             SELECT min(?3, ?2) - max(seen_ms, ?1) FROM player_session
-                 WHERE ended_ms IS NULL AND seen_ms < ?2 AND ?3 > ?1)",
+             SELECT max(0, min(?3, ?2) - max(seen_ms, ?1)) FROM player_session
+                 WHERE ended_ms IS NULL AND +seen_ms < ?2 AND ?3 > ?1)",
         params![from_ms, to_ms, now_ms],
         |row| row.get(0),
     )?;
@@ -385,11 +435,9 @@ pub fn live(conn: &Connection, from_ms: i64, to_ms: i64, now_ms: i64) -> Result<
         params![from_ms, to_ms],
         |row| row.get(0),
     )?;
-    Ok(Counts {
-        groups,
-        player_ms: player_ms.max(0),
-        sessions,
-    })
+    counts.player_ms = player_ms.max(0);
+    counts.sessions = sessions;
+    Ok(counts)
 }
 
 fn group(row: &Row<'_>) -> rusqlite::Result<Group> {
@@ -446,7 +494,7 @@ pub fn roll_up(tx: &Transaction<'_>, hour: i64, now_ms: i64) -> Result<(), Store
     let counts = live(tx, from_ms, from_ms + HOUR_MS, now_ms)?;
     tx.execute("DELETE FROM drop_1h WHERE hour = ?1", [hour])?;
     tx.execute("DELETE FROM exposure_1h WHERE hour = ?1", [hour])?;
-    for group in &counts.groups {
+    for group in counts.groups() {
         tx.execute(
             "INSERT INTO drop_1h (hour, category, kind, subject, drops, incident_drops, incidents, phased, loading)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
@@ -499,7 +547,7 @@ pub fn hourly(
             let hour: i64 = row.get(0)?;
             let category: String = row.get(1)?;
             let kind: String = row.get(2)?;
-            hours.entry(hour).or_default().groups.push(Group {
+            hours.entry(hour).or_default().push(Group {
                 category: category_of(1, &category)?,
                 kind: DropKind::from_name(&kind),
                 subject: row.get(3)?,
@@ -576,27 +624,30 @@ pub struct SignatureRow {
 }
 
 pub fn signatures(conn: &Connection, ids: &[i64]) -> Result<Vec<SignatureRow>, StoreError> {
-    if ids.is_empty() {
-        return Ok(Vec::new());
+    let mut found = Vec::with_capacity(ids.len());
+    for slice in ids.chunks(SLICE) {
+        let mut statement = conn.prepare(&format!(
+            "SELECT c.id, c.signature, c.form, c.module, c.game_build, c.label, r.name, c.first_seen_ms
+             FROM crash_signature c LEFT JOIN resource_name r ON r.id = c.resource WHERE c.id IN ({})",
+            placeholders(slice.len())
+        ))?;
+        let rows = statement.query_map(params_from_iter(slice), |row| {
+            Ok(SignatureRow {
+                id: row.get(0)?,
+                signature: row.get(1)?,
+                form: row.get(2)?,
+                module: row.get(3)?,
+                game_build: row.get(4)?,
+                label: row.get(5)?,
+                resource: row.get(6)?,
+                first_seen_ms: row.get(7)?,
+            })
+        })?;
+        for row in rows {
+            found.push(row?);
+        }
     }
-    let mut statement = conn.prepare(&format!(
-        "SELECT c.id, c.signature, c.form, c.module, c.game_build, c.label, r.name, c.first_seen_ms
-         FROM crash_signature c LEFT JOIN resource_name r ON r.id = c.resource WHERE c.id IN ({})",
-        placeholders(ids.len())
-    ))?;
-    let rows = statement.query_map(params_from_iter(ids), |row| {
-        Ok(SignatureRow {
-            id: row.get(0)?,
-            signature: row.get(1)?,
-            form: row.get(2)?,
-            module: row.get(3)?,
-            game_build: row.get(4)?,
-            label: row.get(5)?,
-            resource: row.get(6)?,
-            first_seen_ms: row.get(7)?,
-        })
-    })?;
-    Ok(rows.collect::<Result<_, _>>()?)
+    Ok(found)
 }
 
 /// The players each signature or each kicking resource dropped from `from_ms` to `to_ms` (or over
@@ -622,26 +673,30 @@ pub fn players_by_subject(
     Ok(rows.collect::<Result<_, _>>()?)
 }
 
-/// The latest distinct redacted texts of a signature's crashes.
-pub fn examples(conn: &Connection, signature: i64, limit: u32) -> Result<Vec<String>, StoreError> {
+/// The latest distinct redacted texts of a signature's crashes, each with the players who
+/// crashed with exactly that text.
+pub fn examples(conn: &Connection, signature: i64, limit: u32) -> Result<Vec<(String, i64)>, StoreError> {
     let mut statement = conn.prepare_cached(
-        "SELECT crash_text FROM player_session WHERE signature = ?1 AND crash_text IS NOT NULL
+        "SELECT crash_text, count(DISTINCT player) FROM player_session WHERE signature = ?1 AND crash_text IS NOT NULL
          GROUP BY crash_text ORDER BY max(ended_ms) DESC LIMIT ?2",
     )?;
-    let rows = statement.query_map(params![signature, limit], |row| row.get(0))?;
+    let rows = statement.query_map(params![signature, limit], |row| Ok((row.get(0)?, row.get(1)?)))?;
     Ok(rows.collect::<Result<_, _>>()?)
 }
 
 pub fn resource_names(conn: &Connection, ids: &[i64]) -> Result<HashMap<i64, String>, StoreError> {
-    if ids.is_empty() {
-        return Ok(HashMap::new());
+    let mut found = HashMap::with_capacity(ids.len());
+    for slice in ids.chunks(SLICE) {
+        let mut statement = conn.prepare(&format!(
+            "SELECT id, name FROM resource_name WHERE id IN ({})",
+            placeholders(slice.len())
+        ))?;
+        for row in statement.query_map(params_from_iter(slice), |row| Ok((row.get(0)?, row.get(1)?)))? {
+            let (id, name) = row?;
+            found.insert(id, name);
+        }
     }
-    let mut statement = conn.prepare(&format!(
-        "SELECT id, name FROM resource_name WHERE id IN ({})",
-        placeholders(ids.len())
-    ))?;
-    let rows = statement.query_map(params_from_iter(ids), |row| Ok((row.get(0)?, row.get(1)?)))?;
-    Ok(rows.collect::<Result<_, _>>()?)
+    Ok(found)
 }
 
 pub fn resource_id(conn: &Connection, name: &str) -> Result<Option<i64>, StoreError> {
@@ -717,7 +772,8 @@ pub struct RunRow {
 }
 
 const RUN_ROW: &str = "SELECT r.id, r.generation, r.started_ms, r.ended_ms, r.start_cause, r.end_cause, r.build,
-        r.spawned_ms, (SELECT count(*) FROM player_session s WHERE s.run = r.id AND s.category = 'serverCrash')
+        r.spawned_ms,
+        coalesce(r.dropped, (SELECT count(*) FROM player_session s WHERE s.run = r.id AND s.category = 'serverCrash'))
     FROM server_run r";
 
 fn run_row(row: &Row<'_>) -> rusqlite::Result<RunRow> {
@@ -817,14 +873,17 @@ pub struct Played {
     pub until_ms: i64,
     pub run_started_ms: i64,
     pub unexpected_ms: Option<i64>,
+    /// The burst it ended in: counted once.
+    pub incident: Option<i64>,
 }
 
 pub fn played(conn: &Connection, from_ms: i64, to_ms: i64, now_ms: i64) -> Result<Vec<Played>, StoreError> {
     let mut statement = conn.prepare(&format!(
         "SELECT s.seen_ms, coalesce(s.ended_ms, ?3), r.started_ms,
-                CASE WHEN s.synthesized = 0 AND s.ended_ms IS NOT NULL AND {UNEXPECTED} THEN s.ended_ms END
+                CASE WHEN s.synthesized = 0 AND s.ended_ms IS NOT NULL AND {UNEXPECTED} THEN s.ended_ms END,
+                s.incident
          FROM player_session s JOIN server_run r ON r.id = s.run
-         WHERE s.seen_ms < ?2 AND (s.ended_ms IS NULL OR s.ended_ms > ?1)"
+         WHERE s.seen_ms < ?2 AND (s.ended_ms IS NULL OR s.ended_ms >= ?1)"
     ))?;
     let rows = statement.query_map(params![from_ms, to_ms, now_ms], |row| {
         Ok(Played {
@@ -832,6 +891,7 @@ pub fn played(conn: &Connection, from_ms: i64, to_ms: i64, now_ms: i64) -> Resul
             until_ms: row.get(1)?,
             run_started_ms: row.get(2)?,
             unexpected_ms: row.get(3)?,
+            incident: row.get(4)?,
         })
     })?;
     Ok(rows.collect::<Result<_, _>>()?)
@@ -939,26 +999,53 @@ pub fn log(conn: &Connection, filter: &LogFilter, limit: u32) -> Result<Vec<LogR
     Ok(rows.collect::<Result<_, _>>()?)
 }
 
-/// Deletes the incidents no kept session holds and the reason groups no kept session uses.
+/// Deletes the reason groups no kept session uses, and takes the text off the free-text
+/// signatures no kept session holds: the rollups and incidents keep counting, nothing keeps what a
+/// client wrote.
 pub fn sweep(tx: &Transaction<'_>) -> Result<usize, StoreError> {
-    let incidents = tx.execute(
-        "DELETE FROM drop_incident WHERE id NOT IN (SELECT incident FROM player_session WHERE incident IS NOT NULL)",
-        [],
-    )?;
     let reasons = tx.execute(
         "DELETE FROM drop_reason WHERE id NOT IN (SELECT reason FROM player_session WHERE reason IS NOT NULL)",
         [],
     )?;
-    Ok(incidents + reasons)
+    let signatures = tx.execute(
+        "UPDATE crash_signature SET signature = 'text:expired:' || id, label = NULL
+         WHERE form IN ('text', 'exception') AND signature <> 'text:other'
+             AND signature NOT LIKE 'text:forgotten:%' AND signature NOT LIKE 'text:expired:%'
+             AND NOT EXISTS (SELECT 1 FROM player_session s WHERE s.signature = crash_signature.id)",
+        [],
+    )?;
+    Ok(reasons + signatures)
 }
 
-/// A forgotten player made no signature: a free-text one only their crashes hold loses its text.
+/// Counts the players each crash or hang of FXServer dropped, once its run ended, before the
+/// sessions that tell it expire.
+pub fn count_crash_drops(tx: &Transaction<'_>) -> Result<usize, StoreError> {
+    Ok(tx.execute(
+        "UPDATE server_run SET dropped = (
+             SELECT count(*) FROM player_session s WHERE s.run = server_run.id AND s.category = 'serverCrash')
+         WHERE dropped IS NULL AND end_cause IN ('crashed', 'hung')",
+        [],
+    )?)
+}
+
+/// Who made a signature only matters for the day's quota: the pseudonym goes after two days.
+pub fn forget_producers(tx: &Transaction<'_>, before_ms: i64) -> Result<usize, StoreError> {
+    Ok(tx.execute(
+        "UPDATE crash_signature SET first_player = NULL WHERE first_player IS NOT NULL AND first_seen_ms < ?1",
+        [before_ms],
+    )?)
+}
+
+/// A forgotten player made no signature: a free-text one no other player's crash holds loses its
+/// text, whoever made it first. Call it before the sessions lose their pseudonym.
 pub fn forget(tx: &Transaction<'_>, pseudonym: [u8; 16]) -> Result<usize, StoreError> {
     let renamed = tx.execute(
         "UPDATE crash_signature SET signature = 'text:forgotten:' || id, label = NULL
-         WHERE first_player = ?1 AND form IN ('text', 'exception') AND NOT EXISTS (
-             SELECT 1 FROM player_session s
-             WHERE s.signature = crash_signature.id AND s.player IS NOT NULL AND s.player <> ?1)",
+         WHERE form IN ('text', 'exception') AND signature <> 'text:other'
+             AND (first_player = ?1 OR id IN (SELECT signature FROM player_session WHERE player = ?1))
+             AND NOT EXISTS (
+                 SELECT 1 FROM player_session s
+                 WHERE s.signature = crash_signature.id AND s.player IS NOT NULL AND s.player <> ?1)",
         [pseudonym],
     )?;
     tx.execute(
@@ -967,6 +1054,9 @@ pub fn forget(tx: &Transaction<'_>, pseudonym: [u8; 16]) -> Result<usize, StoreE
     )?;
     Ok(renamed)
 }
+
+/// The most ids one statement asks for.
+const SLICE: usize = 500;
 
 fn placeholders(count: usize) -> String {
     vec!["?"; count].join(", ")

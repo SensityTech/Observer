@@ -305,25 +305,30 @@ pub struct Carrier {
     pub name: String,
 }
 
-/// Who carries each pseudonym.
+/// Who carries each pseudonym, read in slices rather than one query each.
 pub fn by_pseudonym(
     conn: &Connection,
     pseudonyms: &[[u8; 16]],
 ) -> Result<HashMap<[u8; 16], Carrier>, StoreError> {
-    let mut statement = conn.prepare_cached("SELECT id, license, name FROM player WHERE pseudonym = ?1")?;
-    let mut found = HashMap::new();
-    for pseudonym in pseudonyms {
-        if let Some(row) = statement
-            .query_row([pseudonym], |row| {
-                Ok(Carrier {
-                    id: row.get(0)?,
-                    license: row.get(1)?,
-                    name: row.get(2)?,
-                })
-            })
-            .optional()?
-        {
-            found.insert(*pseudonym, row);
+    let mut found = HashMap::with_capacity(pseudonyms.len());
+    for slice in pseudonyms.chunks(500) {
+        let marks = vec!["?"; slice.len()].join(", ");
+        let mut statement = conn.prepare(&format!(
+            "SELECT pseudonym, id, license, name FROM player WHERE pseudonym IN ({marks})"
+        ))?;
+        let rows = statement.query_map(params_from_iter(slice), |row| {
+            Ok((
+                row.get::<_, [u8; 16]>(0)?,
+                Carrier {
+                    id: row.get(1)?,
+                    license: row.get(2)?,
+                    name: row.get(3)?,
+                },
+            ))
+        })?;
+        for row in rows {
+            let (pseudonym, carrier) = row?;
+            found.insert(pseudonym, carrier);
         }
     }
     Ok(found)

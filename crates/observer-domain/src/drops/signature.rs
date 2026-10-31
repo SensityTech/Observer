@@ -23,6 +23,14 @@ const MODULE_EXTENSIONS: [&str; 2] = ["exe", "dll"];
 const EXCEPTION_PREFIX: &str = "Unhandled exception: ";
 /// Where the game's file system mounts the server's resources.
 const RESOURCES: &str = "resources:/";
+/// The parts of a signature that are not a template are client text too: they keep only the
+/// characters, and the lengths, the names FiveM writes have. Anything else is free text.
+const MOST_MODULE: usize = 64;
+const MOST_OFFSET: usize = 16;
+const MOST_SYMBOL: usize = 128;
+const MOST_RESOURCE: usize = 64;
+const MOST_ERROR: usize = 64;
+const MOST_CODE_WORD: usize = 16;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SignatureForm {
@@ -212,21 +220,22 @@ struct Blame<'a> {
     offset: &'a str,
 }
 
-/// `kilo-ohio-lemon (GTA5_b3095.exe+1A2B3C)`: FiveM's code name and the blamed module.
+/// `kilo-ohio-lemon (GTA5_b3095.exe+1A2B3C)`: FiveM's code name and the blamed module, the whole
+/// text as FiveM writes it. Words around them are a client's, and make the text free.
 fn named_blame(text: &str) -> Option<Blame<'_>> {
     text.match_indices(" (").find_map(|(at, _)| {
-        let label = text[..at].rsplit(char::is_whitespace).next()?;
+        let label = &text[..at];
         if !is_code_name(label) {
             return None;
         }
-        // A module and its offset are short: a far bracket closes something else.
-        let inside = cut(&text[at + 2..], MAX_SIGNATURE_BYTES);
-        let inside = &inside[..inside.find(')')?];
+        let inside = text[at + 2..].strip_suffix(')')?;
+        if inside.len() > MOST_MODULE + 1 + MOST_OFFSET + 2 {
+            return None;
+        }
         let (module, offset) = inside.rsplit_once('+')?;
         let offset = without_hex_prefix(offset);
-        let blamed = !module.is_empty()
-            && !module.contains(char::is_whitespace)
-            && !offset.is_empty()
+        let blamed = module_shaped(module)
+            && (1..=MOST_OFFSET).contains(&offset.len())
             && offset.bytes().all(|byte| byte.is_ascii_hexdigit());
         blamed.then_some(Blame {
             label: Some(label),
@@ -236,14 +245,15 @@ fn named_blame(text: &str) -> Option<Blame<'_>> {
     })
 }
 
-/// A module and its offset with no code name before them: `gta-streaming-five.dll+4F2A1`.
+/// A module and its offset with no code name before them, the whole text:
+/// `gta-streaming-five.dll+4F2A1`.
 fn bare_blame(text: &str) -> Option<Blame<'_>> {
     text.match_indices('+').find_map(|(at, _)| {
-        let module = module_before(text, at)?;
+        let module = module_before(text, at).filter(|module| module.len() == at)?;
         let after = without_hex_prefix(&text[at + 1..]);
         let offset = hex_run(after);
-        let ends = after[offset.len()..].chars().next().is_none_or(|c| !is_word(c));
-        (!offset.is_empty() && ends).then_some(Blame {
+        let ends = offset.len() == after.len();
+        ((1..=MOST_OFFSET).contains(&offset.len()) && ends).then_some(Blame {
             label: None,
             module,
             offset,
@@ -254,9 +264,31 @@ fn bare_blame(text: &str) -> Option<Blame<'_>> {
 /// Three lowercase words joined by hyphens, as FiveM names a crash: `kilo-ohio-lemon`.
 fn is_code_name(word: &str) -> bool {
     word.split('-').count() == 3
-        && word
-            .split('-')
-            .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_lowercase()))
+        && word.split('-').all(|part| {
+            (1..=MOST_CODE_WORD).contains(&part.len()) && part.bytes().all(|byte| byte.is_ascii_lowercase())
+        })
+}
+
+/// A module as FiveM names one: letters, digits, `_`, `.` and `-`, an `.exe` or `.dll` at the end.
+fn module_shaped(module: &str) -> bool {
+    let Some((stem, extension)) = module.rsplit_once('.') else {
+        return false;
+    };
+    module.len() <= MOST_MODULE
+        && !stem.is_empty()
+        && MODULE_EXTENSIONS
+            .iter()
+            .any(|known| extension.eq_ignore_ascii_case(known))
+        && few_digits(module)
+        && module
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'-'))
+}
+
+/// No run of more than five digits: a game build has four, a phone number ten.
+fn few_digits(text: &str) -> bool {
+    text.split(|c: char| !c.is_ascii_digit())
+        .all(|run| run.len() <= 5)
 }
 
 /// A symbolised place: `GTA5_b3095.exe!sub_140A1B2C3 (0x1c)`, or `+0x1c` right after the name.
@@ -266,19 +298,36 @@ struct Symbol<'a> {
     offset: Option<&'a str>,
 }
 
+/// The whole text: `GTA5_b3095.exe!sub_140A1B2C3 (0x1c)`.
 fn symbol(text: &str) -> Option<Symbol<'_>> {
     text.match_indices('!').find_map(|(at, _)| {
-        let module = module_before(text, at)?;
+        let module = module_before(text, at).filter(|module| module.len() == at)?;
         let rest = &text[at + 1..];
         let end = rest
             .find(|c: char| c.is_whitespace() || matches!(c, '(' | ')' | '+'))
             .unwrap_or(rest.len());
         let name = &rest[..end];
-        (!name.is_empty()).then(|| Symbol {
-            module,
-            name,
-            offset: symbol_offset(&rest[end..]),
-        })
+        let shaped = (1..=MOST_SYMBOL).contains(&name.len())
+            && few_digits(name)
+            && name.bytes().all(|byte| {
+                byte.is_ascii_alphanumeric()
+                    || matches!(byte, b'_' | b':' | b'<' | b'>' | b'~' | b'$' | b'@' | b'?' | b'.')
+            });
+        let tail = &rest[end..];
+        let offset = symbol_offset(tail);
+        // Nothing after the name and its offset.
+        let whole = match tail.trim_start().strip_prefix('(') {
+            Some(inside) => inside.ends_with(')') && offset.is_some(),
+            None => {
+                tail.is_empty()
+                    || (offset.is_some()
+                        && tail
+                            .trim_start_matches(['+', '0', 'x', 'X'])
+                            .bytes()
+                            .all(|byte| byte.is_ascii_hexdigit()))
+            }
+        };
+        (shaped && whole).then_some(Symbol { module, name, offset })
     })
 }
 
@@ -299,11 +348,7 @@ fn module_before(text: &str, end: usize) -> Option<&str> {
         .rposition(|byte| !(byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'-')))
         .map_or(0, |at| at + 1);
     let module = &text[start..end];
-    let (stem, extension) = module.rsplit_once('.')?;
-    let known = MODULE_EXTENSIONS
-        .iter()
-        .any(|known| extension.eq_ignore_ascii_case(known));
-    (known && !stem.is_empty()).then_some(module)
+    module_shaped(module).then_some(module)
 }
 
 /// An exception while the game loaded a file of a resource: `An exception occurred (c0000005 at
@@ -318,10 +363,13 @@ fn load(text: &str) -> Option<(&str, Option<String>)> {
             .find(|c: char| matches!(c, '/' | '\\') || c.is_whitespace())
             .unwrap_or(path.len());
         let resource = &path[..end];
-        resource
-            .bytes()
-            .any(|byte| byte != b'.')
-            .then(|| (cut(resource, MAX_RESOURCE_BYTES), exception_code(text)))
+        let shaped = resource.len() <= MOST_RESOURCE.min(MAX_RESOURCE_BYTES)
+            && few_digits(resource)
+            && resource.bytes().any(|byte| byte != b'.')
+            && resource
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'-'));
+        shaped.then(|| (resource, exception_code(text)))
     })
 }
 
@@ -346,7 +394,8 @@ fn error_code(text: &str) -> Option<&str> {
             .bytes()
             .take_while(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit() || *byte == b'_')
             .count();
-        (length >= 3).then(|| &text[at..at + 4 + length])
+        let code = &text[at..at + 4 + length];
+        ((3..=MOST_ERROR - 4).contains(&length) && few_digits(code)).then_some(code)
     })
 }
 
@@ -648,17 +697,19 @@ mod tests {
             None,
         ),
         (
+            // A blame is the whole text as FiveM writes it: with more after it, the error code.
             "kilo-ohio-lemon (GTA5_b3095.exe+1A2B3C) ERR_GFX_D3D_INIT",
-            "hash:GTA5_b3095.exe+1A2B3C",
-            Some("GTA5.exe"),
-            Some(3095),
-            Some("kilo-ohio-lemon"),
+            "error:ERR_GFX_D3D_INIT",
+            None,
+            None,
+            None,
             None,
         ),
         (
+            // Eleven digits are no build FiveM writes.
             "GTA5_b99999999999.exe+1A",
-            "hash:GTA5_b99999999999.exe+1A",
-            Some("GTA5_b99999999999.exe"),
+            "text:GTA5_b99999999999.exe+{n}A",
+            None,
             None,
             None,
             None,
@@ -713,11 +764,12 @@ mod tests {
             None,
         ),
         (
+            // FiveM writes a symbol instead of the code name, never both: a client wrote this.
             "kilo-ohio-lemon (GTA5_b3095.exe+1A2B3C) GTA5_b3095.exe!sub_140A1B2C3 (0x1c)",
-            "symbol:GTA5_b3095.exe!sub_140A1B2C3+0x1c",
-            Some("GTA5.exe"),
-            Some(3095),
-            Some("kilo-ohio-lemon"),
+            "text:kilo-ohio-lemon (GTA5_b3095.exe+{n}A2B3C) GTA5_b3095.exe!sub_140A1B2C3 ({addr})",
+            None,
+            None,
+            None,
             None,
         ),
         // An error while loading an asset.
@@ -1018,11 +1070,12 @@ mod tests {
         let text = signature(&"é".repeat(300));
         let module = signature(&format!("{}.dll+1A", "a".repeat(400)));
 
-        // `symbol:GTA5_b3095.exe!` is 22 bytes, each crab 4: 58 crabs fit.
-        assert_eq!(symbol.signature.len(), 254);
+        // Neither crabs in a symbol nor a 400-letter module is what FiveM writes: free text.
+        assert_eq!(symbol.form, SignatureForm::Text);
+        assert!(symbol.signature.len() <= MAX_SIGNATURE_BYTES);
         assert_eq!(text.signature, format!("text:{}", "é".repeat(125)));
-        assert_eq!(module.signature.len(), MAX_SIGNATURE_BYTES);
-        assert_eq!(module.module.unwrap().len(), MAX_SIGNATURE_BYTES);
+        assert_eq!(module.form, SignatureForm::Text);
+        assert!(module.signature.len() <= MAX_SIGNATURE_BYTES);
     }
 
     #[test]
@@ -1190,5 +1243,26 @@ mod tests {
         assert!(template(&"word ".repeat(100), None).ends_with("word"));
         assert_eq!(template(&cut_before_a_number, None), "a".repeat(157));
         assert_eq!(template(&"é".repeat(200), None), "é".repeat(MAX_TEMPLATE_CHARS));
+    }
+
+    #[test]
+    fn a_structured_form_takes_only_what_fivem_writes_and_anything_else_is_free_text() {
+        // A sentence in the module's place, a name in the symbol's, a path segment in the
+        // resource's: a modified client's text, so a template that two players must share.
+        for text in [
+            "kilo-ohio-lemon (Jean.Dupont,0612345678.dll+1)",
+            "GTA5_b3095.exe!call_Jean_on_0612345678_he_is_a_",
+            "An exception occurred (c0000005 at 0x1) during loading of resources:/Jean,Dupont/x.meta",
+            &format!("ERR_{}", "A".repeat(80)),
+            &format!("{}-ohio-lemon (GTA5_b3095.exe+1A)", "k".repeat(40)),
+        ] {
+            assert_eq!(signature(text).form, SignatureForm::Text, "{text}");
+        }
+        // Words around a real blame are a client's too.
+        assert_eq!(
+            signature("kilo-ohio-lemon (GTA5_b3095.exe+1A2B3C) call Jean").form,
+            SignatureForm::Text
+        );
+        assert_eq!(signature("ERR_0612345678").form, SignatureForm::Text);
     }
 }
