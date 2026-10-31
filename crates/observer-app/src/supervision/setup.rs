@@ -188,6 +188,7 @@ mod tests {
 
     /// Where the test's panel listens. Nothing binds it: the checks only compare with it.
     const PANEL: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 41975);
+    /// A test fixture, not a real key.
     const KEY: &str = "sv_licenseKey cfxk_ObserverLabFixture_k3y";
 
     fn folder(path: &Path) -> String {

@@ -354,6 +354,8 @@ fn is_word(c: char) -> bool {
 
 #[cfg(test)]
 mod tests {
+    // Every key, token and webhook below is a test fixture, not a real secret.
+
     use super::*;
 
     fn masked(text: &str) -> String {

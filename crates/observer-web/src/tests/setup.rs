@@ -15,6 +15,7 @@ use crate::gate::Gate;
 const FOLDER: &str = "/api/servers/default/setup/folder";
 const CFG: &str = "/api/servers/default/setup/cfg";
 const SETUP: &str = "/api/servers/default/setup";
+/// A test fixture, not a real key.
 const KEY: &str = "sv_licenseKey cfxk_ObserverLabFixture_k3y";
 
 impl Server {

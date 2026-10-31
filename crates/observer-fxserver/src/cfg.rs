@@ -779,6 +779,8 @@ fn quote(word: &str, max_chars: usize) -> String {
 
 #[cfg(test)]
 mod tests {
+    // Every key, password and connection string below is a test fixture, not a real secret.
+
     use std::fmt::Write;
 
     use tempfile::TempDir;
