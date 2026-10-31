@@ -264,7 +264,7 @@ function PlayerRow({ player, zone }: { player: PlayerSummary; zone: string }) {
                 <CopyValue
                     value={player.license}
                     shown={shortLicence(player.license)}
-                    label={t.players.copyLicence}
+                    label={t.players.copyLicence(player.license)}
                 />
             </td>
             <td className={cn(number, 'font-semibold text-ink')}>
@@ -298,7 +298,7 @@ function PlayerItem({ player, zone }: { player: PlayerSummary; zone: string }) {
             <CopyValue
                 value={player.license}
                 shown={shortLicence(player.license)}
-                label={t.players.copyLicence}
+                label={t.players.copyLicence(player.license)}
             />
             <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-small">
                 <Figure term={sorts.playTime}>{format.playTime(player.playMs + player.importedMs)}</Figure>

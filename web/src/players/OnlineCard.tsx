@@ -114,7 +114,7 @@ function Licence({ player }: { player: OnlinePlayer }) {
         <CopyValue
             value={player.license}
             shown={shortLicence(player.license)}
-            label={t.players.copyLicence}
+            label={t.players.copyLicence(player.license)}
         />
     );
 }

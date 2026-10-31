@@ -168,7 +168,7 @@ describe('PlayersPage', () => {
 
         const [ruby, confirming, unconfirmed] = rows('players-online');
         expect(within(ruby!).getByRole('link', { name: 'Ruby Vex' }).getAttribute('href')).toBe('/players/7');
-        expect(within(ruby!).getByRole('button', { name: en.players.copyLicence })).not.toBeNull();
+        expect(within(ruby!).getByRole('button', { name: en.players.copyLicence(LICENSE) })).not.toBeNull();
         expect(within(ruby!).getByText('2h 14m')).not.toBeNull();
         expect(within(ruby!).getByText('314h')).not.toBeNull();
         for (const [row, word] of [

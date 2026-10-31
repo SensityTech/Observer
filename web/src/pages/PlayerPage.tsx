@@ -111,7 +111,7 @@ function Profile({ profile }: { profile: PlayerProfile }) {
                         <CopyValue
                             value={profile.license}
                             shown={shortLicence(profile.license)}
-                            label={t.players.copyLicence}
+                            label={t.players.copyLicence(profile.license)}
                         />
                     </HeaderFact>
                     <HeaderFact term={words.firstSeen}>
@@ -483,7 +483,7 @@ function IdentifierValue({ identifier }: { identifier: ShownIdentifier }) {
         <CopyValue
             value={value}
             shown={identifier.kind === 'token' ? shortToken(identifier.value) : identifier.value}
-            label={words.copy(words.kinds[identifier.kind])}
+            label={words.copy(words.kinds[identifier.kind], value)}
         />
     );
 }

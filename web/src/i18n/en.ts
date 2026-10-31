@@ -1172,7 +1172,7 @@ export const en = {
             'The player was forgotten: their profile, play time, names and the identifiers only they held are deleted.',
         online: 'Online',
         offline: 'Offline',
-        copyLicence: 'Copy the licence',
+        copyLicence: (license: string) => `Copy the licence ${license}`,
         now: {
             title: 'Online now',
             meta: (players: number) => `${count(players, { one: 'player', other: 'players' })} · every 10 s`,
@@ -1364,7 +1364,7 @@ export const en = {
                     token: 'Hardware token',
                     ip: 'Address',
                 } satisfies Record<IdentifierKind, string>,
-                copy: (kind: string) => `Copy the ${kind} identifier`,
+                copy: (kind: string, value: string) => `Copy the ${kind} identifier ${value}`,
                 sameAddress: (others: number) =>
                     others === 0
                         ? 'An address no other licence used'
@@ -1439,6 +1439,7 @@ export const en = {
             pathHint: 'The full path on this host of <txData>/<profile>/data/playersDB.json.',
             start: 'Import',
             started: 'The file was read and checked whole. Its players are being written.',
+            running: 'An import is running already: wait for it to end.',
             progress: 'Import progress',
             writing: (written: number, read: number) =>
                 `Writing ${formatNumber('en', written)} of ${count(read, { one: 'player', other: 'players' })}`,

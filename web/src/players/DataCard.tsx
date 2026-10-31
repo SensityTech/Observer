@@ -227,7 +227,11 @@ function ImportForm({ zone }: { zone: string }) {
                 }}
             />
             {start.isError && refused === null && (
-                <Notice tone="danger">{errorMessage(t, start.error)}</Notice>
+                <Notice tone="danger">
+                    {start.error instanceof ApiError && start.error.code === 'job_running'
+                        ? words.running
+                        : errorMessage(t, start.error)}
+                </Notice>
             )}
             <div>
                 <Button type="submit" icon={FileInput} pending={start.isPending} disabled={writing}>
