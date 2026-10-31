@@ -424,7 +424,7 @@
             display: flex;
             align-items: center;
             gap: 8px;
-            height: 60px;
+            height: var(--mobilebar-height);
             padding: 0 8px;
             border-bottom: 1px solid var(--line);
             background: color-mix(in srgb, var(--bg) 82%, transparent);

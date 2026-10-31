@@ -300,7 +300,7 @@
         }
         /* Scrolled to, the card's top stops at the mobile bar's bottom edge rather than under the bar. */
         .console {
-            scroll-margin-top: 60px;
+            scroll-margin-top: var(--mobilebar-height);
         }
         .filter,
         .console-tools .console-tool {
