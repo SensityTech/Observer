@@ -2,6 +2,7 @@
 //! database in a temporary directory.
 
 mod artifacts;
+mod changes;
 mod diagnostics;
 mod files;
 mod live;
@@ -20,15 +21,15 @@ use axum::http::{HeaderMap, Method, Request, StatusCode, header};
 use http_body_util::BodyExt;
 use jiff::SignedDuration;
 use observer_app::{
-    Accounts, Artifacts, ArtifactsSetup, ArtifactsTask, AuditLog, Clock, Diagnostics, DiagnosticsSetup,
-    DiagnosticsTask, Metrics, MetricsSetup, PasswordCost, Running, Schedule, ScheduleSetup, ScheduleTask,
-    Servers, Setup, Supervision,
+    Accounts, Artifacts, ArtifactsSetup, ArtifactsTask, AuditLog, Changes, ChangesSetup, ChangesTask, Clock,
+    Diagnostics, DiagnosticsSetup, DiagnosticsTask, Metrics, MetricsSetup, PasswordCost, Running, Schedule,
+    ScheduleSetup, ScheduleTask, Servers, Setup, Supervision,
 };
 use observer_artifacts::Http;
 use observer_artifacts::catalog::{Catalog, Listing};
 use observer_domain::about::Build;
 use observer_domain::audit::ActorKind;
-use observer_store::Database;
+use observer_store::{ChangesDatabase, Database};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 use tower::ServiceExt;
@@ -61,6 +62,7 @@ struct Server {
     _scheduling: ScheduleTask,
     _building: ArtifactsTask,
     _diagnosing: DiagnosticsTask,
+    _following: ChangesTask,
     cookie_name: String,
 }
 
@@ -190,6 +192,18 @@ impl Server {
         })
         .await
         .unwrap();
+        let (changes, following) = Changes::start(ChangesSetup {
+            db: db.clone(),
+            store: ChangesDatabase::open(dir.path().join("changes.sqlite3"))
+                .await
+                .unwrap(),
+            clock: clock.clone(),
+            supervision: supervision.clone(),
+            data_dir: dir.path().join("data"),
+            artifacts: dir.path().join("data/artifacts"),
+        })
+        .await
+        .unwrap();
         let instance_id = db.instance_id().await.unwrap();
         let services = Services {
             accounts: accounts.clone(),
@@ -201,6 +215,7 @@ impl Server {
             artifacts,
             diagnostics,
             files: observer_app::Files::new(db.clone(), clock.clone(), accounts.clone()),
+            changes,
         };
         let state = AppState::new(
             BUILD,
@@ -226,6 +241,7 @@ impl Server {
             _scheduling: scheduling,
             _building: building,
             _diagnosing: diagnosing,
+            _following: following,
             cookie_name: format!("observer_session_{instance_id}"),
         }
     }

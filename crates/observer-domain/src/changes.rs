@@ -2,10 +2,14 @@
 //! compare, and the rules that only depend on those records. Paths are relative to the server's
 //! data folder, `/`-separated (`resources/[qb]/qb-core/fxmanifest.lua`).
 
+use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use ts_rs::TS;
 
+use crate::audit::AuditAction;
 use crate::files::{NEVER_SHOW, glob_matches};
+use crate::server_data::Game;
 
 /// The extensions whose files get line diffs, until the owner changes the list.
 pub const DEFAULT_EXTENSIONS: &[&str] = &[
@@ -248,6 +252,414 @@ pub struct GitHead {
 pub struct Package {
     pub name: String,
     pub version: Option<String>,
+}
+
+/// What changed between two snapshots, counted.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ChangeCounts {
+    pub added: u32,
+    pub removed: u32,
+    pub updated: u32,
+    /// Files changed and the version did not: what a version string never shows.
+    pub same_version: u32,
+    pub renamed: u32,
+    pub moved: u32,
+    pub did_not_start: u32,
+    /// Waiting for the hashing pass: neither changed nor unchanged yet.
+    pub checking: u32,
+    pub unchanged: u32,
+    /// Files added, removed or modified in the resources that changed.
+    pub files: u32,
+    /// What changed besides the resources.
+    pub environment: Vec<EnvironmentFact>,
+}
+
+impl ChangeCounts {
+    /// Whether anything at all changed.
+    pub fn any(&self) -> bool {
+        self.added
+            + self.removed
+            + self.updated
+            + self.same_version
+            + self.renamed
+            + self.moved
+            + self.did_not_start
+            > 0
+            || !self.environment.is_empty()
+    }
+}
+
+/// What the server runs with besides its resources.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum EnvironmentFact {
+    Build,
+    GameBuild,
+    Launch,
+    Cfg,
+}
+
+/// A snapshot as lists show it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SnapshotSummary {
+    pub id: i64,
+    pub kind: SnapshotKind,
+    pub taken_at: Timestamp,
+    pub cause: Option<StartCause>,
+    pub by: Option<String>,
+    pub state: SnapshotState,
+    pub partial_reason: Option<PartialReason>,
+    pub baseline: bool,
+    pub build: Option<u32>,
+    pub game_build: Option<u32>,
+    pub files: Option<u64>,
+    pub bytes: Option<u64>,
+    /// What changed against the start before it, once both are listed; none for a baseline.
+    pub counts: Option<ChangeCounts>,
+    /// The run it started ended in a crash.
+    pub crashed: bool,
+}
+
+/// `GET /servers/default/changes/starts`: starts newest first, a page of them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct StartList {
+    pub starts: Vec<SnapshotSummary>,
+    /// The `before` of the next page, none on the last.
+    pub next: Option<i64>,
+    /// The latest check of the disk, kept until the next one.
+    pub check: Option<SnapshotSummary>,
+}
+
+/// How a resource changed between two snapshots.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum ResourceChangeKind {
+    Added,
+    Removed,
+    /// A removed and an added folder with the same files, or most of them.
+    Renamed,
+    /// The same name in another category.
+    Moved,
+    /// Files and version changed.
+    Updated,
+    /// Files changed, version did not.
+    SameVersion,
+    /// Some files wait for the hashing pass and no size differs.
+    Checking,
+    /// Some files were never hashed: the snapshot is partial.
+    Unknown,
+    /// Files unchanged, started last time and not this time.
+    DidNotStart,
+    Unchanged,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct FileCounts {
+    pub added: u32,
+    pub removed: u32,
+    pub modified: u32,
+}
+
+impl FileCounts {
+    pub fn total(&self) -> u32 {
+        self.added + self.removed + self.modified
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct LineCounts {
+    pub added: u32,
+    pub removed: u32,
+}
+
+/// A resource that changed between two snapshots.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ResourceChange {
+    /// The later path, or the earlier one for a removed resource.
+    pub path: String,
+    /// The earlier path of a renamed or moved resource.
+    pub from_path: Option<String>,
+    pub name: String,
+    pub change: ResourceChangeKind,
+    /// A renamed or moved resource whose files changed too.
+    pub changed: bool,
+    pub from_version: Option<String>,
+    pub to_version: Option<String>,
+    pub duplicate: bool,
+    pub escrowed: bool,
+    pub files: FileCounts,
+    /// Lines of the text files, none past what one comparison counts.
+    pub lines: Option<LineCounts>,
+    /// Who wrote its files over SFTP between the two snapshots.
+    pub by: Vec<String>,
+}
+
+/// A number before and after.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct NumberChange {
+    pub from: Option<u32>,
+    pub to: Option<u32>,
+}
+
+/// A launch setting before and after: `onesync`, `autoStart`, `txadminEvents`, and for the owner
+/// only `cfgFile` and `dataPath`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SettingChange {
+    pub setting: String,
+    #[ts(type = "unknown")]
+    pub from: Value,
+    #[ts(type = "unknown")]
+    pub to: Value,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum ArgumentChangeKind {
+    Set,
+    Removed,
+    /// Its value changed, which only the owner learns; no value is ever shown.
+    Changed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ArgumentChange {
+    pub name: String,
+    pub change: ArgumentChangeKind,
+}
+
+/// How a file changed between two snapshots.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum FileChangeKind {
+    Added,
+    Removed,
+    /// The same contents under another path.
+    Renamed,
+    Modified,
+    Unchanged,
+}
+
+/// A file of the cfg exec chain that changed; only the owner gets them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct CfgFileChange {
+    pub path: String,
+    pub change: FileChangeKind,
+    pub lines: Option<LineCounts>,
+}
+
+/// The cfg exec chain before and after.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct CfgChange {
+    /// Empty for anyone but the owner, who alone sees the cfg's paths.
+    pub files: Vec<CfgFileChange>,
+    pub changed: u32,
+    pub lines: LineCounts,
+    /// Resources the chain starts now and did not before.
+    pub started: Vec<String>,
+    /// Resources it started before and does not now.
+    pub stopped: Vec<String>,
+}
+
+/// An entry of the audit log that says who changed something between two starts.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct Attribution {
+    pub action: AuditAction,
+    pub by: Option<String>,
+    pub at: Timestamp,
+    #[ts(type = "Record<string, unknown>")]
+    pub details: Value,
+}
+
+/// What the server ran with besides its resources, before and after.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct EnvironmentChange {
+    pub build: Option<NumberChange>,
+    pub game_build: Option<NumberChange>,
+    pub game: Option<GameChange>,
+    pub settings: Vec<SettingChange>,
+    pub arguments: Vec<ArgumentChange>,
+    pub cfg: CfgChange,
+    /// Builds selected, applied and rolled back, and launch settings saved, between the two.
+    pub attributions: Vec<Attribution>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct GameChange {
+    pub from: Option<Game>,
+    pub to: Option<Game>,
+}
+
+/// A resource started, stopped or restarted while the run was up.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct LiveChange {
+    pub at: Timestamp,
+    pub name: String,
+    pub change: LiveChangeKind,
+    /// Who typed it in Observer's console; none when it was made another way.
+    pub by: Option<String>,
+    /// The command, `restart chat`.
+    pub command: Option<String>,
+}
+
+/// `GET /servers/default/changes?from=&to=`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct Comparison {
+    pub from: SnapshotSummary,
+    pub to: SnapshotSummary,
+    pub counts: ChangeCounts,
+    pub environment: EnvironmentChange,
+    /// The resources that changed, those whose files changed under the same version first.
+    pub resources: Vec<ResourceChange>,
+    /// What started and stopped while the later run was up.
+    pub live: Vec<LiveChange>,
+    /// Files of the later snapshot modified while the server was starting.
+    pub changed_while_starting: u32,
+}
+
+/// A file of a resource between two snapshots.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct FileChange {
+    pub path: String,
+    pub from_path: Option<String>,
+    pub kind: FileKind,
+    pub change: FileChangeKind,
+    pub from_size: Option<u64>,
+    pub to_size: Option<u64>,
+    /// The plain SHA-256 of a binary, encrypted or generated file, before and after.
+    pub from_sha256: Option<String>,
+    pub to_sha256: Option<String>,
+    pub lines: Option<LineCounts>,
+    pub flags: Vec<FileFlag>,
+    /// Its contents are never shown: the glob or name that hides it.
+    pub hidden_by: Option<String>,
+    /// Both versions' contents are kept, so the diff can be read.
+    pub kept: bool,
+    /// Who wrote it over SFTP between the two snapshots, and when; a hint, since a file can be
+    /// written again after.
+    pub written_by: Option<String>,
+    pub written_at: Option<Timestamp>,
+}
+
+/// An npm package of a resource before and after.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct PackageChange {
+    pub name: String,
+    pub from: Option<String>,
+    pub to: Option<String>,
+}
+
+/// `GET /servers/default/changes/resource?from=&to=&path=`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ResourceDetail {
+    pub change: ResourceChange,
+    pub from_manifest: Option<Manifest>,
+    pub to_manifest: Option<Manifest>,
+    pub from_git: Option<GitHead>,
+    pub to_git: Option<GitHead>,
+    pub packages: Vec<PackageChange>,
+    /// Every file, unchanged ones included, in path order.
+    pub files: Vec<FileChange>,
+    /// The other folders of the later snapshot with the same name, of which FXServer loads one.
+    pub duplicates: Vec<String>,
+}
+
+/// A version of a resource over the kept starts.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ResourceVersion {
+    /// The first start that ran it.
+    pub since: SnapshotSummary,
+    /// The last start that ran it, the newest for the version running now.
+    pub until: i64,
+    pub version: Option<String>,
+    pub path: String,
+}
+
+/// `GET /servers/default/changes/diff`: a file's diff between two snapshots.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct FileDiff {
+    pub file: FileChange,
+    /// The lines, when both versions are text whose contents are kept.
+    pub diff: Option<TextDiff>,
+}
+
+/// `GET /servers/default/changes/file`: a file of one snapshot, masked.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct FileText {
+    pub path: String,
+    pub snapshot: i64,
+    pub text: TextPage,
+}
+
+/// The owner's settings with what each glob covers now.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ChangesSettingsView {
+    pub settings: ChangesSettings,
+    /// Files each hidden glob covers in the latest snapshot, in order.
+    pub hidden_matches: Vec<u32>,
+    pub excluded_matches: Vec<u32>,
+    /// Compressed bytes of the contents kept.
+    pub stored: u64,
+}
+
+/// What a purge cleared.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct Purged {
+    /// Versions of the file whose contents were kept and are no more.
+    pub versions: u32,
+    /// Their compressed bytes.
+    pub bytes: u64,
 }
 
 /// A piece of a line as the diff shows it.

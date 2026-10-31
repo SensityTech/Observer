@@ -3,9 +3,11 @@
 //! task follows the supervisor for the spawns, the resources the bridge reports started, and the
 //! starts and stops while a run is up; another keeps the history within its bounds.
 
+mod compare;
 mod job;
 mod plan;
 mod settings;
+mod views;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -14,14 +16,17 @@ use std::time::{Duration, Instant};
 
 use jiff::{SignedDuration, Timestamp};
 use observer_domain::audit::AuditAction;
-use observer_domain::changes::{ChangesSettings, LiveChangeKind, MAX_TEXT_LIMIT, StartCause, valid_glob};
+use observer_domain::changes::{
+    ChangesSettings, LiveChangeKind, MAX_TEXT_LIMIT, Purged, StartCause, valid_glob,
+};
 use observer_domain::error::{ApiError, ErrorCode};
+use observer_domain::launch::LaunchSettings;
 use observer_fxserver::changes::{Keys, Limits, ScanSettings, mask};
 use observer_fxserver::command;
 use observer_fxserver::supervisor::{Cause, Event, EventKind, ResourceEvent, State, Status};
 use observer_store::changes::live::{self, LiveChange};
 use observer_store::changes::{index, resources, snapshots, texts, upkeep};
-use observer_store::{ChangesDatabase, Database, launch};
+use observer_store::{ChangesDatabase, Database, StoreError, launch};
 use serde_json::json;
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::{Mutex as AsyncMutex, broadcast, watch};
@@ -30,8 +35,10 @@ use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 use self::job::{Ended, Spawn};
+pub use self::views::ComparedTo;
 use crate::audit::Record;
 use crate::{Caller, Clock, Error, Servers, Supervision};
+pub use observer_fxserver::changes::diff::DiffOptions;
 
 /// The one server Observer runs.
 pub(crate) const SERVER: &str = Servers::DEFAULT;
@@ -49,6 +56,8 @@ const RUNS_KEPT: u32 = 8;
 const CHECK_EVERY: Duration = Duration::from_secs(30);
 const MAX_GLOBS: usize = 200;
 const MAX_EXTENSIONS: usize = 200;
+/// When the last full verification ended, in the state database's settings.
+const VERIFIED_AT: &str = "changes.verified_at";
 
 /// What [`Changes::start`] works with.
 pub struct ChangesSetup {
@@ -270,6 +279,76 @@ impl Changes {
         Ok(())
     }
 
+    /// Reads every file again at the capped rate, whatever the index says: what a copy that kept
+    /// both size and time hid shows at the next start.
+    pub async fn verify(&self, caller: &Caller) -> Result<(), Error> {
+        let mut job = self.inner.job.lock().await;
+        if job.as_ref().is_some_and(|running| !running.task.is_finished()) {
+            return Err(ErrorCode::CheckRunning.into());
+        }
+        let launch = self
+            .inner
+            .shared
+            .db
+            .read(|conn| launch::get(conn, SERVER))
+            .await?
+            .ok_or(ErrorCode::LaunchNotConfigured)?
+            .settings;
+        let record = Record::by(caller, AuditAction::ChangeVerifyRequested).target(SERVER);
+        let now = self.inner.shared.clock.now();
+        self.inner
+            .shared
+            .db
+            .write(move |tx| record.write(tx, now).map_err(Error::from))
+            .await?;
+        let (shared, settings) = (Arc::clone(&self.inner.shared), self.settings());
+        let cancel = CancellationToken::new();
+        let task = tokio::spawn(run_verification(shared, settings, launch, cancel.clone()));
+        *job = Some(Running { cancel, task });
+        Ok(())
+    }
+
+    /// Clears every kept version of the file at `path`, in any start or check, with no copy left
+    /// in the database's free pages, its log or the copies set aside. A version shared with
+    /// another path goes too: it is stored once.
+    pub async fn purge(&self, caller: &Caller, path: String) -> Result<Purged, Error> {
+        let store = &self.inner.shared.store;
+        let wanted = path.clone();
+        let digests = store.read(move |conn| upkeep::digests_of(conn, &wanted)).await?;
+        let (versions, bytes) = store
+            .maintain(move |conn| -> Result<(usize, u64), Error> {
+                conn.pragma_update(None, "secure_delete", true)
+                    .map_err(StoreError::from)?;
+                let transaction = conn.transaction().map_err(StoreError::from)?;
+                let cleared = upkeep::clear_bodies(&transaction, &digests)?;
+                transaction.commit().map_err(StoreError::from)?;
+                upkeep::compact(conn)?;
+                conn.pragma_update(None, "secure_delete", false)
+                    .map_err(StoreError::from)?;
+                Ok(cleared)
+            })
+            .await?;
+        for copy in store.set_asides() {
+            if let Err(error) = tokio::fs::remove_file(&copy).await {
+                warn!(%error, copy = %copy.display(), "a set-aside copy of the changes database could not be deleted");
+            }
+        }
+        let purged = Purged {
+            versions: u32::try_from(versions).unwrap_or(u32::MAX),
+            bytes,
+        };
+        let record = Record::by(caller, AuditAction::ChangeContentsPurged)
+            .target(path)
+            .details(json!({ "versions": purged.versions, "bytes": purged.bytes }));
+        let now = self.inner.shared.clock.now();
+        self.inner
+            .shared
+            .db
+            .write(move |tx| record.write(tx, now).map_err(Error::from))
+            .await?;
+        Ok(purged)
+    }
+
     /// Stores the owner's settings, audited with what changed. New extensions forget the index, so
     /// that the next start reads every file again for what it is now.
     pub async fn change_settings(
@@ -322,10 +401,22 @@ impl Changes {
         let status = self.inner.supervision.supervisor().status();
         let cancel = CancellationToken::new();
         let generation = spawn.generation;
+        let launch = spawn.launch.clone();
         let task = tokio::spawn({
             let cancel = cancel.clone();
             async move {
-                match job::start(shared, settings, spawn, status, cancel).await {
+                let started = job::start(
+                    Arc::clone(&shared),
+                    settings.clone(),
+                    spawn,
+                    status,
+                    cancel.clone(),
+                )
+                .await;
+                if matches!(started, Ok(Ended::Done(_))) && verification_due(&shared, &settings).await {
+                    run_verification(shared, settings, launch, cancel).await;
+                }
+                match started {
                     Ok(Ended::Done(id)) => info!(snapshot = id, generation, "the start's snapshot is taken"),
                     Ok(Ended::Cancelled(id)) => {
                         info!(snapshot = id, generation, "the start's snapshot was cut short");
@@ -516,6 +607,45 @@ impl Changes {
                 Ok(())
             })
             .await
+    }
+}
+
+/// Whether the last full verification is older than the settings ask for.
+async fn verification_due(shared: &Shared, settings: &ChangesSettings) -> bool {
+    if settings.verify_days == 0 {
+        return false;
+    }
+    let last = shared
+        .db
+        .read(|conn| observer_store::settings::get(conn, VERIFIED_AT))
+        .await
+        .ok()
+        .flatten()
+        .and_then(|at| at.parse::<Timestamp>().ok());
+    let every = SignedDuration::from_hours(24 * i64::from(settings.verify_days));
+    last.is_none_or(|last| shared.clock.now() - every >= last)
+}
+
+async fn run_verification(
+    shared: Arc<Shared>,
+    settings: ChangesSettings,
+    launch: LaunchSettings,
+    cancel: CancellationToken,
+) {
+    match job::verify(Arc::clone(&shared), settings, launch, cancel).await {
+        Ok(true) => {
+            let now = shared.clock.now().to_string();
+            let saved = shared
+                .db
+                .write(move |tx| observer_store::settings::set(tx, VERIFIED_AT, &now))
+                .await;
+            if let Err(error) = saved {
+                warn!(%error, "cannot record the end of the full verification");
+            }
+            info!("every file of the server was read again");
+        }
+        Ok(false) => {}
+        Err(error) => warn!(%error, "the full verification failed"),
     }
 }
 

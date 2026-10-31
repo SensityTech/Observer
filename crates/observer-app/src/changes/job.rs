@@ -144,6 +144,83 @@ pub(crate) async fn check(
     Ok(ended)
 }
 
+/// Reads every file again, whatever the index says, and records what it finds there: a copy that
+/// kept both size and time shows at the next start. No snapshot is taken.
+pub(crate) async fn verify(
+    shared: Arc<Shared>,
+    settings: ChangesSettings,
+    launch: LaunchSettings,
+    cancel: CancellationToken,
+) -> Result<bool, Error> {
+    let Some(latest) = shared
+        .store
+        .read(|conn| snapshots::starts(conn, SERVER, None, 1))
+        .await?
+        .pop()
+    else {
+        return Ok(false);
+    };
+    let input = ListingInput {
+        data: PathBuf::from(&launch.data_path),
+        launch,
+        settings: shared.scan_settings(&settings),
+        keys: shared.keys.clone(),
+        index: std::collections::HashMap::new(),
+        bodies: HashSet::new(),
+        read_text_now: false,
+    };
+    let mut rate = Rate::new(settings.hash_rate);
+    let floor = below_floor(&shared.data_dir).await;
+    let pass = {
+        let cancel = cancel.clone();
+        let (pass, returned) = tokio::task::spawn_blocking(move || {
+            let pass = plan::listing_pass(&input, &mut rate, &cancel);
+            (pass.map(|pass| (pass, input)), rate)
+        })
+        .await
+        .map_err(|error| Error::Io(std::io::Error::other(error)))?;
+        rate = returned;
+        match pass {
+            Ok(pass) => pass,
+            Err(_) => return Ok(false),
+        }
+    };
+    let (pass, input) = pass;
+    let waiting: Vec<((), Entry)> = pass
+        .resources
+        .iter()
+        .flat_map(|planned| planned.slots.iter())
+        .filter_map(|slot| match slot {
+            Slot::Pending(entry) => Some(((), entry.clone())),
+            Slot::Known(_) => None,
+        })
+        .collect();
+    for chunk in waiting.chunks(CHUNK_FILES) {
+        let (chunk, settings, keys, cancel) = (
+            chunk.to_vec(),
+            input.settings.clone(),
+            input.keys.clone(),
+            cancel.clone(),
+        );
+        let (reads, returned) = tokio::task::spawn_blocking(move || {
+            let reads = plan::hash(chunk, &settings, &keys, &mut rate, &cancel);
+            (reads, rate)
+        })
+        .await
+        .map_err(|error| Error::Io(std::io::Error::other(error)))?;
+        rate = returned;
+        let Ok(reads) = reads else {
+            return Ok(false);
+        };
+        let reads: Vec<Read> = reads.into_iter().map(|((), read)| read).collect();
+        let mut batch = Batch::new(latest.id, None, floor);
+        batch.add_reads(&reads, true);
+        let now = shared.clock.now();
+        shared.store.write(move |tx| batch.write(tx, now)).await?;
+    }
+    Ok(true)
+}
+
 /// What the launch settings say, as a snapshot keeps them: every value but the extra arguments',
 /// which an argument may well hold a token in; each of those is kept as a tag that tells a value
 /// changed and nothing else.

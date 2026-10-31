@@ -28,7 +28,7 @@ mod users;
 pub use accounts::Accounts;
 pub use artifacts::{ArtifactTimings, Artifacts, ArtifactsSetup, ArtifactsTask};
 pub use audit::AuditLog;
-pub use changes::{Changes, ChangesSetup, ChangesTask};
+pub use changes::{Changes, ChangesSetup, ChangesTask, ComparedTo, DiffOptions};
 pub use clock::Clock;
 pub use diagnostics::{Diagnostics, DiagnosticsSetup, DiagnosticsTask, MAX_DOWNLOAD};
 pub use error::Error;

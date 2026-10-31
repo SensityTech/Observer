@@ -11,11 +11,13 @@ use std::time::{Duration, Instant};
 
 use jiff::Timestamp;
 use observer_app::{
-    Accounts, Caller, Changes, ChangesSetup, ChangesTask, Client, Clock, PasswordCost, Running, Servers,
-    Setup, Supervision,
+    Accounts, Caller, Changes, ChangesSetup, ChangesTask, Client, Clock, DiffOptions, PasswordCost, Running,
+    Servers, Setup, Supervision,
 };
 use observer_domain::audit::ActorKind;
-use observer_domain::changes::{FileKind, LiveChangeKind, SnapshotKind, SnapshotState, StartCause};
+use observer_domain::changes::{
+    FileChangeKind, FileKind, LiveChangeKind, ResourceChangeKind, SnapshotKind, SnapshotState, StartCause,
+};
 use observer_domain::launch::{LaunchSettings, OneSync};
 use observer_domain::server::{ServerState, ServerStatus};
 use observer_fxserver::changes::tree::TreeEntry;
@@ -61,6 +63,7 @@ struct Lab {
     store: ChangesDatabase,
     supervision: Supervision,
     running: Option<Running>,
+    changes: Changes,
     following: Option<ChangesTask>,
     owner: Caller,
 }
@@ -113,7 +116,7 @@ impl Lab {
         let store = ChangesDatabase::open(observer_data.join("changes.sqlite3"))
             .await
             .unwrap();
-        let (_, following) = Changes::start(ChangesSetup {
+        let (changes, following) = Changes::start(ChangesSetup {
             db,
             store: store.clone(),
             clock,
@@ -129,6 +132,7 @@ impl Lab {
             store,
             supervision,
             running: Some(running),
+            changes,
             following: Some(following),
             owner,
         }
@@ -402,6 +406,55 @@ async fn a_restart_after_an_edit_records_the_new_files_with_their_secrets_hidden
     for text in lab.every_text().await {
         assert!(!text.contains("PlantedTokenThatMustNeverBeStored"), "{text}");
     }
+
+    let compared = lab.changes.compare(&lab.owner, None, None).await.unwrap();
+    assert_eq!((compared.from.id, compared.to.id), (first.id, second.id));
+    let kinds: Vec<(&str, ResourceChangeKind)> = compared
+        .resources
+        .iter()
+        .map(|resource| (resource.name.as_str(), resource.change))
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            ("chat", ResourceChangeKind::SameVersion),
+            ("qb-core", ResourceChangeKind::Updated),
+            ("qb-housing", ResourceChangeKind::Added),
+        ]
+    );
+    assert_eq!(compared.counts.same_version, 1);
+    assert_eq!(
+        compared.resources[0]
+            .lines
+            .map(|lines| (lines.added, lines.removed)),
+        Some((1, 0))
+    );
+    let diff = lab
+        .changes
+        .diff(
+            &lab.owner,
+            None,
+            None,
+            "resources/chat/client.lua".to_owned(),
+            DiffOptions::default(),
+        )
+        .await
+        .unwrap();
+    let added = &diff.diff.unwrap().hunks[0].lines[1];
+    assert!(added.segments.iter().any(|segment| segment.redacted));
+    assert!(!serde_json::to_string(added).unwrap().contains("PlantedToken"));
+    let cfg = lab
+        .changes
+        .diff(
+            &lab.owner,
+            None,
+            None,
+            "server.cfg".to_owned(),
+            DiffOptions::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(cfg.file.change, FileChangeKind::Unchanged);
     lab.stop().await;
 }
 

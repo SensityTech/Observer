@@ -6,14 +6,14 @@ use anyhow::Context;
 use axum::Router;
 use jiff::tz::TimeZone;
 use observer_app::{
-    Accounts, Artifacts, ArtifactsSetup, ArtifactsTask, AuditLog, Clock, DatabaseFiles, Diagnostics,
-    DiagnosticsSetup, Metrics, MetricsSetup, PasswordCost, Running, Schedule, ScheduleSetup, ScheduleTask,
-    Servers, Setup, Sources, Supervision,
+    Accounts, Artifacts, ArtifactsSetup, ArtifactsTask, AuditLog, Changes, ChangesSetup, Clock,
+    DatabaseFiles, Diagnostics, DiagnosticsSetup, Metrics, MetricsSetup, PasswordCost, Running, Schedule,
+    ScheduleSetup, ScheduleTask, Servers, Setup, Sources, Supervision,
 };
 use observer_artifacts::Http;
 use observer_artifacts::catalog::Catalog;
 use observer_fxserver::console::{ConsoleLog, LogLimits};
-use observer_store::{BackupKind, Database};
+use observer_store::{BackupKind, ChangesDatabase, Database};
 use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
@@ -82,6 +82,19 @@ pub async fn run(config: Config, args: RunArgs) -> anyhow::Result<()> {
         data_dir: paths.root.clone(),
     })
     .await?;
+    // Before FXServer boots, so that its first start gets a snapshot.
+    let changes_db = ChangesDatabase::open(&paths.changes)
+        .await
+        .with_context(|| format!("cannot open {}", paths.changes.display()))?;
+    let (changes, following) = Changes::start(ChangesSetup {
+        db: db.clone(),
+        store: changes_db.clone(),
+        clock: clock.clone(),
+        supervision: supervision.clone(),
+        data_dir: paths.root.clone(),
+        artifacts: paths.artifacts.clone(),
+    })
+    .await?;
     // Before FXServer boots, so that Observer's own start counts as one for the schedule.
     let (schedule, scheduling) = Schedule::start(
         ScheduleSetup {
@@ -141,6 +154,7 @@ pub async fn run(config: Config, args: RunArgs) -> anyhow::Result<()> {
         artifacts,
         diagnostics,
         files: files.clone(),
+        changes,
     };
     let state = observer_web::AppState::new(
         BUILD,
@@ -221,6 +235,8 @@ pub async fn run(config: Config, args: RunArgs) -> anyhow::Result<()> {
     .await;
     supervised.close().await;
     diagnosing.close().await;
+    // After the supervision: a stop of FXServer ends a snapshot's job, which this joins.
+    following.close().await;
     // After the supervision, so that FXServer's stop is in the statistics.
     sampling.close().await;
     stop.cancel();
@@ -237,6 +253,10 @@ pub async fn run(config: Config, args: RunArgs) -> anyhow::Result<()> {
         .close()
         .await
         .context("cannot close the metrics database")?;
+    changes_db
+        .close()
+        .await
+        .context("cannot close the changes database")?;
     db.close().await.context("cannot close the database")?;
     // Before the release, so that the tray icon leaves the notification area while Windows lets
     // the process run.
