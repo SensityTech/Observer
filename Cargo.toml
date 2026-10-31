@@ -14,6 +14,7 @@ observer-artifacts = { path = "crates/observer-artifacts" }
 observer-domain = { path = "crates/observer-domain" }
 observer-fxserver = { path = "crates/observer-fxserver" }
 observer-platform = { path = "crates/observer-platform" }
+observer-sftp = { path = "crates/observer-sftp" }
 observer-store = { path = "crates/observer-store" }
 observer-web = { path = "crates/observer-web" }
 
@@ -31,6 +32,11 @@ minidump = "0.27.0"
 minidump-synth = "0.27.0"
 reqwest = { version = "0.13.5", default-features = false, features = ["rustls"] }
 rusqlite = { version = "0.40.2", features = ["bundled"] }
+# Pinned exactly: the SSH stack faces the internet and moves fast; each upgrade reruns the real-client tests.
+russh = { version = "=0.65.0", default-features = false, features = ["aws-lc-rs"] }
+russh-sftp = "=3.0.1"
+# The version russh pins: parsing pasted public keys and their fingerprints.
+ssh-key = { version = "=0.7.0-rc.11", default-features = false, features = ["std", "ecdsa", "ed25519", "p256", "p384"] }
 rusqlite_migration = "2.6.0"
 rust-embed = { version = "8.13.0", features = ["mime-guess"] }
 rustix = { version = "1.1.6", features = ["fs", "pipe", "process"] }

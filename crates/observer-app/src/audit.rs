@@ -93,6 +93,43 @@ impl Record {
         })
     }
 
+    /// An entry by an SFTP session: its account, or its pipeline as a `service` actor named
+    /// `+name` with the access's id.
+    pub(crate) fn file_session(
+        user_id: Option<i64>,
+        access_id: i64,
+        login: &str,
+        ip: &str,
+        action: AuditAction,
+    ) -> Self {
+        let (kind, id) = match user_id {
+            Some(id) => (ActorKind::User, id),
+            None => (ActorKind::Service, access_id),
+        };
+        Self {
+            actor_id: Some(id),
+            actor_name: Some(login.to_owned()),
+            ip: Some(ip.to_owned()),
+            ..Self::new(action, kind)
+        }
+    }
+
+    /// The SFTP failures of one closed window, as a single entry naming the login tried.
+    pub(crate) fn file_login_failures(failures: &Unaudited) -> Self {
+        Self {
+            ip: Some(failures.network.clone()),
+            target: Some(failures.username.clone()),
+            outcome: Outcome::Failure,
+            details: json!({
+                "network": failures.network,
+                "failures": failures.failures,
+                "firstAt": failures.first,
+                "lastAt": failures.last,
+            }),
+            ..Self::new(AuditAction::FileLoginFailed, ActorKind::Anonymous)
+        }
+    }
+
     fn user(id: i64, name: &str, client: &Client, action: AuditAction) -> Self {
         Self {
             actor_id: Some(id),
@@ -101,6 +138,11 @@ impl Record {
             user_agent: client.user_agent.clone(),
             ..Self::new(action, ActorKind::User)
         }
+    }
+
+    pub(crate) fn action(mut self, action: AuditAction) -> Self {
+        self.action = action;
+        self
     }
 
     pub(crate) fn target(mut self, target: impl Into<String>) -> Self {

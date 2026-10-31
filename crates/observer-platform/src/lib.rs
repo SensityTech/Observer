@@ -7,6 +7,7 @@
 //! The only crate allowed to use `unsafe` outside test tools.
 #![allow(unsafe_code)]
 
+mod confined;
 mod sockets;
 mod stream;
 mod tree;
@@ -24,11 +25,14 @@ use std::time::{Duration, Instant};
 
 use tokio::sync::watch;
 
+pub use confined::{Entry, EntryKind, InvalidName, RelativePath, TreeError};
 pub use sockets::{Protocol, Socket, SocketState, sockets};
 pub use stream::{Output, Stdin};
 pub use tree::{ProcessInfo, TreeChange, TreeChanges};
 #[cfg(unix)]
 pub use unix::ProcessTree;
+#[cfg(unix)]
+pub use unix::confined::{ConfinedTree, Folder, TemporaryFile};
 #[cfg(unix)]
 pub use unix::leftovers::{PidFile, Sweep};
 #[cfg(unix)]
@@ -41,6 +45,8 @@ pub use usage::{
 pub use windows::ProcessTree;
 #[cfg(windows)]
 pub use windows::authenticode::verify_signature;
+#[cfg(windows)]
+pub use windows::confined::{ConfinedTree, Folder, TemporaryFile};
 #[cfg(windows)]
 pub use windows::console::{ConsoleEvent, ConsoleEvents};
 #[cfg(windows)]

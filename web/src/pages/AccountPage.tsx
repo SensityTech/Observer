@@ -11,6 +11,7 @@ import { PasswordField } from '../components/Field';
 import { Notice } from '../components/Notice';
 import { table } from '../components/table';
 import { errorMessage, problemMessage } from '../i18n/errors';
+import { FilesCard } from '../files/FilesCard';
 import { useI18n } from '../i18n/I18nProvider';
 import { cn } from '../lib/cn';
 
@@ -27,6 +28,7 @@ export function AccountPage() {
             <div className="flex flex-col gap-3">
                 <PasswordCard />
                 <SessionsCard />
+                <FilesCard />
             </div>
         </div>
     );

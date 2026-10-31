@@ -3,6 +3,7 @@
 
 mod artifacts;
 mod diagnostics;
+mod files;
 mod live;
 mod metrics;
 mod proxy;
@@ -199,6 +200,7 @@ impl Server {
             schedule,
             artifacts,
             diagnostics,
+            files: observer_app::Files::new(db.clone(), clock.clone(), accounts.clone()),
         };
         let state = AppState::new(
             BUILD,
@@ -544,7 +546,7 @@ async fn setup_signs_the_owner_in_with_a_strict_http_only_cookie() {
     assert_eq!(session["sessionKey"].as_str().unwrap().len(), 64);
     assert_eq!(session["me"]["username"], "ada");
     assert_eq!(session["me"]["isOwner"], true);
-    assert_eq!(session["me"]["permissions"], "1fff");
+    assert_eq!(session["me"]["permissions"], "3fff");
 
     let again = server.call(Method::POST, "/api/setup", None, Some(body)).await;
     assert_eq!(again.status, StatusCode::CONFLICT);

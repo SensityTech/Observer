@@ -94,6 +94,11 @@ const permissions = {
         description:
             'Processes FXServer starts and their command lines, its connections, crash and hang analyses.',
     },
+    filesManage: {
+        name: 'Manage file access',
+        description:
+            "Give accounts Read and Assets groups over the server's files, take access away and end sessions.",
+    },
 } satisfies Record<PermissionKey, { name: string; description: string }>;
 
 const permissionNames = (hex: string) =>
@@ -230,6 +235,7 @@ export const en = {
         server: 'Server',
         users: 'Users',
         audit: 'Audit log',
+        files: 'Files',
         diagnostics: 'Diagnostics',
         alertCount: (value: number) => count(value, { one: 'alert', other: 'alerts' }),
     },
@@ -1631,6 +1637,90 @@ export const en = {
             openConsole: 'Open the console',
         },
     },
+    files: {
+        title: 'Files',
+        gloss: 'SFTP',
+        intro: 'Groups say which parts of the server folder an access reaches. People log in with their own SSH keys; pipelines with a key Observer makes. Nothing connects until the owner adds an [sftp] section to observer.toml.',
+        groups: 'Groups',
+        newGroup: 'New group',
+        noGroups: 'No group yet. A group lists what it allows and denies, folder by folder.',
+        reachTitle: 'Reach',
+        rulesTitle: 'Rules',
+        ruleCount: (rules: number) => (rules === 1 ? '1 rule' : `${rules} rules`),
+        actions: 'Actions',
+        edit: 'Edit',
+        editNamed: (name: string) => `Edit ${name}`,
+        delete: 'Delete',
+        people: 'People',
+        account: 'Account',
+        keys: 'Keys',
+        noAccess: 'No access',
+        assignGroups: 'Groups',
+        pipelines: 'Pipelines',
+        newPipeline: 'New pipeline',
+        noPipelines: 'No pipeline yet. A pipeline uploads from CI/CD with a key of its own.',
+        keyEnds: 'Key ends',
+        never: 'never',
+        deleteGroup: (name: string) => `Delete ${name}?`,
+        deleteGroupMessage: 'Every access holding it loses what it gives, and their sessions end.',
+        deletePipeline: (name: string) => `Delete +${name}?`,
+        deletePipelineMessage: 'Its key stops working at once and its sessions end.',
+        reach: { read: 'Read', assets: 'Assets', code: 'Code' },
+        effects: { allow: 'Allow', deny: 'Deny' },
+        depths: { tree: 'This folder and everything below', folder: 'This folder only' },
+        rights: {
+            list: 'List',
+            read: 'Read',
+            create: 'Create',
+            modify: 'Modify',
+            rename: 'Rename',
+            delete: 'Delete',
+            makeFolder: 'Make folders',
+            removeFolder: 'Remove folders',
+        },
+        group: {
+            create: 'New group',
+            edit: 'Edit group',
+            save: 'Save',
+            name: 'Name',
+            description: 'Description',
+            rule: (number: number) => `Rule ${number}`,
+            effect: 'Effect',
+            depth: 'Reaches',
+            folder: 'Folder',
+            folderHint:
+                'Relative to the server folder, such as resources/[maps]. * and ? match within one name.',
+            names: 'Names',
+            namesHint: 'Optional, separated by commas: *.ytd, fxmanifest.lua. Empty means every name.',
+            rights: 'Rights',
+            maxSize: 'Largest file, in MiB (optional)',
+            addRule: 'Add a rule',
+            removeRule: 'Remove this rule',
+        },
+        assign: {
+            title: (name: string) => `Groups of ${name}`,
+            save: 'Save',
+            none: 'No group yet: the owner creates them first.',
+        },
+        service: {
+            create: 'New pipeline',
+            submit: 'Create',
+            name: 'Name',
+            nameHint: 'Lowercase letters, digits and dashes. It logs in as +name.',
+            networks: 'Allowed networks',
+            networksHint: 'Optional, such as 192.0.2.0/24. Empty means any address.',
+            days: 'Key life, in days (365 at most)',
+            groups: 'Groups',
+            keyTitle: (login: string) => `Key of ${login}`,
+            keyOnce: 'This is the only time the private key is shown. Store it in your CI secrets now.',
+            login: 'Login',
+            privateKey: 'Private key',
+            saved: 'I stored it',
+            copyKey: 'Copy the key',
+            copied: 'Copied',
+            downloadKey: (name: string) => `Download ${name}.key`,
+        },
+    },
     users: {
         title: 'Users',
         gloss: 'Who signs in, and what they may do.',
@@ -1699,6 +1789,21 @@ export const en = {
         },
     },
     myAccount: {
+        files: {
+            title: 'File access (SFTP)',
+            login: 'Login',
+            noGroups: 'No file access yet: ask whoever manages accesses.',
+            groups: (names: string) => `Groups: ${names}`,
+            keys: 'My SSH keys',
+            fingerprint: 'Key',
+            lastUsed: 'Last used',
+            never: 'never',
+            remove: 'Remove',
+            removeNamed: (fingerprint: string) => `Remove the key ${fingerprint}`,
+            addKey: 'Add an SSH public key',
+            addKeyHint: 'Paste one line of your .pub file. Make one with ssh-keygen -t ed25519.',
+            add: 'Add key',
+        },
         title: 'My account',
         gloss: 'Your password and sessions.',
         password: {
@@ -1803,6 +1908,28 @@ export const en = {
             crash_file_downloaded: 'Crash file downloaded',
             crash_files_deleted: 'Crash files deleted',
             tree_records_full: 'Process records full',
+            file_session_opened: 'File session opened',
+            file_session_closed: 'File session closed',
+            file_login_failed: 'File sign-in failed',
+            file_written: 'File written',
+            file_deleted: 'File deleted',
+            folder_created: 'Folder created',
+            folder_removed: 'Folder removed',
+            file_renamed: 'File renamed',
+            file_refused: 'File operation refused',
+            file_records_full: 'File records full',
+            file_group_created: 'File group created',
+            file_group_changed: 'File group changed',
+            file_group_deleted: 'File group deleted',
+            file_access_changed: 'File access changed',
+            service_access_created: 'Pipeline created',
+            service_access_changed: 'Pipeline changed',
+            service_access_deleted: 'Pipeline deleted',
+            file_key_added: 'SFTP key added',
+            file_key_removed: 'SFTP key removed',
+            file_session_disconnected: 'File session ended',
+            file_settings_changed: 'File settings changed',
+            file_host_key_created: 'SFTP host key created',
         } satisfies Record<AuditAction, string>,
         outcomes: {
             success: 'Success',
@@ -1815,6 +1942,7 @@ export const en = {
             cli: 'Command line',
             system: 'Observer',
             anonymous: 'Anonymous',
+            service: 'Pipeline',
         } satisfies Record<ActorKind, string>,
         // A failed sign-in whose username names no account: it may have been a password.
         unknownUsername: 'Unknown username',
@@ -2041,6 +2169,7 @@ export const en = {
         settings: 'Settings',
         logs: 'Logs',
         diagnostics: 'Diagnostics',
+        files: 'Files',
     } satisfies Record<PermissionArea, string>,
     danger: {
         sensitive: 'Sensitive',
@@ -2171,6 +2300,28 @@ export const en = {
                 ? 'The cfg now keeps FXServer from starting under Observer, so nothing was saved: the check below says what blocks.'
                 : 'The server folder or its cfg keeps FXServer from starting under Observer. Check them again, fix what blocks, then save.';
         },
+        invalid_rule: (params) =>
+            typeof params.index === 'number'
+                ? `Rule ${params.index + 1} needs fixing: check its ${String(params.field ?? 'fields')}.`
+                : 'A rule needs fixing.',
+        invalid_public_key: (params) => {
+            if (params.reason === 'certificate') {
+                return 'Certificates are not accepted: paste the public key itself.';
+            }
+            if (params.reason === 'algorithm') {
+                return 'Only Ed25519 and ECDSA (P-256, P-384) keys are accepted. Make one with ssh-keygen -t ed25519.';
+            }
+            return 'This is not an OpenSSH public key line. Paste the whole line of the .pub file.';
+        },
+        key_in_use: 'This key is already registered.',
+        invalid_access: (params) =>
+            params.field === 'name'
+                ? 'A pipeline name is 1 to 32 lowercase letters, digits and dashes.'
+                : params.field === 'networks'
+                  ? 'Each network is an address or a block such as 192.0.2.0/24.'
+                  : 'A pipeline key lasts 1 to 365 days.',
+        too_many_keys: (params) =>
+            typeof params.max === 'number' ? `An access holds ${params.max} keys at most.` : 'Too many keys.',
     } satisfies Record<ErrorCode, ErrorMessage>,
     failure: {
         unknown: 'Something went wrong. Try again.',

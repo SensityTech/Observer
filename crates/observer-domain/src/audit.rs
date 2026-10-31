@@ -102,10 +102,35 @@ pub enum AuditAction {
     /// once when it happens, then at the run's end with the starts whose command line was not kept
     /// in `unrecorded`.
     TreeRecordsFull,
+    FileSessionOpened,
+    /// With its reads counted: files and bytes.
+    FileSessionClosed,
+    /// One entry per login, network and 15-minute window.
+    FileLoginFailed,
+    FileWritten,
+    FileDeleted,
+    FolderCreated,
+    FolderRemoved,
+    FileRenamed,
+    FileRefused,
+    /// A session reached its cap of change entries.
+    FileRecordsFull,
+    FileGroupCreated,
+    FileGroupChanged,
+    FileGroupDeleted,
+    FileAccessChanged,
+    ServiceAccessCreated,
+    ServiceAccessChanged,
+    ServiceAccessDeleted,
+    FileKeyAdded,
+    FileKeyRemoved,
+    FileSessionDisconnected,
+    FileSettingsChanged,
+    FileHostKeyCreated,
 }
 
 impl AuditAction {
-    pub const ALL: [Self; 48] = [
+    pub const ALL: [Self; 70] = [
         Self::SetupCompleted,
         Self::SetupLinkCreated,
         Self::LoginSucceeded,
@@ -154,6 +179,28 @@ impl AuditAction {
         Self::CrashFileDownloaded,
         Self::CrashFilesDeleted,
         Self::TreeRecordsFull,
+        Self::FileSessionOpened,
+        Self::FileSessionClosed,
+        Self::FileLoginFailed,
+        Self::FileWritten,
+        Self::FileDeleted,
+        Self::FolderCreated,
+        Self::FolderRemoved,
+        Self::FileRenamed,
+        Self::FileRefused,
+        Self::FileRecordsFull,
+        Self::FileGroupCreated,
+        Self::FileGroupChanged,
+        Self::FileGroupDeleted,
+        Self::FileAccessChanged,
+        Self::ServiceAccessCreated,
+        Self::ServiceAccessChanged,
+        Self::ServiceAccessDeleted,
+        Self::FileKeyAdded,
+        Self::FileKeyRemoved,
+        Self::FileSessionDisconnected,
+        Self::FileSettingsChanged,
+        Self::FileHostKeyCreated,
     ];
 
     pub const fn as_str(self) -> &'static str {
@@ -206,6 +253,28 @@ impl AuditAction {
             Self::CrashFileDownloaded => "crash_file_downloaded",
             Self::CrashFilesDeleted => "crash_files_deleted",
             Self::TreeRecordsFull => "tree_records_full",
+            Self::FileSessionOpened => "file_session_opened",
+            Self::FileSessionClosed => "file_session_closed",
+            Self::FileLoginFailed => "file_login_failed",
+            Self::FileWritten => "file_written",
+            Self::FileDeleted => "file_deleted",
+            Self::FolderCreated => "folder_created",
+            Self::FolderRemoved => "folder_removed",
+            Self::FileRenamed => "file_renamed",
+            Self::FileRefused => "file_refused",
+            Self::FileRecordsFull => "file_records_full",
+            Self::FileGroupCreated => "file_group_created",
+            Self::FileGroupChanged => "file_group_changed",
+            Self::FileGroupDeleted => "file_group_deleted",
+            Self::FileAccessChanged => "file_access_changed",
+            Self::ServiceAccessCreated => "service_access_created",
+            Self::ServiceAccessChanged => "service_access_changed",
+            Self::ServiceAccessDeleted => "service_access_deleted",
+            Self::FileKeyAdded => "file_key_added",
+            Self::FileKeyRemoved => "file_key_removed",
+            Self::FileSessionDisconnected => "file_session_disconnected",
+            Self::FileSettingsChanged => "file_settings_changed",
+            Self::FileHostKeyCreated => "file_host_key_created",
         }
     }
 
@@ -215,7 +284,7 @@ impl AuditAction {
 }
 
 /// Who acted: a signed-in user, someone at the host's own window, the command line, Observer
-/// itself, or an anonymous client such as a failed login.
+/// itself, an anonymous client such as a failed login, or a pipeline's file access.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export)]
@@ -225,10 +294,18 @@ pub enum ActorKind {
     Cli,
     System,
     Anonymous,
+    Service,
 }
 
 impl ActorKind {
-    pub const ALL: [Self; 5] = [Self::User, Self::Local, Self::Cli, Self::System, Self::Anonymous];
+    pub const ALL: [Self; 6] = [
+        Self::User,
+        Self::Local,
+        Self::Cli,
+        Self::System,
+        Self::Anonymous,
+        Self::Service,
+    ];
 
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -237,6 +314,7 @@ impl ActorKind {
             Self::Cli => "cli",
             Self::System => "system",
             Self::Anonymous => "anonymous",
+            Self::Service => "service",
         }
     }
 
@@ -291,7 +369,8 @@ pub struct AuditEntry {
     pub id: i64,
     pub at: Timestamp,
     pub actor_kind: ActorKind,
-    /// The user's id when the actor was a user. It outlives the account, unlike a foreign key.
+    /// The user's id when the actor was a user, or the file access's id for a service. It outlives
+    /// the account, unlike a foreign key.
     pub actor_id: Option<i64>,
     pub actor_name: Option<String>,
     pub ip: Option<String>,

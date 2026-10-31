@@ -150,6 +150,7 @@ impl Accounts {
             .reset(record, move |tx| {
                 let user = existing(tx, id)?;
                 delegation::manage(&editor, &account(&user))?;
+                crate::files::may_reset(tx, &editor, user.id)?;
                 Ok(user)
             })
             .await;
@@ -227,7 +228,12 @@ impl Accounts {
         };
         if !matches!(
             refusal.code,
-            ErrorCode::SelfEdit | ErrorCode::OwnerProtected | ErrorCode::Escalation | ErrorCode::Hierarchy
+            ErrorCode::SelfEdit
+                | ErrorCode::OwnerProtected
+                | ErrorCode::Escalation
+                | ErrorCode::Hierarchy
+                | ErrorCode::OwnerOnly
+                | ErrorCode::Forbidden
         ) {
             return result;
         }
@@ -271,6 +277,8 @@ impl Accounts {
                 user.auth_epoch += 1;
                 user.version += 1;
                 users::update(tx, &user)?;
+                // A reset hands the account to whoever made it: keys it logged in with go too.
+                crate::files::forget_keys(tx, user.id, &user.username, &record, now)?;
                 sessions::delete_for_user(tx, user.id, None)?;
                 lift_locks(tx, &user.username, now)?;
                 record

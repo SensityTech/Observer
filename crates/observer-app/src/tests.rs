@@ -10,7 +10,7 @@ use serde_json::json;
 use tempfile::TempDir;
 use tokio::task::JoinHandle;
 
-use crate::{Accounts, AuditLog, Caller, Client, Clock, PasswordCost, Servers, SignedIn};
+use crate::{Accounts, AuditLog, Caller, Client, Clock, Files, PasswordCost, Servers, SignedIn};
 
 const OWNER_PASSWORD: &str = "correct horse battery staple";
 
@@ -23,6 +23,7 @@ struct Lab {
     accounts: Accounts,
     audit: AuditLog,
     servers: Servers,
+    files: Files,
 }
 
 /// A signed-in browser: the session's two secrets and where it connects from.
@@ -44,6 +45,7 @@ impl Lab {
             .unwrap();
         let audit = AuditLog::new(db.clone(), clock.clone());
         let servers = Servers::new(db.clone(), clock.clone());
+        let files = Files::new(db.clone(), clock.clone(), accounts.clone());
         Self {
             _dir: dir,
             db,
@@ -51,6 +53,7 @@ impl Lab {
             accounts,
             audit,
             servers,
+            files,
         }
     }
 
@@ -1589,4 +1592,402 @@ async fn a_follower_too_far_behind_is_told_it_missed_entries() {
         slow.try_recv(),
         Err(tokio::sync::broadcast::error::TryRecvError::Lagged(44))
     ));
+}
+
+fn file_rule(
+    effect: observer_domain::files::Effect,
+    names: &[&str],
+    rights: observer_domain::files::Rights,
+) -> observer_domain::files::Rule {
+    observer_domain::files::Rule {
+        effect,
+        folder: "resources".to_owned(),
+        depth: observer_domain::files::Depth::Tree,
+        names: names.iter().map(|name| (*name).to_owned()).collect(),
+        rights,
+        max_file_size: None,
+    }
+}
+
+#[tokio::test]
+async fn only_the_owner_writes_file_groups_and_every_rule_is_checked() {
+    use observer_domain::files::{Effect, Reach, Rights};
+
+    let lab = Lab::new().await;
+    let owner = lab.owner().await;
+    let manager = lab.user(&owner, "grace", P::FILES_MANAGE).await;
+    let owner = lab.caller(&owner).await;
+    let manager = lab.caller(&manager).await;
+
+    let mut broken = file_rule(Effect::Allow, &[], Rights::VIEW);
+    broken.folder = "resources/**".to_owned();
+    let refused = lab
+        .files
+        .create_group(&owner, "Mappers".to_owned(), String::new(), vec![broken])
+        .await
+        .err()
+        .unwrap();
+    let crate::Error::Refused(refusal) = refused else {
+        unreachable!()
+    };
+    assert_eq!(refusal.code, ErrorCode::InvalidRule);
+    assert_eq!(refusal.params["field"], json!("folder"));
+
+    let textures = vec![file_rule(Effect::Allow, &["*.ytd"], Rights::EDIT)];
+    assert_eq!(
+        code(
+            lab.files
+                .create_group(&manager, "Mappers".to_owned(), String::new(), textures.clone())
+                .await
+        ),
+        ErrorCode::OwnerOnly
+    );
+    let group = lab
+        .files
+        .create_group(&owner, "Mappers".to_owned(), String::new(), textures.clone())
+        .await
+        .unwrap();
+    assert_eq!(group.reach, Reach::Assets);
+    assert_eq!(
+        code(
+            lab.files
+                .create_group(&owner, "mappers".to_owned(), String::new(), textures)
+                .await
+        ),
+        ErrorCode::NameTaken
+    );
+    let entries = lab.entries(AuditAction::FileGroupCreated).await;
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].details["reach"], json!("assets"));
+
+    assert_eq!(
+        code(
+            lab.files
+                .update_group(
+                    &owner,
+                    group.row.id,
+                    group.row.version + 1,
+                    "Mappers".to_owned(),
+                    String::new(),
+                    Vec::new()
+                )
+                .await
+        ),
+        ErrorCode::Conflict
+    );
+}
+
+/// A group of textures (Assets), one of everything below resources (Code), and a deny of scripts.
+async fn file_groups(
+    lab: &Lab,
+    owner: &Caller,
+) -> (crate::files::Group, crate::files::Group, crate::files::Group) {
+    use observer_domain::files::{Effect, Right, Rights};
+
+    let mut groups = Vec::new();
+    for (name, rule) in [
+        ("Mappers", file_rule(Effect::Allow, &["*.ytd"], Rights::EDIT)),
+        ("Developers", file_rule(Effect::Allow, &[], Rights::EDIT)),
+        (
+            "No scripts",
+            file_rule(Effect::Deny, &["*.lua"], Rights::of(&[Right::Modify])),
+        ),
+    ] {
+        groups.push(
+            lab.files
+                .create_group(owner, name.to_owned(), String::new(), vec![rule])
+                .await
+                .unwrap(),
+        );
+    }
+    let no_lua = groups.pop().unwrap();
+    let code_group = groups.pop().unwrap();
+    (groups.pop().unwrap(), code_group, no_lua)
+}
+
+#[tokio::test]
+async fn a_file_manager_gives_read_and_assets_groups_while_code_stays_the_owners() {
+    let lab = Lab::new().await;
+    let owner = lab.owner().await;
+    let manager = lab.user(&owner, "grace", P::FILES_MANAGE | P::CONSOLE_VIEW).await;
+    let mapper = lab.user(&owner, "linus", P::CONSOLE_VIEW).await;
+    let operator = lab.user(&owner, "ken", P::SERVER_CONTROL).await;
+    let owner = lab.caller(&owner).await;
+    let manager = lab.caller(&manager).await;
+    let mapper = lab.caller(&mapper).await.user_id;
+    let operator = lab.caller(&operator).await.user_id;
+
+    let (assets, code_group, no_lua) = file_groups(&lab, &owner).await;
+
+    lab.files
+        .set_user_groups(&manager, mapper, vec![assets.row.id], None)
+        .await
+        .unwrap();
+    assert_eq!(lab.files.user_groups(mapper).await.unwrap().len(), 1);
+    assert_eq!(
+        code(
+            lab.files
+                .set_user_groups(&manager, mapper, vec![assets.row.id, code_group.row.id], None)
+                .await
+        ),
+        ErrorCode::OwnerOnly
+    );
+    assert_eq!(
+        code(
+            lab.files
+                .set_user_groups(&manager, manager.user_id, vec![assets.row.id], None)
+                .await
+        ),
+        ErrorCode::SelfEdit
+    );
+    assert_eq!(
+        code(
+            lab.files
+                .set_user_groups(&manager, owner.user_id, vec![], None)
+                .await
+        ),
+        ErrorCode::OwnerProtected
+    );
+    assert_eq!(
+        code(
+            lab.files
+                .set_user_groups(&manager, operator, vec![assets.row.id], None)
+                .await
+        ),
+        ErrorCode::Hierarchy
+    );
+
+    // The owner gives a deny with the assets; a manager removing the deny would lift it.
+    lab.files
+        .set_user_groups(&owner, mapper, vec![assets.row.id, no_lua.row.id], None)
+        .await
+        .unwrap();
+    assert_eq!(
+        code(
+            lab.files
+                .set_user_groups(&manager, mapper, vec![assets.row.id], None)
+                .await
+        ),
+        ErrorCode::OwnerOnly
+    );
+    // Taking everything away needs no more than the bit.
+    lab.files
+        .set_user_groups(&manager, mapper, vec![], None)
+        .await
+        .unwrap();
+
+    let denied = lab.entries(AuditAction::PermissionDenied).await;
+    assert!(
+        denied
+            .iter()
+            .any(|entry| entry.details["refusal"] == json!("owner_only")
+                && entry.target.as_deref() == Some("linus"))
+    );
+    let changed = lab.entries(AuditAction::FileAccessChanged).await;
+    assert!(
+        changed
+            .iter()
+            .any(|entry| entry.details["groupsAdded"] == json!(["Mappers"]))
+    );
+}
+
+#[tokio::test]
+async fn an_sftp_login_needs_a_registered_key_on_a_usable_access_and_locks_after_five_failures() {
+    use observer_domain::files::{Effect, Rights};
+    use observer_store::files::{self as file_store, FileKeyRow};
+
+    use crate::Login;
+
+    let lab = Lab::new().await;
+    let owner = lab.owner().await;
+    lab.user(&owner, "linus", P::CONSOLE_VIEW).await;
+    let owner = lab.caller(&owner).await;
+    let linus = lab
+        .db
+        .read(|conn| users::find(conn, "linus"))
+        .await
+        .unwrap()
+        .unwrap();
+    let ip: std::net::IpAddr = "192.0.2.10".parse().unwrap();
+    let login = |name: &str, fingerprint: &str| lab.files.login(name.to_owned(), fingerprint.to_owned(), ip);
+
+    let now = lab.clock.now();
+    let access_id = lab
+        .db
+        .write(move |tx| {
+            let access = file_store::user_access_or_new(tx, linus.id, now)?;
+            file_store::insert_key(
+                tx,
+                &FileKeyRow {
+                    id: 0,
+                    access_id: access.id,
+                    algorithm: "ssh-ed25519".to_owned(),
+                    public_key: vec![1],
+                    fingerprint: "SHA256:linus".to_owned(),
+                    comment: String::new(),
+                    created_at: now,
+                    expires_at: None,
+                    last_used_at: None,
+                    last_used_ip: None,
+                },
+            )?;
+            Ok::<_, StoreError>(access.id)
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(login("nobody", "SHA256:linus").await.unwrap(), Login::Refused);
+    assert_eq!(login("linus", "SHA256:other").await.unwrap(), Login::Refused);
+    assert!(
+        lab.files
+            .key_registered("LINUS".to_owned(), "SHA256:linus".to_owned())
+            .await
+            .unwrap()
+    );
+    // Registered, but no group yet: each try is a failure, and the fifth locks the pair.
+    for _ in 0..5 {
+        assert_eq!(login("linus", "SHA256:linus").await.unwrap(), Login::Failed);
+        lab.clock.advance(SignedDuration::from_secs(2));
+    }
+    assert_eq!(login("linus", "SHA256:linus").await.unwrap(), Login::Locked);
+    lab.clock.advance(SignedDuration::from_mins(2));
+
+    let maps = lab
+        .files
+        .create_group(
+            &owner,
+            "Mappers".to_owned(),
+            String::new(),
+            vec![file_rule(Effect::Allow, &[], Rights::VIEW)],
+        )
+        .await
+        .unwrap();
+    lab.files
+        .set_user_groups(&owner, linus.id, vec![maps.row.id], None)
+        .await
+        .unwrap();
+    assert_eq!(login("linus", "SHA256:linus").await.unwrap(), Login::NoServer);
+    lab.servers
+        .change_launch_settings(&owner, Servers::DEFAULT, launch_settings(), None)
+        .await
+        .unwrap();
+    let Login::Granted(grant) = login("linus", "SHA256:linus").await.unwrap() else {
+        panic!("linus was not let in");
+    };
+    assert_eq!(grant.access_id, access_id);
+    assert_eq!(grant.login, "linus");
+    assert_eq!(grant.groups.len(), 1);
+    assert_eq!(grant.root, launch_settings().data_path);
+
+    lab.clock.advance(SignedDuration::from_mins(16));
+    lab.files.sweep().await.unwrap();
+    let failed = lab.entries(AuditAction::FileLoginFailed).await;
+    assert_eq!(failed.len(), 1);
+    assert_eq!(failed[0].details["failures"], json!(5));
+    assert_eq!(failed[0].target.as_deref(), Some("linus"));
+}
+
+#[tokio::test]
+async fn a_password_reset_takes_the_owner_for_code_access_and_drops_the_sftp_keys() {
+    use observer_store::files::{self as file_store, FileKeyRow};
+
+    let lab = Lab::new().await;
+    let owner = lab.owner().await;
+    let manager = lab.user(&owner, "grace", P::USERS_MANAGE | P::CONSOLE_VIEW).await;
+    lab.user(&owner, "linus", P::CONSOLE_VIEW).await;
+    let owner = lab.caller(&owner).await;
+    let manager = lab.caller(&manager).await;
+    let linus = lab
+        .db
+        .read(|conn| users::find(conn, "linus"))
+        .await
+        .unwrap()
+        .unwrap();
+    let (_, code_group, _) = file_groups(&lab, &owner).await;
+    lab.files
+        .set_user_groups(&owner, linus.id, vec![code_group.row.id], None)
+        .await
+        .unwrap();
+    let now = lab.clock.now();
+    lab.db
+        .write(move |tx| {
+            let access = file_store::user_access_or_new(tx, linus.id, now)?;
+            file_store::insert_key(
+                tx,
+                &FileKeyRow {
+                    id: 0,
+                    access_id: access.id,
+                    algorithm: "ssh-ed25519".to_owned(),
+                    public_key: vec![1],
+                    fingerprint: "SHA256:linus".to_owned(),
+                    comment: String::new(),
+                    created_at: now,
+                    expires_at: None,
+                    last_used_at: None,
+                    last_used_ip: None,
+                },
+            )?;
+            Ok::<_, StoreError>(())
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(
+        code(lab.accounts.reset_password(&manager, linus.id).await),
+        ErrorCode::OwnerOnly
+    );
+    assert!(
+        lab.entries(AuditAction::PermissionDenied)
+            .await
+            .iter()
+            .any(|entry| entry.details["refusal"] == json!("owner_only"))
+    );
+    assert!(
+        lab.files
+            .key_registered("linus".to_owned(), "SHA256:linus".to_owned())
+            .await
+            .unwrap()
+    );
+
+    lab.accounts.reset_password(&owner, linus.id).await.unwrap();
+    assert!(
+        !lab.files
+            .key_registered("linus".to_owned(), "SHA256:linus".to_owned())
+            .await
+            .unwrap()
+    );
+    let removed = lab.entries(AuditAction::FileKeyRemoved).await;
+    assert_eq!(removed.len(), 1);
+    assert_eq!(removed[0].details["reason"], json!("passwordReset"));
+}
+
+#[tokio::test]
+async fn a_save_of_groups_read_before_someone_elses_change_is_a_conflict() {
+    let lab = Lab::new().await;
+    let owner = lab.owner().await;
+    lab.user(&owner, "linus", P::CONSOLE_VIEW).await;
+    let owner = lab.caller(&owner).await;
+    let linus = lab
+        .db
+        .read(|conn| users::find(conn, "linus"))
+        .await
+        .unwrap()
+        .unwrap()
+        .id;
+    let (assets, _, no_lua) = file_groups(&lab, &owner).await;
+
+    lab.files
+        .set_user_groups(&owner, linus, vec![assets.row.id], Some(Vec::new()))
+        .await
+        .unwrap();
+    // A dialog opened before that save still believes linus held nothing.
+    assert_eq!(
+        code(
+            lab.files
+                .set_user_groups(&owner, linus, vec![no_lua.row.id], Some(Vec::new()))
+                .await
+        ),
+        ErrorCode::Conflict
+    );
+    assert_eq!(lab.files.user_groups(linus).await.unwrap().len(), 1);
 }

@@ -28,6 +28,7 @@ impl Permissions {
     pub const SETTINGS_MANAGE: Self = Self(1 << 10);
     pub const LOGS_DOWNLOAD: Self = Self(1 << 11);
     pub const DIAGNOSTICS_VIEW: Self = Self(1 << 12);
+    pub const FILES_MANAGE: Self = Self(1 << 13);
 
     /// Every permission in the catalog, which is what the owner holds.
     pub fn all() -> Self {
@@ -191,6 +192,7 @@ pub enum PermissionArea {
     Settings,
     Logs,
     Diagnostics,
+    Files,
 }
 
 /// One permission of the catalog, as `GET /api/permissions` returns it.
@@ -326,6 +328,15 @@ pub const CATALOG: &[PermissionInfo] = &[
         danger: Danger::Sensitive,
         implies: Permissions::NONE,
     },
+    PermissionInfo {
+        bit: 13,
+        constant: "FILES_MANAGE",
+        key: "filesManage",
+        area: PermissionArea::Files,
+        // Gives other accounts reach into the server's files; changing them can run code on the host.
+        danger: Danger::Critical,
+        implies: Permissions::NONE,
+    },
 ];
 
 #[cfg(test)]
@@ -349,6 +360,7 @@ mod tests {
             (10, "SETTINGS_MANAGE", Permissions::SETTINGS_MANAGE),
             (11, "LOGS_DOWNLOAD", Permissions::LOGS_DOWNLOAD),
             (12, "DIAGNOSTICS_VIEW", Permissions::DIAGNOSTICS_VIEW),
+            (13, "FILES_MANAGE", Permissions::FILES_MANAGE),
         ];
 
         assert_eq!(CATALOG.len(), frozen.len());

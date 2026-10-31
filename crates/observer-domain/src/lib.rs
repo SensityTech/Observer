@@ -12,6 +12,7 @@ pub mod audit;
 pub mod delegation;
 pub mod diagnostics;
 pub mod error;
+pub mod files;
 pub mod launch;
 pub mod live;
 pub mod metrics;
