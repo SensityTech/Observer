@@ -17,7 +17,7 @@ export const OWNER: Me = {
     id: 1,
     username: 'ada',
     isOwner: true,
-    permissions: '7fff',
+    permissions: 'ffff',
     mustChangePassword: false,
 };
 /** A moderator who sees players, not their other identifiers. */
@@ -25,7 +25,7 @@ export const MODERATOR: Me = {
     id: 2,
     username: 'kenji',
     isOwner: false,
-    permissions: '2000',
+    permissions: '4000',
     mustChangePassword: false,
 };
 

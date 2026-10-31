@@ -21,6 +21,7 @@ observer-artifacts.workspace = true
 observer-domain.workspace = true
 observer-fxserver.workspace = true
 observer-platform.workspace = true
+observer-sftp.workspace = true
 observer-store.workspace = true
 observer-web.workspace = true
 serde.workspace = true

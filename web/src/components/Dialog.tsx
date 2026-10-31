@@ -17,6 +17,11 @@ type DialogProps = {
     closeOnBackdrop?: boolean;
     role?: 'dialog' | 'alertdialog';
     className?: string;
+    /**
+     * Escape and the browser's own close leave it open: for what is shown once, such as a private
+     * key, only a button of the footer closes it.
+     */
+    dismissible?: boolean;
 };
 
 /**
@@ -32,6 +37,7 @@ export function Dialog({
     closeOnBackdrop = true,
     role,
     className,
+    dismissible = true,
 }: DialogProps) {
     const ref = useRef<HTMLDialogElement>(null);
     const titleId = useId();
@@ -69,6 +75,26 @@ export function Dialog({
             dialog.close();
         };
     }, []);
+
+    useEffect(() => {
+        const dialog = ref.current;
+        if (dialog === null || dismissible) {
+            return;
+        }
+        // A browser may close a modal dialog without a cancel the page can stop, on a second Escape:
+        // open it again while it is still mounted.
+        let mounted = true;
+        const reopen = () => {
+            if (mounted && !dialog.open) {
+                dialog.showModal();
+            }
+        };
+        dialog.addEventListener('close', reopen);
+        return () => {
+            mounted = false;
+            dialog.removeEventListener('close', reopen);
+        };
+    }, [dismissible]);
 
     useEffect(() => {
         const dialog = ref.current;
@@ -127,7 +153,9 @@ export function Dialog({
             )}
             onCancel={(event) => {
                 event.preventDefault();
-                onClose();
+                if (dismissible) {
+                    onClose();
+                }
             }}
         >
             {onSubmit ? (

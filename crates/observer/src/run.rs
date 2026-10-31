@@ -115,6 +115,29 @@ pub async fn run(config: Config, args: RunArgs) -> anyhow::Result<()> {
         .await
         .with_context(|| format!("cannot listen on {}", config.http.listen))?;
     announce(&config.http);
+    let files = observer_app::Files::new(db.clone(), clock.clone(), accounts.clone());
+    // Whether or not SFTP is on now, a crash may have left uploads from when it was.
+    if let Err(error) = observer_sftp::sweep_uploads(&files).await {
+        warn!(%error, "the temporary SFTP uploads could not all be removed");
+    }
+    // Right after the panel's port, so that a port taken stops Observer before FXServer starts.
+    let sftp_listener = match &config.sftp {
+        Some(sftp) => {
+            let host_key = observer_sftp::host_key(&files)
+                .await
+                .context("cannot read or create the SFTP host key")?;
+            let listener = TcpListener::bind(sftp.listen)
+                .await
+                .with_context(|| format!("cannot listen for SFTP on {}", sftp.listen))?;
+            info!(
+                listen = %sftp.listen,
+                fingerprint = %host_key.fingerprint(observer_sftp::FINGERPRINT),
+                "SFTP listening"
+            );
+            Some((listener, host_key))
+        }
+        None => None,
+    };
     let setup_token = setup::offer_link(&accounts, config.http.listen).await?;
 
     let stop = CancellationToken::new();
@@ -127,6 +150,7 @@ pub async fn run(config: Config, args: RunArgs) -> anyhow::Result<()> {
         schedule: schedule.clone(),
         artifacts,
         diagnostics,
+        files: files.clone(),
         players,
     };
     let state = observer_web::AppState::new(
@@ -149,7 +173,32 @@ pub async fn run(config: Config, args: RunArgs) -> anyhow::Result<()> {
     });
     let server = tokio::spawn(serve(listener, observer_web::router(state), stop.clone()));
     let backups = tokio::spawn(daily_backups(db.clone(), stop.clone()));
-    let upkeep = tokio::spawn(upkeep(accounts.clone(), audit.clone(), stop.clone()));
+    let upkeep = tokio::spawn(upkeep(
+        accounts.clone(),
+        audit.clone(),
+        files.clone(),
+        stop.clone(),
+    ));
+    let sftp = sftp_listener.map(|(listener, host_key)| {
+        // Observer's own folders and files, should the server folder hold them.
+        let refused = [
+            Some(paths.root.clone()),
+            std::env::current_exe()
+                .ok()
+                .and_then(|exe| exe.parent().map(std::path::Path::to_path_buf)),
+            Some(config.path.clone()),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+        tokio::spawn(observer_sftp::serve(
+            listener,
+            files.clone(),
+            host_key,
+            refused,
+            stop.clone(),
+        ))
+    });
     let audit_feed = tokio::spawn(publish_audit(audit.clone(), stop.clone()));
     let host = Host::start(HostSetup {
         args,
@@ -191,6 +240,11 @@ pub async fn run(config: Config, args: RunArgs) -> anyhow::Result<()> {
     live.shutdown().await;
 
     join(server, [backups, upkeep, audit_feed]).await?;
+    if let Some(sftp) = sftp
+        && let Err(error) = sftp.await.context("the SFTP server task failed")?
+    {
+        error!(%error, "the SFTP server stopped with an error");
+    }
     console_log.close().await;
     metrics
         .close()
@@ -459,11 +513,14 @@ async fn daily_backups(db: Database, stop: CancellationToken) {
 
 /// Every minute, the accounts' upkeep: failed logins reach the audit log, expired sessions go.
 /// At start and then daily, the audit entries past their retention go too.
-async fn upkeep(accounts: Accounts, audit: AuditLog, stop: CancellationToken) {
+async fn upkeep(accounts: Accounts, audit: AuditLog, files: observer_app::Files, stop: CancellationToken) {
     let mut purged_at: Option<Instant> = None;
     loop {
         if let Err(error) = accounts.sweep().await {
             warn!(%error, "the account upkeep failed");
+        }
+        if let Err(error) = files.sweep().await {
+            warn!(%error, "the SFTP login upkeep failed");
         }
         if purged_at.is_none_or(|at| at.elapsed() >= DAILY) {
             match audit.purge().await {

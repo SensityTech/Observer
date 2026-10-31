@@ -131,6 +131,17 @@ pub enum ErrorCode {
     /// The server folder or its cfg keeps FXServer from starting under Observer. Params: `folder`,
     /// a `FolderProblem`; or `cfg`, a `CfgFileProblem`; or `findings`, the blocking `FindingKind`s.
     SetupBlocked,
+    /// A rule of a file group is unusable. Params: `index`, the rule's position; `field`, `folder`,
+    /// `names`, `rights` or `maxFileSize`.
+    InvalidRule,
+    /// A pasted public key is unusable. Params: `reason`, `format`, `algorithm` or `certificate`.
+    InvalidPublicKey,
+    /// The access holds this key already.
+    KeyInUse,
+    /// Params: `max`, the most keys an access holds.
+    TooManyKeys,
+    /// A pipeline's settings are unusable. Params: `field`, `name`, `networks` or `expiry`.
+    InvalidAccess,
     /// No player has this id: never seen, forgotten, or past the profiles' retention.
     PlayerNotFound,
     /// A players search never takes an address: the panel must not tell which licences used an

@@ -28,8 +28,9 @@ impl Permissions {
     pub const SETTINGS_MANAGE: Self = Self(1 << 10);
     pub const LOGS_DOWNLOAD: Self = Self(1 << 11);
     pub const DIAGNOSTICS_VIEW: Self = Self(1 << 12);
-    pub const PLAYERS_VIEW: Self = Self(1 << 13);
-    pub const PLAYER_IDENTIFIERS_VIEW: Self = Self(1 << 14);
+    pub const FILES_MANAGE: Self = Self(1 << 13);
+    pub const PLAYERS_VIEW: Self = Self(1 << 14);
+    pub const PLAYER_IDENTIFIERS_VIEW: Self = Self(1 << 15);
 
     /// Every permission in the catalog, which is what the owner holds.
     pub fn all() -> Self {
@@ -193,6 +194,7 @@ pub enum PermissionArea {
     Settings,
     Logs,
     Diagnostics,
+    Files,
     Players,
 }
 
@@ -331,6 +333,15 @@ pub const CATALOG: &[PermissionInfo] = &[
     },
     PermissionInfo {
         bit: 13,
+        constant: "FILES_MANAGE",
+        key: "filesManage",
+        area: PermissionArea::Files,
+        // Gives other accounts reach into the server's files; changing them can run code on the host.
+        danger: Danger::Critical,
+        implies: Permissions::NONE,
+    },
+    PermissionInfo {
+        bit: 14,
         constant: "PLAYERS_VIEW",
         key: "playersView",
         area: PermissionArea::Players,
@@ -340,7 +351,7 @@ pub const CATALOG: &[PermissionInfo] = &[
         implies: Permissions::NONE,
     },
     PermissionInfo {
-        bit: 14,
+        bit: 15,
         constant: "PLAYER_IDENTIFIERS_VIEW",
         key: "playerIdentifiersView",
         area: PermissionArea::Players,
@@ -371,9 +382,10 @@ mod tests {
             (10, "SETTINGS_MANAGE", Permissions::SETTINGS_MANAGE),
             (11, "LOGS_DOWNLOAD", Permissions::LOGS_DOWNLOAD),
             (12, "DIAGNOSTICS_VIEW", Permissions::DIAGNOSTICS_VIEW),
-            (13, "PLAYERS_VIEW", Permissions::PLAYERS_VIEW),
+            (13, "FILES_MANAGE", Permissions::FILES_MANAGE),
+            (14, "PLAYERS_VIEW", Permissions::PLAYERS_VIEW),
             (
-                14,
+                15,
                 "PLAYER_IDENTIFIERS_VIEW",
                 Permissions::PLAYER_IDENTIFIERS_VIEW,
             ),

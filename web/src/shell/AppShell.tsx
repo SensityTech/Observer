@@ -3,6 +3,7 @@ import { Link, Outlet } from '@tanstack/react-router';
 import {
     CalendarClock,
     Contact,
+    FolderLock,
     LayoutDashboard,
     Menu as MenuIcon,
     Package,
@@ -47,6 +48,7 @@ type NavEntry = {
         | '/players'
         | '/server'
         | '/users'
+        | '/files'
         | '/audit';
     label: string;
     icon: LucideIcon;
@@ -119,6 +121,7 @@ export function AppShell() {
     const administration: NavEntry[] = [
         { to: '/server', label: t.nav.server, icon: Server, access: 'owner' },
         { to: '/users', label: t.nav.users, icon: Users, access: Permission.UsersManage },
+        { to: '/files', label: t.nav.files, icon: FolderLock, access: Permission.FilesManage },
         { to: '/audit', label: t.nav.audit, icon: ScrollText, access: Permission.AuditView },
     ];
 

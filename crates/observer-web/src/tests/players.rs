@@ -10,8 +10,8 @@ use serde_json::{Value, json};
 use super::{OWNER_PASSWORD, Server, Session};
 
 const DASHBOARD_VIEW: &str = "1";
-const PLAYERS_VIEW: &str = "2000";
-const PLAYER_IDENTIFIERS_VIEW: &str = "4000";
+const PLAYERS_VIEW: &str = "4000";
+const PLAYER_IDENTIFIERS_VIEW: &str = "8000";
 const LICENSE: &str = "license:0123456789abcdef0123456789abcdef01234567";
 const DISCORD: &str = "123456789012345678";
 
