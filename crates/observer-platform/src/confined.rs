@@ -117,8 +117,46 @@ pub enum TreeError {
     InUse,
     #[error("the file is read-only")]
     ReadOnly,
+    /// A commit that expected one file in its target's place found another entry there, or none:
+    /// another writer replaced, removed or created it since it was read.
+    #[error("the file changed since it was read")]
+    Changed,
     #[error(transparent)]
     Io(io::Error),
+}
+
+/// What tells a file from every other on its volume, whichever name leads to it: the volume's
+/// serial number and the file's index on Windows, the device and inode numbers on Unix. The hard
+/// links of one file share it; a file written anew in a name's place has its own. It holds while the
+/// volume stays mounted: Linux may number a device differently once it is mounted again. Unix may
+/// also give the inode of a file removed, with its last link, to the next file created, where NTFS
+/// counts each reuse of an index in the index itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct FileId {
+    volume: u64,
+    index: u128,
+}
+
+impl FileId {
+    pub(crate) fn new(volume: u64, index: u128) -> Self {
+        Self { volume, index }
+    }
+
+    /// The volume's serial number on Windows, the device number on Unix.
+    pub fn volume(&self) -> u64 {
+        self.volume
+    }
+
+    /// The file's index on its volume: 128 bits on Windows, which `ReFS` uses, the inode on Unix.
+    pub fn index(&self) -> u128 {
+        self.index
+    }
+}
+
+impl fmt::Display for FileId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:016x}-{:032x}", self.volume, self.index)
+    }
 }
 
 /// What a commit does with an entry already named as its target.
@@ -128,10 +166,10 @@ pub(crate) enum Replace {
     Never,
     /// Takes the place of a regular file no other hard link shares.
     Alone,
-    /// Takes the place of a regular file even when other hard links share it. The rename moves a
-    /// name, not the file: the other links keep the old content, and nothing is written through
-    /// them.
-    Shared,
+    /// Takes the place of the regular file the identity names, even when other hard links share
+    /// it, and of nothing else (`Changed`). The rename moves a name, not the file: the other links
+    /// keep the old content, and nothing is written through them.
+    Shared(FileId),
 }
 
 /// One entry of a listing. Links, mount points, pipes, sockets and devices never appear.
@@ -441,9 +479,13 @@ mod tests {
             assert_eq!(fs::read_to_string(&stream).unwrap(), "old");
 
             // The refused commit removed its temporary file, so the name is free again.
+            let (_, seen) = tree
+                .open_file_shared(&path("resources/[maps]/harbour/stream/harbour.ytyp"))
+                .unwrap();
             let mut upload = tree.create_temporary(&folder, ".observer-fix-a").unwrap();
             upload.file().write_all(b"new").unwrap();
-            tree.commit_over_shared(&folder, upload, "harbour.ytyp").unwrap();
+            tree.commit_over_shared(&folder, upload, "harbour.ytyp", Some(seen))
+                .unwrap();
 
             assert_eq!(
                 read(&tree, "resources/[maps]/harbour/stream/harbour.ytyp").unwrap(),
@@ -459,7 +501,7 @@ mod tests {
 
             let mut upload = tree.create_temporary(&folder, ".observer-fix-b").unwrap();
             upload.file().write_all(b"fresh").unwrap();
-            tree.commit_over_shared(&folder, upload, "harbour_props.ytyp")
+            tree.commit_over_shared(&folder, upload, "harbour_props.ytyp", None)
                 .unwrap();
             assert_eq!(
                 read(&tree, "resources/[maps]/harbour/stream/harbour_props.ytyp").unwrap(),
@@ -473,10 +515,11 @@ mod tests {
         let (dir, root) = server();
         fs::hard_link(dir.path().join("secret.cfg"), root.join("innocent.txt")).unwrap();
         let tree = ConfinedTree::open(&root).unwrap();
+        let (_, seen) = tree.open_file_shared(&path("innocent.txt")).unwrap();
 
         let mut upload = tree.create_temporary(tree.root(), ".observer-fix-c").unwrap();
         upload.file().write_all(b"replaced").unwrap();
-        tree.commit_over_shared(tree.root(), upload, "innocent.txt")
+        tree.commit_over_shared(tree.root(), upload, "innocent.txt", Some(seen))
             .unwrap();
 
         assert_eq!(read(&tree, "innocent.txt").unwrap(), "replaced");
@@ -500,15 +543,20 @@ mod tests {
         let stream = tree
             .open_folder(&path("resources/[maps]/harbour/stream"))
             .unwrap();
+        // The very file in place where one is expected, so that each refusal is the entry's own.
+        let (_, seen) = tree
+            .open_file_shared(&path("resources/[maps]/harbour/stream/harbour.ytyp"))
+            .unwrap();
+        let expected = Some(seen);
 
         let upload = tree.create_temporary(&harbour, ".observer-fix-d").unwrap();
-        let folder = tree.commit_over_shared(&harbour, upload, "stream");
+        let folder = tree.commit_over_shared(&harbour, upload, "stream", expected);
         assert!(matches!(folder, Err(TreeError::IsAFolder)), "{folder:?}");
         let upload = tree.create_temporary(&stream, ".observer-fix-d").unwrap();
-        let escaped = tree.commit_over_shared(&stream, upload, "../fxmanifest.lua");
+        let escaped = tree.commit_over_shared(&stream, upload, "../fxmanifest.lua", expected);
         assert!(matches!(escaped, Err(TreeError::Escaped)), "{escaped:?}");
         let upload = tree.create_temporary(&stream, ".observer-fix-d").unwrap();
-        let linked = tree.commit_over_shared(&stream, upload, "linked.ytyp");
+        let linked = tree.commit_over_shared(&stream, upload, "linked.ytyp", expected);
         if cfg!(windows) {
             // A junction is a folder, which a file never replaces.
             assert!(matches!(linked, Err(TreeError::IsAFolder)), "{linked:?}");
@@ -521,7 +569,7 @@ mod tests {
             let file_link = stream_file.with_file_name("file-link.ytyp");
             if std::os::windows::fs::symlink_file(dir.path().join("secret.cfg"), &file_link).is_ok() {
                 let upload = tree.create_temporary(&stream, ".observer-fix-d").unwrap();
-                let linked = tree.commit_over_shared(&stream, upload, "file-link.ytyp");
+                let linked = tree.commit_over_shared(&stream, upload, "file-link.ytyp", expected);
                 assert!(matches!(linked, Err(TreeError::Link)), "{linked:?}");
                 fs::remove_file(&file_link).unwrap();
             }
@@ -531,7 +579,7 @@ mod tests {
             permissions.set_readonly(true);
             fs::set_permissions(&stream_file, permissions).unwrap();
             let upload = tree.create_temporary(&stream, ".observer-fix-d").unwrap();
-            let read_only = tree.commit_over_shared(&stream, upload, "harbour.ytyp");
+            let read_only = tree.commit_over_shared(&stream, upload, "harbour.ytyp", expected);
             assert!(matches!(read_only, Err(TreeError::ReadOnly)), "{read_only:?}");
             fs::set_permissions(&stream_file, writable).unwrap();
         }
@@ -541,6 +589,158 @@ mod tests {
         assert_eq!(fs::read_to_string(&stream_file).unwrap(), "old");
         assert_eq!(fs::read_to_string(&cached).unwrap(), "old");
         assert!(dir.path().join("secret.cfg").exists());
+    }
+
+    #[test]
+    fn a_shared_file_is_read_with_its_identity_and_replaced_only_while_it_is_still_that_file() {
+        for fallbacks in [false, true] {
+            let (_dir, root) = server();
+            let (stream, cached) = cached_stream_file(&root);
+            let tree = ConfinedTree::open(&root).unwrap();
+            let tree = if fallbacks { tree.with_fallbacks() } else { tree };
+            let at = path("resources/[maps]/harbour/stream/harbour.ytyp");
+            let folder = tree
+                .open_folder(&path("resources/[maps]/harbour/stream"))
+                .unwrap();
+
+            assert!(matches!(tree.open_file(&at), Err(TreeError::HardLink)));
+            let (mut file, seen) = tree.open_file_shared(&at).unwrap();
+            let mut old = String::new();
+            file.read_to_string(&mut old).unwrap();
+            assert_eq!(old, "old");
+            // Without POSIX semantics an open handle blocks the replace: the read is over first.
+            drop(file);
+            let (_, twin) = tree
+                .open_file_shared(&path("cache/files/harbour/stream_cache/harbour.ytyp"))
+                .unwrap();
+            assert_eq!(twin, seen, "two links of one file are one file");
+
+            let mut upload = tree.create_temporary(&folder, ".observer-fix-e").unwrap();
+            upload.file().write_all(b"new").unwrap();
+            tree.commit_over_shared(&folder, upload, "harbour.ytyp", Some(seen))
+                .unwrap();
+
+            assert_eq!(fs::read_to_string(&stream).unwrap(), "new");
+            assert_eq!(
+                fs::read_to_string(&cached).unwrap(),
+                "old",
+                "fallbacks: {fallbacks}"
+            );
+            let (_, written) = tree.open_file_shared(&at).unwrap();
+            assert_ne!(written, seen, "the file written anew is another file");
+
+            // A writer still going by the first read is refused: the name leads elsewhere now.
+            let mut upload = tree.create_temporary(&folder, ".observer-fix-e").unwrap();
+            upload.file().write_all(b"stale").unwrap();
+            let stale = tree.commit_over_shared(&folder, upload, "harbour.ytyp", Some(seen));
+            assert!(matches!(stale, Err(TreeError::Changed)), "{stale:?}");
+            assert_eq!(fs::read_to_string(&stream).unwrap(), "new");
+            assert_eq!(names(&tree, &folder), ["harbour.ytyp"]);
+        }
+    }
+
+    #[test]
+    fn a_file_swapped_removed_or_created_since_the_read_is_never_overwritten() {
+        let (dir, root) = server();
+        let (stream, cached) = cached_stream_file(&root);
+        let tree = ConfinedTree::open(&root).unwrap();
+        let folder = tree
+            .open_folder(&path("resources/[maps]/harbour/stream"))
+            .unwrap();
+        let (file, seen) = tree
+            .open_file_shared(&path("resources/[maps]/harbour/stream/harbour.ytyp"))
+            .unwrap();
+        drop(file);
+        let commit = |expected| {
+            let mut upload = tree.create_temporary(&folder, ".observer-fix-f").unwrap();
+            upload.file().write_all(b"ours").unwrap();
+            tree.commit_over_shared(&folder, upload, "harbour.ytyp", expected)
+        };
+
+        // Another writer commits its own file under the name, by a rename as an upload does.
+        fs::write(dir.path().join("theirs"), "theirs").unwrap();
+        fs::rename(dir.path().join("theirs"), &stream).unwrap();
+        let swapped = commit(Some(seen));
+        assert!(matches!(swapped, Err(TreeError::Changed)), "{swapped:?}");
+        assert_eq!(fs::read_to_string(&stream).unwrap(), "theirs");
+
+        fs::remove_file(&stream).unwrap();
+        let removed = commit(Some(seen));
+        assert!(matches!(removed, Err(TreeError::Changed)), "{removed:?}");
+        assert!(!stream.exists(), "nothing is created where a file was expected");
+
+        fs::write(&stream, "theirs too").unwrap();
+        let created = commit(None);
+        assert!(matches!(created, Err(TreeError::Changed)), "{created:?}");
+        assert_eq!(fs::read_to_string(&stream).unwrap(), "theirs too");
+
+        assert_eq!(names(&tree, &folder), ["harbour.ytyp"]);
+        assert_eq!(fs::read_to_string(&cached).unwrap(), "old");
+    }
+
+    #[test]
+    fn a_shared_read_still_refuses_links_folders_and_missing_files() {
+        let (dir, root) = server();
+        link_folder(&root.join("resources").join("[maps]").join("outside"), dir.path());
+        let tree = ConfinedTree::open(&root).unwrap();
+
+        let through = tree.open_file_shared(&path("resources/[maps]/outside/secret.cfg"));
+        assert!(matches!(through, Err(TreeError::Link)), "{through:?}");
+        let linked = tree.open_file_shared(&path("resources/[maps]/outside"));
+        // A junction is a folder to Windows; a symbolic link is a link to Unix.
+        assert!(
+            matches!(linked, Err(TreeError::Link | TreeError::IsAFolder)),
+            "{linked:?}"
+        );
+        let folder = tree.open_file_shared(&path("resources"));
+        assert!(matches!(folder, Err(TreeError::IsAFolder)), "{folder:?}");
+        assert!(matches!(
+            tree.open_file_shared(&RelativePath::root()),
+            Err(TreeError::IsAFolder)
+        ));
+        let missing = tree.open_file_shared(&path("resources/missing.ytyp"));
+        assert!(matches!(missing, Err(TreeError::NotFound)), "{missing:?}");
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(dir.path().join("secret.cfg"), root.join("secret.cfg")).unwrap();
+            let link = tree.open_file_shared(&path("secret.cfg"));
+            assert!(matches!(link, Err(TreeError::Link)), "{link:?}");
+            let folder = fs::File::open(&root).unwrap();
+            rustix::fs::mknodat(
+                &folder,
+                "console",
+                rustix::fs::FileType::Fifo,
+                rustix::fs::Mode::from_raw_mode(0o600),
+                0,
+            )
+            .unwrap();
+            let pipe = tree.open_file_shared(&path("console"));
+            assert!(matches!(pipe, Err(TreeError::NotRegular)), "{pipe:?}");
+        }
+        #[cfg(windows)]
+        if std::os::windows::fs::symlink_file(dir.path().join("secret.cfg"), root.join("secret.cfg")).is_ok()
+        {
+            let link = tree.open_file_shared(&path("secret.cfg"));
+            assert!(matches!(link, Err(TreeError::Link)), "{link:?}");
+        }
+    }
+
+    #[test]
+    fn the_root_and_each_file_have_an_identity_of_their_own() {
+        let (_dir, root) = server();
+        let tree = ConfinedTree::open(&root).unwrap();
+        let again = ConfinedTree::open(&root).unwrap();
+
+        let folder = tree.root_id().unwrap();
+        assert_eq!(again.root_id().unwrap(), folder, "one folder opened twice");
+        let (_, manifest) = tree
+            .open_file_shared(&path("resources/[maps]/harbour/fxmanifest.lua"))
+            .unwrap();
+        assert_ne!(manifest, folder);
+        assert_eq!(manifest.volume(), folder.volume());
+        let shown = manifest.to_string();
+        assert_eq!(shown.len(), 16 + 1 + 32, "{shown}");
+        assert!(shown.ends_with(&format!("{:032x}", manifest.index())), "{shown}");
     }
 
     #[test]

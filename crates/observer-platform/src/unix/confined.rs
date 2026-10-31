@@ -10,7 +10,7 @@ use rustix::fs::{
 };
 use rustix::io::Errno;
 
-use crate::confined::{Entry, EntryKind, RelativePath, Replace, TreeError};
+use crate::confined::{Entry, EntryKind, FileId, RelativePath, Replace, TreeError};
 
 /// Whether `openat2` with its resolution flags is available. The kernel and a container's
 /// seccomp profile are the same for the whole process, so the first tree opened decides.
@@ -124,6 +124,28 @@ impl ConfinedTree {
 
     /// Opens a regular file to read.
     pub fn open_file(&self, path: &RelativePath) -> Result<File, TreeError> {
+        self.open_regular(path, false).map(|(file, _)| file)
+    }
+
+    /// Opens a regular file to read as [`open_file`](Self::open_file) does, even when other hard
+    /// links share it: FXServer links every stream file into its cache. Links and mount points
+    /// stay refused, on the way and in the file's place. For Observer's own reads only, never to
+    /// serve a file to someone: another link may lead to it from outside the tree. The file's
+    /// identity comes with it, which [`commit_over_shared`](Self::commit_over_shared) checks
+    /// before it replaces the name.
+    pub fn open_file_shared(&self, path: &RelativePath) -> Result<(File, FileId), TreeError> {
+        let (file, stat) = self.open_regular(path, true)?;
+        Ok((file, file_id(&stat)))
+    }
+
+    /// The root folder's identity, which tells the same folder apart from another reached under the
+    /// same path, and finds it again under another.
+    pub fn root_id(&self) -> Result<FileId, TreeError> {
+        let stat = rustix::fs::fstat(&self.root.handle).map_err(errno)?;
+        Ok(file_id(&stat))
+    }
+
+    fn open_regular(&self, path: &RelativePath, shared: bool) -> Result<(File, Stat), TreeError> {
         let Some((parent, name)) = path.split_last() else {
             return Err(TreeError::IsAFolder);
         };
@@ -135,9 +157,13 @@ impl ConfinedTree {
             OFlags::RDONLY | OFlags::NONBLOCK | OFlags::NOCTTY,
         )?;
         let stat = rustix::fs::fstat(&handle).map_err(errno)?;
-        refuse_unless_regular(&stat)?;
+        if shared {
+            refuse_unless_file(&stat)?;
+        } else {
+            refuse_unless_regular(&stat)?;
+        }
         self.check_final(&handle, path)?;
-        Ok(File::from(handle))
+        Ok((File::from(handle), stat))
     }
 
     /// What the entry at `path` is, without following a link in its place.
@@ -206,14 +232,26 @@ impl ConfinedTree {
     /// Makes the temporary file the folder's `target` as a replacing [`commit`](Self::commit)
     /// does, even when other hard links share the file in its place: FXServer links every stream
     /// file into its cache. The rename takes the name alone, so the other links keep the old
-    /// content. Every other refusal stays, and removes the temporary file.
+    /// content.
+    ///
+    /// `expected` is the file the caller read there, from
+    /// [`open_file_shared`](Self::open_file_shared), or `None` when the name was free: any other
+    /// entry in its place, or none where a file was expected, refuses the commit (`Changed`), so
+    /// that a file another writer committed since is never overwritten. The check comes just
+    /// before the rename, which a writer racing within that instant can still beat. Every other
+    /// refusal stays, and any refusal removes the temporary file.
     pub fn commit_over_shared(
         &self,
         folder: &Folder,
         temporary: TemporaryFile,
         target: &str,
+        expected: Option<FileId>,
     ) -> Result<(), TreeError> {
-        self.commit_as(folder, temporary, target, Replace::Shared)
+        let replace = expected.map_or(Replace::Never, Replace::Shared);
+        match self.commit_as(folder, temporary, target, replace) {
+            Err(TreeError::Exists) => Err(TreeError::Changed),
+            committed => committed,
+        }
     }
 
     fn commit_as(
@@ -248,14 +286,18 @@ impl ConfinedTree {
         } else {
             match rustix::fs::statat(&folder.handle, target, AtFlags::SYMLINK_NOFOLLOW) {
                 Ok(stat) => {
-                    if replace == Replace::Shared {
+                    if let Replace::Shared(expected) = replace {
                         refuse_unless_file(&stat)?;
+                        if file_id(&stat) != expected {
+                            return Err(TreeError::Changed);
+                        }
                     } else {
                         refuse_unless_regular(&stat)?;
                     }
                     let permissions = Mode::from_raw_mode(stat.st_mode & 0o777);
                     rustix::fs::fchmod(&temporary.file, permissions).map_err(errno)?;
                 }
+                Err(Errno::NOENT) if matches!(replace, Replace::Shared(_)) => return Err(TreeError::Changed),
                 Err(Errno::NOENT) => {}
                 Err(error) => return Err(errno(error)),
             }
@@ -444,6 +486,10 @@ fn refuse_unless_regular(stat: &Stat) -> Result<(), TreeError> {
         return Err(TreeError::HardLink);
     }
     Ok(())
+}
+
+fn file_id(stat: &Stat) -> FileId {
+    FileId::new(stat.st_dev, u128::from(stat.st_ino))
 }
 
 /// Refuses anything but a regular file, whatever other hard links share it.
