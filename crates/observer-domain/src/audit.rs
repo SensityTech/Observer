@@ -127,10 +127,17 @@ pub enum AuditAction {
     FileSessionDisconnected,
     FileSettingsChanged,
     FileHostKeyCreated,
+    /// Every trace of a player was erased on request. The target is the licence's keyed
+    /// fingerprint, never the licence.
+    PlayerForgotten,
+    /// txAdmin's players database was taken in. The details hold the file's size and counts only.
+    PlayersImported,
+    /// The retentions of the players' identities, play time per day and profiles changed.
+    PlayersRetentionChanged,
 }
 
 impl AuditAction {
-    pub const ALL: [Self; 70] = [
+    pub const ALL: [Self; 73] = [
         Self::SetupCompleted,
         Self::SetupLinkCreated,
         Self::LoginSucceeded,
@@ -201,6 +208,9 @@ impl AuditAction {
         Self::FileSessionDisconnected,
         Self::FileSettingsChanged,
         Self::FileHostKeyCreated,
+        Self::PlayerForgotten,
+        Self::PlayersImported,
+        Self::PlayersRetentionChanged,
     ];
 
     pub const fn as_str(self) -> &'static str {
@@ -275,6 +285,9 @@ impl AuditAction {
             Self::FileSessionDisconnected => "file_session_disconnected",
             Self::FileSettingsChanged => "file_settings_changed",
             Self::FileHostKeyCreated => "file_host_key_created",
+            Self::PlayerForgotten => "player_forgotten",
+            Self::PlayersImported => "players_imported",
+            Self::PlayersRetentionChanged => "players_retention_changed",
         }
     }
 

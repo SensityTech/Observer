@@ -8,12 +8,14 @@ publish.workspace = true
 [dependencies]
 argon2.workspace = true
 getrandom.workspace = true
+hmac.workspace = true
 jiff.workspace = true
 observer-artifacts.workspace = true
 observer-domain.workspace = true
 observer-fxserver.workspace = true
 observer-platform.workspace = true
 observer-store.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 ssh-key.workspace = true

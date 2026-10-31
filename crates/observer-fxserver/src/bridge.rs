@@ -1,6 +1,6 @@
 //! The `observer` resource Observer installs in every build: it turns Observer's commands into
-//! server events, and reports the heartbeat, readiness, started resources and the JS heap back
-//! through the structured trace channel. The resource lives in `resource/observer`.
+//! server events, and reports the heartbeat, readiness, started resources, the JS heap and the
+//! players back through the structured trace channel. The resource lives in `resource/observer`.
 
 use std::fs;
 use std::io;

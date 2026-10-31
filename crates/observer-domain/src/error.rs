@@ -142,6 +142,17 @@ pub enum ErrorCode {
     TooManyKeys,
     /// A pipeline's settings are unusable. Params: `field`, `name`, `networks` or `expiry`.
     InvalidAccess,
+    /// No player has this id: never seen, forgotten, or past the profiles' retention.
+    PlayerNotFound,
+    /// A players search never takes an address: the panel must not tell which licences used an
+    /// address someone already knows.
+    AddressSearch,
+    /// The search names a kind of identifier with a value that is not one of that kind.
+    InvalidSearch,
+    /// A retention is out of its range, or would outlive what it hangs on.
+    InvalidPlayersSettings,
+    /// txAdmin's players database was refused, whole. Params: `problem`, a `PlayersFileProblem`.
+    InvalidPlayersFile,
 }
 
 /// The body of every error response.

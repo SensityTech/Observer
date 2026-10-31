@@ -213,6 +213,9 @@ const AUDIT_ACTIONS = {
     file_session_disconnected: true,
     file_settings_changed: true,
     file_host_key_created: true,
+    player_forgotten: true,
+    players_imported: true,
+    players_retention_changed: true,
 } satisfies Record<AuditAction, true>;
 
 const OUTCOMES = { success: true, failure: true, denied: true } satisfies Record<Outcome, true>;
