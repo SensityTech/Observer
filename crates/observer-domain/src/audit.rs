@@ -134,10 +134,17 @@ pub enum AuditAction {
     PlayersImported,
     /// The retentions of the players' identities, play time per day and profiles changed.
     PlayersRetentionChanged,
+    /// The drop log went out as CSV. The details hold the kinds of its filters, never their
+    /// values, and the row count.
+    PlayerDropsExported,
+    /// The daily drop rates went out as CSV.
+    DropRatesExported,
+    /// How long players' sessions and their texts are kept changed.
+    DropsRetentionChanged,
 }
 
 impl AuditAction {
-    pub const ALL: [Self; 73] = [
+    pub const ALL: [Self; 76] = [
         Self::SetupCompleted,
         Self::SetupLinkCreated,
         Self::LoginSucceeded,
@@ -211,6 +218,9 @@ impl AuditAction {
         Self::PlayerForgotten,
         Self::PlayersImported,
         Self::PlayersRetentionChanged,
+        Self::PlayerDropsExported,
+        Self::DropRatesExported,
+        Self::DropsRetentionChanged,
     ];
 
     pub const fn as_str(self) -> &'static str {
@@ -288,6 +298,9 @@ impl AuditAction {
             Self::PlayerForgotten => "player_forgotten",
             Self::PlayersImported => "players_imported",
             Self::PlayersRetentionChanged => "players_retention_changed",
+            Self::PlayerDropsExported => "player_drops_exported",
+            Self::DropRatesExported => "drop_rates_exported",
+            Self::DropsRetentionChanged => "drops_retention_changed",
         }
     }
 

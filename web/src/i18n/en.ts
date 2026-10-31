@@ -113,6 +113,10 @@ const permissions = {
         description:
             'Every identifier a player showed, hardware tokens included, and the other licences they link to.',
     },
+    dropsView: {
+        name: 'View player drops',
+        description: 'Drop rates, categories, crash signatures and kicking resources, without any player.',
+    },
 } satisfies Record<PermissionKey, { name: string; description: string }>;
 
 const permissionNames = (hex: string) =>
@@ -2255,6 +2259,9 @@ export const en = {
             player_forgotten: 'Player forgotten',
             players_imported: "txAdmin's players imported",
             players_retention_changed: 'Player retention changed',
+            player_drops_exported: 'Drop log exported',
+            drop_rates_exported: 'Drop rates exported',
+            drops_retention_changed: 'Drop retention changed',
         } satisfies Record<AuditAction, string>,
         outcomes: {
             success: 'Success',
@@ -2511,6 +2518,7 @@ export const en = {
         diagnostics: 'Diagnostics',
         files: 'Files',
         players: 'Players',
+        drops: 'Player drops',
     } satisfies Record<PermissionArea, string>,
     danger: {
         sensitive: 'Sensitive',
@@ -2675,6 +2683,10 @@ export const en = {
                 ? playersFileProblems[problem]
                 : "This file cannot be imported as txAdmin's players database.";
         },
+        invalid_drops_settings: (params) =>
+            typeof params.min === 'number' && typeof params.max === 'number'
+                ? `Keep sessions between ${params.min} and ${params.max} days.`
+                : 'This retention is out of range.',
     } satisfies Record<ErrorCode, ErrorMessage>,
     failure: {
         unknown: 'Something went wrong. Try again.',

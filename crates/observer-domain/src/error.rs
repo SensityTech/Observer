@@ -153,6 +153,8 @@ pub enum ErrorCode {
     InvalidPlayersSettings,
     /// txAdmin's players database was refused, whole. Params: `problem`, a `PlayersFileProblem`.
     InvalidPlayersFile,
+    /// The drop retention is out of its range. Params: `min`, `max`.
+    InvalidDropsSettings,
 }
 
 /// The body of every error response.

@@ -560,7 +560,7 @@ async fn setup_signs_the_owner_in_with_a_strict_http_only_cookie() {
     assert_eq!(session["sessionKey"].as_str().unwrap().len(), 64);
     assert_eq!(session["me"]["username"], "ada");
     assert_eq!(session["me"]["isOwner"], true);
-    assert_eq!(session["me"]["permissions"], "ffff");
+    assert_eq!(session["me"]["permissions"], "1ffff");
 
     let again = server.call(Method::POST, "/api/setup", None, Some(body)).await;
     assert_eq!(again.status, StatusCode::CONFLICT);
