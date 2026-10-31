@@ -140,6 +140,8 @@ pub enum ErrorCode {
     InvalidSearch,
     /// A retention is out of its range, or would outlive what it hangs on.
     InvalidPlayersSettings,
+    /// txAdmin's players database was refused, whole. Params: `problem`, a `PlayersFileProblem`.
+    InvalidPlayersFile,
 }
 
 /// The body of every error response.

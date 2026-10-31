@@ -484,6 +484,65 @@ pub struct PlayerProfile {
     pub today: String,
 }
 
+/// Where txAdmin's players database is on the host: `<txData>/<profile>/data/playersDB.json`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct PlayersImportRequest {
+    pub path: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum ImportState {
+    /// The file was read and checked whole; its players are being written.
+    Writing,
+    Finished,
+    /// The writing stopped; running the import again finishes it, since every write is idempotent.
+    Failed,
+}
+
+/// The txAdmin import under way, or the last one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct PlayersImport {
+    pub state: ImportState,
+    pub started_at: Timestamp,
+    pub finished_at: Option<Timestamp>,
+    pub bytes: u64,
+    /// Records in the file.
+    pub read: u64,
+    /// Records written so far.
+    pub written: u64,
+    /// New profiles, and profiles Observer already had that took txAdmin's record in.
+    pub imported: u64,
+    pub updated: u64,
+    /// Skipped: the licence was forgotten on request.
+    pub forgotten: u64,
+    /// Skipped: no valid licence.
+    pub invalid: u64,
+}
+
+/// Why a players database was refused, whole.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum PlayersFileProblem {
+    Missing,
+    /// A link, a pipe, a device or a folder: only a regular file is read.
+    NotAFile,
+    /// Over 512 MiB.
+    TooLarge,
+    Unreadable,
+    /// Not txAdmin's players database, or cut short.
+    NotPlayersDatabase,
+    /// Written by a txAdmin whose format Observer does not read: open it once with a current
+    /// txAdmin, then import it again.
+    UnsupportedVersion,
+}
+
 /// How long player data is kept, in days. A profile kept for good has `None`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]

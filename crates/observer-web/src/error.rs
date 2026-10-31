@@ -111,6 +111,7 @@ fn status(code: ErrorCode) -> StatusCode {
         | ErrorCode::AddressSearch
         | ErrorCode::InvalidSearch
         | ErrorCode::InvalidPlayersSettings => StatusCode::BAD_REQUEST,
+        ErrorCode::InvalidPlayersFile => StatusCode::UNPROCESSABLE_ENTITY,
         ErrorCode::TooManyAttempts | ErrorCode::TooManySockets | ErrorCode::TooManyCommands => {
             StatusCode::TOO_MANY_REQUESTS
         }
