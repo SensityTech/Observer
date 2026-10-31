@@ -1,6 +1,6 @@
 // The Observer the browser tests run against: the debug binary on a data folder of its own, with
 // the fake FXServer installed as a build no one has selected yet, and the test catalog in place of
-// Cfx.re's, whose one build the fake serves as an archive of itself. Global setup starts both; the
+// Cfx.re's, whose one build is the fake as `fake-archive` serves it. Global setup starts both; the
 // function it returns stops them.
 import { spawn } from 'node:child_process';
 import {
@@ -98,7 +98,7 @@ const answers = async () => {
     }
 };
 
-/** Any answer will do: the fake listens once its archive is made. */
+/** Any answer will do: `fake-archive` listens once its archive is made. */
 const serves = async () => {
     try {
         await fetch(`http://127.0.0.1:${catalogPort}/`);
@@ -111,6 +111,7 @@ const serves = async () => {
 export default async function setup() {
     const observer = binary('OBSERVER_BIN', 'observer');
     const fake = binary('FAKE_FXSERVER_BIN', 'fake-fxserver');
+    const archiveServer = binary('FAKE_ARCHIVE_BIN', 'fake-archive');
     // A debug binary serves the panel from disk.
     if (!existsSync(join(web, 'dist', 'index.html'))) {
         throw new Error('web/dist is missing: run `cargo xtask web` (or `npm run build`) first');
@@ -131,7 +132,7 @@ export default async function setup() {
     writeFileSync(config, `data_dir = "data"\n\n[http]\nlisten = "127.0.0.1:${port}"\n`);
 
     mkdirSync(results, { recursive: true });
-    const archive = spawn(fake, ['--fake-archive', String(catalogPort)], {
+    const archive = spawn(archiveServer, [String(catalogPort)], {
         stdio: ['ignore', 'ignore', 'pipe'],
     });
     archive.stderr.pipe(createWriteStream(join(results, 'archive.err')));
@@ -141,12 +142,10 @@ export default async function setup() {
     });
     if (!(await until(async () => served.exit !== null || (await serves()), Date.now() + patience))) {
         archive.kill();
-        throw new Error(`the fake did not serve its archive on port ${catalogPort}`);
+        throw new Error(`fake-archive did not serve on port ${catalogPort}`);
     }
     if (served.exit !== null) {
-        throw new Error(
-            `the fake could not serve its archive (exit ${served.exit}), see e2e/results/archive.err`,
-        );
+        throw new Error(`fake-archive could not serve (exit ${served.exit}), see e2e/results/archive.err`);
     }
     const stopArchive = async () => {
         if (served.exit === null) {

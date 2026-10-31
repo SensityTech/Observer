@@ -403,15 +403,15 @@ fn archived() -> CatalogBuild {
     }
 }
 
-/// The fake serving its own archive on `ARCHIVE_PORT`, until dropped.
+/// `fake-archive` serving the fake on `ARCHIVE_PORT`, until dropped.
 struct ArchiveServer(Child);
 
 impl ArchiveServer {
-    /// Once the port answers, which the fake opens once its archive is made.
+    /// Once the port answers, which it opens once its archive is made.
     async fn start() -> Self {
         let server = Self(
-            Command::new(env!("CARGO_BIN_EXE_fake-fxserver"))
-                .args(["--fake-archive", &ARCHIVE_PORT.to_string()])
+            Command::new(env!("CARGO_BIN_EXE_fake-archive"))
+                .arg(ARCHIVE_PORT.to_string())
                 .spawn()
                 .unwrap(),
         );

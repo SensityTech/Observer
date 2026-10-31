@@ -40,11 +40,7 @@
 //!
 //! The bridge's `observer_cmd <hex>` prints the event it decodes, which the real bridge does not, so
 //! that tests can see it arrive. Unknown commands get FXServer's `No such command <name>.`
-//!
-//! `fake-fxserver --fake-archive <port>` runs none of this: it serves on 127.0.0.1 an archive of
-//! itself as build 99001 of the host's platform, for Observer to install.
 
-mod archive;
 mod console;
 mod dump;
 mod http;
@@ -71,8 +67,6 @@ const LICENSE_HELP: &str = "Please set the sv_licenseKey console variable to a k
 const HOLD_PIPES: &str = "--fake-hold-pipes";
 /// What FXServer passes the copy of itself that serves as its crash dump server.
 const DUMP_SERVER: &str = "-dumpserver:";
-/// The argument that turns the process into the server of its own archive, followed by the port.
-const SERVE_ARCHIVE: &str = "--fake-archive";
 /// FXServer's main thread, as FXServer 35245 names it.
 const SV_MAIN: &str = "UV loop: svMain";
 
@@ -181,9 +175,6 @@ fn main() {
         || args.iter().any(|arg| arg.starts_with(DUMP_SERVER))
     {
         hang();
-    }
-    if args.first().map(String::as_str) == Some(SERVE_ARCHIVE) {
-        archive::serve(args.get(1).map_or("", String::as_str));
     }
     // Before anything else opens a file, so that fd 3 is still the parent's.
     let traces = Traces::open();

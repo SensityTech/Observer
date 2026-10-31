@@ -85,7 +85,7 @@ fn respond(mut stream: TcpStream, server: &Server) -> io::Result<()> {
     )
 }
 
-pub fn read_head(stream: &mut TcpStream) -> io::Result<String> {
+fn read_head(stream: &mut TcpStream) -> io::Result<String> {
     let mut head = Vec::new();
     let mut buffer = [0; 1024];
     while !head.windows(4).any(|window| window == b"\r\n\r\n") && head.len() < 16 * 1024 {

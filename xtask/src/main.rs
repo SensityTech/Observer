@@ -109,7 +109,8 @@ fn e2e() -> anyhow::Result<()> {
         .args(["run", "e2e"])
         .current_dir(&panel)
         .env("OBSERVER_BIN", binary(&binaries, "observer")?)
-        .env("FAKE_FXSERVER_BIN", binary(&binaries, "fake-fxserver")?))
+        .env("FAKE_FXSERVER_BIN", binary(&binaries, "fake-fxserver")?)
+        .env("FAKE_ARCHIVE_BIN", binary(&binaries, "fake-archive")?))
 }
 
 /// Runs a `cargo build` and says where each binary it built went, by name: Cargo's target

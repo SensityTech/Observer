@@ -1,8 +1,12 @@
-//! The fake as a build to install: an archive of its own executable, laid out as the host's
-//! FXServer builds are, served on 127.0.0.1 for the browser tests' catalog. Its `fake-build.cfg`
-//! makes the installed fake report build 99001.
+//! `fake-archive <port>` serves on 127.0.0.1 the fake FXServer built next to it as build 99001 of
+//! the host's platform, for Observer to install: `server.zip` with the fake as `FXServer.exe` on
+//! Windows, `fx.tar.xz` with the alpine layout and `run.sh` on Linux. A `fake-build.cfg` beside the
+//! fake makes it report 99001.
+//!
+//! A binary of its own, so that the fake every test copies does not carry the archive writers:
+//! their debug info made it two thirds larger.
 
-use std::io::{self, Cursor, Write};
+use std::io::{self, BufRead, BufReader, Cursor, Write};
 use std::net::{TcpListener, TcpStream};
 use std::process;
 use std::sync::Arc;
@@ -14,8 +18,6 @@ use tar::{EntryType, Header};
 use zip::CompressionMethod;
 use zip::result::ZipResult;
 use zip::write::{SimpleFileOptions, ZipWriter};
-
-use crate::http::read_head;
 
 /// The build the archive holds.
 const BUILD: u32 = 99001;
@@ -31,26 +33,27 @@ const STAND_IN: &[u8] = b"#!/bin/sh\n";
 /// Answers a `GET` or a `HEAD` of any path that ends in the archive's name with the archive, and
 /// anything else with a 404. It listens once the archive is made, so that whoever waits for the
 /// port waits for the archive too.
-pub fn serve(port: &str) -> ! {
-    let Ok(port) = port.parse::<u16>() else {
-        fail(&format!("{port:?} is not a port"));
-    };
+fn main() {
+    let port = std::env::args()
+        .nth(1)
+        .and_then(|port| port.parse::<u16>().ok())
+        .unwrap_or_else(|| fail("usage: fake-archive <port>"));
     let archive =
         Arc::new(archive().unwrap_or_else(|error| fail(&format!("cannot make the archive: {error}"))));
     let listener = TcpListener::bind(("127.0.0.1", port))
         .unwrap_or_else(|error| fail(&format!("cannot listen on 127.0.0.1:{port}: {error}")));
-    loop {
-        if let Ok((stream, _)) = listener.accept() {
-            let archive = Arc::clone(&archive);
-            thread::spawn(move || {
-                let _ = respond(stream, &archive);
-            });
-        }
+    for stream in listener.incoming().flatten() {
+        let archive = Arc::clone(&archive);
+        thread::spawn(move || {
+            let _ = respond(&stream, &archive);
+        });
     }
 }
 
 fn archive() -> io::Result<Vec<u8>> {
-    let program = std::fs::read(std::env::current_exe()?)?;
+    let fake =
+        std::env::current_exe()?.with_file_name(format!("fake-fxserver{}", std::env::consts::EXE_SUFFIX));
+    let program = std::fs::read(fake)?;
     let cfg = format!("set fake_build {BUILD}\n");
     if cfg!(windows) {
         zip(&program, cfg.as_bytes()).map_err(io::Error::other)
@@ -97,20 +100,24 @@ fn tar_xz(program: &[u8], cfg: &[u8]) -> io::Result<Vec<u8>> {
     xz.finish()
 }
 
-fn respond(mut stream: TcpStream, archive: &[u8]) -> io::Result<()> {
+fn respond(stream: &TcpStream, archive: &[u8]) -> io::Result<()> {
     stream.set_read_timeout(Some(Duration::from_secs(5)))?;
-    let head = read_head(&mut stream)?;
-    let mut request = head.split(' ');
-    let method = request.next().unwrap_or_default();
-    let path = request.next().unwrap_or_default();
+    let mut lines = BufReader::new(stream).lines();
+    let request = lines.next().transpose()?.unwrap_or_default();
+    // The whole head is read: closing on bytes left unread would reset the connection.
+    while lines.next().transpose()?.is_some_and(|line| !line.is_empty()) {}
+    let mut words = request.split(' ');
+    let method = words.next().unwrap_or_default();
+    let path = words.next().unwrap_or_default();
+    let mut out = stream;
     if !path.ends_with(&format!("/{NAME}")) {
         return write!(
-            stream,
+            out,
             "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
         );
     }
     write!(
-        stream,
+        out,
         "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
         archive.len()
     )?;
@@ -118,7 +125,7 @@ fn respond(mut stream: TcpStream, archive: &[u8]) -> io::Result<()> {
         return Ok(());
     }
     for slice in archive.chunks(archive.len().div_ceil(SLICES).max(1)) {
-        stream.write_all(slice)?;
+        out.write_all(slice)?;
         thread::sleep(PAUSE);
     }
     Ok(())

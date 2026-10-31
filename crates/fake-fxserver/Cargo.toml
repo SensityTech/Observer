@@ -6,7 +6,7 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
-# The archive of itself it serves: a zip on Windows, an xz-compressed tar on Linux.
+# What fake-archive writes the fake into: a zip on Windows, an xz-compressed tar on Linux.
 lzma-rust2 = { workspace = true, features = ["encoder"] }
 minidump-synth.workspace = true
 serde_json.workspace = true
