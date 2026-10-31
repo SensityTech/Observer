@@ -193,7 +193,9 @@ fn sql_passwords(text: &str, found: &mut Vec<Range<usize>>) {
         };
         let open = text.len() - value.len() + 1;
         let line_end = text[open..].find('\n').map_or(text.len(), |end| open + end);
-        let close = text[open..line_end].find(quote).map_or(line_end, |end| open + end);
+        let close = text[open..line_end]
+            .find(quote)
+            .map_or(line_end, |end| open + end);
         found.push(open..close);
     }
 }
@@ -1226,7 +1228,10 @@ GRANT ALL ON db.* TO 'fivem';
         let lua = masked(lua, "resources/a/config.lua");
         let sql = masked(sql, "resources/a/install.sql");
 
-        assert!(!lua.contains("k1") && !lua.contains("k2") && !lua.contains("k3"), "{lua}");
+        assert!(
+            !lua.contains("k1") && !lua.contains("k2") && !lua.contains("k3"),
+            "{lua}"
+        );
         assert!(lua.contains("keybind = 'E'"), "{lua}");
         assert!(!sql.contains("S3cretPass"), "{sql}");
         assert!(sql.contains("GRANT ALL ON db.*"), "{sql}");
@@ -1239,7 +1244,8 @@ GRANT ALL ON db.* TO 'fivem';
         let started = std::time::Instant::now();
 
         let brackets = "token = [[
-".repeat(100_000);
+"
+        .repeat(100_000);
         let found = secrets(&text, "resources/a/data.xml", false);
         let hidden = secrets(&keys, "resources/a/keys.txt", false);
         let unclosed = secrets(&brackets, "resources/a/config.lua", false);

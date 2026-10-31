@@ -831,17 +831,18 @@ impl Batch {
         let Some(snapshot) = snapshots::get(tx, self.id)? else {
             return Ok(());
         };
-        let rows = resources::rows(tx, snapshot.holder())?;
+        let names = resources::names(tx, snapshot.holder())?;
         for (path, modified_ns) in &self.after_start {
-            let Some(row) = rows.iter().find(|row| {
-                path.strip_prefix(row.path.as_str())
+            let Some((_, resource)) = names.iter().find(|(root, _)| {
+                path.strip_prefix(root.as_str())
                     .is_some_and(|rest| rest.starts_with('/'))
             }) else {
                 continue;
             };
+            // Resource names are kept in lower case; the bridge reports them as written.
             let reloaded = reloads
                 .iter()
-                .any(|(name, at)| *name == row.name && *at > i128::from(*modified_ns));
+                .any(|(name, at)| name.eq_ignore_ascii_case(resource) && *at > i128::from(*modified_ns));
             if reloaded {
                 snapshots::flag(tx, self.id, path, FileFlag::ReloadedLive)?;
             }

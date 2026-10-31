@@ -96,6 +96,14 @@ pub fn set_pending(
 
 /// The rows of the snapshot `holder`, in path order: the snapshot itself, or the one it shares
 /// its rows with.
+/// The path and name of each resource of the snapshot `holder`, without the rest of its row.
+pub fn names(conn: &Connection, holder: i64) -> Result<Vec<(String, String)>, StoreError> {
+    let mut statement =
+        conn.prepare("SELECT path, name FROM snapshot_resource WHERE snapshot_id = ?1 ORDER BY path")?;
+    let rows = statement.query_map([holder], |row| Ok((row.get(0)?, row.get(1)?)))?;
+    Ok(rows.collect::<Result<_, _>>()?)
+}
+
 pub fn rows(conn: &Connection, holder: i64) -> Result<Vec<ResourceRow>, StoreError> {
     let mut statement = conn.prepare(
         "SELECT path, name, shown_name, duplicate, tree, pending_listing, pending, manifest, escrowed,

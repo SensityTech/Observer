@@ -507,6 +507,22 @@ impl Changes {
         if job.as_ref().is_some_and(|running| !running.task.is_finished()) {
             return Ok(());
         }
+        let trimmed = self.trim().await;
+        drop(job);
+        trimmed?;
+        // Batch by batch, each under the job lock: a spawn waits for one batch at most.
+        while self.remask().await? {}
+        let job = self.inner.job.lock().await;
+        if job.as_ref().is_some_and(|running| !running.task.is_finished()) {
+            return Ok(());
+        }
+        self.inner.shared.store.maintain(upkeep::compact).await?;
+        Ok(())
+    }
+
+    /// Keeps the history within retention and the budget. Run with no job under way: what a job
+    /// has stored is not referenced yet.
+    async fn trim(&self) -> Result<(), Error> {
         let settings = self.settings();
         let store = &self.inner.shared.store;
         let cutoff = self.inner.shared.clock.now()
@@ -536,8 +552,6 @@ impl Changes {
                 "texts past the budget lost their contents"
             );
         }
-        self.remask().await?;
-        store.maintain(upkeep::compact).await?;
         if expired + trees + texts > 0 {
             info!(
                 starts = expired,
@@ -547,56 +561,65 @@ impl Changes {
         Ok(())
     }
 
-    /// Masks again, with the current rules, the texts older rules masked: masking only removes
-    /// text, so the stored bodies are enough.
-    async fn remask(&self) -> Result<(), Error> {
+    /// Masks again, with the current rules, one batch of the texts older rules masked: masking
+    /// only removes text, so the stored bodies are enough. A file the cfg exec chain ran is masked
+    /// as a cfg, whatever its name. Whether more are left; none while a job runs, which the next
+    /// upkeep picks up.
+    async fn remask(&self) -> Result<bool, Error> {
+        let job = self.inner.job.lock().await;
+        if job.as_ref().is_some_and(|running| !running.task.is_finished()) {
+            return Ok(false);
+        }
         let store = &self.inner.shared.store;
         let tag_key = self.inner.shared.keys.tag;
-        loop {
-            let older = store
-                .read(|conn| texts::masked_before(conn, mask::VERSION, REMASK_BATCH))
-                .await?;
-            if older.is_empty() {
-                return Ok(());
-            }
-            let mut again = Vec::with_capacity(older.len());
-            for (digest, text) in older {
-                let path = store
-                    .read({
-                        let digest = digest.clone();
-                        move |conn| texts::path_of(conn, &digest)
-                    })
-                    .await?
-                    .unwrap_or_default();
-                let Some(body) = text.text else {
-                    continue;
-                };
-                let masked = mask::remask(
-                    &mask::Masked {
-                        text: body,
-                        redactions: mask::Redaction::decode(&text.redactions),
-                    },
-                    &path,
-                    path.to_ascii_lowercase().ends_with(".cfg"),
-                    &tag_key,
-                );
-                again.push((digest, masked));
-            }
-            store
-                .write(move |tx| -> Result<(), Error> {
-                    for (digest, masked) in &again {
-                        texts::remasked(
-                            tx,
-                            digest,
-                            &masked.text,
-                            mask::VERSION,
-                            &mask::Redaction::encode(&masked.redactions),
-                        )?;
-                    }
-                    Ok(())
-                })
-                .await?;
+        // Read and masked on the database's own thread, not the runtime's.
+        let again = store
+            .read(move |conn| -> Result<Vec<(String, mask::Masked)>, StoreError> {
+                let older = texts::masked_before(conn, mask::VERSION, REMASK_BATCH)?;
+                if older.is_empty() {
+                    return Ok(Vec::new());
+                }
+                let chain = snapshots::chain_paths(conn, SERVER)?;
+                let mut again = Vec::with_capacity(older.len());
+                for (digest, text) in older {
+                    let path = texts::path_of(conn, &digest)?.unwrap_or_default();
+                    let Some(body) = text.text else {
+                        continue;
+                    };
+                    let as_cfg = chain.contains(&path) || path.to_ascii_lowercase().ends_with(".cfg");
+                    let masked = mask::remask(
+                        &mask::Masked {
+                            text: body,
+                            redactions: mask::Redaction::decode(&text.redactions),
+                        },
+                        &path,
+                        as_cfg,
+                        &tag_key,
+                    );
+                    again.push((digest, masked));
+                }
+                Ok(again)
+            })
+            .await?;
+        if again.is_empty() {
+            return Ok(false);
         }
+        store
+            .write(move |tx| -> Result<(), Error> {
+                for (digest, masked) in &again {
+                    texts::remasked(
+                        tx,
+                        digest,
+                        &masked.text,
+                        mask::VERSION,
+                        &mask::Redaction::encode(&masked.redactions),
+                    )?;
+                }
+                Ok(())
+            })
+            .await?;
+        drop(job);
+        Ok(true)
     }
 
     /// The bridge reported the resources started: the first report of a run is its snapshot's,
@@ -646,9 +669,10 @@ impl Changes {
                     if change.change != LiveChangeKind::Stopped
                         && let Some(snapshot) = snapshots::get(tx, id)?
                     {
-                        for row in resources::rows(tx, snapshot.holder())? {
-                            if row.name == change.name {
-                                snapshots::reloaded(tx, id, &row.path)?;
+                        // Resource names are kept in lower case; the bridge reports them as written.
+                        for (path, name) in resources::names(tx, snapshot.holder())? {
+                            if name.eq_ignore_ascii_case(&change.name) {
+                                snapshots::reloaded(tx, id, &path)?;
                             }
                         }
                     }
@@ -872,6 +896,8 @@ impl Driver {
         upkeep.reset();
         let mut changed = self.changes.inner.shared.feed.subscribe();
         let mut refresh: Option<tokio::time::Instant> = None;
+        // The upkeep runs beside the events, so that a long one never makes them wait.
+        let mut running_upkeep: Option<JoinHandle<()>> = None;
         loop {
             let due = refresh.unwrap_or_else(|| tokio::time::Instant::now() + UPKEEP_EVERY);
             tokio::select! {
@@ -899,11 +925,20 @@ impl Driver {
                     self.status(&now).await;
                 }
                 _ = upkeep.tick() => {
-                    if let Err(error) = self.changes.upkeep().await {
-                        warn!(%error, "the file changes upkeep failed");
+                    if running_upkeep.as_ref().is_none_or(JoinHandle::is_finished) {
+                        let service = self.changes.clone();
+                        running_upkeep = Some(tokio::spawn(async move {
+                            if let Err(error) = service.upkeep().await {
+                                warn!(%error, "the file changes upkeep failed");
+                            }
+                        }));
                     }
                 }
             }
+        }
+        if let Some(task) = running_upkeep {
+            task.abort();
+            let _ = task.await;
         }
         if let Some(running) = self.changes.inner.job.lock().await.take() {
             running.stop().await;

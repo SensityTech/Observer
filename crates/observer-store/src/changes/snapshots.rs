@@ -1,6 +1,8 @@
 //! Snapshots: one per start of FXServer that was scanned, and the latest check of the disk, with
 //! what holds for one of their files only.
 
+use std::collections::HashSet;
+
 use jiff::Timestamp;
 use observer_domain::changes::{FileFlag, PartialReason, SnapshotKind, SnapshotState, StartCause};
 use observer_domain::server_data::Game;
@@ -270,6 +272,20 @@ pub fn ran_at(conn: &Connection, server: &str, at: Timestamp) -> Result<Option<S
         .optional()?)
 }
 
+/// Every path the cfg exec chain held in a snapshot of `server` still kept: a file the chain ran
+/// once holds the server's secrets in every version of it.
+pub fn chain_paths(conn: &Connection, server: &str) -> Result<HashSet<String>, StoreError> {
+    let mut statement = conn.prepare("SELECT cfg FROM snapshot WHERE server_id = ?1")?;
+    let configs = statement.query_map([server], |row| row.get::<_, String>(0))?;
+    let mut paths = HashSet::new();
+    for cfg in configs {
+        let cfg: Value = serde_json::from_str(&cfg?).unwrap_or(Value::Null);
+        let files = cfg.get("files").and_then(Value::as_array).into_iter().flatten();
+        paths.extend(files.filter_map(|file| file.get("path")?.as_str().map(str::to_owned)));
+    }
+    Ok(paths)
+}
+
 /// The latest check of the disk, kept until the next one replaces it.
 pub fn latest_check(conn: &Connection, server: &str) -> Result<Option<Snapshot>, StoreError> {
     Ok(conn
@@ -506,6 +522,25 @@ mod tests {
         .unwrap();
 
         assert!(!has_starts(&conn, "default").unwrap());
+    }
+
+    #[test]
+    fn every_path_the_chain_ran_in_a_kept_snapshot_is_known() {
+        let conn = memory();
+        let mut first = sample("default", 0);
+        first.cfg = serde_json::json!({ "files": [{ "path": "server.cfg" }, { "path": "secrets.cfg" }] });
+        let mut second = sample("default", 1);
+        second.cfg = serde_json::json!({ "files": [{ "path": "server.cfg" }] });
+        insert(&conn, &first).unwrap();
+        insert(&conn, &second).unwrap();
+        insert(&conn, &sample("other", 2)).unwrap();
+
+        let paths = chain_paths(&conn, "default").unwrap();
+
+        assert_eq!(
+            paths,
+            HashSet::from(["server.cfg".to_owned(), "secrets.cfg".to_owned()])
+        );
     }
 
     #[test]

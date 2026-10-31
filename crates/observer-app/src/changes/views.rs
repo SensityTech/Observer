@@ -224,9 +224,14 @@ fn changed_resources(
     // A side still listing has no rows yet, and one whose listing left resources out does not
     // say the others are gone.
     let missing = |side: &Side, otherwise: ResourceChangeKind| {
-        if side.snapshot.state == SnapshotState::Listing {
+        let snapshot = &side.snapshot;
+        if snapshot.state == SnapshotState::Listing {
             ResourceChangeKind::Checking
-        } else if compare::shortened(&side.snapshot) {
+        } else if compare::shortened(snapshot)
+            || snapshot.listed_at.is_none()
+            || snapshot.state == SnapshotState::Failed
+        {
+            // Cut short or failed before its listing ended: it has no rows to say anything by.
             ResourceChangeKind::Unknown
         } else {
             otherwise
@@ -855,6 +860,7 @@ impl Changes {
         }
         let owner = caller.is_owner;
         let lookup = path.clone();
+        let asked_from = from_path.clone();
         let earlier = from_path.unwrap_or_else(|| path.clone());
         let (from_id, to_id, resource, chain, file, diff) = self
             .inner
@@ -866,11 +872,14 @@ impl Changes {
                 if before.is_none() && after.is_none() {
                     return Err(ErrorCode::NotFound.into());
                 }
-                // A file the chain runs on either side is the owner's on both.
+                // A file the chain runs on either side, or ran in any start kept, is the owner's.
+                let ran = snapshots::chain_paths(conn, SERVER)?;
                 let in_chain = [&before, &after]
                     .into_iter()
                     .flatten()
-                    .any(|located| located.chain);
+                    .any(|located| located.chain)
+                    || ran.contains(&lookup)
+                    || ran.contains(&earlier);
                 if in_chain && !owner {
                     return Err(ErrorCode::OwnerOnly.into());
                 }
@@ -925,7 +934,13 @@ impl Changes {
                 caller,
                 &path,
                 chain,
-                json!({ "from": from_id, "to": to_id, "resource": resource, "view": "diff" }),
+                json!({
+                    "from": from_id,
+                    "to": to_id,
+                    "fromPath": asked_from.filter(|_| !chain),
+                    "resource": resource,
+                    "view": "diff",
+                }),
             )
             .await?;
         }
@@ -957,7 +972,9 @@ impl Changes {
                     .filter(|found| found.server == SERVER)
                     .ok_or(ErrorCode::StartNotFound)?;
                 let located = located(conn, &found, &lookup)?.ok_or(ErrorCode::NotFound)?;
-                if located.chain && !owner {
+                // A file the chain ran in any start kept is the owner's in every version of it.
+                let chain = located.chain || snapshots::chain_paths(conn, SERVER)?.contains(&lookup);
+                if chain && !owner {
                     return Err(ErrorCode::OwnerOnly.into());
                 }
                 let digest = located
@@ -967,7 +984,7 @@ impl Changes {
                     .ok_or(ErrorCode::ContentNotKept)?
                     .to_owned();
                 let text = masked(conn, &digest)?.ok_or(ErrorCode::ContentNotKept)?;
-                Ok((located.resource, located.chain, diff::page(&text, page)))
+                Ok((located.resource, chain, diff::page(&text, page)))
             })
             .await?;
         self.audit_read(
@@ -1012,6 +1029,7 @@ impl Changes {
                         && entry.target.as_deref() == Some(path.as_str())
                         && entry.details.get("from") == details.get("from")
                         && entry.details.get("to") == details.get("to")
+                        && entry.details.get("fromPath") == details.get("fromPath")
                 });
                 if !repeated {
                     record.write(tx, now)?;
