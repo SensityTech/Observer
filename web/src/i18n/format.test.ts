@@ -162,7 +162,8 @@ describe('formatTimestamp', () => {
 
 describe('formatPlayTime', () => {
     it('should count play time in hours past the first, never in days', () => {
-        expect(formatPlayTime('en', 0)).toBe('0 s');
+        expect(formatPlayTime('en', 0)).toBe('0h');
+        expect(formatPlayTime('en', 999)).toBe('0h');
         expect(formatPlayTime('en', 45_900)).toBe('45 s');
         expect(formatPlayTime('en', 15 * 60_000 + 59_000)).toBe('15 min');
         expect(formatPlayTime('en', (2 * 60 + 14) * 60_000)).toBe('2h 14m');

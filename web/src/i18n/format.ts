@@ -99,13 +99,16 @@ export const formatDuration = (locale: string, totalSeconds: number) => {
 };
 
 /**
- * Play time, in the hours players and txAdmin count it in, never in days: `45 s`, `15 min`,
+ * Play time, in the hours players and txAdmin count it in, never in days: `0h`, `45 s`, `15 min`,
  * `2h 14m`, `312h`. Past 100 hours the minutes are noise and left out. Rounded down: time not
  * played yet is never shown.
  */
 export const formatPlayTime = (locale: string, ms: number) => {
     const n = (value: number) => formatNumber(locale, value);
     const seconds = Math.floor(Math.max(0, ms) / 1000);
+    if (seconds === 0) {
+        return `${n(0)}h`;
+    }
     if (seconds < 60) {
         return `${n(seconds)} s`;
     }
