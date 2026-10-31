@@ -23,7 +23,7 @@ export function DropTiles({ summary }: { summary: DropsSummary }) {
     const windows = trendWindows(t, locale, summary);
     const since = keptSince(locale, summary.keptFrom, summary.from, summary.zone);
     return (
-        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <div className="grid grid-cols-1 gap-3 min-[360px]:grid-cols-2 lg:grid-cols-4">
             {ORDER.map((kind) => {
                 const tile = summary.tiles.find((each) => each.kind === kind);
                 return tile === undefined ? null : (

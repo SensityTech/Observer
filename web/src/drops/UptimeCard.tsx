@@ -17,11 +17,14 @@ import { formatRate, keptSince } from './words';
 export function UptimeCard({
     uptime,
     failed,
+    stale,
     rangeFrom,
     zone,
 }: {
     uptime: DropUptime | undefined;
     failed: boolean;
+    /** Still the previous range's, while the new one is read. */
+    stale: boolean;
     /** The range's start, to tell when only the sessions kept since a later day are binned. */
     rangeFrom: string | undefined;
     zone: string;
@@ -33,7 +36,9 @@ export function UptimeCard({
     let body: ReactNode;
     if (uptime === undefined) {
         body = failed ? (
-            <Notice tone="danger">{words.failed}</Notice>
+            <Notice tone="danger" live={false}>
+                {words.failed}
+            </Notice>
         ) : (
             <div className="skeleton h-40 w-full" aria-busy="true" aria-label={words.loading} />
         );
@@ -81,7 +86,7 @@ export function UptimeCard({
                                 </span>
                                 <span
                                     className={cn(
-                                        'block w-full rounded-t-[3px]',
+                                        'block w-full rounded-t-xs',
                                         high ? 'bg-warning-fill' : 'bg-chart-muted',
                                     )}
                                     style={{
@@ -126,7 +131,9 @@ export function UptimeCard({
     return (
         <Card id="drops-uptime" icon={Timer} title={words.title} meta={words.meta}>
             <div className="flex flex-col gap-3">
-                {body}
+                <div aria-busy={stale} className={cn('transition-opacity', stale && 'opacity-50')}>
+                    {body}
+                </div>
                 {since !== null && <p className="text-small text-ink-3">{words.since(since)}</p>}
                 <p className="text-small text-ink-3">{words.note}</p>
             </div>

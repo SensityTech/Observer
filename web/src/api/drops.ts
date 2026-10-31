@@ -47,7 +47,11 @@ export const changesQuery = (range: DropsRange) => ranged<DropChanges>('changes'
 
 export const uptimeQuery = (range: DropsRange) => ranged<DropUptime>('uptime', range);
 
-/** The drop log under its filters, newest first, a page at a time. */
+/**
+ * The drop log under its filters, newest first, a page at a time. Its first page is read again with
+ * the rest of the page; once more are loaded it stays as read, as the audit log does, rather than
+ * reading every page again each time.
+ */
 export const logQuery = (filters: LogFilters) =>
     infiniteQueryOptions({
         queryKey: ['drops', 'log', logSearch(filters)],
@@ -55,7 +59,7 @@ export const logQuery = (filters: LogFilters) =>
             getJson<DropLog>(`${PATH}/log${logSearch(filters, pageParam)}`, signal),
         initialPageParam: undefined as string | undefined,
         getNextPageParam: (page) => page.next ?? undefined,
-        refetchInterval: REFRESH,
+        refetchInterval: (query) => ((query.state.data?.pages.length ?? 0) > 1 ? false : REFRESH),
     });
 
 /** The players a crash of FXServer dropped, by the run it ended: `null` when Observer has none. */

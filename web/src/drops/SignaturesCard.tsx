@@ -10,12 +10,13 @@ import { Button } from '../components/Button';
 import { Card } from '../components/Card';
 import { Chip } from '../components/Chip';
 import { Notice } from '../components/Notice';
+import { Segmented } from '../components/Segmented';
 import { table } from '../components/table';
 import { zoneDate } from '../i18n/format';
 import { useI18n } from '../i18n/I18nProvider';
 import { cn } from '../lib/cn';
 import { PlayerName } from '../players/words';
-import { formatShare, keptSince, ShareBar, VerdictChip } from './words';
+import { formatShare, HintChip, keptSince, ShareBar, VerdictChip } from './words';
 
 type Tab = 'signatures' | 'modules' | 'builds';
 
@@ -25,11 +26,13 @@ const number = cn(table.td, 'w-[1%] text-right font-semibold whitespace-nowrap t
 
 /**
  * The crashes grouped by signature, by module or by game build. A signature opens its redacted
- * example texts, written as plain text: a client wrote them.
+ * example texts, written as plain text: a client wrote them. A row's actions sit under its
+ * signature, so the table fits its card.
  */
 export function SignaturesCard({
     signatures,
     failed,
+    stale,
     zone,
     windows,
     rangeFrom,
@@ -40,6 +43,8 @@ export function SignaturesCard({
 }: {
     signatures: SignatureTable | undefined;
     failed: boolean;
+    /** Still the previous range's, while the new one is read. */
+    stale: boolean;
     zone: string;
     /** Which windows the verdicts compared. */
     windows: string;
@@ -55,13 +60,15 @@ export function SignaturesCard({
 }) {
     const { t, locale } = useI18n();
     const words = t.drops.signatures;
-    const since = signatures === undefined ? null : keptSince(locale, signatures.keptFrom, rangeFrom, zone);
     const [tab, setTab] = useState<Tab>('signatures');
+    const since = signatures === undefined ? null : keptSince(locale, signatures.keptFrom, rangeFrom, zone);
     let body: ReactNode;
     if (signatures === undefined) {
         body = failed ? (
             <div className="p-5 max-md:p-4">
-                <Notice tone="danger">{words.failed}</Notice>
+                <Notice tone="danger" live={false}>
+                    {words.failed}
+                </Notice>
             </div>
         ) : (
             <div className="flex flex-col gap-3 p-5" aria-busy="true">
@@ -74,7 +81,7 @@ export function SignaturesCard({
         body = <p className="px-6 py-4 text-center text-ui text-ink-3">{words.empty}</p>;
     } else if (tab === 'signatures') {
         body = (
-            <SignatureTable
+            <SignatureList
                 entries={signatures.signatures}
                 zone={zone}
                 windows={windows}
@@ -98,61 +105,69 @@ export function SignaturesCard({
                           .join(' · ')
             }
             aside={
-                <fieldset className="inline-flex max-w-full gap-0.5 rounded-control border border-line bg-surface-2 p-0.75 md:-my-1.5">
-                    <legend className="sr-only">{words.groupBy}</legend>
-                    {TABS.map((choice) => (
-                        <button
-                            key={choice}
-                            type="button"
-                            aria-pressed={tab === choice}
-                            onClick={() => setTab(choice)}
-                            className="inline-flex h-6.5 items-center rounded-[7px] px-2.5 text-small font-medium text-ink-3 transition-colors hover:text-ink focus-visible:outline-offset-1 aria-pressed:bg-raise aria-pressed:text-ink aria-pressed:shadow-[var(--elev-sm),0_0_0_1px_var(--line)] max-md:h-11 max-md:min-w-11 max-md:justify-center"
-                        >
-                            {words.tabs[choice]}
-                        </button>
-                    ))}
-                </fieldset>
+                <Segmented
+                    label={words.groupBy}
+                    choices={TABS}
+                    value={tab}
+                    words={words.tabs}
+                    onChange={setTab}
+                    className="md:-my-1.5"
+                />
             }
             flush
         >
-            {body}
+            <div aria-busy={stale} className={cn('transition-opacity', stale && 'opacity-50')}>
+                {body}
+            </div>
             <RepeatCrashers repeat={repeat} since={repeatSince} />
         </Card>
     );
 }
 
 /**
- * A signature in mono, its code name and how it was read, and why it has no example; or why it stays
- * hidden.
+ * A signature in mono; how it was read, its code name, module and game build; why it has no
+ * example; then its actions. Or why it stays hidden.
  */
-function SignatureName({ entry, seesPlayers }: { entry: SignatureEntry; seesPlayers: boolean }) {
+function SignatureCell({
+    entry,
+    actions,
+    seesPlayers,
+}: {
+    entry: SignatureEntry;
+    actions: ReactNode;
+    seesPlayers: boolean;
+}) {
     const { t } = useI18n();
     const words = t.drops.signatures;
     if (entry.signature === null) {
         return (
-            <div>
+            <div className="flex min-w-0 flex-col gap-0.75">
                 <span className="text-ink-2">{words.hidden}</span>
                 <div className={table.sub}>
                     <Chip>{words.forms[entry.form]}</Chip>
-                    {entry.new && <Chip>{words.new}</Chip>}
-                    <span className="sr-only">{words.hiddenHint}</span>
+                    <span>{words.hiddenHint}</span>
                 </div>
+                {actions}
             </div>
         );
     }
+    const facts = [
+        words.forms[entry.form],
+        entry.module,
+        entry.gameBuild === null ? null : words.gameBuild(entry.gameBuild),
+        entry.resource === null ? null : words.asset(entry.resource),
+    ].filter((fact) => fact !== null);
     return (
-        <div>
+        <div className="flex min-w-0 flex-col gap-0.75">
             <span className={cn(table.mono, 'whitespace-normal [overflow-wrap:anywhere]')}>
                 {entry.signature}
             </span>
-            <div className={table.sub}>
-                <span>{words.forms[entry.form]}</span>
-                {entry.label !== null && <span className="font-mono">{entry.label}</span>}
-                {entry.resource !== null && <span>{words.asset(entry.resource)}</span>}
-            </div>
+            {entry.label !== null && <span className="font-mono text-meta text-ink-2">{entry.label}</span>}
+            <div className={table.sub}>{facts.join(' · ')}</div>
             {entry.examples.length === 0 && (
                 <div className={table.sub}>{seesPlayers ? words.noExamples : words.noSharedExample}</div>
             )}
+            {actions}
         </div>
     );
 }
@@ -163,16 +178,13 @@ function FirstSeen({ entry, zone }: { entry: SignatureEntry; zone: string }) {
         <span className="inline-flex flex-wrap items-center gap-1.5 whitespace-nowrap">
             <span className="font-mono text-small text-ink">{zoneDate(entry.firstSeen, zone)}</span>
             {entry.new && entry.signature !== null && (
-                <span title={t.drops.signatures.newHint}>
-                    <Chip>{t.drops.signatures.new}</Chip>
-                    <span className="sr-only">{t.drops.signatures.newHint}</span>
-                </span>
+                <HintChip hint={t.drops.signatures.newHint}>{t.drops.signatures.new}</HintChip>
             )}
         </span>
     );
 }
 
-function SignatureTable({
+function SignatureList({
     entries,
     zone,
     windows,
@@ -190,22 +202,31 @@ function SignatureTable({
     const [open, setOpen] = useState<number | null>(null);
     const ranked = entries.toSorted((a, b) => b.drops - a.drops);
     const actions = (entry: SignatureEntry) => {
-        const detailsId = `drops-signature-${entry.id}`;
+        const examples = entry.signature !== null && entry.examples.length > 0;
+        if (!examples && onShowInLog === undefined) {
+            return null;
+        }
         return (
-            <div className="flex flex-wrap justify-end gap-1.5 whitespace-nowrap max-md:justify-start">
-                {entry.signature !== null && entry.examples.length > 0 && (
+            <div className="-ml-2.5 flex flex-wrap gap-1 max-md:-ml-0 max-md:gap-2">
+                {examples && (
                     <Button
                         size="sm"
                         tone="ghost"
+                        className="h-7"
                         aria-expanded={open === entry.id}
-                        aria-controls={detailsId}
                         onClick={() => setOpen(open === entry.id ? null : entry.id)}
                     >
                         {open === entry.id ? words.hideExamples : words.examples}
                     </Button>
                 )}
                 {onShowInLog !== undefined && (
-                    <Button size="sm" tone="ghost" icon={ListFilter} onClick={() => onShowInLog(entry.id)}>
+                    <Button
+                        size="sm"
+                        tone="ghost"
+                        icon={ListFilter}
+                        className="h-7"
+                        onClick={() => onShowInLog(entry.id)}
+                    >
                         {words.showInLog}
                     </Button>
                 )}
@@ -222,16 +243,10 @@ function SignatureTable({
                             <th scope="col" className={table.th}>
                                 {words.signature}
                             </th>
-                            <th scope="col" className={table.th}>
-                                {words.module}
-                            </th>
-                            <th scope="col" className={cn(table.th, 'text-right')}>
-                                {words.build}
-                            </th>
                             <th scope="col" className={cn(table.th, 'text-right')}>
                                 {words.crashes}
                             </th>
-                            <th scope="col" className={cn(table.th, 'w-[20%]')}>
+                            <th scope="col" className={cn(table.th, 'w-[22%]')}>
                                 <span className="sr-only">{words.share}</span>
                             </th>
                             <th scope="col" className={cn(table.th, 'text-right')}>
@@ -243,22 +258,17 @@ function SignatureTable({
                             <th scope="col" className={table.th}>
                                 {words.verdict}
                             </th>
-                            <th scope="col" className={table.th}>
-                                <span className="sr-only">{words.examples}</span>
-                            </th>
                         </tr>
                     </thead>
                     <tbody>
                         {ranked.map((entry, index) => (
                             <SignatureRows key={entry.id} entry={entry} open={open === entry.id}>
                                 <td className={cn(table.td, 'min-w-56 align-top')}>
-                                    <SignatureName entry={entry} seesPlayers={seesPlayers} />
-                                </td>
-                                <td className={cn(table.td, table.mono, 'align-top')}>
-                                    {entry.module ?? ''}
-                                </td>
-                                <td className={cn(table.td, table.mono, 'text-right align-top')}>
-                                    {entry.gameBuild ?? ''}
+                                    <SignatureCell
+                                        entry={entry}
+                                        actions={actions(entry)}
+                                        seesPlayers={seesPlayers}
+                                    />
                                 </td>
                                 <td className={cn(number, 'align-top')}>{format.number(entry.drops)}</td>
                                 <td className={cn(table.td, 'align-top')}>
@@ -278,7 +288,6 @@ function SignatureTable({
                                 <td className={cn(table.td, 'align-top')}>
                                     <VerdictChip trend={entry.trend} windows={windows} />
                                 </td>
-                                <td className={cn(table.td, 'align-top')}>{actions(entry)}</td>
                             </SignatureRows>
                         ))}
                     </tbody>
@@ -287,7 +296,7 @@ function SignatureTable({
             <ul className="flex flex-col md:hidden">
                 {ranked.map((entry, index) => (
                     <li key={entry.id} className="flex flex-col gap-1.5 border-b border-line px-4 py-3">
-                        <SignatureName entry={entry} seesPlayers={seesPlayers} />
+                        <SignatureCell entry={entry} actions={null} seesPlayers={seesPlayers} />
                         <div className="flex items-center gap-2.5">
                             <ShareBar share={entry.share} first={index === 0} />
                             <span className="text-small whitespace-nowrap text-ink">
@@ -295,11 +304,7 @@ function SignatureTable({
                             </span>
                         </div>
                         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-small text-ink-2">
-                            {entry.module !== null && <span className="font-mono">{entry.module}</span>}
-                            {entry.gameBuild !== null && <span className="font-mono">{entry.gameBuild}</span>}
-                            <span>
-                                {words.players} {format.number(entry.players)}
-                            </span>
+                            <span>{words.playersCount(entry.players)}</span>
                             <FirstSeen entry={entry} zone={zone} />
                             <VerdictChip trend={entry.trend} windows={windows} />
                         </div>
@@ -326,8 +331,8 @@ function SignatureRows({
         <>
             <tr className={cn(table.row, open && '[&>td]:border-b-0')}>{children}</tr>
             {open && (
-                <tr id={`drops-signature-${entry.id}`}>
-                    <td colSpan={9} className={cn(table.td, 'bg-bg-subtle')}>
+                <tr>
+                    <td colSpan={6} className={cn(table.td, 'bg-bg-subtle')}>
                         <Examples entry={entry} />
                     </td>
                 </tr>
@@ -343,20 +348,16 @@ function Examples({ entry }: { entry: SignatureEntry }) {
     return (
         <div className="flex flex-col gap-2 py-2">
             <p className="text-meta text-ink-3">{words.examplesTitle}</p>
-            {entry.examples.length === 0 ? (
-                <p className="text-small text-ink-3">{words.noExamples}</p>
-            ) : (
-                <ul className="flex flex-col gap-1.5">
-                    {entry.examples.map((example) => (
-                        <li
-                            key={example}
-                            className="rounded-xs border border-line bg-surface px-2.5 py-1.5 font-mono text-small whitespace-pre-wrap text-ink [font-variant-ligatures:none] [overflow-wrap:anywhere]"
-                        >
-                            {example}
-                        </li>
-                    ))}
-                </ul>
-            )}
+            <ul className="flex flex-col gap-1.5">
+                {entry.examples.map((example) => (
+                    <li
+                        key={example}
+                        className="rounded-xs border border-line bg-surface px-2.5 py-1.5 font-mono text-small whitespace-pre-wrap text-ink [font-variant-ligatures:none] [overflow-wrap:anywhere]"
+                    >
+                        {example}
+                    </li>
+                ))}
+            </ul>
             {entry.loadingShare !== null && (
                 <p className="text-small text-ink-2">
                     {words.loadingShare(formatShare(locale, entry.loadingShare))}
@@ -438,24 +439,28 @@ function RollupTable({ rows, tab }: { rows: CrashRollup[]; tab: 'modules' | 'bui
     );
 }
 
-/** Players who crashed again and again: counted for everyone, named for who sees players. */
+/**
+ * Players who crashed again and again: counted for everyone, named for who sees players; those
+ * without a confirmed identity are counted after the names.
+ */
 function RepeatCrashers({ repeat, since }: { repeat: RepeatCrasher[]; since: string | null }) {
     const { t } = useI18n();
     const words = t.drops.signatures;
     if (repeat.length === 0) {
         return null;
     }
-    const named = repeat.filter((each) => each.player !== null);
+    const named = repeat.flatMap(({ player, crashes }) => (player === null ? [] : [{ player, crashes }]));
+    const others = repeat.length - named.length;
     return (
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-b-card bg-bg-subtle px-5 py-2.5 text-meta text-ink-3 max-md:px-4">
             {named.length === 0 ? (
-                words.repeat(repeat.length)
+                <span>{words.repeat(repeat.length)}</span>
             ) : (
-                <>
-                    <span>{words.repeatNamed}</span>
-                    {named.map(({ player, crashes }, index) =>
-                        player === null ? null : (
+                <span>
+                    {words.repeatNamed(
+                        named.map(({ player, crashes }, index) => (
                             <span key={player.id}>
+                                {index > 0 && ' · '}
                                 <Link
                                     to="/players/$id"
                                     params={{ id: String(player.id) }}
@@ -464,11 +469,11 @@ function RepeatCrashers({ repeat, since }: { repeat: RepeatCrasher[]; since: str
                                     <PlayerName name={player.name ?? ''} />
                                 </Link>{' '}
                                 {words.repeatCrashes(crashes)}
-                                {index < named.length - 1 && ' ·'}
                             </span>
-                        ),
+                        )),
+                        others,
                     )}
-                </>
+                </span>
             )}
             {since !== null && <span>{t.drops.playersSince(since)}</span>}
         </div>

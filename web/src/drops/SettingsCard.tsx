@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Settings2 } from 'lucide-react';
 import { useState } from 'react';
 
-import { dropsSettingsQuery, saveDropsSettings, SESSION_DAYS } from '../api/drops';
+import { allDrops, dropsSettingsQuery, saveDropsSettings, SESSION_DAYS } from '../api/drops';
 import type { DropsSettings } from '../api/generated/DropsSettings';
 import { Button } from '../components/Button';
 import { Card } from '../components/Card';
@@ -11,7 +11,7 @@ import { Notice } from '../components/Notice';
 import { errorMessage } from '../i18n/errors';
 import { useI18n } from '../i18n/I18nProvider';
 
-type Outcome = { tone: 'success' | 'danger'; message: string };
+type Outcome = { tone: 'success' | 'neutral' | 'danger'; message: string };
 
 /** A whole number of days as typed; anything else, an empty field included, is out of range. */
 const days = (text: string) => (/^\d+$/.test(text.trim()) ? Number(text.trim()) : Number.NaN);
@@ -63,6 +63,11 @@ function RetentionForm({ saved }: { saved: DropsSettings }) {
             setDraft(String(stored.sessionDays));
             setChecked(false);
             setOutcome({ tone: 'success', message: words.saved });
+            // What players are counted over follows the sessions kept: every figure is read again.
+            void client.invalidateQueries({
+                ...allDrops,
+                predicate: (query) => query.queryKey[1] !== 'settings',
+            });
         },
         onError: (error) => setOutcome({ tone: 'danger', message: errorMessage(t, error) }),
     });
@@ -92,7 +97,7 @@ function RetentionForm({ saved }: { saved: DropsSettings }) {
                 onChange={(event) => setDraft(event.target.value)}
             />
             {changed && (
-                <div className="sticky bottom-3 z-10 flex flex-wrap items-center gap-x-4 gap-y-2 rounded-box border border-line-strong bg-surface px-3.5 py-2.5 shadow-pop">
+                <div className="sticky bottom-3 z-(--z-dock) flex flex-wrap items-center gap-x-4 gap-y-2 rounded-box border border-line-strong bg-surface px-3.5 py-2.5 shadow-pop">
                     <output className="mr-auto text-ui text-ink-2">{words.changes(1)}</output>
                     <Button
                         tone="ghost"
@@ -100,7 +105,7 @@ function RetentionForm({ saved }: { saved: DropsSettings }) {
                         onClick={() => {
                             setDraft(String(saved.sessionDays));
                             setChecked(false);
-                            setOutcome({ tone: 'success', message: words.discarded });
+                            setOutcome({ tone: 'neutral', message: words.discarded });
                         }}
                     >
                         {words.discard}

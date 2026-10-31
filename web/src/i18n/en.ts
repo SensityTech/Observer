@@ -1,6 +1,8 @@
 // The source catalog. Every other locale is typed against it, so a key missing there fails the type
 // check. Messages that take values are functions; they format with the helpers bound to this locale.
 
+import type { ReactNode } from 'react';
+
 import type { ActorKind } from '../api/generated/ActorKind';
 import type { ApplyMode } from '../api/generated/ApplyMode';
 import type { ArtifactSettingsProblem } from '../api/generated/ArtifactSettingsProblem';
@@ -1506,6 +1508,16 @@ export const en = {
             serverCrash: 'Server crashes',
             unknown: 'Unknown',
         } satisfies Record<DropCategory, string>,
+        categoriesInline: {
+            quit: 'quits',
+            kick: 'kicks',
+            timeout: 'timeouts',
+            crash: 'crashes',
+            security: 'security drops',
+            serverStop: 'server stops',
+            serverCrash: 'server crashes',
+            unknown: 'unknown drops',
+        } satisfies Record<DropCategory, string>,
         kinds: {
             exit: 'Left the game',
             disconnect: 'Disconnected',
@@ -1611,6 +1623,11 @@ export const en = {
                     ? `${formatNumber('en', drops)} ${what} over ${range}.`
                     : `${formatNumber('en', drops)} ${what} over ${range}, ${rate} per 100 player-hours.`,
             peak: (rate: string, at: string) => `Highest ${rate} per 100 h, at ${at}.`,
+            baselineSpan: (low: string, high: string) =>
+                low === high
+                    ? `The 4-week baseline is ${low} per 100 h.`
+                    : `The 4-week baseline runs from ${low} to ${high} per 100 h.`,
+            noBaseline: 'No 4-week baseline yet: the weeks before are not known.',
             unplayed: (buckets: number, total: number) =>
                 `Nobody played in ${formatNumber('en', buckets)} of its ${formatNumber('en', total)} buckets: the line breaks there.`,
             empty: 'Nobody played over this range.',
@@ -1627,13 +1644,15 @@ export const en = {
             share: 'Share of all drops',
             rate: 'Per 100 h',
             verdict: 'Trend',
-            loading: 'Loading',
+            loading: 'Reading the breakdown',
             loadingShare: (share: string) => `${share} while loading`,
             unexpected: 'Unexpected',
             expected: 'Expected',
             notPlayers: 'Not a player rate',
-            filterHint: 'A category narrows the chart and the log.',
-            filterHintChart: 'A category narrows the chart.',
+            filterHint:
+                'Pick a category to narrow the log to it. Crashes, timeouts, kicks and security narrow the chart too; unknown drops show it as unexpected ones.',
+            filterHintChart:
+                'Pick crashes, timeouts, kicks or security to narrow the chart to them; unknown drops show it as unexpected ones.',
             empty: 'No drop over this range.',
             failed: 'The breakdown could not be read.',
         },
@@ -1658,7 +1677,9 @@ export const en = {
             newHint: 'First seen in this range, after 28 days without it.',
             hidden: 'Hidden until a second player crashes with it.',
             hiddenHint:
-                'A client can write anything after "Game crashed": a text only one player produced is not shown.',
+                'A client can write anything after its crash: a text one player alone wrote is not shown.',
+            gameBuild: (build: number) => `game build ${build}`,
+            playersCount: (players: number) => count(players, { one: 'player', other: 'players' }),
             forms: {
                 hash: 'Code name',
                 symbol: 'Symbol',
@@ -1682,7 +1703,11 @@ export const en = {
             failed: 'The crash signatures could not be read.',
             repeat: (players: number) =>
                 `${count(players, { one: 'player', other: 'players' })} crashed 3 times or more in the last 7 days.`,
-            repeatNamed: 'Crashed 3 times or more in the last 7 days:',
+            repeatNamed: (names: ReactNode, others: number): ReactNode => [
+                'Crashed 3 times or more in the last 7 days: ',
+                names,
+                others > 0 ? `, and ${count(others, { one: 'other player', other: 'other players' })}.` : '.',
+            ],
             repeatCrashes: (crashes: number) => count(crashes, { one: 'crash', other: 'crashes' }),
         },
         resources: {
@@ -1700,6 +1725,7 @@ export const en = {
             reasonsCaption: (resource: string) => `What ${resource} gave as its reasons, most kicks first`,
             reasonsNote: 'Numbers, names and quoted words are taken out, so alike reasons group.',
             reasonKicks: (kicks: number) => count(kicks, { one: 'kick', other: 'kicks' }),
+            playersCount: (players: number) => count(players, { one: 'player', other: 'players' }),
             noReason: 'No reason is kept for these kicks.',
             showInLog: 'Show in the log',
             empty: 'No resource kicked a player over this range.',
@@ -1738,8 +1764,11 @@ export const en = {
             online: (players: number) => `${count(players, { one: 'player', other: 'players' })} online`,
             after: (category: string, before: string, after: string) =>
                 `After it: ${category} ${before} to ${after} per 100 h`,
-            newSignatures: (signatures: number) =>
-                `${count(signatures, { one: 'new signature', other: 'new signatures' })} after it:`,
+            newSignatures: (signatures: number, named: ReactNode): ReactNode => [
+                `${count(signatures, { one: 'new signature', other: 'new signatures' })} after it: `,
+                named,
+            ],
+            seconds: (seconds: string) => `${seconds} s`,
             run: (run: number) => `run ${run}`,
             showInLog: 'Show their drops',
             snapshots:
@@ -1751,7 +1780,7 @@ export const en = {
         uptime: {
             title: 'Uptime',
             meta: 'Unexpected drops per 100 h, by time since the start',
-            bin: (from: number, to: number | null) => (to === null ? `${from} h+` : `${from}-${to} h`),
+            bin: (from: number, to: number | null) => (to === null ? `${from}h+` : `${from}-${to}h`),
             higher: 'Higher',
             higherBins: (bins: string[]) => `${list(bins)}, against the other hours since a start.`,
             notEnough: 'Not enough drops',
@@ -1778,10 +1807,11 @@ export const en = {
             anySignature: 'Any signature',
             signatureId: (id: number) => `Signature ${id}`,
             player: 'Player',
-            playerHint: 'The start of a name, or a licence.',
+            playerHint: 'Player: the start of a name, or a licence.',
             playerHintIdentifiers:
-                'The start of a name, a licence, or any identifier with its prefix, such as discord:. Never an address.',
+                'Player: the start of a name, a licence, or any identifier with its prefix, such as discord:. Never an address. A player typed takes the place of a profile kept.',
             run: 'Run',
+            runInvalid: 'A run is a number, as the log shows it.',
             apply: 'Apply',
             clear: 'Clear',
             export: 'Export CSV',
@@ -1801,7 +1831,7 @@ export const en = {
             noPlayer: 'Not known',
             loadingPhase: 'Loading',
             inGame: 'In game',
-            by: 'by',
+            byResource: (resource: ReactNode): ReactNode => ['by ', resource],
             closedByObserver: 'Closed by Observer',
             duringIncident: 'During an incident',
             runValue: (run: number) => `Run ${run}`,
@@ -1831,7 +1861,8 @@ export const en = {
             failed: 'The retention could not be read.',
         },
         overview: {
-            label: 'Player drops · 24 h',
+            label: 'Player drops · 24h',
+            failed: 'The player drops could not be read. They are read again in 30 s.',
             ended: 'Ended unexpectedly',
             drops: 'Unexpected drops',
             trend: 'Unexpected drops per 100 player-hours over the last 24 hours',

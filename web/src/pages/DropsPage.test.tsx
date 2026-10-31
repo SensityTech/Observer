@@ -401,4 +401,173 @@ describe('DropsPage', () => {
         await open('/drops', MODERATOR);
         expect(document.querySelector('section[aria-labelledby="drops-settings"]')).toBeNull();
     });
+
+    it('should keep the keyboard on Apply, and a draft through a change of range', async () => {
+        const { router } = await open('/drops', MODERATOR);
+
+        const apply = card('drops-log').getByRole('button', { name: en.drops.log.apply });
+        fireEvent.change(card('drops-log').getByLabelText(en.drops.log.resource), {
+            target: { value: 'afk_kick' },
+        });
+        apply.focus();
+        fireEvent.click(apply);
+        await settle();
+        await settle();
+
+        expect(router.state.location.search).toEqual({ resource: 'afk_kick' });
+        // The same button, never drawn anew: the keyboard stays where it was.
+        expect(document.activeElement).toBe(apply);
+        expect(card('drops-log').getByRole('button', { name: en.drops.log.apply })).toBe(apply);
+
+        fireEvent.change(card('drops-log').getByLabelText(en.drops.log.player), { target: { value: 'Ru' } });
+        fireEvent.click(screen.getByRole('button', { name: en.drops.ranges['30d'] }));
+        await settle();
+        await settle();
+        expect(router.state.location.search).toEqual({ range: '30d', resource: 'afk_kick' });
+        expect((card('drops-log').getByLabelText(en.drops.log.player) as HTMLInputElement).value).toBe('Ru');
+    });
+
+    it('should refuse a run that is not a number under its field, and keep the address', async () => {
+        const { router } = await open('/drops', MODERATOR);
+
+        const log = card('drops-log');
+        fireEvent.change(log.getByLabelText(en.drops.log.run), { target: { value: 'forty' } });
+        fireEvent.click(log.getByRole('button', { name: en.drops.log.apply }));
+        await settle();
+
+        expect(log.getByText(en.drops.log.runInvalid)).not.toBeNull();
+        expect(log.getByLabelText(en.drops.log.run).getAttribute('aria-invalid')).toBe('true');
+        expect(router.state.location.search).toEqual({});
+    });
+
+    it('should not announce the coverage, nor the log count but after Load more', async () => {
+        await open(
+            '/drops',
+            MODERATOR,
+            api(MODERATOR, (url) =>
+                url.pathname === `${DROPS}/log` && url.searchParams.has('before')
+                    ? json({ rows: [{ ...LOG.rows[0]!, id: 800, at: '2026-10-28T20:00:00Z' }], next: null })
+                    : undefined,
+            ),
+        );
+
+        const note = screen.getByText(en.drops.coverage(82, 1_520, '5.4%', 70, 12));
+        expect(note.closest('[role]')).toBeNull();
+        const log = card('drops-log');
+        // The footer's count is text; its own status region says nothing until more is loaded.
+        const footer = log.getByText(en.drops.log.shown(3)).parentElement!;
+        expect(within(footer).getByRole('status').textContent).toBe('');
+
+        fireEvent.click(log.getByRole('button', { name: en.drops.log.loadMore }));
+        await settle();
+        await settle();
+        expect(within(footer).getByRole('status').textContent).toBe(en.drops.log.allShown(4));
+    });
+
+    it('should leave out a group for a viewer without identifiers', async () => {
+        const { fetch } = await open('/drops?group=5&profile=7', MODERATOR);
+
+        const log = card('drops-log');
+        expect(
+            log.queryByRole('button', { name: en.drops.log.removeFilter(en.drops.log.group(5)) }),
+        ).toBeNull();
+        expect(
+            log.getByRole('button', { name: en.drops.log.removeFilter(en.drops.log.profile(7)) }),
+        ).not.toBeNull();
+        expect(asked(fetch, 'log')).toEqual(['?range=7d&profile=7']);
+    });
+
+    it('should let a player typed take the place of the profile kept', async () => {
+        const { router } = await open('/drops?profile=7', MODERATOR);
+
+        const log = card('drops-log');
+        fireEvent.change(log.getByLabelText(en.drops.log.player), { target: { value: 'Ruby' } });
+        fireEvent.click(log.getByRole('button', { name: en.drops.log.apply }));
+        await settle();
+        await settle();
+
+        expect(router.state.location.search).toEqual({ player: 'Ruby' });
+    });
+
+    it('should say a refusal of the group where the group is, not under the player field', async () => {
+        const refusal = { code: 'forbidden', params: { permission: 'playerIdentifiersView' } };
+        await open(
+            '/drops?group=5',
+            OWNER,
+            api(OWNER, (url) => (url.pathname === `${DROPS}/log` ? json(refusal, 403) : undefined)),
+        );
+
+        const log = card('drops-log');
+        const message = en.errors.forbidden(refusal.params);
+        const chip = log.getByRole('button', { name: en.drops.log.removeFilter(en.drops.log.group(5)) });
+        const said = log.getByText(message);
+        expect(chip.getAttribute('aria-describedby')).toBe(said.id);
+        expect(log.getByLabelText(en.drops.log.player).getAttribute('aria-invalid')).toBeNull();
+    });
+
+    it('should make a category a button only where it narrows something', async () => {
+        await open('/drops', ANALYST);
+
+        const breakdown = card('drops-breakdown');
+        expect(breakdown.queryByRole('button', { name: en.drops.categories.quit })).toBeNull();
+        expect(breakdown.queryByRole('button', { name: en.drops.categories.serverStop })).toBeNull();
+        expect(breakdown.getAllByRole('button', { name: en.drops.categories.timeout })).toHaveLength(2);
+        expect(breakdown.getAllByRole('button', { name: en.drops.categories.unknown })).toHaveLength(2);
+        cleanup();
+
+        await open('/drops', MODERATOR);
+        expect(
+            card('drops-breakdown').getAllByRole('button', { name: en.drops.categories.quit }),
+        ).toHaveLength(2);
+    });
+
+    it('should word the times of the chart in the server zone and name its baseline', async () => {
+        await open(
+            '/drops',
+            MODERATOR,
+            api(MODERATOR, (url) =>
+                url.pathname === `${DROPS}/summary` ? json({ ...SUMMARY, zone: 'Asia/Tokyo' }) : undefined,
+            ),
+        );
+
+        // The highest rate's hour, 20:00 UTC, is 05:00 the next day in Tokyo.
+        const caption = document.querySelector('figcaption')?.textContent ?? '';
+        expect(caption).toContain(en.drops.chart.peak('6.4', '31 Oct 05:00'));
+        expect(caption).toContain(en.drops.chart.baselineSpan('3', '3.4'));
+        expect(caption).toContain(
+            en.charts.markers.inWords(en.charts.markers.crash, '31 Oct 03:40', '31 Oct 03:42'),
+        );
+    });
+
+    it('should count the repeat crashers it cannot name after those it names', async () => {
+        await open(
+            '/drops',
+            MODERATOR,
+            api(MODERATOR, (url) =>
+                url.pathname === `${DROPS}/summary`
+                    ? json({
+                          ...SUMMARY,
+                          repeatCrashers: [...SUMMARY.repeatCrashers, { crashes: 4, player: null }],
+                      })
+                    : undefined,
+            ),
+        );
+
+        const signatures = card('drops-signatures');
+        expect(signatures.getByRole('link', { name: 'Ruby Vex' }).getAttribute('href')).toBe('/players/7');
+        expect(signatures.getByText(/, and 1 other player\.$/)).not.toBeNull();
+    });
+
+    it('should open the hints of New and Unconfirmed from the keyboard', async () => {
+        await open('/drops', MODERATOR);
+
+        const [fresh] = card('drops-signatures').getAllByRole('button', { name: en.drops.signatures.new });
+        fireEvent.click(fresh!);
+        expect(screen.getByRole('tooltip').textContent).toBe(en.drops.signatures.newHint);
+        fireEvent.keyDown(window, { key: 'Escape' });
+
+        const unconfirmed = card('drops-log').getAllByRole('button', { name: en.drops.log.unconfirmed })[0]!;
+        fireEvent.click(unconfirmed);
+        expect(screen.getByRole('tooltip').textContent).toBe(en.drops.log.unconfirmedHint);
+    });
 });

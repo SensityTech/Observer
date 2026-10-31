@@ -24,16 +24,21 @@ type NoticeProps = VariantProps<typeof noticeVariants> & {
     ref?: Ref<HTMLDivElement>;
     /** -1 for a notice the keyboard is moved to, when what it was on went away. */
     tabIndex?: number;
+    /**
+     * False for a notice that stays on the page and changes with figures read again, which would
+     * be announced each time: it is read where it stands, never as a live region.
+     */
+    live?: boolean;
 };
 
 /** A sentence about what just happened, above or below the thing it concerns. */
-export function Notice({ tone, className, children, ref, tabIndex }: NoticeProps) {
+export function Notice({ tone, className, children, ref, tabIndex, live = true }: NoticeProps) {
     const Icon = ICONS[tone ?? 'neutral'];
     return (
         <div
             ref={ref}
             tabIndex={tabIndex}
-            role={tone === 'danger' || tone === 'warning' ? 'alert' : 'status'}
+            role={live ? (tone === 'danger' || tone === 'warning' ? 'alert' : 'status') : undefined}
             className={cn(noticeVariants({ tone }), className)}
         >
             <Icon size={16} strokeWidth={1.5} className="mt-px flex-none" aria-hidden="true" />

@@ -554,7 +554,7 @@ function ObserverTile({ latest, trend }: TileProps) {
  * Unexpected drops per 100 player-hours over the last 24 hours, today against yesterday's same
  * hours, and the way to the page: for who sees drop statistics, and read only for them.
  */
-function DropsTile() {
+export function DropsTile() {
     const me = use(MeContext);
     return me !== null && allows(me, Permission.DropsView) ? <DropsTileShown /> : null;
 }
@@ -565,45 +565,72 @@ function DropsTileShown() {
     const summary = useQuery(summaryQuery('24h'));
     const data = summary.data;
     const tile = data?.tiles.find((each) => each.kind === 'unexpected');
-    const rising = tile?.trend.verdict === 'rising';
+    const open = (
+        <Link
+            to="/drops"
+            search={{ range: '24h' }}
+            className="inline-flex items-center gap-1.5 self-start rounded-xs text-small font-medium text-ink-2 underline-offset-2 hover:text-ink hover:underline max-md:min-h-11"
+        >
+            {words.open}
+            <ArrowRight size={14} strokeWidth={1.5} aria-hidden="true" />
+        </Link>
+    );
+    // Its four rows in their places while the first read is on its way.
+    if (summary.isPending) {
+        return (
+            <section
+                className="row-span-4 grid min-w-0 grid-rows-subgrid items-start gap-y-2.5 rounded-card border border-line bg-surface px-4 pt-3.75 pb-3.5"
+                aria-label={words.label}
+                aria-busy="true"
+            >
+                <h2 className="flex min-h-5.5 items-center gap-1.5 text-small text-ink-3">
+                    <Unplug size={14} strokeWidth={1.75} aria-hidden="true" />
+                    {words.label}
+                </h2>
+                <span className="skeleton h-7 w-24" />
+                <span className="skeleton w-3/4" />
+                <span className="skeleton h-8 w-full self-end" />
+            </section>
+        );
+    }
+    if (data === undefined || tile === undefined) {
+        return (
+            <Tile
+                icon={Unplug}
+                label={words.label}
+                value={t.drops.unknown}
+                facts={[]}
+                trend={
+                    <div className="flex flex-col gap-2 self-end">
+                        <p className="text-small text-ink-3">{words.failed}</p>
+                        {open}
+                    </div>
+                }
+            />
+        );
+    }
+    const rising = tile.trend.verdict === 'rising';
     return (
         <Tile
             icon={Unplug}
             label={words.label}
             aside={
-                data !== undefined &&
-                tile !== undefined && (
-                    <VerdictChip
-                        trend={tile.trend}
-                        windows={trendWindows(t, locale, data)}
-                        className="ml-auto"
-                    />
-                )
+                <VerdictChip trend={tile.trend} windows={trendWindows(t, locale, data)} className="ml-auto" />
             }
-            value={tile?.rate == null ? t.drops.unknown : formatRate(locale, tile.rate)}
-            unit={tile?.rate == null ? undefined : t.drops.unit}
+            value={tile.rate === null ? t.drops.unknown : formatRate(locale, tile.rate)}
+            unit={tile.rate === null ? undefined : t.drops.unit}
             warning={rising}
             facts={[
                 {
                     term: words.ended,
-                    detail: tile?.oneIn == null ? t.drops.unknown : t.drops.tiles.oneIn(tile.oneIn),
+                    detail: tile.oneIn === null ? t.drops.unknown : t.drops.tiles.oneIn(tile.oneIn),
                 },
-                {
-                    term: words.drops,
-                    detail: tile === undefined ? t.drops.unknown : format.number(tile.drops),
-                },
+                { term: words.drops, detail: format.number(tile.drops) },
             ]}
             trend={
                 <div className="flex flex-col gap-2 self-end">
-                    <Sparkline values={tile?.spark ?? []} label={words.trend} warning={rising} />
-                    <Link
-                        to="/drops"
-                        search={{ range: '24h' }}
-                        className="inline-flex items-center gap-1.5 self-start rounded-xs text-small font-medium text-ink-2 underline-offset-2 hover:text-ink hover:underline max-md:min-h-11"
-                    >
-                        {words.open}
-                        <ArrowRight size={14} strokeWidth={1.5} aria-hidden="true" />
-                    </Link>
+                    <Sparkline values={tile.spark} label={words.trend} warning={rising} />
+                    {open}
                 </div>
             }
         />

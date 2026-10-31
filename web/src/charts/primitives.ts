@@ -110,24 +110,29 @@ export class RangeBand implements ISeriesPrimitive<Time> {
     }
 }
 
+/** A bucket's start as the chart holds it: an instant by default. */
+const asInstant = (seconds: number): Time => seconds as UTCTimestamp;
+
 /**
  * Where an instant falls on a time scale whose points are the buckets' `starts`: between its
  * bucket's start and the next one's, which need not be evenly spaced (a day of a time zone across a
  * change of time is 23 or 25 hours). The last bucket lasts `step` seconds, as wide as the one before.
- * `null` before the first bucket or off the scale.
+ * `timeOf` gives a start as the chart holds it, a calendar day for a chart of days. `null` before
+ * the first bucket or off the scale.
  */
 export const instantX = (
     timeScale: ITimeScaleApi<Time>,
     starts: readonly number[],
     step: number,
     time: number,
+    timeOf: (seconds: number) => Time = asInstant,
 ) => {
     const index = starts.findLastIndex((start) => start <= time);
     const start = starts[index];
     if (start === undefined) {
         return null;
     }
-    const x = (at: number) => timeScale.timeToCoordinate(at as UTCTimestamp);
+    const x = (at: number) => timeScale.timeToCoordinate(timeOf(at));
     const left = x(start);
     if (left === null) {
         return null;
@@ -153,6 +158,7 @@ export class DownBands implements ISeriesPrimitive<Time> {
     private periods: readonly Period[] = [];
     private step = 0;
     private starts: readonly number[] | null = null;
+    private timeOf: (seconds: number) => Time = asInstant;
     private colors = { fill: 'transparent', edge: 'transparent' };
     private spans: [number, number][] = [];
     private readonly view: IPrimitivePaneView = {
@@ -165,10 +171,12 @@ export class DownBands implements ISeriesPrimitive<Time> {
         step: number,
         colors: { fill: string; edge: string },
         starts?: readonly number[],
+        timeOf: (seconds: number) => Time = asInstant,
     ) {
         this.periods = periods;
         this.step = step;
         this.starts = starts ?? null;
+        this.timeOf = timeOf;
         this.colors = colors;
         this.chart?.requestUpdate();
     }
@@ -191,8 +199,14 @@ export class DownBands implements ISeriesPrimitive<Time> {
         const starts = this.starts;
         for (const period of this.periods) {
             if (starts !== null) {
-                const from = instantX(attached.chart.timeScale(), starts, this.step, period.from);
-                const to = instantX(attached.chart.timeScale(), starts, this.step, period.to);
+                const from = instantX(
+                    attached.chart.timeScale(),
+                    starts,
+                    this.step,
+                    period.from,
+                    this.timeOf,
+                );
+                const to = instantX(attached.chart.timeScale(), starts, this.step, period.to, this.timeOf);
                 if (from !== null && to !== null) {
                     this.spans.push(widened(from, to));
                 }

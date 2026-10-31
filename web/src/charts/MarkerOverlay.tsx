@@ -1,6 +1,7 @@
 import { OctagonX, Package, Play, RotateCw, type LucideIcon } from 'lucide-react';
 import { useLayoutEffect, useRef, useState } from 'react';
 
+import { formatClock } from '../i18n/format';
 import { useI18n } from '../i18n/I18nProvider';
 import type { Messages } from '../i18n/en';
 import { cn } from '../lib/cn';
@@ -36,9 +37,14 @@ const markerLabel = (t: Messages, marker: ChartMarker) =>
 
 type Layout = { width: number; wide: boolean; sides: Side[]; clusters: Cluster[] };
 
-/** The 24 px band above a plot: each marker's label beside its instant, or its icon on a phone. */
-export function MarkerBand({ markers }: { markers: readonly PlacedMarker[] }) {
-    const { t } = useI18n();
+/**
+ * The 24 px band above a plot: each marker's label beside its instant, or its icon on a phone. Its
+ * times read in the browser's zone, or in `zone` for a chart that says its own.
+ */
+export function MarkerBand({ markers, zone }: { markers: readonly PlacedMarker[]; zone?: string }) {
+    const { t, locale } = useI18n();
+    const clockOf = (seconds: number) =>
+        zone === undefined ? clock(seconds) : formatClock(locale, seconds * 1000, zone);
     const band = useRef<HTMLDivElement>(null);
     const labels = useRef<(HTMLSpanElement | null)[]>([]);
     const [layout, setLayout] = useState<Layout>({ width: 0, wide: true, sides: [], clusters: [] });
@@ -79,10 +85,10 @@ export function MarkerBand({ markers }: { markers: readonly PlacedMarker[] }) {
             {markers.map(({ marker, x }, index) => {
                 const Icon = MARKER_ICONS[marker.kind];
                 const right = layout.sides[index] === 'right';
-                const time = clock(marker.at);
+                const time = clockOf(marker.at);
                 const back =
                     marker.kind === 'crash' && marker.backOnlineAt !== null
-                        ? t.charts.markers.backOnline(clock(marker.backOnlineAt))
+                        ? t.charts.markers.backOnline(clockOf(marker.backOnlineAt))
                         : '';
                 return (
                     <span
@@ -153,9 +159,14 @@ export function MarkerLines({ markers }: { markers: readonly PlacedMarker[] }) {
 /**
  * The range's markers in words, newest first, for the chart's text alternative: `Crash 14:02, back
  * online 14:04 · Restart 12:31`, with their days over buckets of `step` seconds as long as a week's.
- * `null` without any.
+ * `timeWords` words an instant otherwise, in a chart's own zone for instance. `null` without any.
  */
-export const markerWords = (t: Messages, markers: readonly ChartMarker[], step: number) => {
+export const markerWords = (
+    t: Messages,
+    markers: readonly ChartMarker[],
+    step: number,
+    timeWords: (seconds: number) => string = (seconds) => chartTime(seconds, step),
+) => {
     if (markers.length === 0) {
         return null;
     }
@@ -165,9 +176,9 @@ export const markerWords = (t: Messages, markers: readonly ChartMarker[], step: 
         .map((marker) =>
             t.charts.markers.inWords(
                 markerLabel(t, marker),
-                chartTime(marker.at, step),
+                timeWords(marker.at),
                 marker.kind === 'crash' && marker.backOnlineAt !== null
-                    ? chartTime(marker.backOnlineAt, step)
+                    ? timeWords(marker.backOnlineAt)
                     : null,
             ),
         );

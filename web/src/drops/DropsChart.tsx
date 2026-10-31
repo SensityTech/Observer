@@ -21,46 +21,57 @@ import type { DropSeries } from '../api/generated/DropSeries';
 import type { DropsRange } from '../api/generated/DropsRange';
 import type { Period } from '../charts/coverage';
 import { MarkerBand, MarkerLines, markerWords, type PlacedMarker } from '../charts/MarkerOverlay';
-import { chartTime, type ChartMarker } from '../charts/markers';
+import type { ChartMarker } from '../charts/markers';
 import { ATTRIBUTION } from '../charts/PlayersChart';
 import { DownBands, instantX } from '../charts/primitives';
 import { chartOptions, tokenColor, withAlpha } from '../charts/theme';
-import { zoneDate } from '../i18n/format';
+import { Segmented } from '../components/Segmented';
 import { useI18n } from '../i18n/I18nProvider';
 import { cn } from '../lib/cn';
 import {
     baselinePoints,
+    baselineSpan,
     countPoints,
     crashPeriods,
     dropBuckets,
     peakOf,
     ratePoints,
     rateTop,
-    secondsOf,
     seriesEnd,
     type DropBucket,
 } from './points';
 import { CHART_CATEGORIES } from './search';
+import { bucketWords, daily, instantWords, pointOf, stampOf, tickWords } from './times';
 import { formatRate } from './words';
 
 /** The drop counts' own scale, laid over the lower quarter of the plot, without an axis. */
 const COUNTS = 'drops';
 
-/** The theme's options, the scale reading rates rather than whole players. */
-const rateOptions = (host: Element, locale: string): DeepPartial<ChartOptions> => {
+/**
+ * The theme's options, the scale reading rates rather than whole players, every time worded in the
+ * server's zone: the ticks, and the crosshair's label. A chart of days has no time of day.
+ */
+const dropsOptions = (
+    host: Element,
+    locale: string,
+    zone: string,
+    step: number,
+): DeepPartial<ChartOptions> => {
     const base = chartOptions(host, locale);
     return {
         ...base,
-        localization: { ...base.localization, priceFormatter: (rate: number) => formatRate(locale, rate) },
+        timeScale: {
+            ...base.timeScale,
+            timeVisible: !daily(step),
+            tickMarkFormatter: tickWords(locale, zone),
+        },
+        localization: {
+            ...base.localization,
+            priceFormatter: (rate: number) => formatRate(locale, rate),
+            timeFormatter: (time: Time) => stampOf(time, locale, zone),
+        },
     };
 };
-
-/**
- * A bucket's time in words: for buckets of a day, the day of the schedule's zone they start at
- * midnight of, whatever this browser's zone; its hour otherwise.
- */
-const bucketTime = (seconds: number, step: number, zone: string) =>
-    step >= 86_400 ? zoneDate(seconds * 1000, zone) : chartTime(seconds, step);
 
 /** The chart's markers: the runs' moments and FXServer's build changes, in time order. */
 const markersOf = (series: DropSeries): ChartMarker[] =>
@@ -71,7 +82,7 @@ const markersOf = (series: DropSeries): ChartMarker[] =>
 
 /**
  * The rate of the chosen drops per 100 player-hours with its 4-week baseline and the drops counted,
- * the server's crashes and restarts marked, gaps where nobody played.
+ * the server's crashes and restarts marked, gaps where nobody played; times in the server's zone.
  */
 export function DropsChart({
     range,
@@ -85,7 +96,7 @@ export function DropsChart({
     onCategory: (category: ChartCategory) => void;
     /** The range's rate of these drops, from the summary, for the text alternative. */
     rate: number | null;
-    /** The schedule's zone, whose days the buckets of a day are. */
+    /** The schedule's zone, which every time of the chart reads in. */
     zone: string;
 }) {
     const { t, locale, format } = useI18n();
@@ -93,7 +104,7 @@ export function DropsChart({
     const titleId = useId();
     const query = useQuery({ ...seriesQuery(range, category), placeholderData: keepPreviousData });
     const series = query.data ?? null;
-    const rows = useMemo(() => (series === null ? [] : dropBuckets(series)), [series]);
+    const rows = useMemo(() => (series === null ? [] : dropBuckets(series, zone)), [series, zone]);
     const markers = useMemo(() => (series === null ? [] : markersOf(series)), [series]);
     const periods = useMemo(
         () =>
@@ -109,20 +120,31 @@ export function DropsChart({
     if (series !== null && played.length > 0) {
         const drops = rows.reduce((sum, row) => sum + row.drops, 0);
         const peak = peakOf(rows);
-        summary = words.summary(
-            drops,
-            words.what[series.category],
-            t.drops.over[series.range],
-            rate === null ? null : formatRate(locale, rate),
-        );
-        if (peak !== null && peak.rate !== null) {
-            summary = `${summary} ${words.peak(formatRate(locale, peak.rate), bucketTime(peak.time, series.step, zone))}`;
-        }
-        if (played.length < rows.length) {
-            summary = `${summary} ${words.unplayed(rows.length - played.length, rows.length)}`;
-        }
+        const baseline = baselineSpan(rows);
+        const parts = [
+            words.summary(
+                drops,
+                words.what[series.category],
+                t.drops.over[series.range],
+                rate === null ? null : formatRate(locale, rate),
+            ),
+            peak === null || peak.rate === null
+                ? null
+                : words.peak(
+                      formatRate(locale, peak.rate),
+                      bucketWords(peak.time, series.step, locale, zone),
+                  ),
+            baseline === null
+                ? words.noBaseline
+                : words.baselineSpan(formatRate(locale, baseline.low), formatRate(locale, baseline.high)),
+            played.length < rows.length ? words.unplayed(rows.length - played.length, rows.length) : null,
+        ];
+        summary = parts.filter((part) => part !== null).join(' ');
     }
-    const said = series === null ? null : markerWords(t, markers, series.step);
+    const said =
+        series === null
+            ? null
+            : markerWords(t, markers, series.step, (seconds) => instantWords(seconds, locale, zone));
     const legend = <Legend down={periods.length > 0} events={markers.length > 0} />;
 
     return (
@@ -140,20 +162,14 @@ export function DropsChart({
                 {series !== null && (
                     <span className="text-meta text-ink-3">{words.every(format.duration(series.step))}</span>
                 )}
-                <fieldset className="ml-auto inline-flex max-w-full flex-wrap gap-0.5 rounded-control border border-line bg-surface-2 p-0.75 md:-my-1.5">
-                    <legend className="sr-only">{words.category}</legend>
-                    {CHART_CATEGORIES.map((choice) => (
-                        <button
-                            key={choice}
-                            type="button"
-                            aria-pressed={category === choice}
-                            onClick={() => onCategory(choice)}
-                            className="inline-flex h-6.5 items-center rounded-[7px] px-2.5 text-small font-medium text-ink-3 transition-colors hover:text-ink focus-visible:outline-offset-1 aria-pressed:bg-raise aria-pressed:text-ink aria-pressed:shadow-[var(--elev-sm),0_0_0_1px_var(--line)] max-md:h-11 max-md:min-w-11 max-md:justify-center"
-                        >
-                            {words.categories[choice]}
-                        </button>
-                    ))}
-                </fieldset>
+                <Segmented
+                    label={words.category}
+                    choices={CHART_CATEGORIES}
+                    value={category}
+                    words={words.categories}
+                    onChange={onCategory}
+                    className="ml-auto md:-my-1.5"
+                />
             </div>
             <div className="border-b border-line px-5 py-2.5 max-md:hidden">{legend}</div>
             <div className="card-body flex flex-1 flex-col max-md:p-4">
@@ -164,7 +180,8 @@ export function DropsChart({
                         aria-label={words.loading}
                     />
                 ) : series === null ? (
-                    <Empty text={words.failed} />
+                    // The page's main figure: its failure is said once, politely.
+                    <Empty text={words.failed} live />
                 ) : played.length === 0 ? (
                     <Empty text={words.empty} />
                 ) : (
@@ -172,7 +189,15 @@ export function DropsChart({
                         className={cn('flex flex-1 flex-col transition-opacity', stale && 'opacity-50')}
                         aria-busy={stale}
                     >
-                        <Plot series={series} rows={rows} markers={markers} periods={periods} zone={zone} />
+                        <Plot
+                            // A chart of days holds calendar days, one of hours instants: built anew.
+                            key={daily(series.step) ? 'days' : 'hours'}
+                            series={series}
+                            rows={rows}
+                            markers={markers}
+                            periods={periods}
+                            zone={zone}
+                        />
                         <div className="mt-3 md:hidden">{legend}</div>
                         {summary !== null && (
                             <figcaption className="mt-4 border-t border-line pt-3 text-ui text-ink-3">
@@ -235,9 +260,12 @@ function Legend({ down, events }: { down: boolean; events: boolean }) {
     );
 }
 
-function Empty({ text }: { text: string }) {
+function Empty({ text, live = false }: { text: string; live?: boolean }) {
     return (
-        <div className="grid h-[284px] place-items-center rounded-card border border-dashed border-line-strong bg-bg-subtle px-6 text-center text-ui text-ink-3 max-md:h-[224px]">
+        <div
+            role={live ? 'status' : undefined}
+            className="grid h-[284px] place-items-center rounded-card border border-dashed border-line-strong bg-bg-subtle px-6 text-center text-ui text-ink-3 max-md:h-[224px]"
+        >
             {text}
         </div>
     );
@@ -265,14 +293,20 @@ function Plot({
     const rate = useRef<ISeriesApi<'Area'> | null>(null);
     const baseline = useRef<ISeriesApi<'Line'> | null>(null);
     const counts = useRef<ISeriesApi<'Histogram'> | null>(null);
-    const localeRef = useRef(locale);
+    const optionsOf = useRef({ locale, zone, step: series.step });
     const top = rateTop(rows);
     const topRef = useRef(top);
-    const shown = useRef({ rows, periods, starts: series.starts, step: series.step });
+    const shown = useRef({ rows, periods, starts: series.starts, step: series.step, zone });
     const [down] = useState(() => new DownBands());
     const [placed, setPlaced] = useState<PlacedMarker[]>([]);
     const [hovered, setHovered] = useState<Hovered | null>(null);
     const tip = useRef<HTMLSpanElement>(null);
+
+    /** A bucket's start as this chart holds it: an instant, or a day of the zone. */
+    const timeOf = useCallback((seconds: number) => {
+        const { step, zone: where } = shown.current;
+        return pointOf(seconds, step, where);
+    }, []);
 
     const paintBands = useCallback(() => {
         const element = host.current;
@@ -285,8 +319,9 @@ function Plot({
             step,
             { fill: tokenColor(element, '--danger-soft'), edge: tokenColor(element, '--danger') },
             starts,
+            timeOf,
         );
-    }, [down]);
+    }, [down, timeOf]);
 
     // A marker stands at its instant, between its bucket's start and the next one's.
     const place = useCallback(() => {
@@ -298,11 +333,11 @@ function Plot({
         const { starts, step } = shown.current;
         setPlaced(
             markers.flatMap((marker) => {
-                const x = instantX(api.timeScale(), starts, step, marker.at);
+                const x = instantX(api.timeScale(), starts, step, marker.at, timeOf);
                 return x === null ? [] : [{ marker, x: x + scale }];
             }),
         );
-    }, [markers]);
+    }, [markers, timeOf]);
 
     useEffect(() => {
         topRef.current = top;
@@ -314,7 +349,11 @@ function Plot({
         if (element === null) {
             return;
         }
-        const api = createChart(element, rateOptions(element, localeRef.current));
+        const options = () => {
+            const { locale: language, zone: where, step } = optionsOf.current;
+            return dropsOptions(element, language, where, step);
+        };
+        const api = createChart(element, options());
         const autoscale = () => ({ priceRange: { minValue: 0, maxValue: topRef.current } });
         // Drawn first, so that the rate and its baseline stay over the bars.
         counts.current = api.addSeries(HistogramSeries, {
@@ -344,7 +383,7 @@ function Plot({
         chart.current = api;
         const paint = () => {
             const accent = tokenColor(element, '--accent');
-            api.applyOptions(rateOptions(element, localeRef.current));
+            api.applyOptions(options());
             rate.current?.applyOptions({
                 lineColor: accent,
                 topColor: withAlpha(accent, 0.1),
@@ -360,8 +399,7 @@ function Plot({
         const theme = new MutationObserver(paint);
         theme.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
         const hover = (event: MouseEventParams<Time>) => {
-            const time = event.time === undefined ? null : secondsOf(event.time);
-            const row = shown.current.rows.find((each) => each.time === time);
+            const row = shown.current.rows.find((each) => each.point === event.time);
             if (event.point === undefined || row === undefined) {
                 setHovered(null);
                 return;
@@ -381,17 +419,17 @@ function Plot({
     }, [down, paintBands]);
 
     useEffect(() => {
-        localeRef.current = locale;
+        optionsOf.current = { locale, zone, step: series.step };
         const element = host.current;
         if (element !== null) {
-            chart.current?.applyOptions(rateOptions(element, locale));
+            chart.current?.applyOptions(dropsOptions(element, locale, zone, series.step));
         }
-    }, [locale]);
+    }, [locale, zone, series.step]);
 
     // A page read anew is drawn whole: every 30 s at most, never point by point.
     useEffect(() => {
         const element = host.current;
-        shown.current = { rows, periods, starts: series.starts, step: series.step };
+        shown.current = { rows, periods, starts: series.starts, step: series.step, zone };
         if (element === null) {
             return;
         }
@@ -402,7 +440,7 @@ function Plot({
         chart.current?.timeScale().fitContent();
         paintBands();
         place();
-    }, [rows, periods, series.starts, series.step, paintBands, place]);
+    }, [rows, periods, series.starts, series.step, zone, paintBands, place]);
 
     useEffect(() => {
         const api = chart.current;
@@ -433,7 +471,7 @@ function Plot({
 
     return (
         <div className="relative flex flex-1 flex-col" aria-hidden="true">
-            <MarkerBand markers={placed} />
+            <MarkerBand markers={placed} zone={zone} />
             <div className="relative h-[260px] max-md:h-[200px]">
                 <div ref={host} className="absolute inset-0" />
                 <div className="pointer-events-none absolute inset-0">
@@ -459,7 +497,7 @@ function Plot({
                                     .join(' · ')}
                             </span>
                             <span className="font-mono text-meta text-ink-3">
-                                {bucketTime(hovered.row.time, series.step, zone)}
+                                {stampOf(hovered.row.point, locale, zone)}
                             </span>
                         </span>
                     )}

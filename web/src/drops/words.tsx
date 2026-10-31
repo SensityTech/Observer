@@ -1,12 +1,12 @@
 import { CircleDashed, Minus, TrendingDown, TrendingUp, type LucideIcon } from 'lucide-react';
-import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
+import type { ReactNode } from 'react';
 
 import type { DropCategory } from '../api/generated/DropCategory';
 import type { DropsSummary } from '../api/generated/DropsSummary';
 import type { Trend } from '../api/generated/Trend';
 import type { TrendVerdict } from '../api/generated/TrendVerdict';
 import { chipVariants } from '../components/Chip';
+import { Toggletip } from '../components/Toggletip';
 import type { Messages } from '../i18n/en';
 import { FIGURE, formatClock, formatDay, formatNumber } from '../i18n/format';
 import { useI18n } from '../i18n/I18nProvider';
@@ -95,11 +95,10 @@ export const trendWindows = (
     );
 };
 
-type Tooltip = { top: number; left: number } | null;
-
 /**
  * The verdict as a chip: an icon and a word, never a colour alone, `Rising +38%` in warning. Its
- * interval, both rates and the windows compared show on hover and focus, and are its description.
+ * interval, both rates, the events the test counted and the windows compared are its description,
+ * shown on hover and pinned by a click.
  */
 export function VerdictChip({
     trend,
@@ -112,95 +111,29 @@ export function VerdictChip({
     className?: string;
 }) {
     const { t, locale } = useI18n();
-    const id = useId();
-    const trigger = useRef<HTMLButtonElement>(null);
-    const tip = useRef<HTMLSpanElement>(null);
-    const [shown, setShown] = useState<Tooltip>(null);
     const Icon = VERDICT_ICONS[trend.verdict];
     const lines = verdictDetails(t, locale, trend, windows);
-
-    // Fixed to the window, so a table that scrolls sideways does not cut it; placed under the chip,
-    // and kept inside the window's width.
-    const show = () => {
-        const rect = trigger.current?.getBoundingClientRect();
-        if (rect !== undefined) {
-            setShown({ top: rect.bottom + 6, left: rect.left });
-        }
-    };
-    const hide = () => setShown(null);
-
-    useLayoutEffect(() => {
-        const element = tip.current;
-        if (shown === null || element === null) {
-            return;
-        }
-        const room = document.documentElement.clientWidth - 8;
-        const left = Math.max(8, Math.min(shown.left, room - element.offsetWidth));
-        element.style.left = `${left}px`;
-    }, [shown]);
-
-    useEffect(() => {
-        if (shown === null) {
-            return;
-        }
-        const close = (event: Event) => {
-            if (event instanceof KeyboardEvent && event.key !== 'Escape') {
-                return;
-            }
-            setShown(null);
-        };
-        window.addEventListener('scroll', close, true);
-        window.addEventListener('keydown', close);
-        return () => {
-            window.removeEventListener('scroll', close, true);
-            window.removeEventListener('keydown', close);
-        };
-    }, [shown]);
-
     return (
-        <>
-            <button
-                ref={trigger}
-                type="button"
-                aria-describedby={id}
-                className={cn(
-                    chipVariants({ tone: verdictTone(trend.verdict) }),
-                    'cursor-default focus-visible:outline-offset-1',
-                    className,
-                )}
-                onMouseEnter={show}
-                onMouseLeave={hide}
-                onFocus={show}
-                onBlur={hide}
-            >
-                <Icon size={12} strokeWidth={2} aria-hidden="true" />
-                {verdictText(t, locale, trend)}
-            </button>
-            {/* Out of the heading or the table it sits in: hidden, it still describes the chip. */}
-            {createPortal(
-                <span
-                    ref={tip}
-                    id={id}
-                    role="tooltip"
-                    hidden={shown === null}
-                    className={cn(
-                        'pointer-events-none fixed z-50 w-max max-w-72 flex-col gap-0.5 rounded-sm border border-line-strong bg-surface px-2.5 py-1.5 text-meta text-ink-2 shadow-pop',
-                        shown === null ? 'hidden' : 'flex',
-                    )}
-                    style={shown === null ? undefined : { top: shown.top, left: shown.left }}
-                >
-                    {lines.map((line, index) => (
-                        <span
-                            key={line}
-                            className={index === 0 ? 'text-ui font-semibold text-ink' : undefined}
-                        >
-                            {line}
-                        </span>
-                    ))}
-                </span>,
-                document.body,
-            )}
-        </>
+        <Toggletip
+            className={cn(chipVariants({ tone: verdictTone(trend.verdict) }), className)}
+            tip={lines.map((line, index) => (
+                <span key={line} className={index === 0 ? 'text-ui font-semibold text-ink' : undefined}>
+                    {line}
+                </span>
+            ))}
+        >
+            <Icon size={12} strokeWidth={2} aria-hidden="true" />
+            {verdictText(t, locale, trend)}
+        </Toggletip>
+    );
+}
+
+/** A word that tells more on demand, the `New` of a signature for instance: a chip with its tip. */
+export function HintChip({ hint, children }: { hint: string; children: ReactNode }) {
+    return (
+        <Toggletip className={chipVariants({ tone: 'neutral' })} tip={hint}>
+            {children}
+        </Toggletip>
     );
 }
 

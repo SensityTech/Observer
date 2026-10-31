@@ -18,6 +18,7 @@ import { Permission } from '../api/generated/Permission';
 import { allows, useMe } from '../auth/me';
 import { Button } from '../components/Button';
 import { Notice } from '../components/Notice';
+import { Segmented } from '../components/Segmented';
 import { BreakdownCard } from '../drops/BreakdownCard';
 import { ChangesCard } from '../drops/ChangesCard';
 import { DropsChart } from '../drops/DropsChart';
@@ -74,7 +75,13 @@ export function DropsPage() {
     const me = useMe();
     const navigate = useNavigate();
     const raw = useSearch({ strict: false });
-    const search = useMemo(() => parseDropsSearch(raw as Record<string, unknown>), [raw]);
+    const identifiers = allows(me, Permission.PlayerIdentifiersView);
+    // A player and their linked licences are for who sees identifiers: the API would refuse the
+    // others, so the address's group is left out for them rather than shown refused.
+    const search = useMemo(() => {
+        const parsed = parseDropsSearch(raw as Record<string, unknown>);
+        return identifiers ? parsed : withFilters(parsed, { ...parsed, group: undefined });
+    }, [raw, identifiers]);
     const range = search.range ?? DEFAULT_RANGE;
     const withLog = allows(me, Permission.PlayersView);
     const logTitle = useRef<HTMLHeadingElement>(null);
@@ -115,25 +122,15 @@ export function DropsPage() {
                 </h1>
                 <div className="flex flex-wrap items-center gap-3 max-md:w-full">
                     <ZoneNote zone={zone} />
-                    <fieldset className="inline-flex max-w-full gap-0.5 rounded-control border border-line bg-surface-2 p-0.75">
-                        <legend className="sr-only">{t.drops.range}</legend>
-                        {RANGES.map((choice) => (
-                            <button
-                                key={choice}
-                                type="button"
-                                aria-pressed={range === choice}
-                                onClick={() =>
-                                    void go(
-                                        { ...search, range: choice === DEFAULT_RANGE ? undefined : choice },
-                                        true,
-                                    )
-                                }
-                                className="inline-flex h-6.5 items-center rounded-[7px] px-2.5 text-small font-medium text-ink-3 transition-colors hover:text-ink focus-visible:outline-offset-1 aria-pressed:bg-raise aria-pressed:text-ink aria-pressed:shadow-[var(--elev-sm),0_0_0_1px_var(--line)] max-md:h-11 max-md:min-w-11 max-md:justify-center"
-                            >
-                                {t.drops.ranges[choice]}
-                            </button>
-                        ))}
-                    </fieldset>
+                    <Segmented
+                        label={t.drops.range}
+                        choices={RANGES}
+                        value={range}
+                        words={t.drops.ranges}
+                        onChange={(choice) =>
+                            void go({ ...search, range: choice === DEFAULT_RANGE ? undefined : choice }, true)
+                        }
+                    />
                     <Button
                         icon={Download}
                         pending={rates.isPending}
@@ -156,7 +153,8 @@ export function DropsPage() {
                 </Notice>
             )}
             {coverage !== undefined && coverage.sessions > 0 && closed / coverage.sessions > COVERAGE_GAP && (
-                <Notice>
+                // Its figures change as they are read again: read where it stands, never announced.
+                <Notice live={false}>
                     {t.drops.coverage(
                         closed,
                         coverage.sessions,
@@ -166,10 +164,14 @@ export function DropsPage() {
                     )}
                 </Notice>
             )}
-            <div aria-busy={summary.isFetching} className={cn('transition-opacity', stale && 'opacity-50')}>
+            <div aria-busy={stale} className={cn('transition-opacity', stale && 'opacity-50')}>
                 {summary.data === undefined ? (
                     summary.isPending && (
-                        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4" aria-label={t.drops.loading}>
+                        <div
+                            className="grid grid-cols-1 gap-3 min-[360px]:grid-cols-2 lg:grid-cols-4"
+                            aria-busy="true"
+                            aria-label={t.drops.loading}
+                        >
                             {[0, 1, 2, 3].map((index) => (
                                 <div key={index} className="skeleton h-40 w-full rounded-card" />
                             ))}
@@ -188,19 +190,20 @@ export function DropsPage() {
             />
             <div className="grid grid-cols-1 gap-3 2xl:grid-cols-3">
                 <div className="flex min-w-0 flex-col 2xl:col-span-2 [&>section]:flex-1">
-                    {summary.data !== undefined && (
-                        <BreakdownCard
-                            summary={summary.data}
-                            selected={search.category}
-                            onSelect={select}
-                            withLog={withLog}
-                        />
-                    )}
+                    <BreakdownCard
+                        summary={summary.data}
+                        failed={summary.isError}
+                        stale={stale}
+                        selected={search.category}
+                        onSelect={select}
+                        withLog={withLog}
+                    />
                 </div>
                 <div className="flex min-w-0 flex-col [&>section]:flex-1">
                     <UptimeCard
                         uptime={uptime.data}
                         failed={uptime.isError}
+                        stale={uptime.isPlaceholderData}
                         rangeFrom={summary.data?.from}
                         zone={zone}
                     />
@@ -209,6 +212,7 @@ export function DropsPage() {
             <SignaturesCard
                 signatures={signatures.data}
                 failed={signatures.isError}
+                stale={signatures.isPlaceholderData}
                 zone={zone}
                 windows={windows}
                 rangeFrom={summary.data?.from}
@@ -231,6 +235,7 @@ export function DropsPage() {
                     <ResourcesCard
                         resources={resources.data}
                         failed={resources.isError}
+                        stale={resources.isPlaceholderData}
                         windows={windows}
                         rangeFrom={summary.data?.from}
                         zone={zone}
@@ -241,6 +246,7 @@ export function DropsPage() {
                     <ChangesCard
                         changes={changes.data}
                         failed={changes.isError}
+                        stale={changes.isPlaceholderData}
                         zone={zone}
                         onShowRun={withLog ? (run) => showInLog({ run }) : undefined}
                     />

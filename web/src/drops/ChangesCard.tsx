@@ -54,11 +54,14 @@ const look = (t: Messages, event: ChangeEvent): { tone: Tone; icon: LucideIcon; 
 export function ChangesCard({
     changes,
     failed,
+    stale,
     zone,
     onShowRun,
 }: {
     changes: DropChanges | undefined;
     failed: boolean;
+    /** Still the previous range's, while the new one is read. */
+    stale: boolean;
     zone: string;
     /** Narrows the log to a run; only for a viewer who sees the log. */
     onShowRun?: (run: number) => void;
@@ -69,7 +72,9 @@ export function ChangesCard({
     if (changes === undefined) {
         body = failed ? (
             <div className="p-5 max-md:p-4">
-                <Notice tone="danger">{words.failed}</Notice>
+                <Notice tone="danger" live={false}>
+                    {words.failed}
+                </Notice>
             </div>
         ) : (
             <div className="flex flex-col gap-3 p-5" aria-busy="true">
@@ -99,7 +104,9 @@ export function ChangesCard({
     return (
         <Card id="drops-changes" icon={History} title={words.title} flush>
             <div className="flex h-full flex-col">
-                <div className="flex-1">{body}</div>
+                <div aria-busy={stale} className={cn('flex-1 transition-opacity', stale && 'opacity-50')}>
+                    {body}
+                </div>
                 {changes !== undefined && !changes.snapshots && (
                     <p className="rounded-b-card border-t border-line bg-bg-subtle px-5 py-2.5 text-meta text-ink-3 max-md:px-4">
                         {words.snapshots}
@@ -136,7 +143,7 @@ function Event({
                     >
                         <span>
                             {words.after(
-                                t.drops.categories[category].toLowerCase(),
+                                t.drops.categoriesInline[category],
                                 trend.before === null ? t.drops.unknown : formatRate(locale, trend.before),
                                 trend.now === null ? t.drops.unknown : formatRate(locale, trend.now),
                             )}
@@ -145,16 +152,18 @@ function Event({
                     </p>
                 ))}
                 {event.newSignatures.length > 0 && (
-                    <p className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-small text-ink-2">
-                        <span>{words.newSignatures(event.newSignatures.length)}</span>
-                        {event.newSignatures.map((signature) => (
-                            <code
-                                key={signature}
-                                className="code-inline whitespace-normal [overflow-wrap:anywhere]"
-                            >
-                                {signature}
-                            </code>
-                        ))}
+                    <p className="mt-1 text-small leading-[1.7] text-ink-2">
+                        {words.newSignatures(
+                            event.newSignatures.length,
+                            event.newSignatures.map((signature, index) => (
+                                <span key={signature}>
+                                    {index > 0 && ' '}
+                                    <code className="code-inline whitespace-normal [overflow-wrap:anywhere]">
+                                        {signature}
+                                    </code>
+                                </span>
+                            )),
+                        )}
                     </p>
                 )}
             </>
@@ -168,11 +177,11 @@ function Event({
                 ? null
                 : event.hitchMs < 1000
                   ? format.milliseconds(event.hitchMs)
-                  : `${format.number(event.hitchMs / 1000, FIGURE)} s`,
+                  : words.seconds(format.number(event.hitchMs / 1000, FIGURE)),
         );
         facts.push(
             ...event.incidentCategories.map((each) =>
-                words.incidentCategory(each.drops, t.drops.categories[each.category].toLowerCase()),
+                words.incidentCategory(each.drops, t.drops.categoriesInline[each.category]),
             ),
         );
         if (event.playersOnline !== null) {
@@ -189,7 +198,7 @@ function Event({
                 {formatClock(locale, event.at, zone)}
             </time>
             <span
-                className={cn('relative grid size-7 place-items-center rounded-[8px]', NODE[tone])}
+                className={cn('relative grid size-7 place-items-center rounded-sm', NODE[tone])}
                 aria-hidden="true"
             >
                 <Icon size={14} strokeWidth={1.5} />

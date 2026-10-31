@@ -1,15 +1,15 @@
 import { keepPreviousData, useInfiniteQuery, useMutation } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { ChevronDown, Download, Filter, ScrollText, X } from 'lucide-react';
-import { useId, useState, type ReactNode, type Ref } from 'react';
+import { useId, useRef, useState, type ReactNode, type Ref } from 'react';
 
 import { ApiError } from '../api/client';
 import { downloadLog, logQuery } from '../api/drops';
 import type { DropCategory } from '../api/generated/DropCategory';
 import type { DropKind } from '../api/generated/DropKind';
 import type { DropLogRow } from '../api/generated/DropLogRow';
-import type { SignatureTable } from '../api/generated/SignatureTable';
 import { Permission } from '../api/generated/Permission';
+import type { SignatureTable } from '../api/generated/SignatureTable';
 import { shortLicence } from '../api/players';
 import { allows, useMe } from '../auth/me';
 import { Button } from '../components/Button';
@@ -18,14 +18,28 @@ import { CopyValue } from '../components/CopyValue';
 import { FieldError, inputClass } from '../components/Field';
 import { Notice } from '../components/Notice';
 import { table } from '../components/table';
+import { Toggletip } from '../components/Toggletip';
 import { errorMessage } from '../i18n/errors';
+import { formatClock, zoneDate } from '../i18n/format';
 import { useI18n } from '../i18n/I18nProvider';
 import { cn } from '../lib/cn';
-import { DROP_ICONS, PlayerName, useVisit } from '../players/words';
-import { CATEGORIES, KINDS, filtered, logFilters, type DropsSearch, type LogFilters } from './search';
+import { DROP_ICONS, PlayerName } from '../players/words';
+import {
+    CATEGORIES,
+    DEFAULT_RANGE,
+    KINDS,
+    filtered,
+    logFilters,
+    logSearch,
+    type DropsSearch,
+    type LogFilters,
+} from './search';
 
-/** Refusals of what was typed in the player search, said under it rather than in place of the log. */
+/** Refusals of what was asked for one player, said where it was asked rather than in place of the log. */
 const SEARCH_REFUSALS = new Set(['forbidden', 'address_search', 'invalid_search']);
+
+/** The log's filters, without the page's range and chart. */
+type Filters = Omit<DropsSearch, 'range' | 'chart'>;
 
 type Draft = {
     category: DropCategory | '';
@@ -36,7 +50,7 @@ type Draft = {
     run: string;
 };
 
-const draftOf = (search: DropsSearch): Draft => ({
+const draftOf = (search: Filters): Draft => ({
     category: search.category ?? '',
     kind: search.kind ?? '',
     resource: search.resource ?? '',
@@ -45,17 +59,30 @@ const draftOf = (search: DropsSearch): Draft => ({
     run: search.run === undefined ? '' : String(search.run),
 });
 
-/** The form as the address takes it: what is empty is left out, one player's profile kept. */
-const searchOf = (draft: Draft, search: DropsSearch): Omit<DropsSearch, 'range' | 'chart'> => ({
-    category: draft.category || undefined,
-    kind: draft.kind || undefined,
-    resource: draft.resource.trim() || undefined,
-    signature: draft.signature === '' ? undefined : Number(draft.signature),
-    player: draft.player.trim() || undefined,
-    run: /^\d+$/.test(draft.run.trim()) ? Number(draft.run.trim()) : undefined,
-    profile: search.profile,
-    group: search.group,
-});
+/** A run as typed: empty, or a whole number; anything else is refused under its field. */
+const runOf = (draft: Draft) => draft.run.trim();
+const runValid = (draft: Draft) => runOf(draft) === '' || /^\d+$/.test(runOf(draft));
+
+/**
+ * The form as the address takes it: what is empty is left out. The API reads one player at a time,
+ * a group before a search before a profile: a player typed replaces the profile or the group kept.
+ */
+const searchOf = (draft: Draft, search: Filters): Filters => {
+    const player = draft.player.trim() || undefined;
+    return {
+        category: draft.category || undefined,
+        kind: draft.kind || undefined,
+        resource: draft.resource.trim() || undefined,
+        signature: draft.signature === '' ? undefined : Number(draft.signature),
+        player,
+        run: runOf(draft) === '' ? undefined : Number(runOf(draft)),
+        profile: player === undefined ? search.profile : undefined,
+        group: player === undefined ? search.group : undefined,
+    };
+};
+
+/** The filters as one key, whatever the range: the form starts again from them when they change elsewhere. */
+const filtersKey = (search: DropsSearch) => logSearch({ ...logFilters(search), range: DEFAULT_RANGE });
 
 /**
  * Every drop under the filters, newest first, a page at a time: who, what, how long they played and
@@ -73,18 +100,22 @@ export function LogCard({
     signatures: SignatureTable | undefined;
     zone: string;
     titleRef: Ref<HTMLHeadingElement>;
-    onFilters: (next: Omit<DropsSearch, 'range' | 'chart'>) => void;
+    onFilters: (next: Filters) => void;
 }) {
     const { t } = useI18n();
     const words = t.drops.log;
     const filters = logFilters(search);
     const log = useInfiniteQuery({ ...logQuery(filters), placeholderData: keepPreviousData });
     const rows = log.data?.pages.flatMap((page) => page.rows) ?? [];
-    const refused =
+    const refusal =
         log.error instanceof ApiError && SEARCH_REFUSALS.has(log.error.code)
             ? errorMessage(t, log.error)
             : null;
+    // Said once more pages were loaded, never as the figures are read again.
+    const [announced, setAnnounced] = useState<{ key: string; text: string } | null>(null);
     const exporting = useMutation({ mutationFn: (current: LogFilters) => downloadLog(current) });
+    const stale = log.isPlaceholderData;
+    const shown = (count: number, more: boolean) => (more ? words.shown(count) : words.allShown(count));
     return (
         <Card
             id="drops-log"
@@ -105,11 +136,10 @@ export function LogCard({
             flush
         >
             <LogFilterForm
-                // A filter set from elsewhere, a card's link, starts the form again from it.
-                key={JSON.stringify(search)}
                 search={search}
                 signatures={signatures}
-                refused={refused}
+                refusedPlayer={search.player === undefined ? null : refusal}
+                refusedKept={search.player === undefined ? refusal : null}
                 onFilters={onFilters}
             />
             {exporting.isError && (
@@ -119,7 +149,7 @@ export function LogCard({
                     </Notice>
                 </div>
             )}
-            <div aria-busy={log.isFetching} className={cn(log.isPlaceholderData && 'opacity-50')}>
+            <div aria-busy={stale} className={cn('transition-opacity', stale && 'opacity-50')}>
                 {log.isPending && (
                     <div className="flex flex-col gap-3 p-5">
                         <span className="sr-only">{words.reading}</span>
@@ -128,9 +158,9 @@ export function LogCard({
                         <span className="skeleton w-1/2" />
                     </div>
                 )}
-                {log.isError && refused === null && (
+                {log.isError && refusal === null && (
                     <div className="p-5 max-md:p-4">
-                        <Notice tone="danger">
+                        <Notice tone="danger" live={false}>
                             {words.failed} {errorMessage(t, log.error)}
                         </Notice>
                     </div>
@@ -140,7 +170,7 @@ export function LogCard({
                         {filtered(search) ? words.noMatch : words.empty}
                     </p>
                 )}
-                {rows.length > 0 && refused === null && (
+                {rows.length > 0 && refusal === null && (
                     <>
                         <div className={cn(table.scroll, 'rounded-none max-md:hidden')}>
                             <table className={table.table}>
@@ -185,10 +215,11 @@ export function LogCard({
                     </>
                 )}
             </div>
-            {rows.length > 0 && refused === null && (
+            {rows.length > 0 && refusal === null && (
                 <div className="flex flex-wrap items-center gap-2 rounded-b-card border-t border-line bg-bg-subtle py-2 pr-3 pl-5 text-meta text-ink-3 max-md:pl-4">
-                    <output className="mr-auto">
-                        {log.hasNextPage ? words.shown(rows.length) : words.allShown(rows.length)}
+                    <span className="mr-auto">{shown(rows.length, log.hasNextPage)}</span>
+                    <output className="sr-only">
+                        {announced?.key === logSearch(filters) ? announced.text : ''}
                     </output>
                     {log.hasNextPage && (
                         <Button
@@ -196,7 +227,13 @@ export function LogCard({
                             size="sm"
                             icon={ChevronDown}
                             pending={log.isFetchingNextPage}
-                            onClick={() => void log.fetchNextPage()}
+                            onClick={() => {
+                                const key = logSearch(filters);
+                                void log.fetchNextPage().then((result) => {
+                                    const count = result.data?.pages.flatMap((page) => page.rows).length ?? 0;
+                                    setAnnounced({ key, text: shown(count, result.hasNextPage) });
+                                });
+                            }}
                         >
                             {words.loadMore}
                         </Button>
@@ -210,21 +247,37 @@ export function LogCard({
 function LogFilterForm({
     search,
     signatures,
-    refused,
+    refusedPlayer,
+    refusedKept,
     onFilters,
 }: {
     search: DropsSearch;
     signatures: SignatureTable | undefined;
-    refused: string | null;
-    onFilters: (next: Omit<DropsSearch, 'range' | 'chart'>) => void;
+    /** Why the API refused the player typed. */
+    refusedPlayer: string | null;
+    /** Why it refused the profile or group the address keeps. */
+    refusedKept: string | null;
+    onFilters: (next: Filters) => void;
 }) {
     const { t } = useI18n();
     const words = t.drops.log;
     const me = useMe();
     const playerId = useId();
-    const playerHint = `${playerId}-hint`;
-    const playerError = `${playerId}-error`;
+    const runId = useId();
+    const keptId = useId();
+    const apply = useRef<HTMLButtonElement>(null);
     const [draft, setDraft] = useState(() => draftOf(search));
+    const [runChecked, setRunChecked] = useState(false);
+    // The filters changed elsewhere, a card's link or the address: the form starts again from them.
+    // The range, the chart or the breakdown leave a draft as it is.
+    const applied = filtersKey(search);
+    const [from, setFrom] = useState(applied);
+    if (from !== applied) {
+        setFrom(applied);
+        setDraft(draftOf(search));
+        setRunChecked(false);
+    }
+    const runError = runChecked && !runValid(draft);
     const kinds = draft.category === '' ? [] : KINDS[draft.category];
     const listed = signatures?.signatures.filter((entry) => entry.signature !== null) ?? [];
     const signatureOptions: [string, string][] = [
@@ -245,9 +298,13 @@ function LogFilterForm({
         <form
             className="flex flex-col gap-3 border-b border-line p-5 max-md:p-4"
             aria-label={words.filters}
+            noValidate
             onSubmit={(event) => {
                 event.preventDefault();
-                onFilters(searchOf(draft, search));
+                setRunChecked(true);
+                if (runValid(draft)) {
+                    onFilters(searchOf(draft, search));
+                }
             }}
         >
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3 3xl:grid-cols-6">
@@ -327,34 +384,38 @@ function LogFilterForm({
                         spellCheck={false}
                         autoCapitalize="none"
                         autoComplete="off"
-                        aria-invalid={refused !== null || undefined}
-                        aria-describedby={refused !== null ? playerError : playerHint}
+                        aria-invalid={refusedPlayer !== null || undefined}
+                        aria-describedby={`${playerId}-note`}
                         onChange={(event) => setDraft({ ...draft, player: event.target.value })}
                     />
                 </div>
-                <FilterField label={words.run}>
-                    {(id) => (
-                        <input
-                            id={id}
-                            inputMode="numeric"
-                            className={cn(inputClass, 'font-mono text-ui')}
-                            value={draft.run}
-                            autoComplete="off"
-                            onChange={(event) => setDraft({ ...draft, run: event.target.value })}
-                        />
-                    )}
-                </FilterField>
+                <div className="flex min-w-0 flex-col gap-1.5">
+                    <label htmlFor={runId} className="text-ui font-medium text-ink">
+                        {words.run}
+                    </label>
+                    <input
+                        id={runId}
+                        inputMode="numeric"
+                        className={cn(inputClass, 'font-mono text-ui')}
+                        value={draft.run}
+                        autoComplete="off"
+                        aria-invalid={runError || undefined}
+                        aria-describedby={runError ? `${runId}-error` : undefined}
+                        onChange={(event) => setDraft({ ...draft, run: event.target.value })}
+                    />
+                </div>
             </div>
-            {refused !== null ? (
-                <FieldError id={playerError}>{refused}</FieldError>
+            {refusedPlayer !== null ? (
+                <FieldError id={`${playerId}-note`}>{refusedPlayer}</FieldError>
             ) : (
-                <p id={playerHint} className="text-small text-ink-3">
-                    {words.player}:{' '}
+                <p id={`${playerId}-note`} className="text-small text-ink-3">
                     {allows(me, Permission.PlayerIdentifiersView)
                         ? words.playerHintIdentifiers
                         : words.playerHint}
                 </p>
             )}
+            {runError && <FieldError id={`${runId}-error`}>{words.runInvalid}</FieldError>}
+            {refusedKept !== null && <FieldError id={keptId}>{refusedKept}</FieldError>}
             <div className="flex flex-wrap items-center gap-2 max-md:[&>button]:flex-1">
                 {kept.map((filter) => (
                     <Button
@@ -363,18 +424,24 @@ function LogFilterForm({
                         tone="secondary"
                         icon={X}
                         aria-label={words.removeFilter(filter.name)}
-                        onClick={() => onFilters({ ...searchOf(draft, search), [filter.drop]: undefined })}
+                        aria-describedby={refusedKept === null ? undefined : keptId}
+                        onClick={() => {
+                            // The chip goes: the keyboard goes on to the form's own button.
+                            onFilters({ ...searchOf(draft, search), [filter.drop]: undefined });
+                            apply.current?.focus();
+                        }}
                     >
                         {filter.name}
                     </Button>
                 ))}
-                <Button type="submit" tone="ink" icon={Filter} className="md:ml-auto">
+                <Button ref={apply} type="submit" tone="ink" icon={Filter} className="md:ml-auto">
                     {words.apply}
                 </Button>
                 <Button
                     tone="ghost"
                     onClick={() => {
                         setDraft(draftOf({}));
+                        setRunChecked(false);
                         onFilters({});
                     }}
                 >
@@ -435,6 +502,13 @@ function Select({
     );
 }
 
+/** A drop's moment as logs write it, in the server's zone and to the second: `2026-10-28 14:02:07`. */
+const useStamp = (zone: string) => {
+    const { locale } = useI18n();
+    return (instant: string) =>
+        `${zoneDate(instant, zone)} ${formatClock(locale, instant, zone, { seconds: true })}`;
+};
+
 /** Who dropped: their name to their profile and their licence to copy; or why nobody is named. */
 function Who({ row }: { row: DropLogRow }) {
     const { t } = useI18n();
@@ -443,10 +517,12 @@ function Who({ row }: { row: DropLogRow }) {
         return row.synthesized ? (
             <span className="text-ink-3">{words.noPlayer}</span>
         ) : (
-            <span title={words.unconfirmedHint} className="text-ink-2">
+            <Toggletip
+                className="self-start rounded-xs text-left text-ink-2 underline decoration-dotted underline-offset-2"
+                tip={words.unconfirmedHint}
+            >
                 {words.unconfirmed}
-                <span className="sr-only">. {words.unconfirmedHint}</span>
-            </span>
+            </Toggletip>
         );
     }
     return (
@@ -479,7 +555,7 @@ function Category({ row }: { row: DropLogRow }) {
 }
 
 /** Narrows the log to one thing a row shows: its signature, its run. */
-type OnFilter = (next: Omit<DropsSearch, 'range' | 'chart'>) => void;
+type OnFilter = (next: Filters) => void;
 
 /**
  * What the drop says: its signature, which narrows the log to it, the resource and its reason, its
@@ -504,7 +580,7 @@ function Detail({ row, onFilter }: { row: DropLogRow; onFilter: OnFilter }) {
                         label={words.filterSignature(row.signature)}
                         onClick={() => onFilter({ signature: row.signatureId ?? undefined })}
                     >
-                        <span className="whitespace-normal [overflow-wrap:anywhere] text-ink">
+                        <span className="whitespace-normal text-ink [overflow-wrap:anywhere]">
                             {row.signature}
                         </span>
                     </FilterButton>
@@ -512,7 +588,11 @@ function Detail({ row, onFilter }: { row: DropLogRow; onFilter: OnFilter }) {
             {row.label !== null && <span className="font-mono text-meta text-ink-3">{row.label}</span>}
             {row.resource !== null && (
                 <span>
-                    {words.by} <code className="code-inline">{row.resource}</code>
+                    {words.byResource(
+                        <code key="resource" className="code-inline">
+                            {row.resource}
+                        </code>,
+                    )}
                 </span>
             )}
             {row.reason !== null && (
@@ -561,19 +641,19 @@ function RunButton({ run, onFilter }: { run: number; onFilter: OnFilter }) {
 
 function LogRow({ row, zone, onFilter }: { row: DropLogRow; zone: string; onFilter: OnFilter }) {
     const { t, format } = useI18n();
-    const visit = useVisit(zone);
+    const stamp = useStamp(zone);
     return (
         <tr className={table.row}>
             <td className={cn(table.td, table.mono, 'align-top')}>
-                <time dateTime={row.at}>{visit(row.at)}</time>
+                <time dateTime={row.at}>{stamp(row.at)}</time>
             </td>
-            <td className={cn(table.td, 'min-w-40 align-top')}>
+            <td className={cn(table.td, 'min-w-36 align-top')}>
                 <Who row={row} />
             </td>
             <td className={cn(table.td, 'align-top')}>
                 <Category row={row} />
             </td>
-            <td className={cn(table.td, 'min-w-56 align-top')}>
+            <td className={cn(table.td, 'min-w-48 align-top')}>
                 <Detail row={row} onFilter={onFilter} />
             </td>
             <td className={cn(table.td, 'text-right align-top whitespace-nowrap')}>
@@ -590,31 +670,33 @@ function LogRow({ row, zone, onFilter }: { row: DropLogRow; zone: string; onFilt
 function LogItem({ row, zone, onFilter }: { row: DropLogRow; zone: string; onFilter: OnFilter }) {
     const { t, format } = useI18n();
     const words = t.drops.log;
-    const visit = useVisit(zone);
+    const stamp = useStamp(zone);
+    // Each figure's line as tall as the run's button, so that the three stand level.
+    const figure = 'flex min-h-11 items-center text-ink';
     return (
         <li className="flex flex-col gap-1.5 border-b border-line px-4 py-3 last:border-b-0">
             <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
                 <Category row={row} />
                 <time dateTime={row.at} className="font-mono text-small text-ink-3">
-                    {visit(row.at)}
+                    {stamp(row.at)}
                 </time>
             </div>
             <Who row={row} />
             <div className="text-small text-ink-2">
                 <Detail row={row} onFilter={onFilter} />
             </div>
-            <dl className="grid grid-cols-3 gap-x-4 gap-y-1 text-small">
+            <dl className="grid grid-cols-3 gap-x-4 text-small">
                 <div className="flex min-w-0 flex-col">
                     <dt className="text-meta text-ink-3">{words.session}</dt>
-                    <dd className="text-ink">{row.lengthMs === null ? '' : format.playTime(row.lengthMs)}</dd>
+                    <dd className={figure}>{row.lengthMs === null ? '' : format.playTime(row.lengthMs)}</dd>
                 </div>
                 <div className="flex min-w-0 flex-col">
                     <dt className="text-meta text-ink-3">{words.phase}</dt>
-                    <dd className="text-ink">{phase(t, row.loading)}</dd>
+                    <dd className={figure}>{phase(t, row.loading)}</dd>
                 </div>
                 <div className="flex min-w-0 flex-col">
                     <dt className="text-meta text-ink-3">{words.runColumn}</dt>
-                    <dd>
+                    <dd className={figure}>
                         <RunButton run={row.run} onFilter={onFilter} />
                     </dd>
                 </div>

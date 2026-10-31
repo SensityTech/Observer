@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { en } from '../i18n/en';
@@ -67,33 +67,76 @@ describe('trendWindows', () => {
     });
 });
 
+/** A rising chip, its trigger and its tip. */
+const chip = () => {
+    render(
+        <I18nProvider>
+            <VerdictChip trend={RISING} windows="the windows" />
+        </I18nProvider>,
+    );
+    const trigger = screen.getByRole('button', { name: 'Rising +38%' });
+    const tip = screen.getByRole('tooltip', { hidden: true });
+    return { trigger, tip };
+};
+
 describe('VerdictChip', () => {
     afterEach(cleanup);
 
-    it('should carry its word and its icon, and show its details on focus', () => {
-        render(
-            <I18nProvider>
-                <VerdictChip trend={RISING} windows="the windows" />
-            </I18nProvider>,
-        );
+    it('should carry its word and its icon, and be described by its details even closed', () => {
+        const { trigger, tip } = chip();
 
-        const chip = screen.getByRole('button', { name: 'Rising +38%' });
-        expect(chip.querySelector('svg')).not.toBeNull();
-        const tooltip = screen.getByRole('tooltip', { hidden: true });
-        expect(chip.getAttribute('aria-describedby')).toBe(tooltip.id);
-        // Hidden, it still describes the chip, and it is never part of the chip's own words.
-        expect(tooltip.hidden).toBe(true);
-        expect(chip.contains(tooltip)).toBe(false);
-        expect(tooltip.textContent).toContain(en.drops.verdict.rates('4.6', '3.3'));
+        expect(trigger.querySelector('svg')).not.toBeNull();
+        expect(trigger.getAttribute('aria-describedby')).toBe(tip.id);
+        expect(trigger.getAttribute('aria-controls')).toBe(tip.id);
+        expect(trigger.getAttribute('aria-expanded')).toBe('false');
+        expect(tip.hidden).toBe(true);
+        expect(trigger.contains(tip)).toBe(false);
+        expect(tip.textContent).toContain(en.drops.verdict.rates('4.6', '3.3'));
+    });
 
-        fireEvent.focus(chip);
-        expect(tooltip.hidden).toBe(false);
+    it('should show on hover, stay while the pointer crosses into it, and go once it left both', async () => {
+        const { trigger, tip } = chip();
+
+        fireEvent.mouseEnter(trigger);
+        expect(tip.hidden).toBe(false);
+        expect(trigger.getAttribute('aria-expanded')).toBe('true');
         expect(screen.getByRole('tooltip').textContent).toContain(
             en.drops.verdict.interval('+38%', '+12%', '+70%'),
         );
-        expect(tooltip.textContent).toContain('the windows');
+
+        // On its way to the tip, which can be hovered, unlike a title.
+        fireEvent.mouseLeave(trigger);
+        fireEvent.mouseEnter(tip);
+        await act(() => new Promise((resolve) => setTimeout(resolve, 200)));
+        expect(tip.hidden).toBe(false);
+
+        fireEvent.mouseLeave(tip);
+        await act(() => new Promise((resolve) => setTimeout(resolve, 200)));
+        expect(tip.hidden).toBe(true);
+    });
+
+    it('should stay open once clicked, and close on Escape or a second click', async () => {
+        const { trigger, tip } = chip();
+
+        fireEvent.click(trigger);
+        fireEvent.mouseLeave(trigger);
+        await act(() => new Promise((resolve) => setTimeout(resolve, 200)));
+        expect(tip.hidden).toBe(false);
 
         fireEvent.keyDown(window, { key: 'Escape' });
-        expect(tooltip.hidden).toBe(true);
+        expect(tip.hidden).toBe(true);
+
+        fireEvent.click(trigger);
+        expect(tip.hidden).toBe(false);
+        fireEvent.click(trigger);
+        expect(tip.hidden).toBe(true);
+    });
+
+    it('should close when something else is pressed', () => {
+        const { trigger, tip } = chip();
+
+        fireEvent.click(trigger);
+        fireEvent.pointerDown(document.body);
+        expect(tip.hidden).toBe(true);
     });
 });

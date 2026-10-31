@@ -233,24 +233,30 @@ export const SUMMARY_DAY: DropsSummary = {
     beforeTo: '2026-10-29T19:00:00Z',
 };
 
-/** Six hours of crashes: nobody played in the third, a crash at 21:40, a build change at 22:00. */
+/** 30 October 2026, 17:00 in Paris. */
+const SERIES_FROM = 1_793_376_000;
+
+/**
+ * Six hours of crashes from 17:00 in Paris: nobody played in the third, a crash at 19:40 back at
+ * 19:42, a build change at 20:00.
+ */
 export const SERIES: DropSeries = {
     range: '7d',
     category: 'crash',
-    from: 1_761_854_400,
+    from: SERIES_FROM,
     step: 3_600,
-    starts: Array.from({ length: 6 }, (_, index) => 1_761_854_400 + index * 3_600),
+    starts: Array.from({ length: 6 }, (_, index) => SERIES_FROM + index * 3_600),
     rates: [3.1, 4.2, null, 5, 6.4, 4.4],
     baseline: [null, 3.2, 3.4, 3.3, 3.1, 3],
     drops: [2, 3, 0, 4, 6, 3],
     markers: [
         {
-            at: 1_761_854_400 + 2 * 3_600 + 2_400,
+            at: SERIES_FROM + 2 * 3_600 + 2_400,
             kind: 'crash',
-            backOnlineAt: 1_761_854_400 + 2 * 3_600 + 2_520,
+            backOnlineAt: SERIES_FROM + 2 * 3_600 + 2_520,
         },
     ],
-    changes: [{ at: 1_761_854_400 + 3 * 3_600, build: 17000 }],
+    changes: [{ at: SERIES_FROM + 3 * 3_600, build: 17000 }],
 };
 
 export const SIGNATURES: SignatureTable = {
