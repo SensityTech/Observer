@@ -1,0 +1,393 @@
+use observer_domain::drops::stats;
+use observer_store::MetricsDatabase;
+use observer_store::metrics::drops::{Grouping, NewSignature};
+use observer_store::metrics::runs::{EndCause, RunKey, StartCause};
+use observer_store::metrics::sessions::{self, Closure, NewSession};
+use tempfile::TempDir;
+
+use super::*;
+
+/// Friday 2025-10-31 12:00 UTC.
+const NOW_MS: i64 = 1_761_912_000_000;
+const ADA: [u8; 16] = [1; 16];
+
+struct Lab {
+    _dir: TempDir,
+    metrics: MetricsDatabase,
+    next: i64,
+}
+
+impl Lab {
+    async fn new() -> Self {
+        let dir = tempfile::tempdir().unwrap();
+        let metrics = MetricsDatabase::open(dir.path().join("metrics.sqlite3"))
+            .await
+            .unwrap();
+        Self {
+            _dir: dir,
+            metrics,
+            next: 1,
+        }
+    }
+
+    async fn run(
+        &self,
+        generation: u32,
+        started_ms: i64,
+        ended: Option<(i64, EndCause)>,
+        build: u32,
+    ) -> RunKey {
+        let run = RunKey {
+            observer_started: NOW_MS - 400 * DAY_MS,
+            generation,
+        };
+        self.metrics
+            .write(move |tx| -> Result<(), StoreError> {
+                runs::start(tx, run, started_ms, StartCause::Restart)?;
+                runs::build(tx, run, build)?;
+                if let Some((ended_ms, cause)) = ended {
+                    runs::end(tx, run, ended_ms, cause)?;
+                }
+                Ok(())
+            })
+            .await
+            .unwrap();
+        run
+    }
+
+    /// A session played from `seen_ms` for `length_ms`, ended in `category`.
+    async fn play(
+        &mut self,
+        run: RunKey,
+        seen_ms: i64,
+        length_ms: i64,
+        category: DropCategory,
+        signature: Option<&'static str>,
+        player: Option<[u8; 16]>,
+    ) {
+        let id = self.next;
+        self.next += 1;
+        self.metrics
+            .write(move |tx| -> Result<(), StoreError> {
+                sessions::insert(
+                    tx,
+                    &NewSession {
+                        id,
+                        run,
+                        net_id: u32::try_from(id).unwrap(),
+                        joined_ms: Some(seen_ms),
+                        seen_ms,
+                    },
+                )?;
+                sessions::close(
+                    tx,
+                    &Closure {
+                        id,
+                        ended_ms: seen_ms + length_ms,
+                        length_ms: Some(length_ms),
+                        category,
+                        kind: (category == DropCategory::Kick).then_some(DropKind::Resource),
+                        native: None,
+                        resource: (category == DropCategory::Kick).then(|| "afk".to_owned()),
+                        crash_text: signature.map(str::to_owned),
+                        reason_text: None,
+                        loading: None,
+                        synthesized: false,
+                    },
+                )?;
+                if let Some(player) = player {
+                    tx.execute(
+                        "UPDATE player_session SET player = ?1 WHERE id = ?2",
+                        (player, id),
+                    )?;
+                }
+                if let Some(signature) = signature {
+                    let session = stored::unclassified(tx, 1000)?
+                        .into_iter()
+                        .find(|session| session.id == id)
+                        .unwrap();
+                    stored::classify(
+                        tx,
+                        &session,
+                        Grouping::Signature(NewSignature {
+                            signature,
+                            form: "error",
+                            module: None,
+                            game_build: None,
+                            label: None,
+                            resource: None,
+                            normaliser: 1,
+                        }),
+                        1,
+                    )?;
+                }
+                Ok(())
+            })
+            .await
+            .unwrap();
+    }
+
+    async fn read<T: Send + 'static>(
+        &self,
+        compute: impl FnOnce(&Connection) -> Result<T, StoreError> + Send + 'static,
+    ) -> T {
+        self.metrics.read(compute).await.unwrap()
+    }
+}
+
+fn now() -> Timestamp {
+    Timestamp::from_millisecond(NOW_MS).unwrap()
+}
+
+#[test]
+fn a_day_compares_today_since_midnight_with_yesterdays_same_hours() {
+    let paris = TimeZone::get("Europe/Paris").unwrap();
+
+    let windows = Windows::of(DropsRange::Day, now(), &paris);
+
+    // 13:00 in Paris: midnight there is 23:00 UTC the day before.
+    assert_eq!(windows.now, (NOW_MS - 13 * HOUR_MS, NOW_MS));
+    assert_eq!(windows.before, (NOW_MS - 37 * HOUR_MS, NOW_MS - DAY_MS));
+    assert_eq!(windows.from_ms, NOW_MS - DAY_MS);
+}
+
+#[test]
+fn a_week_compares_with_the_week_before() {
+    let windows = Windows::of(DropsRange::Week, now(), &TimeZone::UTC);
+
+    assert_eq!(windows.now, (NOW_MS - 7 * DAY_MS, NOW_MS));
+    assert_eq!(windows.before, (NOW_MS - 14 * DAY_MS, NOW_MS - 7 * DAY_MS));
+}
+
+#[tokio::test]
+async fn crashes_six_times_as_frequent_as_the_week_before_are_rising_and_one_player_is_named_as_their_source()
+{
+    let mut lab = Lab::new().await;
+    let run = lab.run(1, NOW_MS - 20 * DAY_MS, None, 3095).await;
+    // The same play each week: 50 sessions of an hour; 30 crashes now, 5 before.
+    for day in 0..14 {
+        for slot in 0..5 {
+            let seen = NOW_MS - (13 - day) * DAY_MS - 12 * HOUR_MS + slot * HOUR_MS;
+            let recent = day >= 7;
+            let crashing = if recent {
+                slot < 3
+            } else {
+                slot == 0 && day % 2 == 0 && day < 10
+            };
+            let (category, signature) = if crashing {
+                (DropCategory::Crash, Some("ERR_GFX_D3D_INIT"))
+            } else {
+                (DropCategory::Quit, None)
+            };
+            let player = (recent && crashing && slot == 0).then_some(ADA);
+            lab.play(run, seen, HOUR_MS, category, signature, player).await;
+        }
+    }
+
+    let summary = lab
+        .read(|conn| summary(conn, DropsRange::Week, now(), &TimeZone::UTC))
+        .await
+        .summary;
+
+    let crashes = summary
+        .tiles
+        .iter()
+        .find(|tile| tile.kind == TileKind::Crashes)
+        .unwrap();
+    assert_eq!(crashes.drops, 21);
+    assert_eq!(crashes.trend.verdict, TrendVerdict::Rising);
+    assert_eq!(crashes.spark.len(), 7 * 24);
+    assert_eq!(crashes.rate, Some(60.0));
+    // Ada made 7 of the 21 crashes: a third, more than 30 %.
+    assert!(
+        crashes
+            .one_player_share
+            .is_some_and(|share| (share - 1.0 / 3.0).abs() < 1e-9)
+    );
+    let share = summary
+        .categories
+        .iter()
+        .find(|row| row.category == DropCategory::Crash)
+        .unwrap()
+        .share;
+    assert!((share - 0.6).abs() < 1e-9);
+}
+
+#[tokio::test]
+async fn a_chart_leaves_a_gap_where_nobody_played_and_draws_the_baseline_from_the_weeks_before() {
+    let mut lab = Lab::new().await;
+    let run = lab.run(1, NOW_MS - 40 * DAY_MS, None, 3095).await;
+    let hour = NOW_MS - 3 * HOUR_MS;
+    let hour = hour - hour.rem_euclid(HOUR_MS);
+    for week in 0..=4 {
+        lab.play(
+            run,
+            hour - week * 7 * DAY_MS,
+            HOUR_MS / 2,
+            DropCategory::Crash,
+            None,
+            None,
+        )
+        .await;
+    }
+
+    let series = lab
+        .read(|conn| {
+            series(
+                conn,
+                DropsRange::Week,
+                ChartCategory::Crash,
+                now(),
+                &TimeZone::UTC,
+            )
+        })
+        .await;
+
+    let index = usize::try_from((hour / 1000 - series.from) / 3600).unwrap();
+    assert_eq!(series.rates.len(), 7 * 24);
+    // One crash in half an hour of play: 200 per 100 player-hours.
+    assert_eq!(series.rates[index], Some(200.0));
+    assert_eq!(series.baseline[index], Some(200.0));
+    assert_eq!(series.drops[index], 1);
+    assert_eq!(series.rates[index - 1], None);
+}
+
+#[tokio::test]
+async fn a_build_change_shows_the_rates_before_and_after_and_a_server_crash_its_players() {
+    let mut lab = Lab::new().await;
+    let old = lab
+        .run(
+            1,
+            NOW_MS - 5 * DAY_MS,
+            Some((NOW_MS - 2 * DAY_MS, EndCause::Stopped)),
+            3095,
+        )
+        .await;
+    let new = lab
+        .run(
+            2,
+            NOW_MS - 2 * DAY_MS,
+            Some((NOW_MS - DAY_MS, EndCause::Crashed)),
+            3258,
+        )
+        .await;
+    lab.play(old, NOW_MS - 3 * DAY_MS, HOUR_MS, DropCategory::Crash, None, None)
+        .await;
+    lab.play(
+        new,
+        NOW_MS - 2 * DAY_MS + HOUR_MS,
+        HOUR_MS,
+        DropCategory::Crash,
+        Some("ERR_NEW"),
+        None,
+    )
+    .await;
+    lab.play(
+        new,
+        NOW_MS - DAY_MS - HOUR_MS,
+        HOUR_MS,
+        DropCategory::ServerCrash,
+        None,
+        None,
+    )
+    .await;
+
+    let changes = lab
+        .read(|conn| changes(conn, DropsRange::Week, now(), &TimeZone::UTC))
+        .await;
+
+    let build = changes
+        .events
+        .iter()
+        .find(|event| event.kind == ChangeKind::Build)
+        .unwrap();
+    assert_eq!((build.build_from, build.build_to), (Some(3095), Some(3258)));
+    assert_eq!(build.new_signatures, ["ERR_NEW"]);
+    let crash = &build.before_after[0];
+    assert_eq!(
+        (crash.category, crash.trend.events_before, crash.trend.events_now),
+        (DropCategory::Crash, 1, 1)
+    );
+    let server = changes
+        .events
+        .iter()
+        .find(|event| event.kind == ChangeKind::ServerCrash)
+        .unwrap();
+    assert_eq!(server.players_dropped, Some(1));
+    assert!(!changes.snapshots);
+    assert!(changes.events.windows(2).all(|pair| pair[0].at >= pair[1].at));
+}
+
+#[tokio::test]
+async fn drops_late_in_runs_raise_the_last_uptime_bin() {
+    let mut lab = Lab::new().await;
+    for generation in 1..=6 {
+        let started = NOW_MS - 7 * DAY_MS + i64::from(generation) * DAY_MS;
+        let run = lab.run(generation, started, None, 3095).await;
+        for slot in 0..10 {
+            lab.play(
+                run,
+                started + slot * HOUR_MS,
+                HOUR_MS,
+                DropCategory::Quit,
+                None,
+                None,
+            )
+            .await;
+        }
+        for slot in 12..20 {
+            lab.play(
+                run,
+                started + slot * HOUR_MS,
+                HOUR_MS / 2,
+                DropCategory::Timeout,
+                None,
+                None,
+            )
+            .await;
+        }
+    }
+
+    let uptime = lab
+        .read(|conn| uptime(conn, DropsRange::Week, now(), &TimeZone::UTC))
+        .await;
+
+    let last = uptime.bins.last().unwrap();
+    assert_eq!(last.drops, 48);
+    assert_eq!(last.verdict, UptimeVerdict::Higher);
+    assert_eq!(uptime.bins[0].drops, 0);
+}
+
+#[tokio::test]
+async fn the_rates_export_has_one_row_per_day_with_every_category() {
+    let mut lab = Lab::new().await;
+    let run = lab.run(1, NOW_MS - 5 * DAY_MS, None, 3095).await;
+    lab.play(run, NOW_MS - 2 * DAY_MS, HOUR_MS, DropCategory::Kick, None, None)
+        .await;
+
+    let days = lab
+        .read(|conn| {
+            day_rates(
+                conn,
+                NOW_MS - 3 * DAY_MS - 12 * HOUR_MS,
+                NOW_MS,
+                NOW_MS,
+                &TimeZone::UTC,
+            )
+        })
+        .await;
+
+    assert_eq!(days.len(), 4);
+    let kicked = days.iter().find(|day| day.played_ms > 0).unwrap();
+    assert_eq!(kicked.day, "2025-10-29");
+    assert!(kicked.drops.contains(&(DropCategory::Kick, 1)));
+    assert_eq!(kicked.drops.len(), DropCategory::ALL.len());
+}
+
+#[test]
+fn a_median_needs_two_values() {
+    assert_eq!(median(&mut [3.0]), None);
+    assert_eq!(median(&mut [3.0, 1.0]), Some(2.0));
+    assert_eq!(median(&mut [3.0, 1.0, 2.0]), Some(2.0));
+    assert!(stats::per_hundred_hours(1, 0).is_none());
+}
