@@ -3578,6 +3578,7 @@ name = "observer-fxserver"
 version = "0.1.0"
 dependencies = [
  "getrandom 0.4.3",
+ "hmac",
  "http-body-util",
  "hyper",
  "hyper-util",
@@ -3589,6 +3590,7 @@ dependencies = [
  "observer-platform",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
  "test-assembler",
  "thiserror 2.0.21",

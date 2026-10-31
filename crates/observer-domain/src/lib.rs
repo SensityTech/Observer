@@ -9,6 +9,7 @@ pub mod accounts;
 pub mod api;
 pub mod artifacts;
 pub mod audit;
+pub mod changes;
 pub mod delegation;
 pub mod diagnostics;
 pub mod error;
