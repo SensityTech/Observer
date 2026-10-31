@@ -3,12 +3,14 @@ import { describe, expect, it } from 'vitest';
 import {
     formatBitRate,
     formatBytes,
+    formatCalendarDay,
     formatClock,
     formatDay,
     formatDuration,
     formatMilliseconds,
     formatNumber,
     formatPercent,
+    formatPlayTime,
     formatTimestamp,
     knownZone,
     plural,
@@ -155,5 +157,25 @@ describe('formatTimestamp', () => {
 
     it('should drop the seconds on request', () => {
         expect(formatTimestamp(moment, { seconds: false })).toBe('2026-10-28 14:02');
+    });
+});
+
+describe('formatPlayTime', () => {
+    it('should count play time in hours past the first, never in days', () => {
+        expect(formatPlayTime('en', 0)).toBe('0 s');
+        expect(formatPlayTime('en', 45_900)).toBe('45 s');
+        expect(formatPlayTime('en', 15 * 60_000 + 59_000)).toBe('15 min');
+        expect(formatPlayTime('en', (2 * 60 + 14) * 60_000)).toBe('2h 14m');
+        expect(formatPlayTime('en', 3 * 3_600_000)).toBe('3h');
+        expect(formatPlayTime('en', 50 * 3_600_000 + 5 * 60_000)).toBe('50h 5m');
+        expect(formatPlayTime('en', 312 * 3_600_000 + 47 * 60_000)).toBe('312h');
+        expect(formatPlayTime('en', 1_284 * 3_600_000)).toBe('1,284h');
+    });
+});
+
+describe('formatCalendarDay', () => {
+    it('should name a day of the API as it is written, whatever the zone of the browser', () => {
+        expect(formatCalendarDay('en', '2026-10-28')).toBe('Wed 28 Oct');
+        expect(formatCalendarDay('en', '2026-03-01', { weekday: false })).toBe('1 Mar');
     });
 });

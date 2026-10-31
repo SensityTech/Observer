@@ -98,6 +98,25 @@ export const formatDuration = (locale: string, totalSeconds: number) => {
     return hours % 24 === 0 ? `${n(days)}d` : `${n(days)}d ${n(hours % 24)}h`;
 };
 
+/**
+ * Play time, in the hours players and txAdmin count it in, never in days: `45 s`, `15 min`,
+ * `2h 14m`, `312h`. Past 100 hours the minutes are noise and left out. Rounded down: time not
+ * played yet is never shown.
+ */
+export const formatPlayTime = (locale: string, ms: number) => {
+    const n = (value: number) => formatNumber(locale, value);
+    const seconds = Math.floor(Math.max(0, ms) / 1000);
+    if (seconds < 60) {
+        return `${n(seconds)} s`;
+    }
+    const minutes = Math.floor(seconds / 60);
+    if (minutes < 60) {
+        return `${n(minutes)} min`;
+    }
+    const hours = Math.floor(minutes / 60);
+    return hours >= 100 || minutes % 60 === 0 ? `${n(hours)}h` : `${n(hours)}h ${n(minutes % 60)}m`;
+};
+
 const pad = (value: number) => String(value).padStart(2, '0');
 
 /** Tables and logs read dates in ISO order in every language: `2026-10-28 14:02:07`, local time. */
@@ -174,3 +193,7 @@ export const zoneOffset = (locale: string, zone: string, instant: string | numbe
     const offset = (name ?? 'GMT').replace('GMT', 'UTC');
     return offset === 'UTC+0' ? 'UTC' : offset;
 };
+
+/** A calendar day the API gives as `2026-10-28`, named as `formatDay` names one, never moved by a zone. */
+export const formatCalendarDay = (locale: string, day: string, { weekday = true } = {}) =>
+    formatDay(locale, `${day}T12:00:00Z`, 'UTC', { weekday });
