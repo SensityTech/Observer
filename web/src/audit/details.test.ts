@@ -184,4 +184,27 @@ describe('auditDetails', () => {
             'Crash: 2 · Files: a.dmp, a-full.dmp · Size: 500 bytes',
         );
     });
+
+    it('should word the players retentions as they were and became, and an import by its counts', () => {
+        const kept = { linkDays: 365, addressDays: 90, dayDays: 400, profileDays: 730 };
+        expect(
+            auditDetails(en, format, { from: kept, to: { ...kept, linkDays: 1, profileDays: null } }),
+        ).toBe(
+            'Before: (Identifiers and names: 365 days, Address fingerprints: 90 days, Play time per day: 400 days, Profiles: 730 days) · ' +
+                'After: (Identifiers and names: 1 day, Address fingerprints: 90 days, Play time per day: 400 days, Profiles: kept for good)',
+        );
+        expect(
+            auditDetails(en, format, {
+                bytes: 3_145_728,
+                read: 1_204,
+                written: 1_200,
+                imported: 1_150,
+                updated: 50,
+                forgotten: 3,
+                invalid: 1,
+            }),
+        ).toBe(
+            'Size: 3 MB · Read: 1,204 · Written: 1,200 · New: 1,150 · Updated: 50 · Skipped as forgotten: 3 · Invalid: 1',
+        );
+    });
 });

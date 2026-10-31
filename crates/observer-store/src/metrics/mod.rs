@@ -8,6 +8,7 @@ pub mod rollups;
 pub mod runs;
 pub mod samples;
 pub mod series;
+pub mod sessions;
 pub mod threads;
 
 use std::path::PathBuf;
@@ -25,6 +26,7 @@ pub use columns::{Affinity, Column, Kind, Values};
 const MIGRATIONS: &[M<'static>] = &[
     M::up(include_str!("../../migrations/metrics/0001_samples.sql")),
     M::up(include_str!("../../migrations/metrics/0002_depth.sql")),
+    M::up(include_str!("../../migrations/metrics/0003_sessions.sql")),
 ];
 
 const SHAPE: Shape = Shape {
@@ -68,6 +70,14 @@ impl MetricsDatabase {
         F: FnOnce(&Connection) -> Result<R, E> + Send + 'static,
     {
         self.inner.read(function).await
+    }
+
+    /// Writes the log back into the file and truncates it, so that what was overwritten leaves
+    /// both.
+    pub async fn checkpoint(&self) -> Result<(), StoreError> {
+        self.inner
+            .maintain(|conn| crate::database::checkpoint(conn))
+            .await
     }
 
     pub async fn close(self) -> Result<(), StoreError> {

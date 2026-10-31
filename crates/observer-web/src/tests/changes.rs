@@ -9,7 +9,7 @@ use crate::api::routes;
 use crate::gate::Gate;
 use observer_domain::permissions::Permissions;
 
-const CHANGES_VIEW: &str = "4000";
+const CHANGES_VIEW: &str = "10000";
 const DASHBOARD_VIEW: &str = "1";
 const STARTS: &str = "/api/servers/default/changes/starts";
 const DIFF: &str = "/api/servers/default/changes/diff";

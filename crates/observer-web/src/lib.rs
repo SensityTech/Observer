@@ -18,7 +18,8 @@ use std::sync::Arc;
 use axum::extract::Request;
 use axum::{Router, middleware};
 use observer_app::{
-    Accounts, Artifacts, AuditLog, Changes, Diagnostics, Files, Metrics, Schedule, Servers, Supervision,
+    Accounts, Artifacts, AuditLog, Changes, Diagnostics, Files, Metrics, Players, Schedule, Servers,
+    Supervision,
 };
 use observer_domain::about::Build;
 use tower_http::catch_panic::CatchPanicLayer;
@@ -46,6 +47,7 @@ pub struct AppState {
     pub artifacts: Artifacts,
     pub diagnostics: Diagnostics,
     pub files: Files,
+    pub players: Players,
     pub changes: Changes,
     pub live: Live,
     /// Cookies ignore ports, so the name carries the instance id: two Observers on one host never
@@ -67,6 +69,7 @@ pub struct Services {
     pub artifacts: Artifacts,
     pub diagnostics: Diagnostics,
     pub files: Files,
+    pub players: Players,
     pub changes: Changes,
 }
 
@@ -88,6 +91,7 @@ impl AppState {
             artifacts,
             diagnostics,
             files,
+            players,
             changes,
         } = services;
         Self {
@@ -101,6 +105,7 @@ impl AppState {
             artifacts,
             diagnostics,
             files,
+            players,
             changes,
             live: Live::new(),
             cookie: format!("observer_session_{instance_id}"),

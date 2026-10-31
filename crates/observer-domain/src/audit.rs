@@ -127,6 +127,13 @@ pub enum AuditAction {
     FileSessionDisconnected,
     FileSettingsChanged,
     FileHostKeyCreated,
+    /// Every trace of a player was erased on request. The target is the licence's keyed
+    /// fingerprint, never the licence.
+    PlayerForgotten,
+    /// txAdmin's players database was taken in. The details hold the file's size and counts only.
+    PlayersImported,
+    /// The retentions of the players' identities, play time per day and profiles changed.
+    PlayersRetentionChanged,
     /// A diff or a full file of the server's contents, once an hour per account, file and pair
     /// of starts.
     ChangeContentsViewed,
@@ -136,7 +143,7 @@ pub enum AuditAction {
 }
 
 impl AuditAction {
-    pub const ALL: [Self; 74] = [
+    pub const ALL: [Self; 77] = [
         Self::SetupCompleted,
         Self::SetupLinkCreated,
         Self::LoginSucceeded,
@@ -207,6 +214,9 @@ impl AuditAction {
         Self::FileSessionDisconnected,
         Self::FileSettingsChanged,
         Self::FileHostKeyCreated,
+        Self::PlayerForgotten,
+        Self::PlayersImported,
+        Self::PlayersRetentionChanged,
         Self::ChangeContentsViewed,
         Self::ChangeSettingsChanged,
         Self::ChangeContentsPurged,
@@ -285,6 +295,9 @@ impl AuditAction {
             Self::FileSessionDisconnected => "file_session_disconnected",
             Self::FileSettingsChanged => "file_settings_changed",
             Self::FileHostKeyCreated => "file_host_key_created",
+            Self::PlayerForgotten => "player_forgotten",
+            Self::PlayersImported => "players_imported",
+            Self::PlayersRetentionChanged => "players_retention_changed",
             Self::ChangeContentsViewed => "change_contents_viewed",
             Self::ChangeSettingsChanged => "change_settings_changed",
             Self::ChangeContentsPurged => "change_contents_purged",

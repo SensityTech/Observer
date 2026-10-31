@@ -140,7 +140,7 @@ async fn the_alerts_open_to_the_dashboard_and_the_records_to_their_own_permissio
 async fn a_crash_file_goes_to_the_owner_alone_with_the_password_entered_again() {
     let server = Server::new().await;
     let owner = server.owner().await;
-    let everything = server.member(&owner, "grace", "1fff").await;
+    let everything = server.member(&owner, "grace", "ffff").await;
     let id = server
         .crash_with(&[
             ("6c1f0b2e.dmp", 1_300),

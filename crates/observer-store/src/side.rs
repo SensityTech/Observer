@@ -121,6 +121,9 @@ fn open_blocking(path: &Path, shape: Shape) -> Result<Connection, StoreError> {
     conn.pragma_update(None, "trusted_schema", false)?;
     conn.pragma_update(None, "journal_size_limit", 64 * 1024 * 1024)?;
     conn.pragma_update(None, "foreign_keys", shape.foreign_keys)?;
+    // What is deleted is overwritten, not only unlinked, where that costs no I/O: a forgotten
+    // player's texts, a purged file's contents.
+    conn.pragma_update(None, "secure_delete", "FAST")?;
     conn.busy_timeout(Duration::from_secs(5))?;
     let verdict: String = conn.query_row("PRAGMA quick_check", [], |row| row.get(0))?;
     if verdict != "ok" {

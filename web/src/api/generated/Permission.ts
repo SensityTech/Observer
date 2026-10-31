@@ -15,6 +15,8 @@ export const Permission = {
     LogsDownload: 1n << 11n,
     DiagnosticsView: 1n << 12n,
     FilesManage: 1n << 13n,
-    ChangesView: 1n << 14n,
-    ChangesContent: 1n << 15n,
+    PlayersView: 1n << 14n,
+    PlayerIdentifiersView: 1n << 15n,
+    ChangesView: 1n << 16n,
+    ChangesContent: 1n << 17n,
 } as const;

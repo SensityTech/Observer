@@ -27,6 +27,7 @@ use crate::health::{self, HangCause, Health, HealthLimits, PlayerList, Players, 
 use crate::launch::{self, ServerLaunch};
 use crate::layout::{Flavour, Layout};
 use crate::perf::TickReport;
+use crate::players::{PlayerReport, PlayerReportKind};
 use crate::recovery::{Next, Recovery, RecoveryPolicy};
 use crate::stdin::{CommandRefusal, Credentials, StdinError, StdinWriter, SystemLine, UserCommand, Write};
 use crate::trace::{self, Trace, TraceDecoder, TraceKind};
@@ -46,6 +47,8 @@ const DEFAULT_PORT: u16 = 30120;
 const EVENTS: usize = 256;
 /// A burst of starts must not push the other events out, so the tree's go on a bus of their own.
 const PROCESS_EVENTS: usize = 1024;
+/// A restart of a full server reports a join or a drop for each of its players at once.
+const PLAYER_REPORTS: usize = 8192;
 /// How often the tree's members are compared with what its notifications said.
 const RECONCILE_EVERY: Duration = Duration::from_secs(5);
 /// A member younger than this is the notifications' to report: a fork may not have run its program
@@ -426,6 +429,7 @@ pub struct Supervisor {
     requests: mpsc::Sender<Request>,
     events: broadcast::Sender<Event>,
     processes: broadcast::Sender<TreeEvent>,
+    players: broadcast::Sender<PlayerReport>,
     status: watch::Receiver<Status>,
     readings: watch::Receiver<Readings>,
 }
@@ -437,6 +441,7 @@ impl Supervisor {
         let (requests, requests_rx) = mpsc::channel(REQUESTS);
         let events = broadcast::channel(EVENTS).0;
         let processes = broadcast::channel(PROCESS_EVENTS).0;
+        let players = broadcast::channel(PLAYER_REPORTS).0;
         let initial = Status {
             state: State::Stopped,
             generation: 0,
@@ -459,6 +464,7 @@ impl Supervisor {
             console,
             events: events.clone(),
             processes: processes.clone(),
+            players: players.clone(),
             status: status_tx,
             readings: readings_tx,
             requests: requests_rx,
@@ -486,6 +492,7 @@ impl Supervisor {
                 requests,
                 events,
                 processes,
+                players,
                 status,
                 readings,
             },
@@ -567,6 +574,12 @@ impl Supervisor {
     /// The processes each run's tree starts and ends, classified.
     pub fn processes(&self) -> broadcast::Receiver<TreeEvent> {
         self.processes.subscribe()
+    }
+
+    /// What the bridge reports about players. They stay off the event bus, which is printed and
+    /// logged, since a join carries the player's address.
+    pub fn player_reports(&self) -> broadcast::Receiver<PlayerReport> {
+        self.players.subscribe()
     }
 
     pub fn status(&self) -> watch::Receiver<Status> {
@@ -741,6 +754,7 @@ struct Actor {
     console: Arc<ConsoleHub>,
     events: broadcast::Sender<Event>,
     processes: broadcast::Sender<TreeEvent>,
+    players: broadcast::Sender<PlayerReport>,
     status: watch::Sender<Status>,
     readings: watch::Sender<Readings>,
     requests: mpsc::Receiver<Request>,
@@ -1315,6 +1329,15 @@ impl Actor {
         let Some(run) = self.run.as_mut().filter(|run| run.generation == trace.generation) else {
             return;
         };
+        if let Some(kind) = PlayerReportKind::from_trace(&trace.kind) {
+            let _ = self.players.send(PlayerReport {
+                generation: trace.generation,
+                at_ms: now_ms(),
+                received: Instant::now(),
+                kind,
+            });
+            return;
+        }
         let event = match Report::from_trace(&trace.kind) {
             Some(Report::Ready { .. } | Report::Heartbeat) => {
                 run.health.heartbeat(Instant::now());

@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Link, Outlet } from '@tanstack/react-router';
 import {
     CalendarClock,
+    Contact,
     FolderLock,
     LayoutDashboard,
     Menu as MenuIcon,
@@ -44,6 +45,7 @@ type NavEntry = {
         | '/schedule'
         | '/artifacts'
         | '/diagnostics'
+        | '/players'
         | '/server'
         | '/users'
         | '/files'
@@ -54,6 +56,8 @@ type NavEntry = {
     access: bigint | bigint[] | 'owner';
     /** Shows how many alerts are live. */
     alerts?: boolean;
+    /** Stays current on the pages under it, as a player's profile is under the players. */
+    nested?: boolean;
 };
 
 export function AppShell() {
@@ -112,6 +116,7 @@ export function AppShell() {
             access: Permission.DiagnosticsView,
             alerts: true,
         },
+        { to: '/players', label: t.nav.players, icon: Contact, access: Permission.PlayersView, nested: true },
     ];
     const administration: NavEntry[] = [
         { to: '/server', label: t.nav.server, icon: Server, access: 'owner' },
@@ -242,12 +247,12 @@ function NavEntries({
     return (
         <>
             {group && <p className="nav-group">{group}</p>}
-            {allowed.map(({ to, label, icon: Icon, alerts }) => (
+            {allowed.map(({ to, label, icon: Icon, alerts, nested }) => (
                 <Link
                     key={to}
                     to={to}
                     className="nav-item"
-                    activeOptions={{ exact: true }}
+                    activeOptions={{ exact: nested !== true }}
                     onClick={onNavigate}
                 >
                     <Icon size={16} strokeWidth={1.5} aria-hidden="true" />
