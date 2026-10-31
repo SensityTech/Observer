@@ -94,7 +94,8 @@ fn status(code: ErrorCode) -> StatusCode {
         | ErrorCode::KvpRollback
         | ErrorCode::NoBuildSelected
         | ErrorCode::CrashFileTooLarge
-        | ErrorCode::SetupBlocked => StatusCode::UNPROCESSABLE_ENTITY,
+        | ErrorCode::SetupBlocked
+        | ErrorCode::InvalidPlayersFile => StatusCode::UNPROCESSABLE_ENTITY,
         ErrorCode::JsonRequired => StatusCode::UNSUPPORTED_MEDIA_TYPE,
         ErrorCode::UnknownHost => StatusCode::MISDIRECTED_REQUEST,
         ErrorCode::InvalidUsername
@@ -111,7 +112,6 @@ fn status(code: ErrorCode) -> StatusCode {
         | ErrorCode::AddressSearch
         | ErrorCode::InvalidSearch
         | ErrorCode::InvalidPlayersSettings => StatusCode::BAD_REQUEST,
-        ErrorCode::InvalidPlayersFile => StatusCode::UNPROCESSABLE_ENTITY,
         ErrorCode::TooManyAttempts | ErrorCode::TooManySockets | ErrorCode::TooManyCommands => {
             StatusCode::TOO_MANY_REQUESTS
         }

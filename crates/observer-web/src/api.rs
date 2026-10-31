@@ -137,6 +137,8 @@ pub(crate) fn routes() -> Vec<Route> {
         route(M::GET,    "/servers/default/players/community", players, players::community),
         route(M::GET,    "/servers/default/players/settings",  Owner,   players::settings),
         route(M::PUT,    "/servers/default/players/settings",  erase,   players::change_settings),
+        route(M::GET,    "/servers/default/players/import",    Owner,   players::import_status),
+        route(M::POST,   "/servers/default/players/import",    erase,   players::import),
         route(M::GET,    "/servers/default/players/{id}",      players, players::profile),
         route(M::DELETE, "/servers/default/players/{id}",      erase,   players::forget),
     ]

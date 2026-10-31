@@ -683,5 +683,83 @@ pub fn checkpoint(conn: &Connection) -> Result<(), StoreError> {
     Ok(())
 }
 
+/// A player of txAdmin's players database.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Imported<'a> {
+    pub license: &'a str,
+    pub name: Option<&'a str>,
+    /// txAdmin's play time, kept apart from Observer's.
+    pub play_ms: i64,
+    pub joined: Timestamp,
+    pub last: Timestamp,
+    /// Validated, never an address.
+    pub others: &'a [(IdentifierKind, String)],
+    pub imported_at: Timestamp,
+    /// Given to the player if Observer never saw them.
+    pub pseudonym: [u8; 16],
+}
+
+/// Takes one of txAdmin's players in: the first visit is the earlier, the last visit the later,
+/// the name txAdmin's only when its last visit is later, and the imported time replaced, never
+/// added, so that running the import twice changes nothing. Links are imported ones until Observer
+/// sees them. Returns whether the player is new.
+pub fn import(tx: &Transaction<'_>, player: &Imported<'_>) -> Result<bool, StoreError> {
+    let known: Option<i64> = tx
+        .query_row(
+            "SELECT id FROM player WHERE license = ?1",
+            [player.license],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let (joined, last) = (Utc(player.joined), Utc(player.last));
+    let id = match known {
+        Some(id) => {
+            tx.execute(
+                "UPDATE player SET first_seen = min(first_seen, ?2),
+                     name = CASE WHEN ?4 IS NOT NULL AND ?3 > last_seen THEN ?4 ELSE name END,
+                     last_seen = max(last_seen, ?3), imported_ms = ?5, imported_at = ?6
+                 WHERE id = ?1",
+                params![
+                    id,
+                    joined,
+                    last,
+                    player.name,
+                    player.play_ms,
+                    Utc(player.imported_at)
+                ],
+            )?;
+            id
+        }
+        None => tx.query_row(
+            "INSERT INTO player (license, pseudonym, name, first_seen, last_seen, imported_ms, imported_at)
+             VALUES (?1, ?2, coalesce(?3, ''), ?4, ?5, ?6, ?7) RETURNING id",
+            params![
+                player.license,
+                player.pseudonym,
+                player.name,
+                joined,
+                last,
+                player.play_ms,
+                Utc(player.imported_at)
+            ],
+            |row| row.get(0),
+        )?,
+    };
+    for (kind, value) in player.others {
+        let identifier = identifier_id(tx, *kind, value)?;
+        tx.execute(
+            "INSERT INTO player_identifier (player, identifier, first_seen, last_seen, times, source)
+             VALUES (?1, ?2, ?3, ?4, 1, 'imported')
+             ON CONFLICT (player, identifier) DO UPDATE SET
+                 first_seen = min(first_seen, excluded.first_seen), last_seen = max(last_seen, excluded.last_seen)",
+            params![id, identifier, joined, last],
+        )?;
+    }
+    if let Some(name) = player.name {
+        record_name(tx, id, name, player.joined, player.last)?;
+    }
+    Ok(known.is_none())
+}
+
 #[cfg(test)]
 mod tests;

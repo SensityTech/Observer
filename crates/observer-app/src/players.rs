@@ -4,32 +4,33 @@
 //! and drops are two transactions rather than thousands.
 
 mod identity;
+mod import;
 mod redact;
 mod sessions;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write as _};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use jiff::tz::TimeZone;
 use jiff::{SignedDuration, Timestamp};
-use observer_domain::audit::AuditAction;
+use observer_domain::audit::{AuditAction, Outcome};
 use observer_domain::drops::{DropCategory, DropKind};
 use observer_domain::error::{ApiError, ErrorCode};
 use observer_domain::permissions::Permissions;
 use observer_domain::players::{
-    Community, CommunityDay, CommunityTotals, Confirmation, OnlinePlayer, OnlinePlayers, PlayDay, PlayerPage,
-    PlayerProfile, PlayerSort, PlayersSettings, Search, SearchRefusal,
+    Community, CommunityDay, CommunityTotals, Confirmation, ImportState, OnlinePlayer, OnlinePlayers,
+    PlayDay, PlayerPage, PlayerProfile, PlayerSort, PlayersImport, PlayersSettings, Search, SearchRefusal,
 };
 use observer_domain::schedule::ScheduleStatus;
 use observer_fxserver::players::PlayerReport;
 use observer_fxserver::supervisor::{Cause, Event, EventKind, Readings, State};
 use observer_store::metrics::runs::RunKey;
 use observer_store::metrics::sessions::{self as stored_sessions, Closure};
-use observer_store::players::{self as stored, Credit, PlayerFilter, PlayerQuery, Seen};
+use observer_store::players::{self as stored, Credit, Imported, PlayerFilter, PlayerQuery, Seen};
 use observer_store::{Database, MetricsDatabase, StoreError};
 use serde_json::json;
 use tokio::sync::broadcast::error::RecvError;
@@ -51,6 +52,9 @@ const PAGE: u32 = 50;
 const DROPS_SHOWN: u32 = 20;
 const ACTIVITY_DAYS: i64 = 90;
 const REQUESTS: usize = 16;
+/// An import writes this many players per transaction, so that logins never wait long.
+const IMPORT_BATCH: usize = 500;
+const IMPORT_EVERY: Duration = Duration::from_millis(100);
 /// Licences forgotten on request, as keyed fingerprints and dates: outside the backups, so that a
 /// restored backup cannot bring a forgotten player back.
 const FORGOTTEN_FILE: &str = "players-forgotten";
@@ -77,6 +81,7 @@ struct Inner {
     clock: Clock,
     schedule: watch::Receiver<ScheduleStatus>,
     requests: mpsc::Sender<Request>,
+    import: Arc<Mutex<Option<PlayersImport>>>,
 }
 
 /// The players' task; [`PlayersTask::close`] writes what it holds and ends it.
@@ -100,6 +105,11 @@ enum Request {
     Forget {
         player: i64,
         reply: oneshot::Sender<Result<Option<[u8; 16]>, Error>>,
+    },
+    Import {
+        parsed: import::Parsed,
+        caller: Caller,
+        reply: oneshot::Sender<Result<PlayersImport, Error>>,
     },
 }
 
@@ -138,6 +148,7 @@ impl Players {
         let next_id = metrics_db.read(stored_sessions::next_id).await?;
 
         let (requests, requests_rx) = mpsc::channel(REQUESTS);
+        let import = Arc::new(Mutex::new(None));
         let supervisor = supervision.supervisor();
         let stop = CancellationToken::new();
         let worker = Worker {
@@ -158,6 +169,8 @@ impl Players {
             later: Later::default(),
             failing: false,
             last_list: None,
+            importing: None,
+            import: Arc::clone(&import),
         };
         let task = tokio::spawn(worker.run(
             stop.clone(),
@@ -173,6 +186,7 @@ impl Players {
                 clock,
                 schedule,
                 requests,
+                import,
             }),
         };
         Ok((players, PlayersTask { stop, task }))
@@ -482,6 +496,46 @@ impl Players {
         Ok(())
     }
 
+    /// Takes txAdmin's players database in: read and checked whole first, then written in the
+    /// background, a few hundred players at a time. The path stays out of the audit log.
+    pub async fn import(&self, caller: &Caller, path: &str) -> Result<PlayersImport, Error> {
+        if self
+            .import_status()
+            .is_some_and(|import| import.state == ImportState::Writing)
+        {
+            return Err(ErrorCode::JobRunning.into());
+        }
+        let path = PathBuf::from(path);
+        let now = self.inner.clock.now();
+        let parsed = tokio::task::spawn_blocking(move || import::read(&path, now))
+            .await
+            .map_err(|_| Error::from(ErrorCode::Internal))?
+            .map_err(|problem| {
+                ApiError::new(ErrorCode::InvalidPlayersFile)
+                    .with("problem", serde_json::to_value(problem).unwrap_or_default())
+            })?;
+        let (reply, answer) = oneshot::channel();
+        self.inner
+            .requests
+            .send(Request::Import {
+                parsed,
+                caller: caller.clone(),
+                reply,
+            })
+            .await
+            .map_err(|_| Error::from(ErrorCode::ShuttingDown))?;
+        answer.await.map_err(|_| Error::from(ErrorCode::ShuttingDown))?
+    }
+
+    /// The import under way, or the last one since Observer started.
+    pub fn import_status(&self) -> Option<PlayersImport> {
+        self.inner
+            .import
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
     fn today(&self) -> (TimeZone, String) {
         let zone = zone_of(&self.inner.schedule.borrow());
         let today = self.inner.clock.now().to_zoned(zone.clone()).date().to_string();
@@ -523,6 +577,15 @@ struct Worker {
     later: Later,
     failing: bool,
     last_list: Option<Instant>,
+    importing: Option<Importing>,
+    import: Arc<Mutex<Option<PlayersImport>>>,
+}
+
+/// The players of an import still to write.
+struct Importing {
+    records: VecDeque<import::Record>,
+    caller: Caller,
+    status: PlayersImport,
 }
 
 impl Worker {
@@ -537,6 +600,7 @@ impl Worker {
         let mut flush = tokio::time::interval(FLUSH_EVERY);
         flush.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         let mut upkeep = tokio::time::interval(UPKEEP_EVERY);
+        let mut import_batch = tokio::time::interval(IMPORT_EVERY);
         upkeep.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             tokio::select! {
@@ -565,7 +629,11 @@ impl Worker {
                 },
                 _ = flush.tick() => self.flush().await,
                 _ = upkeep.tick() => self.upkeep().await,
+                _ = import_batch.tick(), if self.importing.is_some() => self.import_batch().await,
             }
+        }
+        if self.importing.is_some() {
+            self.finish_import(false).await;
         }
         // The server's stop just before is part of the run.
         while let Ok(report) = reports.try_recv() {
@@ -634,7 +702,141 @@ impl Worker {
             Request::Forget { player, reply } => {
                 let _ = reply.send(self.forget(player).await);
             }
+            Request::Import {
+                parsed,
+                caller,
+                reply,
+            } => {
+                let _ = reply.send(self.start_import(parsed, caller).await);
+            }
         }
+    }
+
+    /// Starts writing an import, without the players whose licence was forgotten: the file of
+    /// forgotten licences is taken in first, as txAdmin's database still holds every one of them.
+    async fn start_import(&mut self, parsed: import::Parsed, caller: Caller) -> Result<PlayersImport, Error> {
+        if self.importing.is_some() {
+            return Err(ErrorCode::JobRunning.into());
+        }
+        apply_forgotten(&self.db, &self.metrics, &self.fingerprints, &self.forgotten_file).await?;
+        let forgotten = self.db.read(stored::forgotten).await?;
+        let read = parsed.records.len() as u64 + parsed.invalid;
+        let (records, skipped): (Vec<_>, Vec<_>) = parsed
+            .records
+            .into_iter()
+            .partition(|record| !forgotten.contains_key(&self.fingerprints.license(&record.license)));
+        let status = PlayersImport {
+            state: ImportState::Writing,
+            started_at: self.clock.now(),
+            finished_at: None,
+            bytes: parsed.bytes,
+            read,
+            written: 0,
+            imported: 0,
+            updated: 0,
+            forgotten: skipped.len() as u64,
+            invalid: parsed.invalid,
+        };
+        self.publish_import(&status);
+        self.importing = Some(Importing {
+            records: records.into(),
+            caller,
+            status: status.clone(),
+        });
+        Ok(status)
+    }
+
+    async fn import_batch(&mut self) {
+        let Some(importing) = self.importing.as_mut() else {
+            return;
+        };
+        let count = importing.records.len().min(IMPORT_BATCH);
+        let batch: Vec<import::Record> = importing.records.drain(..count).collect();
+        let pseudonyms: Vec<[u8; 16]> = batch.iter().map(|_| self.pseudonyms.next()).collect();
+        let at = self.clock.now();
+        let written = self
+            .db
+            .write(move |tx| -> Result<u64, StoreError> {
+                let mut new = 0;
+                for (record, pseudonym) in batch.iter().zip(pseudonyms) {
+                    let imported = Imported {
+                        license: &record.license,
+                        name: record.name.as_deref(),
+                        play_ms: record.play_ms,
+                        joined: record.joined,
+                        last: record.last,
+                        others: &record.others,
+                        imported_at: at,
+                        pseudonym,
+                    };
+                    new += u64::from(stored::import(tx, &imported)?);
+                }
+                Ok(new)
+            })
+            .await;
+        match written {
+            Ok(new) => {
+                let Some(importing) = self.importing.as_mut() else {
+                    return;
+                };
+                importing.status.written += count as u64;
+                importing.status.imported += new;
+                importing.status.updated += count as u64 - new;
+                let status = importing.status.clone();
+                let done = importing.records.is_empty();
+                self.publish_import(&status);
+                if done {
+                    self.finish_import(true).await;
+                }
+            }
+            Err(error) => {
+                warn!(%error, "the import of txAdmin's players stopped; running it again finishes it");
+                self.finish_import(false).await;
+            }
+        }
+    }
+
+    /// Ends the import, applies the retentions at once to what came in already expired, and audits
+    /// it with its counts only.
+    async fn finish_import(&mut self, finished: bool) {
+        let Some(mut importing) = self.importing.take() else {
+            return;
+        };
+        if finished {
+            self.upkeep().await;
+        }
+        let now = self.clock.now();
+        importing.status.state = if finished {
+            ImportState::Finished
+        } else {
+            ImportState::Failed
+        };
+        importing.status.finished_at = Some(now);
+        self.publish_import(&importing.status);
+        let status = &importing.status;
+        let record = Record::by(&importing.caller, AuditAction::PlayersImported)
+            .target(Servers::DEFAULT)
+            .outcome(if finished {
+                Outcome::Success
+            } else {
+                Outcome::Failure
+            })
+            .details(json!({
+                "bytes": status.bytes,
+                "read": status.read,
+                "written": status.written,
+                "imported": status.imported,
+                "updated": status.updated,
+                "forgotten": status.forgotten,
+                "invalid": status.invalid,
+            }));
+        if let Err(error) = self.db.write(move |tx| record.write(tx, now)).await {
+            warn!(%error, "cannot audit the import of txAdmin's players");
+        }
+    }
+
+    fn publish_import(&self, status: &PlayersImport) {
+        *self.import.lock().unwrap_or_else(PoisonError::into_inner) = Some(status.clone());
     }
 
     fn connected(&self) -> Vec<Connected> {

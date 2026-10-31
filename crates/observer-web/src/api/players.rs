@@ -7,7 +7,8 @@ use axum::http::StatusCode;
 use axum::{Extension, Json};
 use observer_app::Caller;
 use observer_domain::players::{
-    Community, OnlinePlayers, PlayerPage, PlayerProfile, PlayerSort, PlayersSettings,
+    Community, OnlinePlayers, PlayerPage, PlayerProfile, PlayerSort, PlayersImport, PlayersImportRequest,
+    PlayersSettings,
 };
 use serde::Deserialize;
 
@@ -64,6 +65,21 @@ pub(crate) async fn forget(
 ) -> Result<StatusCode, Failure> {
     state.players.forget(&caller, id).await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// Starts the import of txAdmin's players database from a host path, once the file was read and
+/// checked whole.
+pub(crate) async fn import(
+    State(state): State<AppState>,
+    Extension(caller): Extension<Caller>,
+    JsonBody(request): JsonBody<PlayersImportRequest>,
+) -> Result<(StatusCode, Json<PlayersImport>), Failure> {
+    let import = state.players.import(&caller, &request.path).await?;
+    Ok((StatusCode::ACCEPTED, Json(import)))
+}
+
+pub(crate) async fn import_status(State(state): State<AppState>) -> Json<Option<PlayersImport>> {
+    Json(state.players.import_status())
 }
 
 pub(crate) async fn settings(State(state): State<AppState>) -> Result<Json<PlayersSettings>, Failure> {

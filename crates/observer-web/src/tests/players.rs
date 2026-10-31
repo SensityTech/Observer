@@ -245,3 +245,188 @@ async fn the_owner_changes_the_retentions_within_their_ranges() {
     let entries = server.audited("players_retention_changed").await;
     assert_eq!(entries[0]["details"]["to"]["linkDays"], 180);
 }
+
+/// A players database as txAdmin writes it: Ada, whom Observer already saw, and Grace.
+fn players_database(version: u64) -> Value {
+    json!({
+        "version": version,
+        "players": [
+            {
+                "license": &LICENSE[8..],
+                "ids": [LICENSE, format!("discord:{DISCORD}"), "steam:110000112345678"],
+                "hwids": [],
+                "displayName": "Ada (old)",
+                "pureName": "ada",
+                "playTime": 600,
+                "tsJoined": 1_600_000_000,
+                "tsLastConnection": 1_730_000_000,
+            },
+            {
+                "license": "ffffffffffffffffffffffffffffffffffffffff",
+                "ids": ["discord:999999999999999999"],
+                "hwids": [],
+                "displayName": "Grace",
+                "pureName": "grace",
+                "playTime": 60,
+                "tsJoined": 1_730_000_000,
+                "tsLastConnection": 1_735_000_000,
+                "notes": { "text": "never read", "lastAdmin": "x", "tsLastEdit": 1 },
+            },
+            { "license": "nope", "ids": [], "hwids": [] },
+        ],
+        "actions": [{ "type": "ban", "reason": "never read" }],
+    })
+}
+
+impl Server {
+    async fn import_finished(&self, owner: &Session, path: &std::path::Path) -> Value {
+        let started = self
+            .call(
+                Method::POST,
+                "/api/servers/default/players/import",
+                Some(owner),
+                Some(json!({ "path": path })),
+            )
+            .await;
+        assert_eq!(started.status, StatusCode::ACCEPTED, "{}", started.text);
+        for _ in 0..200 {
+            let status = self
+                .call(
+                    Method::GET,
+                    "/api/servers/default/players/import",
+                    Some(owner),
+                    None,
+                )
+                .await
+                .json();
+            if status["state"] != "writing" {
+                return status;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        panic!("the import did not finish");
+    }
+}
+
+#[tokio::test]
+async fn txadmins_players_come_in_apart_and_twice_changes_nothing() {
+    let server = Server::new().await;
+    let owner = server.owner().await;
+    let ada = server.seen_player().await;
+    let file = server.dir.path().join("playersDB.json");
+    std::fs::write(&file, players_database(5).to_string()).unwrap();
+    server.reauthenticate_owner(&owner).await;
+
+    let first = server.import_finished(&owner, &file).await;
+    let second = server.import_finished(&owner, &file).await;
+
+    assert_eq!(first["state"], "finished");
+    assert_eq!(
+        (
+            &first["read"],
+            &first["imported"],
+            &first["updated"],
+            &first["invalid"]
+        ),
+        (&json!(3), &json!(1), &json!(1), &json!(1))
+    );
+    assert_eq!((&second["imported"], &second["updated"]), (&json!(0), &json!(2)));
+    let profile = server
+        .call(
+            Method::GET,
+            &format!("/api/servers/default/players/{ada}"),
+            Some(&owner),
+            None,
+        )
+        .await
+        .json();
+    assert_eq!(profile["name"], "Ada");
+    assert_eq!(profile["importedMs"], 600 * 60_000);
+    assert_eq!(profile["playMs"], 0);
+    assert_eq!(profile["firstSeen"], "2020-09-13T12:26:40Z");
+    let steam = profile["identifiers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|identifier| identifier["kind"] == "steam")
+        .unwrap()
+        .clone();
+    assert_eq!(steam["imported"], true);
+    let discord = profile["identifiers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|identifier| identifier["kind"] == "discord")
+        .unwrap()
+        .clone();
+    assert_eq!(discord["imported"], false);
+    let entries = server.audited("players_imported").await;
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0]["details"]["bytes"], first["bytes"]);
+    assert!(!entries[0].to_string().contains("playersDB"));
+}
+
+#[tokio::test]
+async fn a_forgotten_player_stays_forgotten_through_an_import() {
+    let server = Server::new().await;
+    let owner = server.owner().await;
+    let ada = server.seen_player().await;
+    let file = server.dir.path().join("playersDB.json");
+    std::fs::write(&file, players_database(5).to_string()).unwrap();
+    server.reauthenticate_owner(&owner).await;
+    let forgotten = server
+        .call(
+            Method::DELETE,
+            &format!("/api/servers/default/players/{ada}"),
+            Some(&owner),
+            None,
+        )
+        .await;
+    assert_eq!(forgotten.status, StatusCode::NO_CONTENT);
+
+    let import = server.import_finished(&owner, &file).await;
+
+    assert_eq!(
+        (&import["forgotten"], &import["imported"]),
+        (&json!(1), &json!(1))
+    );
+    let found = server
+        .call(Method::GET, &search(&LICENSE[8..]), Some(&owner), None)
+        .await
+        .json();
+    assert_eq!(found["players"], json!([]));
+}
+
+#[tokio::test]
+async fn an_unreadable_players_database_is_refused_whole_and_only_the_owner_imports() {
+    let server = Server::new().await;
+    let owner = server.owner().await;
+    let investigator = server.member(&owner, "lovelace", PLAYER_IDENTIFIERS_VIEW).await;
+    let old = server.dir.path().join("old.json");
+    std::fs::write(&old, players_database(3).to_string()).unwrap();
+    server.reauthenticate_owner(&owner).await;
+    let import = |session, path: &std::path::Path| {
+        server.call(
+            Method::POST,
+            "/api/servers/default/players/import",
+            Some(session),
+            Some(json!({ "path": path })),
+        )
+    };
+
+    let by_staff = import(&investigator, &old).await;
+    let refused = import(&owner, &old).await;
+    let missing = import(&owner, &server.dir.path().join("none.json")).await;
+
+    assert_eq!(by_staff.status, StatusCode::FORBIDDEN);
+    assert_eq!(refused.status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(refused.json()["params"]["problem"], "unsupportedVersion");
+    assert_eq!(missing.json()["params"]["problem"], "missing");
+    assert_eq!(
+        server
+            .call(Method::GET, "/api/servers/default/players", Some(&owner), None)
+            .await
+            .json()["players"],
+        json!([])
+    );
+}
