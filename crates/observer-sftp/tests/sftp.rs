@@ -159,6 +159,7 @@ impl Lab {
             listener,
             files.clone(),
             host_key,
+            Vec::new(),
             stop.clone(),
         ));
         Self {
@@ -382,5 +383,39 @@ async fn a_pipeline_uploads_with_the_key_observer_made_and_showed_once() {
         .await
         .unwrap();
     assert_eq!(actor, "service +deploy-main");
+    lab.stop.cancel();
+}
+
+#[tokio::test]
+async fn a_refused_write_never_replaces_the_file_and_cfgs_and_folders_stay_put() {
+    let lab = Lab::new().await;
+    let sftp = lab.connect("linus", Arc::clone(&lab.key)).await.unwrap();
+    let manifest = lab.root.join("resources/[maps]/harbour/fxmanifest.lua");
+
+    // Past the rule's 1 MB, the write is refused and the close commits nothing.
+    let mut upload = sftp
+        .create("/resources/[maps]/harbour/fxmanifest.lua")
+        .await
+        .unwrap();
+    let _ = upload.write_all(&vec![b'x'; 1_200_000]).await;
+    let _ = upload.shutdown().await;
+    drop(upload);
+    assert_eq!(
+        std::fs::read_to_string(&manifest).unwrap(),
+        "fx_version 'cerulean'"
+    );
+
+    assert!(
+        sftp.create("/resources/[maps]/harbour/permissions.cfg")
+            .await
+            .is_err()
+    );
+    assert!(sftp.rename("/resources/[maps]", "/resources/maps").await.is_err());
+    assert!(lab.root.join("resources/[maps]/harbour").exists());
+    let left: Vec<_> = std::fs::read_dir(lab.root.join("resources/[maps]/harbour"))
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .collect();
+    assert_eq!(left, ["fxmanifest.lua"]);
     lab.stop.cancel();
 }

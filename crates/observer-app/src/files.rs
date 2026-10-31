@@ -71,6 +71,9 @@ pub struct Grant {
     pub root: String,
     pub max_rate: Option<u64>,
     pub daily_budget: Option<u64>,
+    /// The account's sign-in epoch at the login: signing out everywhere or a new password moves
+    /// it, which ends the session.
+    pub auth_epoch: Option<i64>,
 }
 
 #[derive(Clone)]
@@ -102,6 +105,11 @@ impl Files {
     /// Changes to groups and accesses, for the sessions they may end.
     pub fn changes(&self) -> watch::Receiver<()> {
         self.changes.subscribe()
+    }
+
+    /// Changes to accounts' sessions: a sign-out everywhere, a password changed or reset.
+    pub fn account_changes(&self) -> watch::Receiver<()> {
+        self.accounts.session_changes.subscribe()
     }
 
     pub async fn groups(&self) -> Result<Vec<Group>, Error> {
@@ -344,15 +352,18 @@ impl Files {
                     return Ok(Login::NoServer);
                 };
                 store::record_login(tx, access.id, key.id, &ip.to_string(), now)?;
+                let epoch = user.as_ref().map(|user| user.auth_epoch);
                 Ok::<_, Error>(Login::Granted(Grant {
                     access_id: access.id,
                     key_id: key.id,
                     user_id: user.as_ref().map(|user| user.id),
+
                     login: user.map_or_else(|| login.clone(), |user| user.username),
                     groups: groups.into_iter().map(|group| (group.id, group.rules)).collect(),
                     root: launch.settings.data_path,
                     max_rate: access.max_rate,
                     daily_budget: access.daily_budget,
+                    auth_epoch: epoch,
                 }))
             })
             .await
@@ -456,7 +467,9 @@ impl Files {
                     .map(|group| (group.id, group.rules))
                     .collect();
                 let user_usable = match access.user_id {
-                    Some(id) => users::get(conn, id)?.is_some_and(|user| !user.must_change_password),
+                    Some(id) => users::get(conn, id)?.is_some_and(|user| {
+                        !user.must_change_password && Some(user.auth_epoch) == grant.auth_epoch
+                    }),
                     None => true,
                 };
                 let root = launch::get(conn, SERVER)?.map(|launch| launch.settings.data_path);
@@ -752,6 +765,63 @@ impl Files {
             .await?;
         Err(error)
     }
+}
+
+/// Whether `editor` may reset the password of `user_id`, given what its file access reaches: a
+/// reset hands the account over, so an access holding a Code group takes the owner, and one
+/// holding any group takes `FILES_MANAGE` as well.
+pub(crate) fn may_reset(conn: &Connection, editor: &Account, user_id: i64) -> Result<(), Error> {
+    if editor.is_owner {
+        return Ok(());
+    }
+    let Some(access) = store::user_access(conn, user_id)? else {
+        return Ok(());
+    };
+    let groups = store::access_groups(conn, access.id)?;
+    if groups
+        .iter()
+        .any(|group| files::reach(&group.rules) == Reach::Code)
+    {
+        return Err(ErrorCode::OwnerOnly.into());
+    }
+    if !groups.is_empty()
+        && !editor
+            .permissions
+            .contains(observer_domain::permissions::Permissions::FILES_MANAGE)
+    {
+        return Err(ApiError::new(ErrorCode::Forbidden)
+            .with("permission", "filesManage")
+            .into());
+    }
+    Ok(())
+}
+
+/// Removes an account's SFTP keys as its password is reset, each removal audited by whoever
+/// reset it.
+pub(crate) fn forget_keys(
+    conn: &Connection,
+    user_id: i64,
+    username: &str,
+    record: &Record,
+    now: jiff::Timestamp,
+) -> Result<(), StoreError> {
+    let Some(access) = store::user_access(conn, user_id)? else {
+        return Ok(());
+    };
+    for key in store::delete_keys(conn, access.id)? {
+        record
+            .clone()
+            .action(AuditAction::FileKeyRemoved)
+            .target(username)
+            .details(json!({
+                "fingerprint": key.fingerprint,
+                "algorithm": key.algorithm,
+                "comment": key.comment,
+                "reason": "passwordReset",
+            }))
+            .write(conn, now)?;
+    }
+    Ok(())
 }
 
 /// The access a login names, with its account: the username for a person, `+name` for a pipeline.

@@ -140,6 +140,11 @@ impl Record {
         }
     }
 
+    pub(crate) fn action(mut self, action: AuditAction) -> Self {
+        self.action = action;
+        self
+    }
+
     pub(crate) fn target(mut self, target: impl Into<String>) -> Self {
         self.target = Some(target.into());
         self

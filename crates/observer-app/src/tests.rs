@@ -1879,3 +1879,77 @@ async fn an_sftp_login_needs_a_registered_key_on_a_usable_access_and_locks_after
     assert_eq!(failed[0].details["failures"], json!(5));
     assert_eq!(failed[0].target.as_deref(), Some("linus"));
 }
+
+#[tokio::test]
+async fn a_password_reset_takes_the_owner_for_code_access_and_drops_the_sftp_keys() {
+    use observer_store::files::{self as file_store, FileKeyRow};
+
+    let lab = Lab::new().await;
+    let owner = lab.owner().await;
+    let manager = lab.user(&owner, "grace", P::USERS_MANAGE | P::CONSOLE_VIEW).await;
+    lab.user(&owner, "linus", P::CONSOLE_VIEW).await;
+    let owner = lab.caller(&owner).await;
+    let manager = lab.caller(&manager).await;
+    let linus = lab
+        .db
+        .read(|conn| users::find(conn, "linus"))
+        .await
+        .unwrap()
+        .unwrap();
+    let (_, code_group, _) = file_groups(&lab, &owner).await;
+    lab.files
+        .set_user_groups(&owner, linus.id, vec![code_group.row.id])
+        .await
+        .unwrap();
+    let now = lab.clock.now();
+    lab.db
+        .write(move |tx| {
+            let access = file_store::user_access_or_new(tx, linus.id, now)?;
+            file_store::insert_key(
+                tx,
+                &FileKeyRow {
+                    id: 0,
+                    access_id: access.id,
+                    algorithm: "ssh-ed25519".to_owned(),
+                    public_key: vec![1],
+                    fingerprint: "SHA256:linus".to_owned(),
+                    comment: String::new(),
+                    created_at: now,
+                    expires_at: None,
+                    last_used_at: None,
+                    last_used_ip: None,
+                },
+            )?;
+            Ok::<_, StoreError>(())
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(
+        code(lab.accounts.reset_password(&manager, linus.id).await),
+        ErrorCode::OwnerOnly
+    );
+    assert!(
+        lab.entries(AuditAction::PermissionDenied)
+            .await
+            .iter()
+            .any(|entry| entry.details["refusal"] == json!("owner_only"))
+    );
+    assert!(
+        lab.files
+            .key_registered("linus".to_owned(), "SHA256:linus".to_owned())
+            .await
+            .unwrap()
+    );
+
+    lab.accounts.reset_password(&owner, linus.id).await.unwrap();
+    assert!(
+        !lab.files
+            .key_registered("linus".to_owned(), "SHA256:linus".to_owned())
+            .await
+            .unwrap()
+    );
+    let removed = lab.entries(AuditAction::FileKeyRemoved).await;
+    assert_eq!(removed.len(), 1);
+    assert_eq!(removed[0].details["reason"], json!("passwordReset"));
+}

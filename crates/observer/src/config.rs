@@ -12,6 +12,9 @@ use serde::Deserialize;
 #[derive(Debug, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
+    /// Where this configuration was read from, or would have been.
+    #[serde(skip)]
+    pub path: PathBuf,
     /// Relative paths are resolved against the configuration file's directory, so a service
     /// started from anywhere finds the same data.
     pub data_dir: PathBuf,
@@ -51,6 +54,7 @@ pub struct LogConfig {
 impl Default for Config {
     fn default() -> Self {
         Self {
+            path: PathBuf::from("observer.toml"),
             data_dir: PathBuf::from("data"),
             http: HttpConfig::default(),
             sftp: None,
@@ -120,6 +124,7 @@ impl Config {
             Err(error) => return Err(error).with_context(|| format!("cannot read {}", path.display())),
         };
 
+        config.path = path.to_path_buf();
         if config.data_dir.is_relative() {
             let base = path.parent().unwrap_or_else(|| Path::new(""));
             config.data_dir = base.join(&config.data_dir);

@@ -284,6 +284,32 @@ pub const NEVER_SHOW: &[&str] = &[
 /// config often a token, and upload files are Observer's own.
 pub const REFUSED_NAMES: &[&str] = &[".git", ".observer-upload-*"];
 
+/// Whether the entry at `path` is refused whatever the rules: a name refused anywhere; any `.cfg`
+/// file, since the cfg exec chain holds the server's secrets and is never reachable (decision 6),
+/// and until its targets are resolved every cfg is treated as one of them; FXServer's `cache`
+/// folder at the root; and anything under `refused`, the paths of Observer's own folders and
+/// files that lie inside the server folder.
+pub fn built_in_refusal(path: &[String], refused: &[Vec<String>]) -> bool {
+    let cfg = path.last().is_some_and(|name| {
+        name.len() > 4
+            && name
+                .get(name.len() - 4..)
+                .is_some_and(|end| end.eq_ignore_ascii_case(".cfg"))
+    });
+    let cache = path
+        .first()
+        .is_some_and(|first| first.eq_ignore_ascii_case("cache"));
+    let inside = refused.iter().any(|prefix| {
+        !prefix.is_empty()
+            && path.len() >= prefix.len()
+            && prefix
+                .iter()
+                .zip(path)
+                .all(|(a, b)| glob_matches(a, b, true) && glob_matches(b, a, true))
+    });
+    refused_by_name(path) || cfg || cache || inside
+}
+
 /// The prefix of Observer's temporary upload files.
 pub const UPLOAD_PREFIX: &str = ".observer-upload-";
 
@@ -568,7 +594,13 @@ fn folder_reaches(rule: &Rule, folder: &[String], ignore_case: bool) -> bool {
             .all(|(glob, component)| glob_matches(glob, component, ignore_case))
 }
 
+/// Whether a deny rule matches the entry at `path` or any folder above it: what a deny hides
+/// or protects, it hides or protects with everything inside.
 fn deny_matches(rule: &Rule, path: &[String]) -> bool {
+    (1..=path.len()).any(|length| deny_matches_entry(rule, &path[..length]))
+}
+
+fn deny_matches_entry(rule: &Rule, path: &[String]) -> bool {
     let Some((_, parent)) = path.split_last() else {
         return false;
     };

@@ -6,7 +6,7 @@ mod handler;
 
 use std::borrow::Cow;
 use std::net::{IpAddr, SocketAddr};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -109,13 +109,19 @@ pub fn config(host_key: PrivateKey) -> russh::server::Config {
 }
 
 /// Serves SFTP on `listener` until `stop` is cancelled.
+/// Serves SFTP on `listener` until `stop` is cancelled. `refused` are Observer's own folders and
+/// files: no session reaches them, wherever the server folder is.
 pub async fn serve(
     listener: TcpListener,
     files: Files,
     host_key: PrivateKey,
+    refused: Vec<PathBuf>,
     stop: CancellationToken,
 ) -> std::io::Result<()> {
-    let mut server = Server { files };
+    let mut server = Server {
+        files,
+        refused: Arc::new(refused),
+    };
     let running = server.run_on_socket(Arc::new(config(host_key)), &listener);
     let shutdown = running.handle();
     tokio::select! {
@@ -130,6 +136,7 @@ pub async fn serve(
 #[derive(Clone)]
 struct Server {
     files: Files,
+    refused: Arc<Vec<PathBuf>>,
 }
 
 impl russh::server::Server for Server {
@@ -138,6 +145,7 @@ impl russh::server::Server for Server {
     fn new_client(&mut self, peer: Option<SocketAddr>) -> Connection {
         Connection {
             files: self.files.clone(),
+            refused: Arc::clone(&self.refused),
             ip: peer.map_or(IpAddr::from([0, 0, 0, 0]), |peer| peer.ip()),
             grant: None,
             channel: None,
@@ -147,6 +155,7 @@ impl russh::server::Server for Server {
 
 struct Connection {
     files: Files,
+    refused: Arc<Vec<PathBuf>>,
     ip: IpAddr,
     grant: Option<Grant>,
     channel: Option<Channel<Msg>>,
@@ -206,11 +215,14 @@ impl russh::server::Handler for Connection {
             return Ok(());
         };
         let root = grant.root.clone();
-        let tree = tokio::task::spawn_blocking(move || ConfinedTree::open(Path::new(&root)))
-            .await
-            .map_err(std::io::Error::other)?;
-        let tree = match tree {
-            Ok(tree) => Arc::new(tree),
+        let refused = Arc::clone(&self.refused);
+        let opened = tokio::task::spawn_blocking(move || {
+            ConfinedTree::open(Path::new(&root)).map(|tree| (tree, inside(Path::new(&root), &refused)))
+        })
+        .await
+        .map_err(std::io::Error::other)?;
+        let (tree, refused) = match opened {
+            Ok((tree, refused)) => (Arc::new(tree), refused),
             Err(error) => {
                 tracing::warn!(%error, "the server folder cannot be opened for SFTP");
                 refuse(session, id);
@@ -220,13 +232,22 @@ impl russh::server::Handler for Connection {
         session
             .channel_success(id)
             .map_err(|error| Error::Io(std::io::Error::other(error.to_string())))?;
+        let watch = CancellationToken::new();
         tokio::spawn(revoke_on_change(
             self.files.clone(),
             grant.clone(),
             self.ip,
             session.handle(),
+            watch.clone(),
         ));
-        let handler = handler::Sftp::new(self.files.clone(), grant, self.ip.to_string(), tree);
+        let handler = handler::Sftp::new(
+            self.files.clone(),
+            grant,
+            self.ip.to_string(),
+            tree,
+            refused,
+            watch.drop_guard(),
+        );
         russh_sftp::server::run(channel.into_stream(), handler).await;
         Ok(())
     }
@@ -280,13 +301,26 @@ const RECHECK: Duration = Duration::from_secs(15);
 
 /// Ends the session once its access changes: a group or a rule, a key removed, the access
 /// disabled or expired, the server folder moved.
-async fn revoke_on_change(files: Files, grant: Grant, ip: IpAddr, handle: russh::server::Handle) {
+async fn revoke_on_change(
+    files: Files,
+    grant: Grant,
+    ip: IpAddr,
+    handle: russh::server::Handle,
+    session: CancellationToken,
+) {
     let mut changes = files.changes();
+    let mut accounts = files.account_changes();
     let mut recheck = tokio::time::interval(RECHECK);
     recheck.tick().await;
     loop {
         tokio::select! {
+            () = session.cancelled() => return,
             signal = changes.changed() => {
+                if signal.is_err() {
+                    return;
+                }
+            }
+            signal = accounts.changed() => {
                 if signal.is_err() {
                     return;
                 }
@@ -309,6 +343,47 @@ async fn revoke_on_change(files: Files, grant: Grant, ip: IpAddr, handle: russh:
             Err(error) => tracing::warn!(%error, "an SFTP session's access could not be checked again"),
         }
     }
+}
+
+/// The paths of `refused` that lie inside `root`, as components below it. Both sides are
+/// resolved first, so a link or another spelling of the same folder is caught; on Windows the
+/// comparison ignores case, as the file system does.
+fn inside(root: &Path, refused: &[PathBuf]) -> Vec<Vec<String>> {
+    let Ok(root) = std::fs::canonicalize(root) else {
+        return Vec::new();
+    };
+    let key = |path: &Path| {
+        let text = path.to_string_lossy().into_owned();
+        if cfg!(windows) { text.to_lowercase() } else { text }
+    };
+    let root_key = key(&root);
+    refused
+        .iter()
+        .filter_map(|path| std::fs::canonicalize(path).ok())
+        .filter_map(|path| {
+            let path_key = key(&path);
+            let rest = path_key.strip_prefix(&root_key)?;
+            if !rest.starts_with(std::path::MAIN_SEPARATOR) {
+                return None;
+            }
+            let components = path.strip_prefix(&root).ok().map_or_else(
+                // Another case of the same root: split the lowercased rest instead.
+                || {
+                    rest.split(std::path::MAIN_SEPARATOR)
+                        .filter(|part| !part.is_empty())
+                        .map(str::to_owned)
+                        .collect()
+                },
+                |relative| {
+                    relative
+                        .components()
+                        .map(|part| part.as_os_str().to_string_lossy().into_owned())
+                        .collect()
+                },
+            );
+            Some(components)
+        })
+        .collect()
 }
 
 /// Removes the temporary upload files a crash left, each under the root it was made in, and

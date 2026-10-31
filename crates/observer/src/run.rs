@@ -169,10 +169,22 @@ pub async fn run(config: Config, args: RunArgs) -> anyhow::Result<()> {
         stop.clone(),
     ));
     let sftp = sftp_listener.map(|(listener, host_key)| {
+        // Observer's own folders and files, should the server folder hold them.
+        let refused = [
+            Some(paths.root.clone()),
+            std::env::current_exe()
+                .ok()
+                .and_then(|exe| exe.parent().map(std::path::Path::to_path_buf)),
+            Some(config.path.clone()),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
         tokio::spawn(observer_sftp::serve(
             listener,
             files.clone(),
             host_key,
+            refused,
             stop.clone(),
         ))
     });

@@ -506,3 +506,43 @@ fn removing_a_group_lifts_a_denial_only_when_a_kept_group_allows_the_right() {
     assert!(lifts_denial(&no_cfg, &[&readers, &editors]));
     assert!(!lifts_denial(&readers, &[&editors]));
 }
+
+#[test]
+fn a_deny_on_a_folder_covers_everything_inside_it() {
+    let view = [allow("", Depth::Tree, &[], Rights::VIEW)];
+    let private = [deny(
+        "resources",
+        Depth::Folder,
+        &["private"],
+        Rights::of(&[Right::Read, Right::List]),
+    )];
+    let groups: [(i64, &[Rule]); 2] = [(1, &view), (2, &private)];
+
+    assert!(!decide(&groups, "resources/private/keys.lua", Right::Read).is_allowed());
+    assert!(!decide(&groups, "resources/private/sub/deep.lua", Right::Read).is_allowed());
+    let rules = RuleSet {
+        groups: &groups,
+        case: CaseRules::LINUX,
+    };
+    assert!(!rules.may_list(&path("resources/private/sub")));
+    assert!(decide(&groups, "resources/public/keys.lua", Right::Read).is_allowed());
+}
+
+#[test]
+fn built_in_refusals_take_every_cfg_the_cache_and_observers_own_folders() {
+    let observer = vec![path("observer/data")];
+    assert!(built_in_refusal(&path("server.cfg"), &observer));
+    assert!(built_in_refusal(
+        &path("resources/vmenu/config/permissions.CFG"),
+        &observer
+    ));
+    assert!(built_in_refusal(&path("cache/files/x"), &observer));
+    assert!(built_in_refusal(
+        &path("Observer/Data/observer.sqlite3"),
+        &observer
+    ));
+    assert!(built_in_refusal(&path("resources/.git/config"), &observer));
+    assert!(!built_in_refusal(&path("resources/cache/x.lua"), &observer));
+    assert!(!built_in_refusal(&path("observer/readme.txt"), &observer));
+    assert!(!built_in_refusal(&path("resources/config.lua"), &observer));
+}
