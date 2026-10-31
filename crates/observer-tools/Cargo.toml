@@ -6,6 +6,8 @@ rust-version.workspace = true
 publish.workspace = true
 
 [dependencies]
+getrandom.workspace = true
+jiff.workspace = true
 observer-domain.workspace = true
 observer-fxserver.workspace = true
 observer-gamefiles.workspace = true

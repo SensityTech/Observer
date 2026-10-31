@@ -4,6 +4,8 @@
 // Each test file uses some of these helpers; all are test code, though not in `#[test]` functions.
 #![allow(dead_code, clippy::unwrap_used)]
 
+pub mod fixes;
+
 use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};

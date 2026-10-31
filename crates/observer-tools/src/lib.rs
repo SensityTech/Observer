@@ -5,6 +5,7 @@
 
 pub mod archetypes;
 pub mod edit;
+pub mod fix;
 pub mod glob;
 pub mod manifest;
 pub mod resources;
