@@ -64,8 +64,8 @@ struct Inner {
     cache: Mutex<HashMap<String, Cached>>,
 }
 
-/// When an answer was asked first, and the answer once computed.
-type Cached = (Instant, Arc<OnceCell<Arc<dyn Any + Send + Sync>>>);
+/// An answer, once computed, and when it was.
+type Cached = Arc<OnceCell<(Instant, Arc<dyn Any + Send + Sync>)>>;
 
 /// The drops' task; [`DropsTask::close`] ends it.
 pub struct DropsTask {
@@ -169,13 +169,9 @@ impl Drops {
         let key = format!("{key}:{}", retention.session_days);
         let cell = {
             let mut cache = self.inner.cache.lock().unwrap_or_else(PoisonError::into_inner);
-            cache.retain(|_, (at, _)| at.elapsed() < CACHED_FOR);
-            Arc::clone(
-                &cache
-                    .entry(key)
-                    .or_insert_with(|| (Instant::now(), Arc::new(OnceCell::new())))
-                    .1,
-            )
+            // One being computed stays, so that its callers keep waiting for it.
+            cache.retain(|_, cell| cell.get().is_none_or(|(at, _)| at.elapsed() < CACHED_FOR));
+            Arc::clone(cache.entry(key).or_insert_with(|| Arc::new(OnceCell::new())))
         };
         let value = cell
             .get_or_try_init(|| async {
@@ -192,10 +188,10 @@ impl Drops {
                         Ok(value)
                     })
                     .await?;
-                Ok::<_, Error>(Arc::new(value) as Arc<dyn Any + Send + Sync>)
+                Ok::<_, Error>((Instant::now(), Arc::new(value) as Arc<dyn Any + Send + Sync>))
             })
             .await?;
-        Arc::clone(value)
+        Arc::clone(&value.1)
             .downcast::<T>()
             .map_err(|_| ErrorCode::Internal.into())
     }
@@ -239,7 +235,8 @@ impl Drops {
     }
 
     /// The crash signatures. What a client wrote reaches statistics viewers only once two players
-    /// wrote it: a free-text signature, and each example's own text.
+    /// wrote it: a signature of any form, since a modified client can write any, its rollups, and
+    /// each example's own text.
     pub async fn signatures(&self, range: DropsRange, held: Permissions) -> Result<SignatureTable, Error> {
         let base = self
             .cached(
@@ -249,10 +246,15 @@ impl Drops {
             .await?;
         let mut table = base.table.clone();
         if !held.contains(Permissions::PLAYERS_VIEW) {
+            table.modules.clone_from(&base.shared_modules);
+            table.builds.clone_from(&base.shared_builds);
             for entry in &mut table.signatures {
-                if entry.form.free_text() && base.players_ever.get(&entry.id).copied().unwrap_or(0) < 2 {
+                if base.players_ever.get(&entry.id).copied().unwrap_or(0) < 2 {
                     entry.signature = None;
                     entry.label = None;
+                    entry.module = None;
+                    entry.game_build = None;
+                    entry.resource = None;
                     entry.examples.clear();
                     continue;
                 }
@@ -371,7 +373,12 @@ impl Drops {
         let days = self
             .inner
             .metrics
-            .read(move |conn| compute::day_rates(conn, from_ms, to_ms, now_ms, &zone))
+            .read(move |conn| -> Result<_, StoreError> {
+                let snapshot = conn.unchecked_transaction()?;
+                let days = compute::day_rates(&snapshot, from_ms, to_ms, now_ms, &zone)?;
+                snapshot.commit()?;
+                Ok(days)
+            })
             .await?;
         let record = Record::by(caller, AuditAction::DropRatesExported)
             .target(Servers::DEFAULT)

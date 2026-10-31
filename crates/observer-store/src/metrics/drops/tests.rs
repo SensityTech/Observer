@@ -298,7 +298,7 @@ fn a_forgotten_players_free_text_signature_loses_its_text_unless_another_player_
         .collect::<Result<_, _>>()
         .unwrap();
     assert_eq!(left, ["text:forgotten:1", "text:shared"]);
-    let made = signatures_made(&conn, ADA, 0, i64::MAX).unwrap();
+    let made = signatures_made(&conn, Some(ADA), 0, i64::MAX).unwrap();
     assert_eq!(made, 0);
 }
 
@@ -519,4 +519,88 @@ fn a_free_text_signature_no_kept_session_holds_loses_its_text() {
         .query_row("SELECT signature FROM crash_signature", [], |row| row.get(0))
         .unwrap();
     assert_eq!(left, "text:expired:1");
+}
+
+#[test]
+fn hours_before_the_first_session_are_empty_without_reading_the_sessions() {
+    let mut conn = lab();
+    session(&mut conn, 1, 0, Some((30, DropCategory::Crash)));
+
+    let before = live(&conn, START_MS - 90 * 24 * HOUR_MS, START_MS, START_MS + HOUR_MS).unwrap();
+    let wide = window(
+        &conn,
+        START_MS - 30 * 24 * HOUR_MS,
+        START_MS + HOUR_MS,
+        START_MS + HOUR_MS,
+    )
+    .unwrap();
+
+    assert_eq!(before, Counts::default());
+    assert_eq!(wide.player_ms, 30 * MINUTE);
+}
+
+#[test]
+fn a_crash_of_fxserver_is_counted_an_hour_after_its_run_ended_with_no_session_open() {
+    let mut conn = lab();
+    session(&mut conn, 1, 0, Some((30, DropCategory::ServerCrash)));
+    conn.execute(
+        "UPDATE server_run SET ended_ms = ?1, end_cause = 'crashed'",
+        [START_MS + 30 * MINUTE],
+    )
+    .unwrap();
+    let count = |conn: &mut Connection, now_ms: i64| {
+        let tx = conn.transaction().unwrap();
+        let counted = count_crash_drops(&tx, now_ms).unwrap();
+        tx.commit().unwrap();
+        counted
+    };
+
+    let early = count(&mut conn, START_MS + 40 * MINUTE);
+    let later = count(&mut conn, START_MS + 120 * MINUTE);
+
+    assert_eq!((early, later), (0, 1));
+    let dropped: i64 = conn
+        .query_row("SELECT dropped FROM server_run", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(dropped, 1);
+}
+
+#[test]
+fn a_client_cannot_write_a_prefix_that_keeps_its_text_past_the_sweep() {
+    let mut conn = lab();
+    let tx = conn.transaction().unwrap();
+    signature_id(
+        &tx,
+        &NewSignature {
+            signature: "text:expired: call me on {n}",
+            form: "text",
+            module: None,
+            game_build: None,
+            label: None,
+            resource: None,
+            normaliser: 1,
+        },
+        START_MS,
+        Some(ADA),
+    )
+    .unwrap();
+    sweep(&tx).unwrap();
+    tx.commit().unwrap();
+
+    let left: String = conn
+        .query_row("SELECT signature FROM crash_signature", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(left, "text:expired:1");
+}
+
+#[test]
+fn the_sessions_kept_start_at_the_latest_cut_of_the_retention() {
+    let mut conn = lab();
+
+    let tx = conn.transaction().unwrap();
+    sessions::expire(&tx, START_MS + 90 * MINUTE).unwrap();
+    sessions::expire(&tx, START_MS + 30 * MINUTE).unwrap();
+    tx.commit().unwrap();
+
+    assert_eq!(kept_since(&conn).unwrap(), Some(START_MS + HOUR_MS));
 }

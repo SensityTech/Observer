@@ -246,9 +246,16 @@ pub fn per_hundred_hours(count: i64, ms: i64) -> f64 {
 /// Deletes the sessions that ended before `before_ms`, then the incidents and reason groups no
 /// session kept holds. The hourly rollups stay.
 pub fn expire(tx: &Transaction<'_>, before_ms: i64) -> Result<usize, StoreError> {
+    let cut_ms = drops::hour_of(before_ms) * 1000;
     let sessions = tx.execute(
         "DELETE FROM player_session WHERE ended_ms IS NOT NULL AND ended_ms < ?1",
-        [drops::hour_of(before_ms) * 1000],
+        [cut_ms],
+    )?;
+    // What counts players starts at the latest cut, whatever the retention says now.
+    tx.execute(
+        "INSERT INTO drop_kept (id, cut_ms) VALUES (1, ?1)
+         ON CONFLICT (id) DO UPDATE SET cut_ms = max(cut_ms, excluded.cut_ms)",
+        [cut_ms],
     )?;
     if sessions > 0 {
         drops::sweep(tx)?;

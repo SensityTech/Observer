@@ -56,6 +56,8 @@ ALTER TABLE player_session ADD COLUMN reason INTEGER REFERENCES drop_reason (id)
 ALTER TABLE player_session ADD COLUMN incident INTEGER REFERENCES drop_incident (id);
 -- The normaliser that classified this closed session; 0 until then.
 ALTER TABLE player_session ADD COLUMN classified INTEGER NOT NULL DEFAULT 0;
+-- The first drop of its category in its incident: an incident counts once per category.
+ALTER TABLE player_session ADD COLUMN incident_first INTEGER NOT NULL DEFAULT 0;
 
 CREATE INDEX player_session_signature ON player_session (signature, ended_ms) WHERE signature IS NOT NULL;
 CREATE INDEX player_session_reason ON player_session (reason) WHERE reason IS NOT NULL;
@@ -92,3 +94,9 @@ CREATE TABLE exposure_1h (
 -- The hours whose rollups are written. A session closed or reclassified late takes its hours out,
 -- so that they are computed again.
 CREATE TABLE drop_rolled (hour INTEGER PRIMARY KEY) STRICT, WITHOUT ROWID;
+
+-- Sessions that ended before this were deleted by the retention: what counts players starts here.
+CREATE TABLE drop_kept (
+    id     INTEGER PRIMARY KEY CHECK (id = 1),
+    cut_ms INTEGER NOT NULL
+) STRICT;

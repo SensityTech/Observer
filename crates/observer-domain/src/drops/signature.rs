@@ -285,6 +285,13 @@ fn module_shaped(module: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'-'))
 }
 
+/// A function FiveM could not name, by its address: `sub_141234567`.
+fn sub_address(name: &str) -> bool {
+    name.strip_prefix("sub_").is_some_and(|address| {
+        (1..=MOST_OFFSET).contains(&address.len()) && address.bytes().all(|byte| byte.is_ascii_hexdigit())
+    })
+}
+
 /// No run of more than five digits: a game build has four, a phone number ten.
 fn few_digits(text: &str) -> bool {
     text.split(|c: char| !c.is_ascii_digit())
@@ -308,7 +315,7 @@ fn symbol(text: &str) -> Option<Symbol<'_>> {
             .unwrap_or(rest.len());
         let name = &rest[..end];
         let shaped = (1..=MOST_SYMBOL).contains(&name.len())
-            && few_digits(name)
+            && (few_digits(name) || sub_address(name))
             && name.bytes().all(|byte| {
                 byte.is_ascii_alphanumeric()
                     || matches!(byte, b'_' | b':' | b'<' | b'>' | b'~' | b'$' | b'@' | b'?' | b'.')
@@ -1264,5 +1271,10 @@ mod tests {
             SignatureForm::Text
         );
         assert_eq!(signature("ERR_0612345678").form, SignatureForm::Text);
+        // A function FiveM could not name keeps its address, however many digits it has.
+        assert_eq!(
+            signature("GTA5_b3095.exe!sub_141234567 (0x1c)").signature,
+            "symbol:GTA5_b3095.exe!sub_141234567+0x1c"
+        );
     }
 }

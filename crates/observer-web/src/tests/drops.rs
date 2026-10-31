@@ -300,7 +300,7 @@ async fn the_drop_retention_is_the_owners_with_the_password_again_and_within_its
 }
 
 #[tokio::test]
-async fn an_example_text_only_one_player_crashed_with_stays_with_log_readers() {
+async fn what_only_one_players_crash_wrote_stays_with_log_readers() {
     let server = Server::new().await;
     let now_ms = server.clock.now().as_millisecond();
     let metrics = MetricsDatabase::open(server.dir.path().join("metrics.sqlite3"))
@@ -369,11 +369,11 @@ async fn an_example_text_only_one_player_crashed_with_stays_with_log_readers() {
         .json();
     let for_owner = server.call(Method::GET, path, Some(&owner), None).await.json();
 
-    assert_eq!(
-        for_statistics["signatures"][0]["signature"],
-        "error:ERR_GFX_D3D_INIT"
-    );
+    // One player's crash, whatever its form: a modified client can write any.
+    assert!(for_statistics["signatures"][0]["signature"].is_null());
     assert_eq!(for_statistics["signatures"][0]["examples"], json!([]));
+    assert_eq!(for_statistics["modules"][0]["key"], json!(null));
+    assert_eq!(for_owner["signatures"][0]["signature"], "error:ERR_GFX_D3D_INIT");
     assert_eq!(
         for_owner["signatures"][0]["examples"],
         json!(["ERR_GFX_D3D_INIT"])

@@ -253,7 +253,9 @@ fn rates_csv(days: &[DayRates]) -> String {
                 .find(|(known, _)| *known == category)
                 .map_or(0, |(_, drops)| *drops);
             cells.push(drops.to_string());
-            cells.push(if hours > 0.0 {
+            // The server's own stops and crashes are no player rate.
+            let players = !matches!(category, DropCategory::ServerStop | DropCategory::ServerCrash);
+            cells.push(if hours > 0.0 && players {
                 format!("{:.3}", drops as f64 * 100.0 / hours)
             } else {
                 String::new()

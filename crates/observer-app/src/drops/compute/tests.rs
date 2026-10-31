@@ -273,15 +273,18 @@ async fn a_build_change_shows_the_rates_before_and_after_and_a_server_crash_its_
         .await;
     lab.play(old, NOW_MS - 3 * DAY_MS, HOUR_MS, DropCategory::Crash, None, None)
         .await;
-    lab.play(
-        new,
-        NOW_MS - 2 * DAY_MS + HOUR_MS,
-        HOUR_MS,
-        DropCategory::Crash,
-        Some("ERR_NEW"),
-        None,
-    )
-    .await;
+    // Two players crash with the new signature: only then is it shown in the timeline.
+    for player in [[1; 16], [2; 16]] {
+        lab.play(
+            new,
+            NOW_MS - 2 * DAY_MS + HOUR_MS,
+            HOUR_MS,
+            DropCategory::Crash,
+            Some("ERR_NEW"),
+            Some(player),
+        )
+        .await;
+    }
     lab.play(
         new,
         NOW_MS - DAY_MS - HOUR_MS,
@@ -306,7 +309,7 @@ async fn a_build_change_shows_the_rates_before_and_after_and_a_server_crash_its_
     let crash = &build.before_after[0];
     assert_eq!(
         (crash.category, crash.trend.events_before, crash.trend.events_now),
-        (DropCategory::Crash, 1, 1)
+        (DropCategory::Crash, 1, 2)
     );
     let server = changes
         .events

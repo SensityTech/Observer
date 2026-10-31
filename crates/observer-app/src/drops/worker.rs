@@ -16,11 +16,12 @@ use observer_store::metrics::drops::{
 use observer_store::metrics::sessions as stored_sessions;
 use observer_store::players as stored_players;
 use tokio_util::sync::CancellationToken;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use super::Inner;
 
 const PAST_THE_MINUTE_MS: i64 = 20_000;
+const FIRST_ROUND_AFTER: Duration = Duration::from_secs(5);
 /// Sessions classified per transaction, and transactions per minute: a backlog never holds the
 /// writer for long.
 const CLASSIFY_BATCH: u32 = 200;
@@ -29,9 +30,16 @@ const CLASSIFY_ROUNDS: usize = 25;
 const HOURS_PER_WRITE: usize = 24;
 /// One player's crashes make at most this many new signatures a day; then `text:other`.
 const NEW_SIGNATURES_A_DAY: i64 = 5;
+/// The unconfirmed sessions together make at most this many, and never of a client's free text.
+const UNCONFIRMED_SIGNATURES_A_DAY: i64 = 20;
 const OTHER: &str = "text:other";
 
 pub(super) async fn run(inner: std::sync::Arc<Inner>, stop: CancellationToken) {
+    // Observer's start, its first samples and the players' recovery go first.
+    tokio::select! {
+        () = stop.cancelled() => return,
+        () = tokio::time::sleep(FIRST_ROUND_AFTER) => {}
+    }
     // A newer normaliser classifies the sessions kept again.
     match inner.metrics.write(|tx| stored::outdated(tx, NORMALISER)).await {
         Ok(0) => {}
@@ -105,11 +113,15 @@ pub(super) async fn tick(inner: &Inner, expired_hour: &mut Option<i64>) -> Resul
         let expired = inner
             .metrics
             .write(move |tx| -> Result<usize, StoreError> {
-                stored::count_crash_drops(tx)?;
+                stored::count_crash_drops(tx, now_ms)?;
                 stored::forget_producers(tx, producers_ms)?;
                 stored_sessions::expire(tx, before_ms)
             })
             .await?;
+        // A forget's checkpoint may have met a read: the journal is emptied here at the latest.
+        if let Err(error) = inner.metrics.checkpoint().await {
+            debug!(%error, "the statistics' journal could not be emptied; SQLite does it later");
+        }
         if expired > 0 {
             info!(
                 sessions = expired,
@@ -178,11 +190,15 @@ fn group(tx: &Transaction<'_>, session: &Unclassified, name: Option<&str>) -> Re
                 // signatures in the day before their crash, an unconfirmed one none at all.
                 let day_before = session.ended_ms - 24 * HOUR_MS;
                 let allowed = match session.player {
-                    Some(player) => {
-                        stored::signatures_made(tx, player, day_before, session.ended_ms)?
+                    Some(_) => {
+                        stored::signatures_made(tx, session.player, day_before, session.ended_ms)?
                             < NEW_SIGNATURES_A_DAY
                     }
-                    None => false,
+                    None => {
+                        !found.form.free_text()
+                            && stored::signatures_made(tx, None, day_before, session.ended_ms)?
+                                < UNCONFIRMED_SIGNATURES_A_DAY
+                    }
                 };
                 if !allowed {
                     found = other();

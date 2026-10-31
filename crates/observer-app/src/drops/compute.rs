@@ -353,7 +353,7 @@ impl Reads {
         let windows = Windows::of(range, now, zone);
         let now_ms = windows.to_ms;
         let shown = stored::window(conn, windows.from_ms, now_ms, now_ms)?;
-        let kept_from_ms = kept_from_ms.max(windows.from_ms);
+        let kept_from_ms = kept_since(conn, kept_from_ms)?.max(windows.from_ms);
         let kept = if kept_from_ms > windows.from_ms {
             stored::window(conn, kept_from_ms, now_ms, now_ms)?
         } else {
@@ -368,6 +368,12 @@ impl Reads {
             kept,
         })
     }
+}
+
+/// The first moment the sessions kept tell: the later of the retention and of its last cut, which
+/// is later when the retention was lengthened since.
+fn kept_since(conn: &Connection, retention_ms: i64) -> Result<i64, StoreError> {
+    Ok(stored::kept_since(conn)?.map_or(retention_ms, |cut| cut.max(retention_ms)))
 }
 
 fn at(ms: i64, or: Timestamp) -> Timestamp {
@@ -614,6 +620,10 @@ fn median(values: &mut [f64]) -> Option<f64> {
 /// many players ever produced each signature.
 pub(super) struct Signatures {
     pub table: SignatureTable,
+    /// The rollups statistics viewers get: what only one player's crashes name is folded into
+    /// the crashes that name none, as a client could write it.
+    pub shared_modules: Vec<CrashRollup>,
+    pub shared_builds: Vec<CrashRollup>,
     /// Over every session kept: a client's free text is shown to statistics viewers from 2.
     pub players_ever: HashMap<i64, i64>,
     /// For each signature, the players behind each of its examples, in the same order.
@@ -659,22 +669,18 @@ pub(super) fn signatures(
         .collect();
     let verdicts = stats::list_verdicts(&comparisons);
 
-    let mut modules: BTreeMap<Option<String>, (i64, i64)> = BTreeMap::new();
-    let mut builds: BTreeMap<Option<String>, (i64, i64)> = BTreeMap::new();
+    let mut rollups = Rollups::default();
     let mut entries = Vec::new();
     let mut example_players = HashMap::new();
     for (((subject, total), comparison), verdict) in subjects.iter().zip(&comparisons).zip(&verdicts) {
         let Some(row) = info.get(subject) else {
             continue;
         };
-        let module = modules.entry(row.module.clone()).or_default();
-        module.0 += total.drops;
-        module.1 += 1;
-        let build = builds
-            .entry(row.game_build.map(|build| build.to_string()))
-            .or_default();
-        build.0 += total.drops;
-        build.1 += 1;
+        rollups.add(
+            row,
+            total.drops,
+            players_ever.get(subject).copied().unwrap_or(0) >= 2,
+        );
         if entries.len() >= SIGNATURES_SHOWN {
             continue;
         }
@@ -708,24 +714,68 @@ pub(super) fn signatures(
             range,
             crashes,
             signatures: entries,
-            modules: rollups(modules, crashes),
-            builds: rollups(builds, crashes),
+            modules: rollups.modules(crashes),
+            builds: rollups.builds(crashes),
             kept_from: at(reads.kept_from_ms, now),
         },
+        shared_modules: rollups.shared_modules(crashes),
+        shared_builds: rollups.shared_builds(crashes),
         players_ever,
         example_players,
     })
 }
 
+/// Crashes by blamed module and by game build: every signature's, and for statistics viewers only
+/// those two players' crashes made, the others folded into the crashes that name none.
+#[derive(Default)]
+struct Rollups {
+    modules: BTreeMap<Option<String>, (i64, i64)>,
+    builds: BTreeMap<Option<String>, (i64, i64)>,
+    shared_modules: BTreeMap<Option<String>, (i64, i64)>,
+    shared_builds: BTreeMap<Option<String>, (i64, i64)>,
+}
+
+impl Rollups {
+    fn add(&mut self, row: &stored::SignatureRow, drops: i64, shared: bool) {
+        let build = row.game_build.map(|build| build.to_string());
+        for (map, key) in [
+            (&mut self.modules, row.module.clone()),
+            (&mut self.builds, build.clone()),
+            (&mut self.shared_modules, row.module.clone().filter(|_| shared)),
+            (&mut self.shared_builds, build.filter(|_| shared)),
+        ] {
+            let rollup = map.entry(key).or_default();
+            rollup.0 += drops;
+            rollup.1 += 1;
+        }
+    }
+
+    fn modules(&self, crashes: i64) -> Vec<CrashRollup> {
+        rollups(&self.modules, crashes)
+    }
+
+    fn builds(&self, crashes: i64) -> Vec<CrashRollup> {
+        rollups(&self.builds, crashes)
+    }
+
+    fn shared_modules(&self, crashes: i64) -> Vec<CrashRollup> {
+        rollups(&self.shared_modules, crashes)
+    }
+
+    fn shared_builds(&self, crashes: i64) -> Vec<CrashRollup> {
+        rollups(&self.shared_builds, crashes)
+    }
+}
+
 /// Crashes gathered by a key, the largest first.
-fn rollups(map: BTreeMap<Option<String>, (i64, i64)>, crashes: i64) -> Vec<CrashRollup> {
+fn rollups(map: &BTreeMap<Option<String>, (i64, i64)>, crashes: i64) -> Vec<CrashRollup> {
     let mut rollups: Vec<CrashRollup> = map
-        .into_iter()
+        .iter()
         .map(|(key, (drops, signatures))| CrashRollup {
-            key,
-            drops,
-            share: share(drops, crashes),
-            signatures,
+            key: key.clone(),
+            drops: *drops,
+            share: share(*drops, crashes),
+            signatures: *signatures,
         })
         .collect();
     rollups.sort_by_key(|rollup| std::cmp::Reverse(rollup.drops));
@@ -820,6 +870,7 @@ fn build_change(
     now_ms: i64,
     hours: &Hours,
     zone: &TimeZone,
+    players_ever: &HashMap<i64, i64>,
 ) -> Result<(Vec<BeforeAfter>, Vec<String>), StoreError> {
     let since = build_starts
         .iter()
@@ -857,11 +908,13 @@ fn build_change(
         .filter(|group| group.category == DropCategory::Crash && group.subject != 0)
         .map(|group| group.subject)
         .collect();
-    // A client's free text stays out: this list is shown to statistics viewers.
+    // Shown to statistics viewers: no free text, and only what two players' crashes made.
     let new_signatures = stored::signatures(conn, &ids)?
         .into_iter()
         .filter(|row| {
-            row.first_seen_ms >= start && !CrashForm::parse(&row.form).is_none_or(CrashForm::free_text)
+            row.first_seen_ms >= start
+                && !CrashForm::parse(&row.form).is_none_or(CrashForm::free_text)
+                && players_ever.get(&row.id).copied().unwrap_or(0) >= 2
         })
         .map(|row| row.signature)
         .collect();
@@ -908,14 +961,22 @@ pub(super) fn changes(
         .filter(|pair| build_changed(pair[0].build, pair[1].build))
         .map(|pair| pair[1].started_ms)
         .collect();
+    let players_ever = stored::players_by_subject(conn, DropCategory::Crash, None)?;
     let mut events = Vec::new();
     for (index, run) in runs.iter().enumerate() {
         if run.started_ms >= windows.from_ms {
             let previous = index.checked_sub(1).map(|index| &runs[index]);
             match previous.filter(|previous| build_changed(previous.build, run.build)) {
                 Some(previous) => {
-                    let (before_after, new_signatures) =
-                        build_change(conn, run.started_ms, &build_starts, now_ms, &hours, zone)?;
+                    let (before_after, new_signatures) = build_change(
+                        conn,
+                        run.started_ms,
+                        &build_starts,
+                        now_ms,
+                        &hours,
+                        zone,
+                        &players_ever,
+                    )?;
                     events.push(ChangeEvent {
                         build_from: previous.build,
                         before_after,
@@ -979,7 +1040,7 @@ pub(super) fn uptime(
 ) -> Result<DropUptime, StoreError> {
     let windows = Windows::of(range, now, zone);
     let now_ms = windows.to_ms;
-    let from_ms = windows.from_ms.max(kept_from_ms);
+    let from_ms = windows.from_ms.max(kept_since(conn, kept_from_ms)?);
     let mut played = [0i64; UPTIME_BINS.len()];
     let mut drops = [0i64; UPTIME_BINS.len()];
     let mut bursts: HashSet<(usize, i64)> = HashSet::new();
@@ -1077,9 +1138,13 @@ pub(super) fn day_rates(
             day: date,
             played_ms: counts.player_ms,
             sessions: counts.sessions,
+            // As the breakdown counts: an unknown drop is a player's.
             drops: DropCategory::ALL
                 .into_iter()
-                .map(|category| (category, tally(&counts, |group| group.category == category).drops))
+                .map(|category| {
+                    let pick = Pick::Category(category);
+                    (category, tally(&counts, |group| pick.takes(group)).drops)
+                })
                 .collect(),
         });
     }

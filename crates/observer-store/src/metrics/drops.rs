@@ -98,15 +98,16 @@ pub fn signature_known(conn: &Connection, signature: &str) -> Result<bool, Store
         .is_some())
 }
 
-/// How many signatures a player's crashes made from `from_ms` to `to_ms`, both included.
+/// How many signatures a player's crashes made from `from_ms` to `to_ms`, both included; with no
+/// player, how many the unconfirmed sessions made together.
 pub fn signatures_made(
     conn: &Connection,
-    player: [u8; 16],
+    player: Option<[u8; 16]>,
     from_ms: i64,
     to_ms: i64,
 ) -> Result<i64, StoreError> {
     Ok(conn.query_row(
-        "SELECT count(*) FROM crash_signature WHERE first_player = ?1 AND first_seen_ms BETWEEN ?2 AND ?3",
+        "SELECT count(*) FROM crash_signature WHERE first_player IS ?1 AND first_seen_ms BETWEEN ?2 AND ?3",
         params![player, from_ms, to_ms],
         |row| row.get(0),
     )?)
@@ -316,8 +317,12 @@ fn still_bursting(drops: &[(i64, i64, i64, Option<i64>)], at: usize) -> bool {
 /// Puts sessions in an incident, and takes their hours out of the rolled ones.
 fn mark(tx: &Transaction<'_>, incident: i64, sessions: &[i64]) -> Result<(), StoreError> {
     for &session in sessions {
+        // Sessions join in the order they ended: the first of a category is the earliest.
         let ended: i64 = tx.query_row(
-            "UPDATE player_session SET incident = ?2 WHERE id = ?1 RETURNING ended_ms",
+            "UPDATE player_session SET incident = ?2, incident_first = NOT EXISTS (
+                 SELECT 1 FROM player_session o
+                 WHERE o.incident = ?2 AND o.category = player_session.category AND o.id <> player_session.id)
+             WHERE id = ?1 RETURNING ended_ms",
             params![session, incident],
             |row| row.get(0),
         )?;
@@ -403,16 +408,20 @@ impl Counts {
 
 /// Counts the sessions themselves from `from_ms` to `to_ms`, open sessions played up to `now_ms`.
 pub fn live(conn: &Connection, from_ms: i64, to_ms: i64, now_ms: i64) -> Result<Counts, StoreError> {
+    // Hours before the first session are never rolled up: nothing kept can count in them.
+    let first: Option<i64> = conn
+        .prepare_cached("SELECT min(seen_ms) FROM player_session")?
+        .query_row([], |row| row.get(0))?;
+    if first.is_none_or(|first| to_ms <= first) {
+        return Ok(Counts::default());
+    }
     let mut statement = conn.prepare_cached(
         "SELECT category, kind,
                 CASE category WHEN 'crash' THEN coalesce(signature, 0) WHEN 'kick' THEN coalesce(resource, 0)
                     ELSE 0 END AS subject,
-                count(*), count(incident),
-                count(*) FILTER (WHERE incident IS NOT NULL AND NOT EXISTS (
-                    SELECT 1 FROM player_session o WHERE o.incident = s.incident AND o.category = s.category
-                        AND (o.ended_ms, o.id) < (s.ended_ms, s.id))),
+                count(*), count(incident), count(*) FILTER (WHERE incident_first = 1),
                 count(phase), count(*) FILTER (WHERE phase = 'loading')
-         FROM player_session s WHERE ended_ms >= ?1 AND ended_ms < ?2
+         FROM player_session WHERE ended_ms >= ?1 AND ended_ms < ?2
          GROUP BY category, coalesce(kind, ''), subject",
     )?;
     let mut counts = Counts::default();
@@ -1001,7 +1010,7 @@ pub fn log(conn: &Connection, filter: &LogFilter, limit: u32) -> Result<Vec<LogR
 
 /// Deletes the reason groups no kept session uses, and takes the text off the free-text
 /// signatures no kept session holds: the rollups and incidents keep counting, nothing keeps what a
-/// client wrote.
+/// client wrote. A signature renamed already is matched exactly: a client can write the prefix.
 pub fn sweep(tx: &Transaction<'_>) -> Result<usize, StoreError> {
     let reasons = tx.execute(
         "DELETE FROM drop_reason WHERE id NOT IN (SELECT reason FROM player_session WHERE reason IS NOT NULL)",
@@ -1009,23 +1018,32 @@ pub fn sweep(tx: &Transaction<'_>) -> Result<usize, StoreError> {
     )?;
     let signatures = tx.execute(
         "UPDATE crash_signature SET signature = 'text:expired:' || id, label = NULL
-         WHERE form IN ('text', 'exception') AND signature <> 'text:other'
-             AND signature NOT LIKE 'text:forgotten:%' AND signature NOT LIKE 'text:expired:%'
+         WHERE form IN ('text', 'exception')
+             AND signature NOT IN ('text:other', 'text:expired:' || id, form || ':forgotten:' || id)
              AND NOT EXISTS (SELECT 1 FROM player_session s WHERE s.signature = crash_signature.id)",
         [],
     )?;
     Ok(reasons + signatures)
 }
 
-/// Counts the players each crash or hang of FXServer dropped, once its run ended, before the
-/// sessions that tell it expire.
-pub fn count_crash_drops(tx: &Transaction<'_>) -> Result<usize, StoreError> {
+/// Counts the players each crash or hang of FXServer dropped, before the sessions that tell it
+/// expire: once its run ended an hour ago and has no session left open, so that the drops reported
+/// late are in.
+pub fn count_crash_drops(tx: &Transaction<'_>, now_ms: i64) -> Result<usize, StoreError> {
     Ok(tx.execute(
         "UPDATE server_run SET dropped = (
              SELECT count(*) FROM player_session s WHERE s.run = server_run.id AND s.category = 'serverCrash')
-         WHERE dropped IS NULL AND end_cause IN ('crashed', 'hung')",
-        [],
+         WHERE dropped IS NULL AND end_cause IN ('crashed', 'hung') AND ended_ms < ?1 - 3600000
+             AND NOT EXISTS (SELECT 1 FROM player_session s WHERE s.run = server_run.id AND s.ended_ms IS NULL)",
+        [now_ms],
     )?)
+}
+
+/// When the sessions kept start: the retention's last cut, if it ever cut.
+pub fn kept_since(conn: &Connection) -> Result<Option<i64>, StoreError> {
+    Ok(conn
+        .query_row("SELECT cut_ms FROM drop_kept WHERE id = 1", [], |row| row.get(0))
+        .optional()?)
 }
 
 /// Who made a signature only matters for the day's quota: the pseudonym goes after two days.
@@ -1036,12 +1054,14 @@ pub fn forget_producers(tx: &Transaction<'_>, before_ms: i64) -> Result<usize, S
     )?)
 }
 
-/// A forgotten player made no signature: a free-text one no other player's crash holds loses its
-/// text, whoever made it first. Call it before the sessions lose their pseudonym.
+/// A forgotten player made no signature: one no other player's crash holds loses what it says,
+/// whatever its form, whoever made it first. A client can write a structured form too. Call it
+/// before the sessions lose their pseudonym.
 pub fn forget(tx: &Transaction<'_>, pseudonym: [u8; 16]) -> Result<usize, StoreError> {
     let renamed = tx.execute(
-        "UPDATE crash_signature SET signature = 'text:forgotten:' || id, label = NULL
-         WHERE form IN ('text', 'exception') AND signature <> 'text:other'
+        "UPDATE crash_signature SET signature = form || ':forgotten:' || id, label = NULL, module = NULL,
+             game_build = NULL, resource = NULL
+         WHERE signature NOT IN ('text:other', 'text:expired:' || id, form || ':forgotten:' || id)
              AND (first_player = ?1 OR id IN (SELECT signature FROM player_session WHERE player = ?1))
              AND NOT EXISTS (
                  SELECT 1 FROM player_session s
