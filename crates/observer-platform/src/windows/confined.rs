@@ -40,7 +40,7 @@ use windows_sys::Win32::System::WindowsProgramming::{
     FILE_RENAME_FLAG_POSIX_SEMANTICS, FILE_RENAME_FLAG_REPLACE_IF_EXISTS,
 };
 
-use crate::confined::{Entry, EntryKind, RelativePath, TreeError, same_name_ignoring_case};
+use crate::confined::{Entry, EntryKind, RelativePath, Replace, TreeError, same_name_ignoring_case};
 
 const FOLDER_ACCESS: u32 = FILE_LIST_DIRECTORY | FILE_TRAVERSE | FILE_READ_ATTRIBUTES | SYNCHRONIZE;
 /// Folders are held without sharing deletion, so that nobody renames one under an operation.
@@ -286,6 +286,30 @@ impl ConfinedTree {
         target: &str,
         replace: bool,
     ) -> Result<(), TreeError> {
+        let replace = if replace { Replace::Alone } else { Replace::Never };
+        self.commit_as(folder, temporary, target, replace)
+    }
+
+    /// Makes the temporary file the folder's `target` as a replacing [`commit`](Self::commit)
+    /// does, even when other hard links share the file in its place: FXServer links every stream
+    /// file into its cache. The rename takes the name alone, so the other links keep the old
+    /// content. Every other refusal stays, and removes the temporary file.
+    pub fn commit_over_shared(
+        &self,
+        folder: &Folder,
+        temporary: TemporaryFile,
+        target: &str,
+    ) -> Result<(), TreeError> {
+        self.commit_as(folder, temporary, target, Replace::Shared)
+    }
+
+    fn commit_as(
+        &self,
+        folder: &Folder,
+        temporary: TemporaryFile,
+        target: &str,
+        replace: Replace,
+    ) -> Result<(), TreeError> {
         let committed = self.commit_inner(folder, &temporary, target, replace);
         if committed.is_err() {
             let _ = self.delete_handle(&temporary.file);
@@ -299,17 +323,17 @@ impl ConfinedTree {
         folder: &Folder,
         temporary: &TemporaryFile,
         target: &str,
-        replace: bool,
+        replace: Replace,
     ) -> Result<(), TreeError> {
         if temporary.folder != folder.path {
             return Err(TreeError::Escaped);
         }
         let path = child(folder, target)?;
         temporary.file.sync_all().map_err(TreeError::Io)?;
-        if replace {
-            self.check_replaced(folder, target, &path)?;
+        if replace != Replace::Never {
+            self.check_replaced(folder, target, &path, replace == Replace::Shared)?;
         }
-        retried(|| self.rename_handle(&temporary.file, &folder.handle, target, replace))
+        retried(|| self.rename_handle(&temporary.file, &folder.handle, target, replace != Replace::Never))
     }
 
     /// Removes a temporary file that will not be committed.
@@ -346,7 +370,7 @@ impl ConfinedTree {
         }
         self.check_final(&source, &source_path)?;
         if replace {
-            self.check_replaced(to, new_name, &target_path)?;
+            self.check_replaced(to, new_name, &target_path, false)?;
         }
         retried(|| self.rename_handle(&source, &to.handle, new_name, replace))
     }
@@ -481,8 +505,14 @@ impl ConfinedTree {
     }
 
     /// Checks the file a replacing rename would take the place of, when one is there: reached
-    /// under its own name, a regular file with one link, and not read-only.
-    fn check_replaced(&self, folder: &Folder, name: &str, path: &RelativePath) -> Result<(), TreeError> {
+    /// under its own name, a regular file with one link unless `shared`, and not read-only.
+    fn check_replaced(
+        &self,
+        folder: &Folder,
+        name: &str,
+        path: &RelativePath,
+        shared: bool,
+    ) -> Result<(), TreeError> {
         let existing = match nt_open(
             &folder.handle,
             name,
@@ -498,7 +528,7 @@ impl ConfinedTree {
         };
         let attributes = attributes(&existing).map_err(TreeError::Io)?;
         attributes.refuse_reparse()?;
-        if links(&existing)? > 1 {
+        if !shared && links(&existing)? > 1 {
             return Err(TreeError::HardLink);
         }
         self.check_final(&existing, path)?;

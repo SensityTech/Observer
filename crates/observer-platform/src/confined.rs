@@ -121,6 +121,19 @@ pub enum TreeError {
     Io(io::Error),
 }
 
+/// What a commit does with an entry already named as its target.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Replace {
+    /// Refuses the commit (`Exists`).
+    Never,
+    /// Takes the place of a regular file no other hard link shares.
+    Alone,
+    /// Takes the place of a regular file even when other hard links share it. The rename moves a
+    /// name, not the file: the other links keep the old content, and nothing is written through
+    /// them.
+    Shared,
+}
+
 /// One entry of a listing. Links, mount points, pipes, sockets and devices never appear.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Entry {
@@ -385,6 +398,149 @@ mod tests {
             tree.rename(source, "a.lua", &target, "a.lua", false),
             Err(TreeError::HardLink)
         ));
+    }
+
+    /// A stream file as FXServer leaves it: hard-linked into the resource's cache.
+    fn cached_stream_file(root: &Path) -> (std::path::PathBuf, std::path::PathBuf) {
+        let stream = root.join("resources/[maps]/harbour/stream");
+        let cache = root.join("cache/files/harbour/stream_cache");
+        fs::create_dir_all(&stream).unwrap();
+        fs::create_dir_all(&cache).unwrap();
+        fs::write(stream.join("harbour.ytyp"), "old").unwrap();
+        fs::hard_link(stream.join("harbour.ytyp"), cache.join("harbour.ytyp")).unwrap();
+        (stream.join("harbour.ytyp"), cache.join("harbour.ytyp"))
+    }
+
+    /// The folder's entries by name, in byte order.
+    fn names(tree: &ConfinedTree, folder: &crate::Folder) -> Vec<String> {
+        let mut names: Vec<_> = tree
+            .list(folder)
+            .unwrap()
+            .into_iter()
+            .map(|entry| entry.name)
+            .collect();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn a_file_shared_by_another_hard_link_is_replaced_over_shared_and_the_link_keeps_the_old_bytes() {
+        for fallbacks in [false, true] {
+            let (_dir, root) = server();
+            let (stream, cached) = cached_stream_file(&root);
+            let tree = ConfinedTree::open(&root).unwrap();
+            let tree = if fallbacks { tree.with_fallbacks() } else { tree };
+            let folder = tree
+                .open_folder(&path("resources/[maps]/harbour/stream"))
+                .unwrap();
+
+            let mut upload = tree.create_temporary(&folder, ".observer-fix-a").unwrap();
+            upload.file().write_all(b"new").unwrap();
+            let ordinary = tree.commit(&folder, upload, "harbour.ytyp", true);
+            assert!(matches!(ordinary, Err(TreeError::HardLink)), "{ordinary:?}");
+            assert_eq!(fs::read_to_string(&stream).unwrap(), "old");
+
+            // The refused commit removed its temporary file, so the name is free again.
+            let mut upload = tree.create_temporary(&folder, ".observer-fix-a").unwrap();
+            upload.file().write_all(b"new").unwrap();
+            tree.commit_over_shared(&folder, upload, "harbour.ytyp").unwrap();
+
+            assert_eq!(
+                read(&tree, "resources/[maps]/harbour/stream/harbour.ytyp").unwrap(),
+                "new",
+                "alone now, the new file is served"
+            );
+            assert_eq!(
+                fs::read_to_string(&cached).unwrap(),
+                "old",
+                "fallbacks: {fallbacks}"
+            );
+            assert_eq!(names(&tree, &folder), ["harbour.ytyp"]);
+
+            let mut upload = tree.create_temporary(&folder, ".observer-fix-b").unwrap();
+            upload.file().write_all(b"fresh").unwrap();
+            tree.commit_over_shared(&folder, upload, "harbour_props.ytyp")
+                .unwrap();
+            assert_eq!(
+                read(&tree, "resources/[maps]/harbour/stream/harbour_props.ytyp").unwrap(),
+                "fresh"
+            );
+        }
+    }
+
+    #[test]
+    fn a_replace_over_shared_never_writes_through_a_link_to_outside() {
+        let (dir, root) = server();
+        fs::hard_link(dir.path().join("secret.cfg"), root.join("innocent.txt")).unwrap();
+        let tree = ConfinedTree::open(&root).unwrap();
+
+        let mut upload = tree.create_temporary(tree.root(), ".observer-fix-c").unwrap();
+        upload.file().write_all(b"replaced").unwrap();
+        tree.commit_over_shared(tree.root(), upload, "innocent.txt")
+            .unwrap();
+
+        assert_eq!(read(&tree, "innocent.txt").unwrap(), "replaced");
+        assert_eq!(
+            fs::read_to_string(dir.path().join("secret.cfg")).unwrap(),
+            "set mysql_connection_string \"…\""
+        );
+    }
+
+    #[test]
+    fn a_replace_over_shared_keeps_every_other_refusal_and_removes_its_temporary_file() {
+        let (dir, root) = server();
+        let (stream_file, cached) = cached_stream_file(&root);
+        // One component at a time: `mklink` reads a `/` as the start of an option.
+        let link = ["resources", "[maps]", "harbour", "stream", "linked.ytyp"]
+            .iter()
+            .fold(root.clone(), |path, name| path.join(name));
+        link_folder(&link, dir.path());
+        let tree = ConfinedTree::open(&root).unwrap();
+        let harbour = tree.open_folder(&path("resources/[maps]/harbour")).unwrap();
+        let stream = tree
+            .open_folder(&path("resources/[maps]/harbour/stream"))
+            .unwrap();
+
+        let upload = tree.create_temporary(&harbour, ".observer-fix-d").unwrap();
+        let folder = tree.commit_over_shared(&harbour, upload, "stream");
+        assert!(matches!(folder, Err(TreeError::IsAFolder)), "{folder:?}");
+        let upload = tree.create_temporary(&stream, ".observer-fix-d").unwrap();
+        let escaped = tree.commit_over_shared(&stream, upload, "../fxmanifest.lua");
+        assert!(matches!(escaped, Err(TreeError::Escaped)), "{escaped:?}");
+        let upload = tree.create_temporary(&stream, ".observer-fix-d").unwrap();
+        let linked = tree.commit_over_shared(&stream, upload, "linked.ytyp");
+        if cfg!(windows) {
+            // A junction is a folder, which a file never replaces.
+            assert!(matches!(linked, Err(TreeError::IsAFolder)), "{linked:?}");
+        } else {
+            assert!(matches!(linked, Err(TreeError::Link)), "{linked:?}");
+        }
+        #[cfg(windows)]
+        {
+            // Windows grants file links to administrators and developer mode only.
+            let file_link = stream_file.with_file_name("file-link.ytyp");
+            if std::os::windows::fs::symlink_file(dir.path().join("secret.cfg"), &file_link).is_ok() {
+                let upload = tree.create_temporary(&stream, ".observer-fix-d").unwrap();
+                let linked = tree.commit_over_shared(&stream, upload, "file-link.ytyp");
+                assert!(matches!(linked, Err(TreeError::Link)), "{linked:?}");
+                fs::remove_file(&file_link).unwrap();
+            }
+
+            let writable = fs::metadata(&stream_file).unwrap().permissions();
+            let mut permissions = writable.clone();
+            permissions.set_readonly(true);
+            fs::set_permissions(&stream_file, permissions).unwrap();
+            let upload = tree.create_temporary(&stream, ".observer-fix-d").unwrap();
+            let read_only = tree.commit_over_shared(&stream, upload, "harbour.ytyp");
+            assert!(matches!(read_only, Err(TreeError::ReadOnly)), "{read_only:?}");
+            fs::set_permissions(&stream_file, writable).unwrap();
+        }
+
+        assert_eq!(names(&tree, &harbour), ["fxmanifest.lua", "stream"]);
+        assert_eq!(names(&tree, &stream), ["harbour.ytyp"]);
+        assert_eq!(fs::read_to_string(&stream_file).unwrap(), "old");
+        assert_eq!(fs::read_to_string(&cached).unwrap(), "old");
+        assert!(dir.path().join("secret.cfg").exists());
     }
 
     #[test]

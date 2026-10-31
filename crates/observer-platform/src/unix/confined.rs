@@ -10,7 +10,7 @@ use rustix::fs::{
 };
 use rustix::io::Errno;
 
-use crate::confined::{Entry, EntryKind, RelativePath, TreeError};
+use crate::confined::{Entry, EntryKind, RelativePath, Replace, TreeError};
 
 /// Whether `openat2` with its resolution flags is available. The kernel and a container's
 /// seccomp profile are the same for the whole process, so the first tree opened decides.
@@ -199,6 +199,30 @@ impl ConfinedTree {
         target: &str,
         replace: bool,
     ) -> Result<(), TreeError> {
+        let replace = if replace { Replace::Alone } else { Replace::Never };
+        self.commit_as(folder, temporary, target, replace)
+    }
+
+    /// Makes the temporary file the folder's `target` as a replacing [`commit`](Self::commit)
+    /// does, even when other hard links share the file in its place: FXServer links every stream
+    /// file into its cache. The rename takes the name alone, so the other links keep the old
+    /// content. Every other refusal stays, and removes the temporary file.
+    pub fn commit_over_shared(
+        &self,
+        folder: &Folder,
+        temporary: TemporaryFile,
+        target: &str,
+    ) -> Result<(), TreeError> {
+        self.commit_as(folder, temporary, target, Replace::Shared)
+    }
+
+    fn commit_as(
+        &self,
+        folder: &Folder,
+        temporary: TemporaryFile,
+        target: &str,
+        replace: Replace,
+    ) -> Result<(), TreeError> {
         if temporary.folder != folder.path || !Self::still_named(folder, &temporary) {
             return Err(TreeError::Escaped);
         }
@@ -215,14 +239,20 @@ impl ConfinedTree {
         folder: &Folder,
         temporary: &TemporaryFile,
         target: &str,
-        replace: bool,
+        replace: Replace,
     ) -> Result<(), TreeError> {
         self.in_place(folder, target)?;
         temporary.file.sync_all().map_err(TreeError::Io)?;
-        if replace {
+        if replace == Replace::Never {
+            Self::rename_new(folder, &temporary.name, folder, target, true)?;
+        } else {
             match rustix::fs::statat(&folder.handle, target, AtFlags::SYMLINK_NOFOLLOW) {
                 Ok(stat) => {
-                    refuse_unless_regular(&stat)?;
+                    if replace == Replace::Shared {
+                        refuse_unless_file(&stat)?;
+                    } else {
+                        refuse_unless_regular(&stat)?;
+                    }
                     let permissions = Mode::from_raw_mode(stat.st_mode & 0o777);
                     rustix::fs::fchmod(&temporary.file, permissions).map_err(errno)?;
                 }
@@ -230,8 +260,6 @@ impl ConfinedTree {
                 Err(error) => return Err(errno(error)),
             }
             rustix::fs::renameat(&folder.handle, &*temporary.name, &folder.handle, target).map_err(errno)?;
-        } else {
-            Self::rename_new(folder, &temporary.name, folder, target, true)?;
         }
         rustix::fs::fsync(&folder.handle).map_err(errno)
     }
@@ -411,8 +439,16 @@ impl ConfinedTree {
 }
 
 fn refuse_unless_regular(stat: &Stat) -> Result<(), TreeError> {
+    refuse_unless_file(stat)?;
+    if stat.st_nlink > 1 {
+        return Err(TreeError::HardLink);
+    }
+    Ok(())
+}
+
+/// Refuses anything but a regular file, whatever other hard links share it.
+fn refuse_unless_file(stat: &Stat) -> Result<(), TreeError> {
     match FileType::from_raw_mode(stat.st_mode) {
-        FileType::RegularFile if stat.st_nlink > 1 => Err(TreeError::HardLink),
         FileType::RegularFile => Ok(()),
         FileType::Directory => Err(TreeError::IsAFolder),
         FileType::Symlink => Err(TreeError::Link),
