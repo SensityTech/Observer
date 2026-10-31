@@ -200,6 +200,10 @@ trusted_proxies = []
 [log]
 # A tracing filter, such as "debug" or "info,observer_web=debug".
 level = "info"
+
+# File access over SFTP stays off until this section exists (see "File access over SFTP").
+# [sftp]
+# listen = "0.0.0.0:40126"
 ```
 
 Two environment variables apply to the log of `observer run` and `observer fxserver run`:
@@ -245,6 +249,7 @@ The backups are complete snapshots of the state database:
 | Port | What |
 |---|---|
 | 40125/TCP (`http.listen`) | The panel, its API and its websocket (`/api/ws`). |
+| 40126/TCP (`sftp.listen`), when set | File access over SFTP. Off unless `[sftp]` is in `observer.toml`. |
 | The cfg's endpoints, such as 30120 TCP and UDP | FXServer's own. Observer reads FXServer's HTTP endpoint (`/dynamic.json`, `/info.json`, `/perf/`, `/players.json`) on the cfg's first `endpoint_add_tcp`, through loopback when that one listens on every interface. |
 
 ### Outbound connections
@@ -378,6 +383,46 @@ When the public address carries a port, such as `https://panel.example.com:8443`
 Observer pings the websocket every 20 seconds, well within nginx's default 60-second
 `proxy_read_timeout`. The panel opens `wss://` by itself when the page is HTTPS.
 
+## File access over SFTP
+
+Observer can let people and CI pipelines read and change chosen parts of the server folder over SFTP,
+the file transfer of SSH. It is off until the owner adds this to `observer.toml` and restarts Observer:
+
+```toml
+[sftp]
+listen = "0.0.0.0:40126"
+```
+
+At that first start Observer makes the server's SSH host key and logs its fingerprint
+(`SFTP listening ... fingerprint=SHA256:...`); clients compare it on their first connection. Expose the
+port directly: behind a TCP proxy every client would share the proxy's address, which the lockouts and
+the pipelines' allowed networks rely on. Allow TCP 40126 in the firewall only for the networks that
+need it.
+
+In the panel, under **Files**:
+
+- **Groups** say what is reachable, folder by folder: allow or deny rules with rights (list, read,
+  create, modify, rename, delete, make and remove folders), name filters such as `*.ytd`, and an
+  optional largest file. A deny always wins. Each group shows its reach: **Read**, **Assets** (changes
+  only textures, models, images, audio and fonts) or **Code** (anything else, which runs code on the
+  host). Only the owner writes groups.
+- **People** log in with their username and SSH keys they add themselves under **My account**
+  (Ed25519 or ECDSA; `ssh-keygen -t ed25519` makes one). The owner, or someone with the permission to
+  manage file access, gives them groups; Code groups stay the owner's to give.
+- **Pipelines** log in as `+name` with a key Observer makes and shows once, valid 90 days by default
+  and 365 at most, optionally from allowed networks only. Store the private key in the CI's secrets;
+  a deploy step then runs, for example:
+
+  ```sh
+  sftp -b deploy.txt -P 40126 -i deploy.key -o StrictHostKeyChecking=yes +deploy-main@panel.example.com
+  ```
+
+Whatever the groups say, no one reaches the cfg files (`*.cfg`, which hold the licence key and the
+database string), `cache/`, Observer's own folders and `observer.toml`, `.git`, `.env` files and key
+files. Every change is in the audit log; uploads are written to a temporary file and swapped in only
+when complete, so FXServer never reads half a file. Observer never restarts a resource after an
+upload: restart it from the console, or let your own resource react.
+
 ## Integrations
 
 [`resource/CONTRACT.md`](resource/CONTRACT.md) is the integration contract: the server events Observer
@@ -459,6 +504,9 @@ that does.
   Windows 10 and Windows Server 2016 to 2022, prints the log's colour codes as text. Windows Terminal
   renders them, and `NO_COLOR=1` turns them off.
 - **English only.** The panel, the command line and the logs are in English.
+- **SFTP: folders are not renamed or moved,** files are; every `*.cfg` file is refused until Observer
+  reads which ones the server executes; a file FXServer holds open on Windows cannot be replaced until
+  it lets go of it.
 
 ## Licence
 
