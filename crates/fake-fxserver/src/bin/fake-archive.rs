@@ -31,8 +31,9 @@ const PAUSE: Duration = Duration::from_millis(30);
 const STAND_IN: &[u8] = b"#!/bin/sh\n";
 
 /// Answers a `GET` or a `HEAD` of any path that ends in the archive's name with the archive, and
-/// anything else with a 404. It listens once the archive is made, so that whoever waits for the
-/// port waits for the archive too.
+/// anything else with a 404. It listens once the archive is made, then says so on stdout: whoever
+/// waits for that line waits for the archive too, and an answer on the port alone could come from
+/// another server, such as a `fake-archive` a killed run left behind.
 fn main() {
     let port = std::env::args()
         .nth(1)
@@ -42,6 +43,7 @@ fn main() {
         Arc::new(archive().unwrap_or_else(|error| fail(&format!("cannot make the archive: {error}"))));
     let listener = TcpListener::bind(("127.0.0.1", port))
         .unwrap_or_else(|error| fail(&format!("cannot listen on 127.0.0.1:{port}: {error}")));
+    println!("listening on 127.0.0.1:{port}");
     for stream in listener.incoming().flatten() {
         let archive = Arc::clone(&archive);
         thread::spawn(move || {

@@ -98,16 +98,6 @@ const answers = async () => {
     }
 };
 
-/** Any answer will do: `fake-archive` listens once its archive is made. */
-const serves = async () => {
-    try {
-        await fetch(`http://127.0.0.1:${catalogPort}/`);
-        return true;
-    } catch {
-        return false;
-    }
-};
-
 export default async function setup() {
     const observer = binary('OBSERVER_BIN', 'observer');
     const fake = binary('FAKE_FXSERVER_BIN', 'fake-fxserver');
@@ -133,18 +123,23 @@ export default async function setup() {
 
     mkdirSync(results, { recursive: true });
     const archive = spawn(archiveServer, [String(catalogPort)], {
-        stdio: ['ignore', 'ignore', 'pipe'],
+        stdio: ['ignore', 'pipe', 'pipe'],
     });
     archive.stderr.pipe(createWriteStream(join(results, 'archive.err')));
-    const served: { exit: number | null } = { exit: null };
+    // It prints a line once it listens, which it does once its archive is made. An answer on the port
+    // alone could come from another server, such as a fake-archive a killed run left behind.
+    const served: { listening: boolean; exit: number | null } = { listening: false, exit: null };
+    archive.stdout.once('data', () => {
+        served.listening = true;
+    });
     archive.on('exit', (code) => {
         served.exit = code ?? -1;
     });
-    if (!(await until(async () => served.exit !== null || (await serves()), Date.now() + patience))) {
+    if (!(await until(() => served.listening || served.exit !== null, Date.now() + patience))) {
         archive.kill();
         throw new Error(`fake-archive did not serve on port ${catalogPort}`);
     }
-    if (served.exit !== null) {
+    if (!served.listening) {
         throw new Error(`fake-archive could not serve (exit ${served.exit}), see e2e/results/archive.err`);
     }
     const stopArchive = async () => {

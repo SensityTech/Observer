@@ -7,11 +7,12 @@
 #![allow(clippy::unwrap_used)]
 
 use std::fs;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream};
+use std::io::{BufRead, BufReader};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command};
+use std::process::{Child, Command, Stdio};
 use std::sync::{LazyLock, Mutex, PoisonError};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use jiff::{SignedDuration, Timestamp, Unit};
 use observer_app::{
@@ -407,20 +408,23 @@ fn archived() -> CatalogBuild {
 struct ArchiveServer(Child);
 
 impl ArchiveServer {
-    /// Once the port answers, which it opens once its archive is made.
-    async fn start() -> Self {
-        let server = Self(
-            Command::new(env!("CARGO_BIN_EXE_fake-archive"))
-                .arg(ARCHIVE_PORT.to_string())
-                .spawn()
-                .unwrap(),
+    /// Once it says it listens, which it does once its archive is made. A server already on the
+    /// port would answer too, so the line is waited for rather than a connection.
+    fn start() -> Self {
+        let mut server = Command::new(env!("CARGO_BIN_EXE_fake-archive"))
+            .arg(ARCHIVE_PORT.to_string())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut said = String::new();
+        BufReader::new(server.stdout.take().unwrap())
+            .read_line(&mut said)
+            .unwrap();
+        assert!(
+            !said.is_empty(),
+            "fake-archive could not serve on port {ARCHIVE_PORT}, see its error above"
         );
-        let deadline = Instant::now() + WAIT;
-        while TcpStream::connect(("127.0.0.1", ARCHIVE_PORT)).is_err() {
-            assert!(Instant::now() < deadline, "the archive server never listened");
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
-        server
+        Self(server)
     }
 }
 
@@ -677,7 +681,7 @@ async fn a_build_a_process_runs_from_is_not_deleted() {
 #[cfg(unix)]
 #[tokio::test]
 async fn the_fakes_own_archive_installs_and_starts_on_probation_as_build_99001() {
-    let _archive = ArchiveServer::start().await;
+    let _archive = ArchiveServer::start();
     let mut lab = Lab::new(Duration::from_mins(5), "").await;
     lab.supervision.start_server(&lab.owner).await.unwrap();
     lab.online_on(HEALTHY).await;
@@ -704,7 +708,7 @@ async fn the_fakes_own_archive_installs_and_starts_on_probation_as_build_99001()
 async fn the_fakes_own_archive_is_refused_at_validation_for_want_of_a_signature() {
     use observer_domain::artifacts::InstallFailure;
 
-    let _archive = ArchiveServer::start().await;
+    let _archive = ArchiveServer::start();
     let mut lab = Lab::new(Duration::from_mins(5), "").await;
 
     lab.artifacts.install(&lab.owner, ARCHIVED, false).await.unwrap();
