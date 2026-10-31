@@ -37,7 +37,7 @@ fn perf(count: u32, ms: u32) -> TickReport {
 fn list(players: &[(u32, u32)]) -> PlayerList {
     PlayerList {
         players: players.iter().map(|&(id, ping)| (id, Some(ping))).collect(),
-        anonymous: false,
+        ..PlayerList::default()
     }
 }
 
@@ -870,7 +870,7 @@ fn a_player_without_a_ping_counts_in_joins_and_leaves_but_not_in_the_pings() {
                     mid_slot(start, slot),
                     PlayerList {
                         players,
-                        anonymous: false,
+                        ..PlayerList::default()
                     },
                 )),
                 ..no_readings()

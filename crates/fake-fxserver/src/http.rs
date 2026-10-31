@@ -100,7 +100,10 @@ fn read_head(stream: &mut TcpStream) -> io::Result<String> {
 
 fn dynamic(server: &Server) -> String {
     json!({
-        "clients": server.number("fake_players").unwrap_or(0),
+        "clients": match server.players().len() {
+            0 => server.number("fake_players").unwrap_or(0),
+            joined => joined as u64,
+        },
         "gametype": "",
         "hostname": server.convar("sv_hostname").unwrap_or_else(|| "FXServer, but unconfigured".to_owned()),
         "iv": "0",
@@ -110,11 +113,22 @@ fn dynamic(server: &Server) -> String {
     .to_string()
 }
 
-/// Ids 1 to `fake_players`, given the token Observer set in `sv_playersToken`; otherwise the
-/// public list, whose ids and pings are 0.
+/// The players who joined, or ids 1 to `fake_players`, given the token Observer set in
+/// `sv_playersToken`; otherwise the public list, whose ids and pings are 0.
 fn players(server: &Server, token: Option<&str>) -> String {
     let count = server.number("fake_players").unwrap_or(0);
     let honoured = token.is_some_and(|token| server.convar("sv_playersToken").as_deref() == Some(token));
+    let joined = server.players();
+    if !joined.is_empty() {
+        let mut listed = joined.listed();
+        if !honoured {
+            for player in &mut listed {
+                player["id"] = json!(0);
+                player["ping"] = json!(0);
+            }
+        }
+        return serde_json::Value::from(listed).to_string();
+    }
     let players: Vec<serde_json::Value> = (1..=count)
         .map(|id| {
             let (id, ping) = if honoured { (id, 20 + 5 * id) } else { (0, 0) };

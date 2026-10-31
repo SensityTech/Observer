@@ -17,6 +17,7 @@ const MIGRATIONS: &[M<'static>] = &[
     M::up(include_str!("../migrations/0006_artifacts.sql")),
     M::up(include_str!("../migrations/0007_diagnostics.sql")),
     M::up(include_str!("../migrations/0008_file_access.sql")),
+    M::up(include_str!("../migrations/0009_players.sql")),
 ];
 
 /// The schema version this build migrates to.

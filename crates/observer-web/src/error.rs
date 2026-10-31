@@ -62,7 +62,8 @@ fn status(code: ErrorCode) -> StatusCode {
         ErrorCode::NotFound
         | ErrorCode::BuildNotListed
         | ErrorCode::CrashNotFound
-        | ErrorCode::CrashFileNotFound => StatusCode::NOT_FOUND,
+        | ErrorCode::CrashFileNotFound
+        | ErrorCode::PlayerNotFound => StatusCode::NOT_FOUND,
         ErrorCode::Conflict
         | ErrorCode::NameTaken
         | ErrorCode::AlreadySetUp
@@ -98,7 +99,8 @@ fn status(code: ErrorCode) -> StatusCode {
         | ErrorCode::InvalidRule
         | ErrorCode::InvalidPublicKey
         | ErrorCode::TooManyKeys
-        | ErrorCode::InvalidAccess => StatusCode::UNPROCESSABLE_ENTITY,
+        | ErrorCode::InvalidAccess
+        | ErrorCode::InvalidPlayersFile => StatusCode::UNPROCESSABLE_ENTITY,
         ErrorCode::JsonRequired => StatusCode::UNSUPPORTED_MEDIA_TYPE,
         ErrorCode::UnknownHost => StatusCode::MISDIRECTED_REQUEST,
         ErrorCode::InvalidUsername
@@ -111,7 +113,10 @@ fn status(code: ErrorCode) -> StatusCode {
         | ErrorCode::InvalidRequest
         | ErrorCode::InvalidSchedule
         | ErrorCode::InvalidArtifactSettings
-        | ErrorCode::InvalidImportFolder => StatusCode::BAD_REQUEST,
+        | ErrorCode::InvalidImportFolder
+        | ErrorCode::AddressSearch
+        | ErrorCode::InvalidSearch
+        | ErrorCode::InvalidPlayersSettings => StatusCode::BAD_REQUEST,
         ErrorCode::TooManyAttempts | ErrorCode::TooManySockets | ErrorCode::TooManyCommands => {
             StatusCode::TOO_MANY_REQUESTS
         }

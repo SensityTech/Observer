@@ -9,6 +9,8 @@ import type { BuildPlatform } from '../api/generated/BuildPlatform';
 import type { CfgFileProblem } from '../api/generated/CfgFileProblem';
 import type { CfgFileState } from '../api/generated/CfgFileState';
 import type { CommandRefusal } from '../api/generated/CommandRefusal';
+import type { DropCategory } from '../api/generated/DropCategory';
+import type { DropKind } from '../api/generated/DropKind';
 import type { EndpointProtocol } from '../api/generated/EndpointProtocol';
 import type { ErrorCode } from '../api/generated/ErrorCode';
 import type { FindingKind } from '../api/generated/FindingKind';
@@ -16,6 +18,7 @@ import type { FindingParams } from '../api/generated/FindingParams';
 import type { FolderProblem } from '../api/generated/FolderProblem';
 import type { Game } from '../api/generated/Game';
 import type { HealthProblem } from '../api/generated/HealthProblem';
+import type { IdentifierKind } from '../api/generated/IdentifierKind';
 import type { InstallFailure } from '../api/generated/InstallFailure';
 import type { JobKind } from '../api/generated/JobKind';
 import type { JobStep } from '../api/generated/JobStep';
@@ -26,6 +29,8 @@ import type { NoticeReason } from '../api/generated/NoticeReason';
 import type { OneSync } from '../api/generated/OneSync';
 import type { Outcome } from '../api/generated/Outcome';
 import type { PermissionArea } from '../api/generated/PermissionArea';
+import type { PlayerSort } from '../api/generated/PlayerSort';
+import type { PlayersFileProblem } from '../api/generated/PlayersFileProblem';
 import type { Protection } from '../api/generated/Protection';
 import type { Range } from '../api/generated/Range';
 import type { ScheduleMode } from '../api/generated/ScheduleMode';
@@ -99,6 +104,15 @@ const permissions = {
         description:
             "Give accounts Read and Assets groups over the server's files, take access away and end sessions.",
     },
+    playersView: {
+        name: 'View players',
+        description: "Who is connected, and each player's names, licence, play time and disconnections.",
+    },
+    playerIdentifiersView: {
+        name: 'View player identifiers',
+        description:
+            'Every identifier a player showed, hardware tokens included, and the other licences they link to.',
+    },
 } satisfies Record<PermissionKey, { name: string; description: string }>;
 
 const permissionNames = (hex: string) =>
@@ -135,6 +149,20 @@ const healthProblems = {
     probeUnauthorized: 'its performance probe refuses Observer',
     watchdogBark: 'its watchdog reported a stuck thread',
 } satisfies Record<HealthProblem, string>;
+
+const playersFileProblems = {
+    missing: 'Nothing is at this path on the host.',
+    notAFile: 'This is not a plain file: a folder, a link or a device.',
+    tooLarge: 'This file is over 512 MB, more than a players database holds.',
+    unreadable: 'Observer cannot read this file: check its permissions.',
+    notPlayersDatabase: "This file is not txAdmin's players database.",
+    unsupportedVersion:
+        'txAdmin wrote this file in a format Observer does not read. Open it once with a current txAdmin, then import it again.',
+    notLocal: 'Give the full path of a file on this host, not a network share or a relative path.',
+} satisfies Record<PlayersFileProblem, string>;
+
+const isPlayersFileProblem = (key: string): key is PlayersFileProblem =>
+    Object.hasOwn(playersFileProblems, key);
 
 const ranges = {
     '1h': '1h',
@@ -215,6 +243,7 @@ export const en = {
         copy: 'Copy',
         copied: 'Copied',
         copyBlocked: 'Copying is blocked here: the text is selected, copy it with your keyboard.',
+        copyBlockedValue: (value: string) => `Copying is blocked here. The full value is ${value}.`,
         showPassword: 'Show the password',
         loading: 'Loading',
         retry: 'Try again',
@@ -237,6 +266,7 @@ export const en = {
         audit: 'Audit log',
         files: 'Files',
         diagnostics: 'Diagnostics',
+        players: 'Players',
         alertCount: (value: number) => count(value, { one: 'alert', other: 'alerts' }),
     },
     theme: {
@@ -1139,6 +1169,298 @@ export const en = {
             sleep: 'sleeping',
         },
     },
+    players: {
+        title: 'Players',
+        gloss: 'Who plays, for how long, and how often.',
+        zone: (zone: string, offset: string) => `Days and times in ${zone} (${offset})`,
+        zoneUnknown: (zone: string) => `Days in ${zone}, times in UTC: this browser does not know ${zone}`,
+        timeConnected: 'Play time is time connected: loading screens and idle players count.',
+        forgotten:
+            'The player was forgotten: their profile, play time, names and the identifiers only they held are deleted.',
+        online: 'Online',
+        offline: 'Offline',
+        copyLicence: (license: string) => `Copy the licence ${license}`,
+        // A name the player chose that nothing was left of once cleaned of control characters.
+        noName: 'No name',
+        now: {
+            title: 'Online now',
+            meta: (players: number) => `${count(players, { one: 'player', other: 'players' })} · every 10 s`,
+            caption: 'Players connected now, by server ID',
+            player: 'Player',
+            licence: 'Licence',
+            session: 'This session',
+            total: 'Total play time',
+            serverId: (id: number) => `ID ${id}`,
+            confirming: 'Confirming',
+            confirmingHint: 'FXServer has not listed this player yet.',
+            unconfirmed: 'Unconfirmed',
+            unconfirmedHint: "FXServer's player list did not match: nothing is kept of who they are.",
+            empty: 'Nobody is connected.',
+            loading: 'Reading who is connected',
+            failed: 'Who is connected could not be read. It is read again in 10 s.',
+        },
+        community: {
+            title: 'Community',
+            players: 'Unique players',
+            newPlayers: 'New players',
+            playTime: 'Play time',
+            lastWeek: 'Last 7 days, today so far',
+            before: 'The 7 days before',
+            difference: 'Difference',
+            period: 'Chart period',
+            perDay: 'Per day',
+            perWeek: 'Per week',
+            tooltipPlayers: (players: number | null) =>
+                players === null
+                    ? 'Unique players not known'
+                    : count(players, { one: 'unique player', other: 'unique players' }),
+            tooltipOthers: (newPlayers: number, playTime: string) =>
+                `${formatNumber('en', newPlayers)} new · ${playTime} played`,
+            todaySoFar: 'today, so far',
+            weekSoFar: 'this week, so far',
+            weekOf: (first: string, last: string) => `${first} to ${last}`,
+            summaryDays: (peak: number, day: string, players: number, newPlayers: number, playTime: string) =>
+                `At most ${count(peak, { one: 'player', other: 'players' })} in a day, on ${day}. Today, so far: ${count(players, { one: 'player', other: 'players' })}, ${formatNumber('en', newPlayers)} new, ${playTime} played.`,
+            summaryWeeks: (players: number, newPlayers: number, playTime: string) =>
+                `This week, so far: ${count(players, { one: 'player', other: 'players' })}, ${formatNumber('en', newPlayers)} new, ${playTime} played. Unique players per week are known for the last two weeks only.`,
+            empty: 'Nobody played in the last 30 days.',
+            loading: 'Loading the community figures',
+            failed: 'The community figures could not be read.',
+        },
+        list: {
+            title: 'All players',
+            search: 'Search players',
+            searchHint: 'The start of a name, or a licence.',
+            searchHintIdentifiers:
+                'The start of a name, a licence, or any identifier with its prefix, such as discord:. Never an address.',
+            submit: 'Search',
+            clear: 'Clear',
+            sort: 'Sort by',
+            sorts: {
+                playTime: 'Total play time',
+                recent: 'Last 30 days',
+                lastSeen: 'Last visit',
+                firstSeen: 'First visit',
+                sessions: 'Sessions',
+            } satisfies Record<PlayerSort, string>,
+            caption: (sort: string) => `Players, sorted by ${sort}, largest or latest first`,
+            name: 'Name',
+            licence: 'Licence',
+            state: 'State',
+            imported: (time: string) => `${time} before Observer`,
+            empty: 'No player yet. A player shows here once FXServer has confirmed who they are.',
+            noMatch: 'No player matches this search.',
+            loadMore: 'Load more',
+            shown: (players: number) => `${count(players, { one: 'player', other: 'players' })} shown`,
+            allShown: (players: number) => `All ${count(players, { one: 'player', other: 'players' })} shown`,
+            loading: 'Reading the players',
+            failed: 'The players could not be read.',
+        },
+        profile: {
+            back: 'All players',
+            loading: 'Reading the player',
+            failed: 'The player could not be read.',
+            facts: 'About this player',
+            licence: 'Licence',
+            firstSeen: 'First visit',
+            lastSeen: 'Last visit',
+            imported: 'Imported from txAdmin',
+            total: 'Total play time',
+            seenByObserver: 'Seen by Observer',
+            beforeObserver: 'Before Observer',
+            inProgress: 'Session in progress',
+            last7: 'Last 7 days',
+            last30: 'Last 30 days',
+            todaySoFar: 'Today, so far',
+            sessions: 'Sessions',
+            average: 'Average',
+            longest: 'Longest',
+            noSession: 'None seen by Observer yet',
+            crashRate: 'Crashes',
+            perHundredHours: 'per 100 h',
+            serverRate: "The server's",
+            rate: (rate: string) => `${rate} per 100 h`,
+            crashesSeen: 'Crashes seen',
+            unknown: 'n/a',
+            activity: {
+                title: 'Activity',
+                meta: 'Play time per day, last 90 days',
+                summary: (days: number, total: string) =>
+                    days === 0
+                        ? 'No play time in the last 90 days.'
+                        : `Played on ${count(days, { one: 'day', other: 'days' })} of the last 90, ${total} in all.`,
+                today: (time: string) => `Today, so far: ${time}.`,
+                tooltip: (time: string) => `${time} played`,
+                todaySoFar: 'today, so far',
+                hours: (hours: string) => `${hours}h`,
+            },
+            names: {
+                title: 'Names',
+                caption: 'Names this player used, with when they were first and last seen',
+                name: 'Name',
+                firstSeen: 'First seen',
+                lastSeen: 'Last seen',
+            },
+            drops: {
+                title: 'Disconnections',
+                crashes: 'Crashes',
+                timeouts: 'Timeouts',
+                kicks: 'Kicks',
+                lifetime: 'Over every session Observer saw',
+                caption: 'Their last disconnections, latest first',
+                when: 'When',
+                what: 'What',
+                length: 'Session',
+                by: 'by',
+                empty: 'No disconnection is kept for this player.',
+                categories: {
+                    quit: 'Quit',
+                    kick: 'Kicked',
+                    timeout: 'Timed out',
+                    crash: 'Crashed',
+                    security: 'Security',
+                    serverStop: 'Server stopped',
+                    serverCrash: 'Server crashed',
+                    unknown: 'Unknown',
+                } satisfies Record<DropCategory, string>,
+                kinds: {
+                    exit: 'left the game',
+                    disconnect: 'disconnected',
+                    otherServer: 'joined another server',
+                    reconnect: 'reconnected',
+                    editor: 'opened the Rockstar Editor',
+                    reload: 'reloaded the game',
+                    quitMessage: 'quit with a message',
+                    resource: 'by a resource',
+                    connection: 'connection lost',
+                    pendingCommands: 'too many commands waiting',
+                    missedFrames: 'missed frames',
+                    replaced: 'replaced by a new connection',
+                    stateBagRate: 'too many state bag changes',
+                    netEventRate: 'too many net events',
+                    latentNetEventRate: 'too many latent net events',
+                    commandRate: 'too many commands',
+                    netGameEventRate: 'too many game events',
+                    serverInitiated: 'refused by the server',
+                    stop: 'stopped',
+                    restart: 'restarted',
+                    scheduled: 'scheduled restart',
+                    shutdown: 'Observer stopped',
+                    crashLoop: 'crash loop',
+                    console: 'quit in the console',
+                    crash: 'crash',
+                    hang: 'stopped responding',
+                    lost: 'lost when Observer stopped',
+                    missed: 'missed',
+                    other: 'other',
+                } satisfies Record<DropKind, string>,
+            },
+            identifiers: {
+                title: 'Identifiers',
+                caption: 'Identifiers this player showed besides the licence',
+                kind: 'Kind',
+                value: 'Value',
+                firstSeen: 'First seen',
+                lastSeen: 'Last seen',
+                seen: 'Seen',
+                times: (times: number) => count(times, { one: 'time', other: 'times' }),
+                kinds: {
+                    license2: 'Licence 2',
+                    steam: 'Steam',
+                    discord: 'Discord',
+                    fivem: 'Cfx.re',
+                    xbl: 'Xbox Live',
+                    live: 'Microsoft',
+                    token: 'Hardware token',
+                    ip: 'Address',
+                } satisfies Record<IdentifierKind, string>,
+                copy: (kind: string, value: string) => `Copy the ${kind} identifier ${value}`,
+                sameAddress: (others: number) =>
+                    others === 0
+                        ? 'An address no other licence used'
+                        : `Same address as ${count(others, { one: 'other licence', other: 'other licences' })}`,
+                sharedWith: (others: number) =>
+                    `Shared with ${count(others, { one: 'other licence', other: 'other licences' })}`,
+                imported: 'Imported',
+                importedHint: 'From txAdmin, not seen by Observer since.',
+                empty: 'No identifier besides the licence.',
+            },
+            linked: {
+                title: 'Linked licences',
+                caption: 'Other licences that share an identifier with this one, directly or through another',
+                player: 'Player',
+                through: 'Linked through',
+                link: 'Link',
+                strong: 'Strong',
+                weak: 'Weak',
+                strength: (strength: string) => `· ${strength}`,
+                direct: 'Shares an identifier',
+                indirect: 'Through another licence',
+                empty: 'No other licence shares an identifier with this one.',
+                note: 'A strong link goes through an identifier Observer saw itself, shown by 3 licences at most. A weak one goes through an address, an identifier many licences show, or one only imported from txAdmin.',
+            },
+            forget: {
+                button: 'Forget this player…',
+                title: (name: string) =>
+                    name === '' ? 'Forget this player, who has no name?' : `Forget ${name}?`,
+                lead: 'For an erasure request. Observer deletes, now and for good:',
+                goes: [
+                    'their profile and play time, day by day',
+                    'the names they used',
+                    'the identifiers no other licence holds; those another licence shares stay with it',
+                    'the texts of their sessions: crash and kick reasons',
+                ],
+                stays: 'The statistics keep their sessions as counts, with nothing that names them.',
+                backups:
+                    'A licence forgotten stays forgotten: restoring a daily, pre-migration or manual backup made before now does not bring it back, and neither does an import from txAdmin. If they join again, they start a new profile.',
+                confirm: (code: string) => `Type ${code} to confirm`,
+                submit: 'Forget the player',
+            },
+        },
+        data: {
+            title: 'Player data',
+            meta: 'Owner only',
+            retention: 'Retention',
+            retentionLead:
+                'How long Observer keeps what it knows of players. Each identifier, name and day expires on its own, after it was last seen.',
+            linkDays: 'Identifiers and names',
+            addressDays: 'Address fingerprints',
+            dayDays: 'Play time per day',
+            profileDays: 'Profiles',
+            ranges: {
+                linkDays: "Days after each was last seen, from 30 up to the profiles' retention.",
+                addressDays: "Days, from 7 up to the identifiers' retention.",
+                dayDays: "Days, from 30 up to the profiles' retention.",
+                profileDays:
+                    'Days after the last visit, 365 or more. Everything that hangs on a profile goes with it.',
+            },
+            outOfRange: (range: string) => `Out of range. ${range}`,
+            keepForGood: 'Keep profiles for good',
+            keepForGoodHint: 'A profile and its play time stay until the player is forgotten on request.',
+            changes: (changes: number) => `${count(changes, { one: 'change', other: 'changes' })} not saved`,
+            discard: 'Discard',
+            discarded: 'Changes discarded.',
+            save: 'Save the retention',
+            saved: 'Retention saved. What it no longer keeps goes at the next daily upkeep.',
+            loading: 'Reading the retention',
+            failed: 'The retention could not be read.',
+            import: 'Import from txAdmin',
+            importLead:
+                "Takes in the play time, first and last visits, names and identifiers of txAdmin's players database. Observer only reads the file; notes, bans, warnings and the whitelist stay out. Importing it again changes nothing, and forgotten players stay forgotten.",
+            path: 'Players database',
+            pathHint: 'The full path on this host of <txData>/<profile>/data/playersDB.json.',
+            start: 'Import',
+            started: 'The file was read and checked whole. Its players are being written.',
+            running: 'An import is running already: wait for it to end.',
+            progress: 'Import progress',
+            writing: (written: number, read: number) =>
+                `Writing ${formatNumber('en', written)} of ${count(read, { one: 'player', other: 'players' })}`,
+            finished: (at: string, imported: number, updated: number, forgotten: number, invalid: number) =>
+                `Imported ${at}: ${count(imported, { one: 'new profile', other: 'new profiles' })}, ${formatNumber('en', updated)} updated, ${formatNumber('en', forgotten)} skipped as forgotten, ${formatNumber('en', invalid)} without a valid licence.`,
+            stopped: (at: string, written: number, read: number) =>
+                `The import of ${at} stopped after ${formatNumber('en', written)} of ${count(read, { one: 'player', other: 'players' })}. Import the file again to finish: what was written stays.`,
+        },
+    },
     server_state: {
         states: {
             stopped: 'Stopped',
@@ -1930,6 +2252,9 @@ export const en = {
             file_session_disconnected: 'File session ended',
             file_settings_changed: 'File settings changed',
             file_host_key_created: 'SFTP host key created',
+            player_forgotten: 'Player forgotten',
+            players_imported: "txAdmin's players imported",
+            players_retention_changed: 'Player retention changed',
         } satisfies Record<AuditAction, string>,
         outcomes: {
             success: 'Success',
@@ -2084,7 +2409,22 @@ export const en = {
             crash: 'Crash',
             names: 'Files',
             unrecorded: 'Command lines not kept',
+            before: 'Before',
+            after: 'After',
+            linkDays: 'Identifiers and names',
+            addressDays: 'Address fingerprints',
+            dayDays: 'Play time per day',
+            profileDays: 'Profiles',
+            read: 'Read',
+            written: 'Written',
+            imported: 'New',
+            updated: 'Updated',
+            forgotten: 'Skipped as forgotten',
+            invalid: 'Invalid',
         },
+        days: (value: number) => count(value, { one: 'day', other: 'days' }),
+        // A profile whose retention is unset is never deleted.
+        keptForGood: 'kept for good',
         snapshotKinds: { dump: 'a stack dump', report: 'a thread report' },
         snapshotFailures: {
             lowDisk: 'less than 1 GB free',
@@ -2170,6 +2510,7 @@ export const en = {
         logs: 'Logs',
         diagnostics: 'Diagnostics',
         files: 'Files',
+        players: 'Players',
     } satisfies Record<PermissionArea, string>,
     danger: {
         sensitive: 'Sensitive',
@@ -2322,6 +2663,18 @@ export const en = {
                   : 'A pipeline key lasts 1 to 365 days.',
         too_many_keys: (params) =>
             typeof params.max === 'number' ? `An access holds ${params.max} keys at most.` : 'Too many keys.',
+        player_not_found: 'This player is no longer recorded: they were forgotten, or their profile expired.',
+        address_search: 'A search never takes an address. Search by a name, a licence or another identifier.',
+        invalid_search:
+            'What follows this prefix is not a valid identifier of its kind. Check it, or search by a name.',
+        invalid_players_settings:
+            'Some retentions are out of range. Each one says its range below its field.',
+        invalid_players_file: (params) => {
+            const problem = stringParam(params, 'problem');
+            return isPlayersFileProblem(problem)
+                ? playersFileProblems[problem]
+                : "This file cannot be imported as txAdmin's players database.";
+        },
     } satisfies Record<ErrorCode, ErrorMessage>,
     failure: {
         unknown: 'Something went wrong. Try again.',

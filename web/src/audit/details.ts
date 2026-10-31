@@ -27,6 +27,8 @@ const LISTS = new Set<string>(['times', 'warnings', 'dropped', 'branches']);
 const NESTED = new Set<string>(['scheduled', 'dropped']);
 /** The schedule's settings counted in minutes. */
 const MINUTES = new Set<string>(['intervalMinutes', 'skipAfterStart', 'warnings']);
+/** The players' retentions, in days. */
+const DAYS = new Set<string>(['linkDays', 'addressDays', 'dayDays', 'profileDays']);
 
 const has = <T extends object>(record: T, key: unknown): key is keyof T =>
     typeof key === 'string' && Object.hasOwn(record, key);
@@ -74,6 +76,10 @@ const label = (t: Messages, key: string, value: unknown) => {
     if (typeof value === 'number' && (key === 'from' || key === 'to')) {
         return key === 'from' ? t.audit.detail.fromBuild : t.audit.detail.toBuild;
     }
+    // The players' retentions, as they were and as they became.
+    if (isRecord(value) && (key === 'from' || key === 'to')) {
+        return key === 'from' ? t.audit.detail.before : t.audit.detail.after;
+    }
     return has(t.audit.detail, key) ? t.audit.detail[key] : key;
 };
 
@@ -82,6 +88,9 @@ const word = (t: Messages, format: Format, key: string, value: unknown): string 
         return `${word(t, format, key, value.before)} → ${word(t, format, key, value.after)}`;
     }
     if (value === null) {
+        if (key === 'profileDays') {
+            return t.audit.keptForGood;
+        }
         return key === 'timeZone' ? t.audit.hostZone : t.audit.unset;
     }
     if (HIDDEN.has(key) && value === true) {
@@ -114,6 +123,9 @@ const word = (t: Messages, format: Format, key: string, value: unknown): string 
         if (MINUTES.has(key)) {
             return t.audit.minutes(format.number(value));
         }
+        if (DAYS.has(key)) {
+            return t.audit.days(value);
+        }
         if (key === 'bytes') {
             return format.bytes(value);
         }
@@ -125,7 +137,7 @@ const word = (t: Messages, format: Format, key: string, value: unknown): string 
             ? t.audit.unset
             : value.map((item) => word(t, format, key, item)).join(', ');
     }
-    if (NESTED.has(key) && isRecord(value)) {
+    if ((NESTED.has(key) || key === 'from' || key === 'to') && isRecord(value)) {
         return `(${pairs(t, format, value).join(', ')})`;
     }
     if (typeof value !== 'string') {

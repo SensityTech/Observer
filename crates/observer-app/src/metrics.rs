@@ -1,7 +1,7 @@
 //! The statistics: a sample of FXServer, the host and Observer at the end of every five-second
 //! slot, kept in the metrics database with its aggregates, and sent live to the dashboards.
 
-mod runs;
+pub(crate) mod runs;
 mod sampler;
 mod upkeep;
 
@@ -134,6 +134,15 @@ impl Metrics {
             .db
             .read(move |conn| growth::read(conn, observer_started, now))
             .await?)
+    }
+
+    pub(crate) fn database(&self) -> &MetricsDatabase {
+        &self.inner.db
+    }
+
+    /// When this service started: runs are numbered from it.
+    pub(crate) fn observer_started(&self) -> i64 {
+        self.inner.started_ms
     }
 
     /// The newest sample, and the ones that follow it.

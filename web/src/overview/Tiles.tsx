@@ -103,7 +103,7 @@ export function Facts({ facts }: { facts: readonly Fact[] }) {
     );
 }
 
-function Tile({
+export function Tile({
     icon: Icon,
     label,
     aside,

@@ -13,6 +13,7 @@ use hyper::{Request, StatusCode};
 use hyper_util::rt::TokioIo;
 use observer_domain::metrics;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -206,21 +207,31 @@ pub struct Players {
     pub max_clients: Option<u64>,
 }
 
-/// The players `/players.json` lists, as `(net id, ping in ms)`. Names, identifiers and endpoints
-/// are never kept.
+/// The players `/players.json` lists, as `(net id, ping in ms)`, and what each one shows, which
+/// the players service checks the bridge's reports against. It stays in memory: endpoints and
+/// `ip:` identifiers are never read.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct PlayerList {
     /// The ping is `None` for a client FXServer has no network peer for: it lists it with `-1`.
     pub players: Vec<(u32, Option<u32>)>,
+    pub shown: Vec<Listed>,
     /// FXServer did not honour the token and answered the public list, whose ids and pings are 0.
     pub anonymous: bool,
+}
+
+/// A listed player's identifiers other than `ip:`, as FXServer gives them, and name.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Listed {
+    pub id: u32,
+    pub identifiers: Vec<String>,
+    pub name: Option<String>,
 }
 
 impl PlayerList {
     pub fn anonymous() -> Self {
         Self {
-            players: Vec::new(),
             anonymous: true,
+            ..Self::default()
         }
     }
 }
@@ -446,15 +457,14 @@ fn parse_dynamic(body: &[u8]) -> Result<Players, ProbeError> {
     if text.trim().is_empty() || text.to_ascii_lowercase().contains("<html") {
         return Err(invalid("not the JSON of /dynamic.json"));
     }
-    let value: serde_json::Value =
-        serde_json::from_str(&text).map_err(|_| invalid("/dynamic.json is not JSON"))?;
+    let value: Value = serde_json::from_str(&text).map_err(|_| invalid("/dynamic.json is not JSON"))?;
     let clients = value
         .get("clients")
-        .and_then(serde_json::Value::as_u64)
+        .and_then(Value::as_u64)
         .ok_or_else(|| invalid("/dynamic.json has no player count"))?;
     // FXServer prints it as a string, as convars are.
     let max_clients = value.get("sv_maxclients").and_then(|max| match max {
-        serde_json::Value::String(text) => text.parse().ok(),
+        Value::String(text) => text.parse().ok(),
         other => other.as_u64(),
     });
     Ok(Players { clients, max_clients })
@@ -463,11 +473,8 @@ fn parse_dynamic(body: &[u8]) -> Result<Players, ProbeError> {
 /// `"server": "FXServer-master SERVER v1.0.0.35245 win32"`: the last part of the version.
 fn parse_build(body: &[u8]) -> Result<u32, ProbeError> {
     let invalid = || ProbeError::Invalid("/info.json names no build".to_owned());
-    let value: serde_json::Value = serde_json::from_slice(body).map_err(|_| invalid())?;
-    let server = value
-        .get("server")
-        .and_then(serde_json::Value::as_str)
-        .ok_or_else(invalid)?;
+    let value: Value = serde_json::from_slice(body).map_err(|_| invalid())?;
+    let server = value.get("server").and_then(Value::as_str).ok_or_else(invalid)?;
     server
         .split_whitespace()
         .find_map(|word| {
@@ -485,6 +492,10 @@ fn parse_players(body: &[u8]) -> Result<PlayerList, ProbeError> {
     struct Entry {
         id: u32,
         ping: i64,
+        #[serde(default)]
+        identifiers: Vec<Value>,
+        #[serde(default)]
+        name: Option<Value>,
     }
     let entries: Vec<Entry> = serde_json::from_slice(body)
         .map_err(|_| ProbeError::Invalid("/players.json is not a list of players".to_owned()))?;
@@ -493,11 +504,32 @@ fn parse_players(body: &[u8]) -> Result<PlayerList, ProbeError> {
     }
     Ok(PlayerList {
         players: entries
-            .into_iter()
+            .iter()
             .map(|entry| (entry.id, u32::try_from(entry.ping).ok()))
+            .collect(),
+        shown: entries
+            .into_iter()
+            .map(|entry| Listed {
+                id: entry.id,
+                identifiers: entry
+                    .identifiers
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .filter(|identifier| !is_address(identifier))
+                    .map(str::to_owned)
+                    .collect(),
+                name: entry.name.as_ref().and_then(Value::as_str).map(str::to_owned),
+            })
             .collect(),
         anonymous: false,
     })
+}
+
+/// An `ip:` identifier, whatever its case: never kept, not even in memory.
+pub fn is_address(identifier: &str) -> bool {
+    identifier
+        .get(..3)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("ip:"))
 }
 
 fn base64(bytes: &[u8]) -> String {
@@ -710,17 +742,30 @@ mod tests {
     }
 
     #[test]
-    fn the_player_list_keeps_ids_and_pings_only() {
-        let body = br#"[{"endpoint":"127.0.0.1","id":3,"identifiers":["license:abc","discord:1"],"name":"Ada","ping":42},
-                        {"endpoint":"10.0.0.2","id":7,"identifiers":[],"name":"Grace","ping":120}]"#;
+    fn the_player_list_keeps_identifiers_and_names_but_never_addresses() {
+        let body = br#"[{"endpoint":"127.0.0.1","id":3,"identifiers":["license:abc","IP:127.0.0.1","discord:1",4],"name":"Ada","ping":42},
+                        {"endpoint":"10.0.0.2","id":7,"identifiers":["ip:10.0.0.2"],"name":"Grace","ping":120}]"#;
 
+        let list = parse_players(body).unwrap();
+
+        assert_eq!(list.players, [(3, Some(42)), (7, Some(120))]);
         assert_eq!(
-            parse_players(body),
-            Ok(PlayerList {
-                players: vec![(3, Some(42)), (7, Some(120))],
-                anonymous: false
-            })
+            list.shown,
+            [
+                Listed {
+                    id: 3,
+                    identifiers: vec!["license:abc".to_owned(), "discord:1".to_owned()],
+                    name: Some("Ada".to_owned()),
+                },
+                Listed {
+                    id: 7,
+                    identifiers: Vec::new(),
+                    name: Some("Grace".to_owned()),
+                },
+            ]
         );
+        assert!(!format!("{list:?}").contains("127.0.0.1"));
+        assert!(!format!("{list:?}").contains("10.0.0.2"));
         assert_eq!(parse_players(b"[]"), Ok(PlayerList::default()));
     }
 
@@ -728,13 +773,7 @@ mod tests {
     fn a_player_without_a_network_peer_stays_in_the_list_without_a_ping() {
         let body = br#"[{"id":3,"name":"Ada","ping":42},{"id":4,"name":"Grace","ping":-1}]"#;
 
-        assert_eq!(
-            parse_players(body),
-            Ok(PlayerList {
-                players: vec![(3, Some(42)), (4, None)],
-                anonymous: false
-            })
-        );
+        assert_eq!(parse_players(body).unwrap().players, [(3, Some(42)), (4, None)]);
     }
 
     #[test]

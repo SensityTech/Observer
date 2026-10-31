@@ -7,8 +7,8 @@ use axum::Router;
 use jiff::tz::TimeZone;
 use observer_app::{
     Accounts, Artifacts, ArtifactsSetup, ArtifactsTask, AuditLog, Clock, DatabaseFiles, Diagnostics,
-    DiagnosticsSetup, Metrics, MetricsSetup, PasswordCost, Running, Schedule, ScheduleSetup, ScheduleTask,
-    Servers, Setup, Sources, Supervision,
+    DiagnosticsSetup, Metrics, MetricsSetup, PasswordCost, Players, PlayersSetup, Running, Schedule,
+    ScheduleSetup, ScheduleTask, Servers, Setup, Sources, Supervision,
 };
 use observer_artifacts::Http;
 use observer_artifacts::catalog::Catalog;
@@ -100,6 +100,16 @@ pub async fn run(config: Config, args: RunArgs) -> anyhow::Result<()> {
     })
     .await
     .with_context(|| format!("cannot open {}", paths.metrics.display()))?;
+    // Before FXServer boots, so that the first run's players are followed from its start.
+    let (players, playing) = Players::start(PlayersSetup {
+        db: db.clone(),
+        metrics: metrics.clone(),
+        clock: clock.clone(),
+        supervision: supervision.clone(),
+        schedule: schedule.status(),
+        data_dir: paths.root.clone(),
+    })
+    .await?;
 
     let listener = TcpListener::bind(config.http.listen)
         .await
@@ -141,6 +151,7 @@ pub async fn run(config: Config, args: RunArgs) -> anyhow::Result<()> {
         artifacts,
         diagnostics,
         files: files.clone(),
+        players,
     };
     let state = observer_web::AppState::new(
         BUILD,
@@ -221,6 +232,8 @@ pub async fn run(config: Config, args: RunArgs) -> anyhow::Result<()> {
     .await;
     supervised.close().await;
     diagnosing.close().await;
+    // After the supervision, so that FXServer's stop closes the sessions.
+    playing.close().await;
     // After the supervision, so that FXServer's stop is in the statistics.
     sampling.close().await;
     stop.cancel();
