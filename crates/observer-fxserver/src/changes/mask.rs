@@ -143,6 +143,7 @@ pub fn secrets(text: &str, path: &str, chain: bool) -> Vec<Range<usize>> {
     authorization_headers(text, line_values, &mut found);
     private_keys(text, &mut found);
     xml(text, &mut found);
+    sql_passwords(text, &mut found);
     let mut start = 0;
     for line in text.split('\n') {
         let line = line.strip_suffix('\r').unwrap_or(line);
@@ -169,7 +170,32 @@ fn secret_name(name: &str) -> bool {
         .filter(|c| *c != '_' && *c != '-')
         .map(|c| c.to_ascii_lowercase())
         .collect();
-    SECRET_WORDS.iter().any(|word| name.ends_with(word))
+    // `tokens`, `apiKeys`, `TOKEN_2`: a plural or a number after the word names a secret too.
+    let numbered = name.trim_end_matches(|c: char| c.is_ascii_digit());
+    let singular = numbered.strip_suffix('s').unwrap_or(numbered);
+    [name.as_str(), numbered, singular]
+        .iter()
+        .any(|name| SECRET_WORDS.iter().any(|word| name.ends_with(word)))
+}
+
+/// SQL's `IDENTIFIED BY '…'`, which gives a database account its password.
+fn sql_passwords(text: &str, found: &mut Vec<Range<usize>>) {
+    // ASCII lowercasing keeps every byte offset.
+    let lower = text.to_ascii_lowercase();
+    for (at, phrase) in lower.match_indices("identified") {
+        let rest = lower[at + phrase.len()..].trim_start_matches([' ', '\t']);
+        let Some(rest) = rest.strip_prefix("by") else {
+            continue;
+        };
+        let value = rest.trim_start_matches([' ', '\t']);
+        let Some(quote) = value.chars().next().filter(|c| matches!(c, '\'' | '"' | '`')) else {
+            continue;
+        };
+        let open = text.len() - value.len() + 1;
+        let line_end = text[open..].find('\n').map_or(text.len(), |end| open + end);
+        let close = text[open..line_end].find(quote).map_or(line_end, |end| open + end);
+        found.push(open..close);
+    }
 }
 
 /// Whether a convar a cfg sets holds a secret: one the console knows, or one named like a secret.
@@ -268,7 +294,14 @@ pub fn tag(value: &str, key: &[u8; 32]) -> u16 {
 /// (`bypass = true`, a number, a call) stay.
 fn assignments(text: &str, line_values: bool, found: &mut Vec<Range<usize>>) {
     let bytes = text.as_bytes();
+    // An operator inside a value already hidden is part of that value. Skipping it keeps the scan
+    // linear: an unclosed `[[` hides the rest of the text, and each later `token = [[` would
+    // otherwise look for its own `]]` to the end again.
+    let mut covered = 0;
     for (at, operator) in text.match_indices(['=', ':']) {
+        if at < covered {
+            continue;
+        }
         let next = bytes.get(at + 1).copied();
         let previous = at.checked_sub(1).map(|index| bytes[index]);
         let comparison = operator == "="
@@ -283,6 +316,7 @@ fn assignments(text: &str, line_values: bool, found: &mut Vec<Range<usize>>) {
             continue;
         }
         if let Some(value) = value_after(text, at + 1, line_values) {
+            covered = value.end;
             found.push(value);
         }
     }
@@ -497,7 +531,11 @@ fn private_keys(text: &str, found: &mut Vec<Range<usize>>) {
 fn authorization_headers(text: &str, line_values: bool, found: &mut Vec<Range<usize>>) {
     // ASCII lowercasing keeps every byte offset.
     let lower = text.to_ascii_lowercase();
+    let mut covered = 0;
     for (start, name) in lower.match_indices("authorization") {
+        if start < covered {
+            continue;
+        }
         let after = &text[start + name.len()..];
         if after.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_') {
             continue;
@@ -514,6 +552,7 @@ fn authorization_headers(text: &str, line_values: bool, found: &mut Vec<Range<us
             continue;
         }
         if let Some(value) = value_after(text, text.len() - rest.len() + 1, line_values) {
+            covered = value.end;
             found.push(credentials(text, value));
         }
     }
@@ -1174,16 +1213,40 @@ mod tests {
     }
 
     #[test]
+    fn plural_and_numbered_names_and_sql_passwords_are_secrets_too() {
+        let lua = "Config.ApiKeys = \"k1\"
+local tokens = 'k2'
+TOKEN_2 = \"k3\"
+local keybind = 'E'
+";
+        let sql = "CREATE USER 'fivem'@'localhost' IDENTIFIED BY 'S3cretPass';
+GRANT ALL ON db.* TO 'fivem';
+";
+
+        let lua = masked(lua, "resources/a/config.lua");
+        let sql = masked(sql, "resources/a/install.sql");
+
+        assert!(!lua.contains("k1") && !lua.contains("k2") && !lua.contains("k3"), "{lua}");
+        assert!(lua.contains("keybind = 'E'"), "{lua}");
+        assert!(!sql.contains("S3cretPass"), "{sql}");
+        assert!(sql.contains("GRANT ALL ON db.*"), "{sql}");
+    }
+
+    #[test]
     fn markup_that_never_closes_is_read_quickly() {
         let text = "<a x=\"".repeat(200_000);
         let keys = "-----BEGIN PRIVATE KEY-----".repeat(40_000);
         let started = std::time::Instant::now();
 
+        let brackets = "token = [[
+".repeat(100_000);
         let found = secrets(&text, "resources/a/data.xml", false);
         let hidden = secrets(&keys, "resources/a/keys.txt", false);
+        let unclosed = secrets(&brackets, "resources/a/config.lua", false);
 
         assert_eq!(found, []);
         assert_eq!(hidden.len(), 1);
+        assert_eq!(unclosed, vec![10..brackets.len()]);
         assert!(
             started.elapsed() < std::time::Duration::from_secs(5),
             "{:?}",
