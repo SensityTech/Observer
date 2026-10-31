@@ -171,6 +171,15 @@ describe('formatPlayTime', () => {
         expect(formatPlayTime('en', 50 * 3_600_000 + 5 * 60_000)).toBe('50h 5m');
         expect(formatPlayTime('en', 312 * 3_600_000 + 47 * 60_000)).toBe('312h');
         expect(formatPlayTime('en', 1_284 * 3_600_000)).toBe('1,284h');
+        expect(formatPlayTime('en', -3_600_000)).toBe('0h');
+    });
+
+    it('should sign a difference of play time as Intl signs numbers', () => {
+        expect(formatPlayTime('en', (2 * 60 + 14) * 60_000, { signed: true })).toBe('+2h 14m');
+        expect(formatPlayTime('en', -62 * 3_600_000, { signed: true })).toBe(
+            formatNumber('en', -62, { signDisplay: 'exceptZero' }) + 'h',
+        );
+        expect(formatPlayTime('en', 0, { signed: true })).toBe('0h');
     });
 });
 

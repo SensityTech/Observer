@@ -1,11 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { FileInput, Settings2 } from 'lucide-react';
-import { useId, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 
 import { ApiError } from '../api/client';
 import type { PlayersImport } from '../api/generated/PlayersImport';
 import type { PlayersSettings } from '../api/generated/PlayersSettings';
 import {
+    FEWEST_DAYS,
+    allPlayers,
     importQuery,
     playersSettingsQuery,
     retentionIssues,
@@ -26,6 +28,28 @@ type Outcome = { tone: 'success' | 'danger'; message: string };
 
 /** The profile retention offered when the owner stops keeping profiles for good: the default. */
 const PROFILE_DAYS = 730;
+
+type DayField = 'linkDays' | 'addressDays' | 'dayDays';
+
+/** The retentions as typed: a field emptied stays empty rather than turning into 0. */
+type Draft = Record<DayField, string> & { profileDays: string | null };
+
+const draftOf = (settings: PlayersSettings): Draft => ({
+    linkDays: String(settings.linkDays),
+    addressDays: String(settings.addressDays),
+    dayDays: String(settings.dayDays),
+    profileDays: settings.profileDays === null ? null : String(settings.profileDays),
+});
+
+/** A whole number of days as typed; anything else, an empty field included, is out of every range. */
+const days = (text: string) => (/^\d+$/.test(text.trim()) ? Number(text.trim()) : Number.NaN);
+
+const settingsOf = (draft: Draft): PlayersSettings => ({
+    linkDays: days(draft.linkDays),
+    addressDays: days(draft.addressDays),
+    dayDays: days(draft.dayDays),
+    profileDays: draft.profileDays === null ? null : days(draft.profileDays),
+});
 
 /** The owner's: how long player data is kept, and txAdmin's players taken in. */
 export function DataCard({ zone }: { zone: string }) {
@@ -78,35 +102,34 @@ function RetentionForm({ saved }: { saved: PlayersSettings }) {
     const words = t.players.data;
     const client = useQueryClient();
     const keepId = useId();
-    const [draft, setDraft] = useState(saved);
+    const [draft, setDraft] = useState(() => draftOf(saved));
     const [checked, setChecked] = useState(false);
     const [outcome, setOutcome] = useState<Outcome | null>(null);
-    const issues = checked ? retentionIssues(draft) : [];
-    const changes = (Object.keys(draft) as (keyof PlayersSettings)[]).filter(
-        (key) => draft[key] !== saved[key],
-    ).length;
+    const issues = checked ? retentionIssues(settingsOf(draft)) : [];
+    const kept = draftOf(saved);
+    const changes = (Object.keys(draft) as (keyof Draft)[]).filter((key) => draft[key] !== kept[key]).length;
     const save = useMutation({
-        mutationFn: () => savePlayersSettings(draft),
+        mutationFn: () => savePlayersSettings(settingsOf(draft)),
         onMutate: () => setOutcome(null),
         onSuccess: (stored) => {
             client.setQueryData(playersSettingsQuery.queryKey, stored);
-            setDraft(stored);
+            setDraft(draftOf(stored));
             setChecked(false);
             setOutcome({ tone: 'success', message: words.saved });
         },
         onError: (error) => setOutcome({ tone: 'danger', message: errorMessage(t, error) }),
     });
-    const field = (key: 'linkDays' | 'addressDays' | 'dayDays') => (
+    const field = (key: DayField) => (
         <TextField
             label={words[key]}
             hint={words.ranges[key]}
             error={issues.includes(key) ? words.outOfRange(words.ranges[key]) : undefined}
             type="number"
             inputMode="numeric"
-            min={1}
+            min={FEWEST_DAYS[key]}
             className="max-w-md"
-            value={String(draft[key])}
-            onChange={(event) => setDraft({ ...draft, [key]: Number(event.target.value) })}
+            value={draft[key]}
+            onChange={(event) => setDraft({ ...draft, [key]: event.target.value })}
         />
     );
     return (
@@ -116,7 +139,7 @@ function RetentionForm({ saved }: { saved: PlayersSettings }) {
             onSubmit={(event) => {
                 event.preventDefault();
                 setChecked(true);
-                if (retentionIssues(draft).length === 0 && !save.isPending) {
+                if (retentionIssues(settingsOf(draft)).length === 0 && !save.isPending) {
                     save.mutate();
                 }
             }}
@@ -138,7 +161,7 @@ function RetentionForm({ saved }: { saved: PlayersSettings }) {
                                 ...draft,
                                 profileDays: event.target.checked
                                     ? null
-                                    : (saved.profileDays ?? PROFILE_DAYS),
+                                    : String(saved.profileDays ?? PROFILE_DAYS),
                             })
                         }
                     />
@@ -158,10 +181,10 @@ function RetentionForm({ saved }: { saved: PlayersSettings }) {
                         }
                         type="number"
                         inputMode="numeric"
-                        min={365}
+                        min={FEWEST_DAYS.profileDays}
                         className="max-w-md"
-                        value={String(draft.profileDays)}
-                        onChange={(event) => setDraft({ ...draft, profileDays: Number(event.target.value) })}
+                        value={draft.profileDays}
+                        onChange={(event) => setDraft({ ...draft, profileDays: event.target.value })}
                     />
                 )}
             </div>
@@ -172,7 +195,7 @@ function RetentionForm({ saved }: { saved: PlayersSettings }) {
                         tone="ghost"
                         className="max-md:flex-1"
                         onClick={() => {
-                            setDraft(saved);
+                            setDraft(draftOf(saved));
                             setChecked(false);
                             setOutcome({ tone: 'success', message: words.discarded });
                         }}
@@ -197,8 +220,21 @@ function ImportForm({ zone }: { zone: string }) {
     const [touched, setTouched] = useState(false);
     const start = useMutation({
         mutationFn: () => startImport(path.trim()),
-        onSuccess: (started) => client.setQueryData(importQuery.queryKey, started),
+        onSuccess: async (started) => {
+            // A read still on its way would put the status from before the start back, and end the polling.
+            await client.cancelQueries({ queryKey: importQuery.queryKey });
+            client.setQueryData(importQuery.queryKey, started);
+        },
     });
+    // Once written, the players it brought change the list, the community figures and the profiles.
+    const state = imports.data?.state;
+    const before = useRef(state);
+    useEffect(() => {
+        if (before.current === 'writing' && state !== undefined && state !== 'writing') {
+            void client.invalidateQueries(allPlayers);
+        }
+        before.current = state;
+    }, [state, client]);
     const refused =
         start.error instanceof ApiError && start.error.code === 'invalid_players_file'
             ? errorMessage(t, start.error)

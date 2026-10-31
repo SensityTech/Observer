@@ -181,13 +181,58 @@ describe('PlayersPage', () => {
         }
     });
 
-    it('should count the time txAdmin saw into the total and name it apart', async () => {
+    it('should name a confirmed player before their profile is written, and one left without a name', async () => {
+        const confirmed = ONLINE.players[0]!;
+        await open(
+            '/players',
+            MODERATOR,
+            api((url) =>
+                url.pathname === `${PLAYERS_PATH}/online`
+                    ? json({
+                          players: [
+                              { ...confirmed, netId: 4, player: null, name: 'Lena', totalMs: 0 },
+                              { ...confirmed, netId: 5, player: 9, name: '' },
+                          ],
+                      })
+                    : undefined,
+            ),
+        );
+
+        const [first, nameless] = rows('players-online');
+        expect(within(first!).getByText('Lena')).not.toBeNull();
+        expect(within(first!).queryByRole('link')).toBeNull();
+        expect(within(first!).queryByText(en.players.now.unconfirmed)).toBeNull();
+        expect(within(nameless!).getByRole('link', { name: en.players.noName }).getAttribute('href')).toBe(
+            '/players/9',
+        );
+    });
+
+    it('should count the time txAdmin saw and the session under way into the total', async () => {
         await open('/players', MODERATOR);
 
+        // 34h seen, 280h from txAdmin, and the 2h 14m of the session under way.
         const [ruby] = rows('players-list');
-        expect(within(ruby!).getByText('314h')).not.toBeNull();
+        expect(within(ruby!).getByText('316h')).not.toBeNull();
         expect(within(ruby!).getByText(en.players.list.imported('280h'))).not.toBeNull();
+        expect(within(ruby!).getByText('23h 14m')).not.toBeNull();
         expect(within(ruby!).getByText(en.players.online)).not.toBeNull();
+    });
+
+    it('should say a player has no name rather than show an empty link', async () => {
+        await open(
+            '/players',
+            MODERATOR,
+            api((url) =>
+                url.pathname === PLAYERS_PATH
+                    ? json({ ...PLAYERS, players: [{ ...PLAYERS.players[0]!, name: '' }] })
+                    : undefined,
+            ),
+        );
+
+        const [nameless] = rows('players-list');
+        expect(within(nameless!).getByRole('link', { name: en.players.noName }).getAttribute('href')).toBe(
+            '/players/7',
+        );
     });
 
     it('should say under the search why a search by another identifier is refused', async () => {
@@ -217,15 +262,17 @@ describe('PlayersPage', () => {
         );
     });
 
-    it('should show the import while it writes, then what it took in', async () => {
+    it('should show the import while it writes, then what it took in, and read the players again', async () => {
         let current = writing;
-        const { client } = await open(
+        const { client, fetch } = await open(
             '/players',
             OWNER,
             api((url) => (url.pathname === `${PLAYERS_PATH}/import` ? json(current) : undefined)),
         );
 
         const data = card('players-data');
+        const listReads = () => fetch.mock.calls.filter(([input]) => String(input) === PLAYERS_PATH).length;
+        const before = listReads();
         expect(data.getByText(en.players.data.writing(1_200, 5_000))).not.toBeNull();
         expect(data.getByRole('progressbar', { name: en.players.data.progress }).getAttribute('value')).toBe(
             '1200',
@@ -249,6 +296,22 @@ describe('PlayersPage', () => {
             data.getByText(en.players.data.finished('2026-10-30 21:01', 4_700, 280, 12, 8)),
         ).not.toBeNull();
         expect(data.queryByRole('progressbar')).toBeNull();
+        await settle();
+        expect(listReads()).toBe(before + 1);
+    });
+
+    it('should keep an emptied retention empty, and refuse it as out of range', async () => {
+        await open('/players', OWNER);
+        const data = card('players-data');
+        const links = data.getByLabelText(en.players.data.linkDays);
+        expect(links.getAttribute('min')).toBe('30');
+
+        fireEvent.change(links, { target: { value: '' } });
+        expect((links as HTMLInputElement).value).toBe('');
+        fireEvent.click(data.getByRole('button', { name: en.players.data.save }));
+        await settle();
+
+        expect(data.getByText(en.players.data.outOfRange(en.players.data.ranges.linkDays))).not.toBeNull();
     });
 
     it('should keep the retention and the import to the owner', async () => {
@@ -330,6 +393,12 @@ describe('PlayerPage', () => {
         );
 
         const identifiers = card('player-identifiers');
+        const token = `3:${'c4'.repeat(32)}`;
+        expect(
+            identifiers.getAllByRole('button', {
+                name: en.players.profile.identifiers.copy(en.players.profile.identifiers.kinds.token, token),
+            }),
+        ).toHaveLength(2);
         expect(identifiers.getAllByText(en.players.profile.identifiers.sameAddress(2))).toHaveLength(2);
         expect(identifiers.getAllByText('3:c4c4c4c4c4c4…')).toHaveLength(2);
         expect(identifiers.getAllByText(en.players.profile.identifiers.imported)).toHaveLength(2);
@@ -367,5 +436,23 @@ describe('PlayerPage', () => {
         );
         expect(router.state.location.pathname).toBe('/players');
         expect(screen.getByText(en.players.forgotten)).not.toBeNull();
+        // Said once: a reload or a step back and forth does not say it again.
+        expect(router.state.location.state.forgotten).toBe(false);
+    });
+
+    it('should say a player has no name in the title and the forget dialog', async () => {
+        await open(
+            '/players/7',
+            OWNER,
+            api((url) => (url.pathname === `${PLAYERS_PATH}/7` ? json({ ...PROFILE, name: '' }) : undefined)),
+        );
+
+        expect(screen.getByRole('heading', { level: 1, name: en.players.noName })).not.toBeNull();
+        fireEvent.click(screen.getByRole('button', { name: en.players.profile.forget.button }));
+        expect(
+            within(screen.getByRole('alertdialog')).getByRole('heading', {
+                name: en.players.profile.forget.title(''),
+            }),
+        ).not.toBeNull();
     });
 });

@@ -1,8 +1,11 @@
 import { Check, Copy } from 'lucide-react';
-import { useId, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 
 import { useI18n } from '../i18n/I18nProvider';
 import { cn } from '../lib/cn';
+
+/** How long "Copied" stays under the value. */
+const COPIED_FOR = 2_000;
 
 /**
  * A long value shown short, in mono, and copied whole in one click where the browser allows it.
@@ -12,6 +15,13 @@ export function CopyValue({ value, shown, label }: { value: string; shown: strin
     const { t } = useI18n();
     const id = useId();
     const [state, setState] = useState<'idle' | 'copied' | 'blocked'>('idle');
+    useEffect(() => {
+        if (state !== 'copied') {
+            return;
+        }
+        const timer = setTimeout(() => setState('idle'), COPIED_FOR);
+        return () => clearTimeout(timer);
+    }, [state]);
     const copy = async () => {
         try {
             await navigator.clipboard.writeText(value);

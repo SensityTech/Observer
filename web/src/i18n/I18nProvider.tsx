@@ -31,8 +31,8 @@ type I18n = {
         milliseconds: (ms: number) => string;
         dateTime: (date: Date, options?: Intl.DateTimeFormatOptions) => string;
         duration: (seconds: number) => string;
-        /** Play time, in hours past the first: `2h 14m`, `312h`. */
-        playTime: (ms: number) => string;
+        /** Play time, in hours past the first: `2h 14m`, `312h`; a `signed` difference `+2h 14m`. */
+        playTime: (ms: number, options?: { signed?: boolean }) => string;
         /** An API timestamp (RFC 3339) as tables show it, in local time. */
         timestamp: (rfc3339: string, options?: { seconds?: boolean }) => string;
     };
@@ -76,7 +76,7 @@ export function I18nProvider({ children }: { children: ReactNode }) {
                 milliseconds: (ms) => formatMilliseconds(locale, ms),
                 dateTime: (date, options) => formatDateTime(locale, date, options),
                 duration: (seconds) => formatDuration(locale, seconds),
-                playTime: (ms) => formatPlayTime(locale, ms),
+                playTime: (ms, options) => formatPlayTime(locale, ms, options),
                 timestamp: (rfc3339, options) => formatTimestamp(new Date(rfc3339), options),
             },
         }),

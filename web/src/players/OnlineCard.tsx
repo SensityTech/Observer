@@ -11,6 +11,7 @@ import { Notice } from '../components/Notice';
 import { table } from '../components/table';
 import { useI18n } from '../i18n/I18nProvider';
 import { cn } from '../lib/cn';
+import { PlayerName } from './words';
 
 /** Who is connected now: a confirmed player by name and licence, the others by their state only. */
 export function OnlineCard() {
@@ -80,18 +81,24 @@ export function OnlineCard() {
     );
 }
 
-/** The player's name opening their profile, or what is known of a player not confirmed. */
+/**
+ * A confirmed player by name, opening their profile once it is written (a first visit waits for
+ * the next write); a player not confirmed by their state alone.
+ */
 function Who({ player }: { player: OnlinePlayer }) {
     const { t } = useI18n();
     const words = t.players.now;
-    if (player.confirmation === 'confirmed' && player.player !== null && player.name !== null) {
-        return (
+    if (player.confirmation === 'confirmed') {
+        const name = <PlayerName name={player.name ?? ''} />;
+        return player.player === null ? (
+            <span className="font-medium text-ink [overflow-wrap:anywhere]">{name}</span>
+        ) : (
             <Link
                 to="/players/$id"
                 params={{ id: String(player.player) }}
                 className="font-medium text-ink underline-offset-2 [overflow-wrap:anywhere] hover:underline"
             >
-                {player.name}
+                {name}
             </Link>
         );
     }

@@ -86,6 +86,7 @@ export const PLAYERS: PlayerPage = {
             playMs: 34 * HOUR,
             importedMs: 280 * HOUR,
             recentMs: 21 * HOUR,
+            inProgressMs: 2 * HOUR + 14 * 60_000,
             sessions: 19,
             firstSeen: '2024-03-02T19:20:00Z',
             lastSeen: '2026-10-30T18:02:00Z',
@@ -93,6 +94,7 @@ export const PLAYERS: PlayerPage = {
         },
     ],
     next: null,
+    zone: 'Europe/Paris',
 };
 
 export const PROFILE: PlayerProfile = {

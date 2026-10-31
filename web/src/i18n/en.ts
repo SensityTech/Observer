@@ -1174,6 +1174,8 @@ export const en = {
         online: 'Online',
         offline: 'Offline',
         copyLicence: (license: string) => `Copy the licence ${license}`,
+        // A name the player chose that nothing was left of once cleaned of control characters.
+        noName: 'No name',
         now: {
             title: 'Online now',
             meta: (players: number) => `${count(players, { one: 'player', other: 'players' })} · every 10 s`,
@@ -1256,7 +1258,7 @@ export const en = {
             licence: 'Licence',
             firstSeen: 'First visit',
             lastSeen: 'Last visit',
-            importedAt: (day: string) => `Imported from txAdmin ${day}`,
+            imported: 'Imported from txAdmin',
             total: 'Total play time',
             seenByObserver: 'Seen by Observer',
             beforeObserver: 'Before Observer',
@@ -1284,6 +1286,7 @@ export const en = {
                 today: (time: string) => `Today, so far: ${time}.`,
                 tooltip: (time: string) => `${time} played`,
                 todaySoFar: 'today, so far',
+                hours: (hours: string) => `${hours}h`,
             },
             names: {
                 title: 'Names',
@@ -1384,6 +1387,7 @@ export const en = {
                 link: 'Link',
                 strong: 'Strong',
                 weak: 'Weak',
+                strength: (strength: string) => `· ${strength}`,
                 direct: 'Shares an identifier',
                 indirect: 'Through another licence',
                 empty: 'No other licence shares an identifier with this one.',
@@ -1391,7 +1395,8 @@ export const en = {
             },
             forget: {
                 button: 'Forget this player…',
-                title: (name: string) => `Forget ${name}?`,
+                title: (name: string) =>
+                    name === '' ? 'Forget this player, who has no name?' : `Forget ${name}?`,
                 lead: 'For an erasure request. Observer deletes, now and for good:',
                 goes: [
                     'their profile and play time, day by day',

@@ -11,6 +11,7 @@ import {
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 
 import { FIGURE, formatNumber } from '../i18n/format';
+import type { Messages } from '../i18n/en';
 import { useI18n } from '../i18n/I18nProvider';
 import { dayChartOptions } from './days';
 import { tokenColor } from './theme';
@@ -18,13 +19,14 @@ import { tokenColor } from './theme';
 const HOUR = 3_600_000;
 
 /** The scale reads in hours: `1.5h`; a bar's own time, in the tooltip, to the minute. */
-const activityOptions = (host: Element, locale: string): DeepPartial<ChartOptions> => {
+const activityOptions = (host: Element, locale: string, t: Messages): DeepPartial<ChartOptions> => {
     const base = dayChartOptions(host, locale);
     return {
         ...base,
         localization: {
             ...base.localization,
-            priceFormatter: (hours: number) => `${formatNumber(locale, hours, FIGURE)}h`,
+            priceFormatter: (hours: number) =>
+                t.players.profile.activity.hours(formatNumber(locale, hours, FIGURE)),
         },
     };
 };
@@ -35,7 +37,7 @@ export function ActivityChart({ days, today }: { days: { day: string; playMs: nu
     const host = useRef<HTMLDivElement>(null);
     const chart = useRef<IChartApi | null>(null);
     const bars = useRef<ISeriesApi<'Histogram'> | null>(null);
-    const localeRef = useRef(locale);
+    const localeRef = useRef({ locale, t });
     const shown = useRef(days);
     const [hovered, setHovered] = useState<{ x: number; day: string; playMs: number } | null>(null);
     const tip = useRef<HTMLSpanElement>(null);
@@ -49,7 +51,10 @@ export function ActivityChart({ days, today }: { days: { day: string; playMs: nu
         if (element === null) {
             return;
         }
-        const api = createChart(element, activityOptions(element, localeRef.current));
+        const api = createChart(
+            element,
+            activityOptions(element, localeRef.current.locale, localeRef.current.t),
+        );
         bars.current = api.addSeries(HistogramSeries, {
             priceScaleId: 'left',
             priceLineVisible: false,
@@ -57,7 +62,7 @@ export function ActivityChart({ days, today }: { days: { day: string; playMs: nu
         });
         chart.current = api;
         const paint = () => {
-            api.applyOptions(activityOptions(element, localeRef.current));
+            api.applyOptions(activityOptions(element, localeRef.current.locale, localeRef.current.t));
             bars.current?.applyOptions({ color: tokenColor(element, '--chart-muted') });
         };
         paint();
@@ -82,12 +87,12 @@ export function ActivityChart({ days, today }: { days: { day: string; playMs: nu
     }, []);
 
     useEffect(() => {
-        localeRef.current = locale;
+        localeRef.current = { locale, t };
         const element = host.current;
         if (element !== null) {
-            chart.current?.applyOptions(activityOptions(element, locale));
+            chart.current?.applyOptions(activityOptions(element, locale, t));
         }
-    }, [locale]);
+    }, [locale, t]);
 
     useEffect(() => {
         bars.current?.setData(days.map((each) => ({ time: each.day, value: each.playMs / HOUR })));

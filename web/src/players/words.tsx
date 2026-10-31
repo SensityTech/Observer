@@ -28,6 +28,12 @@ export function OnlineState({ online }: { online: boolean }) {
     );
 }
 
+/** A name as the player chose it, in plain text; one left empty by its cleaning says so in grey. */
+export function PlayerName({ name }: { name: string }) {
+    const { t } = useI18n();
+    return name === '' ? <span className="text-ink-3">{t.players.noName}</span> : name;
+}
+
 /** The zone the page's days are dates in, and its times read in. */
 export function ZoneNote({ zone }: { zone: string }) {
     const { t, locale } = useI18n();

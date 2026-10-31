@@ -10,15 +10,18 @@ import { Tile } from '../overview/Tiles';
 import { formatCalendarDay } from '../i18n/format';
 import { useI18n } from '../i18n/I18nProvider';
 
-/** A plain difference, signed as the panel signs one (`+12`, `−3h`), with no verdict: these are counts of people. */
-const signed = (value: number, words: string) => (value > 0 ? `+${words}` : value < 0 ? `−${words}` : words);
-
 /** The last 7 days against the 7 before, then the chart of the last 30 days. */
 export function CommunitySection() {
     const { t, format } = useI18n();
     const words = t.players.community;
     const community = useQuery(communityQuery);
-    const tile = (figure: (totals: CommunityTotals) => number, as: (value: number) => string) => {
+    // Each tile against the 7 days before as a plain difference, signed by Intl, with no verdict:
+    // these are counts of people, not rates.
+    const tile = (
+        figure: (totals: CommunityTotals) => number,
+        as: (value: number) => string,
+        signed: (value: number) => string,
+    ) => {
         if (community.data === undefined) {
             return { value: t.tiles.unknown, facts: [] };
         }
@@ -28,10 +31,11 @@ export function CommunitySection() {
             value: as(now),
             facts: [
                 { term: words.before, detail: as(before) },
-                { term: words.difference, detail: signed(now - before, as(Math.abs(now - before))) },
+                { term: words.difference, detail: signed(now - before) },
             ],
         };
     };
+    const difference = (value: number) => format.number(value, { signDisplay: 'exceptZero' });
     const period = <p className="self-end text-small text-ink-3">{words.lastWeek}</p>;
     return (
         <>
@@ -39,19 +43,23 @@ export function CommunitySection() {
                 <Tile
                     icon={Users}
                     label={words.players}
-                    {...tile((totals) => totals.players, format.number)}
+                    {...tile((totals) => totals.players, format.number, difference)}
                     trend={period}
                 />
                 <Tile
                     icon={UserPlus}
                     label={words.newPlayers}
-                    {...tile((totals) => totals.newPlayers, format.number)}
+                    {...tile((totals) => totals.newPlayers, format.number, difference)}
                     trend={period}
                 />
                 <Tile
                     icon={Clock}
                     label={words.playTime}
-                    {...tile((totals) => totals.playMs, format.playTime)}
+                    {...tile(
+                        (totals) => totals.playMs,
+                        (ms) => format.playTime(ms),
+                        (ms) => format.playTime(ms, { signed: true }),
+                    )}
                     trend={period}
                 />
             </div>

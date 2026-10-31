@@ -7,7 +7,7 @@ import { ApiError } from '../api/client';
 import { Permission } from '../api/generated/Permission';
 import type { PlayerSort } from '../api/generated/PlayerSort';
 import type { PlayerSummary } from '../api/generated/PlayerSummary';
-import { playersQuery, shortLicence } from '../api/players';
+import { playersQuery, shortLicence, totalOf } from '../api/players';
 import { allows, useMe } from '../auth/me';
 import { Button } from '../components/Button';
 import { Card } from '../components/Card';
@@ -19,7 +19,7 @@ import { errorMessage } from '../i18n/errors';
 import { zoneDate } from '../i18n/format';
 import { useI18n } from '../i18n/I18nProvider';
 import { cn } from '../lib/cn';
-import { OnlineState, useVisit } from './words';
+import { OnlineState, PlayerName, useVisit } from './words';
 
 const SORTS: PlayerSort[] = ['playTime', 'recent', 'sessions', 'firstSeen', 'lastSeen'];
 
@@ -27,7 +27,7 @@ const SORTS: PlayerSort[] = ['playTime', 'recent', 'sessions', 'firstSeen', 'las
 const SEARCH_REFUSALS = new Set(['forbidden', 'address_search', 'invalid_search']);
 
 /** Every profile, searched and sorted, a page at a time. */
-export function PlayersCard({ zone }: { zone: string }) {
+export function PlayersCard() {
     const { t } = useI18n();
     const words = t.players.list;
     const me = useMe();
@@ -37,6 +37,8 @@ export function PlayersCard({ zone }: { zone: string }) {
     const [sort, setSort] = useState<PlayerSort>('playTime');
     const list = useInfiniteQuery({ ...playersQuery(search, sort), placeholderData: keepPreviousData });
     const players = list.data?.pages.flatMap((page) => page.players) ?? [];
+    // Visits read in the schedule's zone, which the list names itself; there are none to show before it.
+    const zone = list.data?.pages[0]?.zone ?? 'UTC';
     const refused =
         list.error instanceof ApiError && SEARCH_REFUSALS.has(list.error.code)
             ? errorMessage(t, list.error)
@@ -246,7 +248,7 @@ function Name({ player }: { player: PlayerSummary }) {
             params={{ id: String(player.id) }}
             className="font-medium text-ink underline-offset-2 [overflow-wrap:anywhere] hover:underline"
         >
-            {player.name}
+            <PlayerName name={player.name} />
         </Link>
     );
 }
@@ -268,14 +270,14 @@ function PlayerRow({ player, zone }: { player: PlayerSummary; zone: string }) {
                 />
             </td>
             <td className={cn(number, 'font-semibold text-ink')}>
-                {format.playTime(player.playMs + player.importedMs)}
+                {format.playTime(totalOf(player))}
                 {player.importedMs > 0 && (
                     <div className={cn(table.sub, 'justify-end font-normal')}>
                         {t.players.list.imported(format.playTime(player.importedMs))}
                     </div>
                 )}
             </td>
-            <td className={number}>{format.playTime(player.recentMs)}</td>
+            <td className={number}>{format.playTime(player.recentMs + player.inProgressMs)}</td>
             <td className={number}>{format.number(player.sessions)}</td>
             <td className={cn(table.td, table.mono)}>{visit(player.firstSeen)}</td>
             <td className={cn(table.td, table.mono)}>{visit(player.lastSeen)}</td>
@@ -301,8 +303,8 @@ function PlayerItem({ player, zone }: { player: PlayerSummary; zone: string }) {
                 label={t.players.copyLicence(player.license)}
             />
             <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-small">
-                <Figure term={sorts.playTime}>{format.playTime(player.playMs + player.importedMs)}</Figure>
-                <Figure term={sorts.recent}>{format.playTime(player.recentMs)}</Figure>
+                <Figure term={sorts.playTime}>{format.playTime(totalOf(player))}</Figure>
+                <Figure term={sorts.recent}>{format.playTime(player.recentMs + player.inProgressMs)}</Figure>
                 <Figure term={sorts.sessions}>{format.number(player.sessions)}</Figure>
                 <Figure term={sorts.lastSeen}>
                     <span className="font-mono">{zoneDate(player.lastSeen, zone)}</span>

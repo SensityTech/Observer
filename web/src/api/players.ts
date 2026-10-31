@@ -12,6 +12,9 @@ import type { PlayersSettings } from './generated/PlayersSettings';
 
 const PATH = '/servers/default/players';
 
+/** Every players query: what an import or a forgotten player changes. */
+export const allPlayers = { queryKey: ['players'] };
+
 /** Who is connected, read again every 10 s while someone looks. */
 export const onlineQuery = queryOptions({
     queryKey: ['players', 'online'],
@@ -79,6 +82,14 @@ export const startImport = (path: string) =>
 /** The longest retention Observer takes, a hundred years: what "kept for good" stands for in the ranges. */
 export const MOST_DAYS = 36_500;
 
+/** The shortest each retention may be. */
+export const FEWEST_DAYS = {
+    linkDays: 30,
+    addressDays: 7,
+    dayDays: 30,
+    profileDays: 365,
+} satisfies Record<keyof PlayersSettings, number>;
+
 const within = (value: number, low: number, high: number) =>
     Number.isInteger(value) && value >= low && value <= high;
 
@@ -89,10 +100,12 @@ const within = (value: number, low: number, high: number) =>
 export const retentionIssues = (settings: PlayersSettings) => {
     const profile = Math.min(settings.profileDays ?? MOST_DAYS, MOST_DAYS);
     const out: (keyof PlayersSettings | null)[] = [
-        settings.profileDays !== null && !within(settings.profileDays, 365, MOST_DAYS) ? 'profileDays' : null,
-        within(settings.linkDays, 30, profile) ? null : 'linkDays',
-        within(settings.addressDays, 7, settings.linkDays) ? null : 'addressDays',
-        within(settings.dayDays, 30, profile) ? null : 'dayDays',
+        settings.profileDays !== null && !within(settings.profileDays, FEWEST_DAYS.profileDays, MOST_DAYS)
+            ? 'profileDays'
+            : null,
+        within(settings.linkDays, FEWEST_DAYS.linkDays, profile) ? null : 'linkDays',
+        within(settings.addressDays, FEWEST_DAYS.addressDays, settings.linkDays) ? null : 'addressDays',
+        within(settings.dayDays, FEWEST_DAYS.dayDays, profile) ? null : 'dayDays',
     ];
     return out.filter((field) => field !== null);
 };
@@ -104,7 +117,8 @@ export const shortLicence = (license: string) => `${license.replace(/^license:/,
 export const shortToken = (token: string) => (token.length > 14 ? `${token.slice(0, 14)}…` : token);
 
 /** Total play time: what Observer saw, txAdmin's, and the session under way. */
-export const totalOf = (profile: PlayerProfile) => profile.playMs + profile.importedMs + profile.inProgressMs;
+export const totalOf = (player: Pick<PlayerProfile, 'playMs' | 'importedMs' | 'inProgressMs'>) =>
+    player.playMs + player.importedMs + player.inProgressMs;
 
 /** The day `back` days before `day`, both `YYYY-MM-DD`: calendar arithmetic, no zone involved. */
 export const dayBefore = (day: string, back: number) =>

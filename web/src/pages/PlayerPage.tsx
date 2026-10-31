@@ -18,7 +18,15 @@ import type { LinkedLicence } from '../api/generated/LinkedLicence';
 import type { PlayerDrop } from '../api/generated/PlayerDrop';
 import type { PlayerProfile } from '../api/generated/PlayerProfile';
 import type { ShownIdentifier } from '../api/generated/ShownIdentifier';
-import { fillDays, forgetPlayer, profileQuery, shortLicence, shortToken, totalOf } from '../api/players';
+import {
+    allPlayers,
+    fillDays,
+    forgetPlayer,
+    profileQuery,
+    shortLicence,
+    shortToken,
+    totalOf,
+} from '../api/players';
 import { useMe } from '../auth/me';
 import { ActivityChart } from '../charts/ActivityChart';
 import { ATTRIBUTION } from '../charts/PlayersChart';
@@ -35,7 +43,7 @@ import { FIGURE, zoneDate } from '../i18n/format';
 import { useI18n } from '../i18n/I18nProvider';
 import { cn } from '../lib/cn';
 import { Tile, type Fact } from '../overview/Tiles';
-import { DROP_ICONS, OnlineState, useVisit, ZoneNote } from '../players/words';
+import { DROP_ICONS, OnlineState, PlayerName, useVisit, ZoneNote } from '../players/words';
 
 /** The days the activity chart covers, as the API reads them. */
 const ACTIVITY_DAYS = 90;
@@ -92,7 +100,9 @@ function Profile({ profile }: { profile: PlayerProfile }) {
     return (
         <>
             <div className="page-head">
-                <h1 className="page-title [overflow-wrap:anywhere]">{profile.name}</h1>
+                <h1 className="page-title [overflow-wrap:anywhere]">
+                    <PlayerName name={profile.name} />
+                </h1>
                 <div className="flex flex-wrap items-center gap-3 max-md:w-full">
                     <ZoneNote zone={profile.zone} />
                     {me.isOwner && (
@@ -121,9 +131,11 @@ function Profile({ profile }: { profile: PlayerProfile }) {
                         <span className="font-mono text-small">{visit(profile.lastSeen)}</span>
                     </HeaderFact>
                     {profile.importedAt !== null && (
-                        <div className="col-span-2 self-center">
-                            <Chip>{words.importedAt(zoneDate(profile.importedAt, profile.zone))}</Chip>
-                        </div>
+                        <HeaderFact term={words.imported}>
+                            <span className="font-mono text-small">
+                                {zoneDate(profile.importedAt, profile.zone)}
+                            </span>
+                        </HeaderFact>
                     )}
                 </dl>
             </section>
@@ -155,9 +167,7 @@ function Tiles({ profile }: { profile: PlayerProfile }) {
     const { t, format } = useI18n();
     const words = t.players.profile;
     const today = profile.days.find((day) => day.day === profile.today)?.playMs ?? 0;
-    const total: Fact[] = [
-        { term: words.seenByObserver, detail: format.playTime(profile.playMs + profile.inProgressMs) },
-    ];
+    const total: Fact[] = [{ term: words.seenByObserver, detail: format.playTime(profile.playMs) }];
     if (profile.importedMs > 0) {
         total.push({ term: words.beforeObserver, detail: format.playTime(profile.importedMs) });
     }
@@ -283,7 +293,9 @@ function NamesCard({ profile }: { profile: PlayerProfile }) {
                         key={`${name.name}-${name.firstSeen}`}
                         className="flex flex-col gap-1.5 border-b border-line px-4 py-3 last:border-b-0"
                     >
-                        <span className="text-ui text-ink [overflow-wrap:anywhere]">{name.name}</span>
+                        <span className="text-ui text-ink [overflow-wrap:anywhere]">
+                            <PlayerName name={name.name} />
+                        </span>
                         <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-small">
                             <div className="flex min-w-0 flex-col">
                                 <dt className="text-meta text-ink-3">{words.firstSeen}</dt>
@@ -317,7 +329,7 @@ function NamesCard({ profile }: { profile: PlayerProfile }) {
                         {profile.names.map((name) => (
                             <tr key={`${name.name}-${name.firstSeen}`} className={table.row}>
                                 <td className={cn(table.td, 'min-w-40 text-ink [overflow-wrap:anywhere]')}>
-                                    {name.name}
+                                    <PlayerName name={name.name} />
                                 </td>
                                 <td className={cn(table.td, table.mono)}>{visit(name.firstSeen)}</td>
                                 <td className={cn(table.td, table.mono)}>{visit(name.lastSeen)}</td>
@@ -569,7 +581,8 @@ function IdentifierValue({ identifier }: { identifier: ShownIdentifier }) {
     if (identifier.kind === 'ip' || identifier.value === null) {
         return <span className="text-ink-2">{words.sameAddress(identifier.otherLicences)}</span>;
     }
-    const value = `${identifier.kind}:${identifier.value}`;
+    // A token reads with its type in front, as FiveM gives it and as a search takes it.
+    const value = identifier.kind === 'token' ? identifier.value : `${identifier.kind}:${identifier.value}`;
     return (
         <CopyValue
             value={value}
@@ -650,7 +663,7 @@ function LinkedName({ other }: { other: LinkedLicence }) {
                 params={{ id: String(other.player) }}
                 className="font-medium text-ink underline-offset-2 [overflow-wrap:anywhere] hover:underline"
             >
-                {other.name}
+                <PlayerName name={other.name} />
             </Link>
             <div className={cn(table.sub, 'font-mono')}>{shortLicence(other.license)}</div>
         </div>
@@ -672,7 +685,9 @@ function LinkedThrough({ other }: { other: LinkedLicence }) {
                             {link.kind === 'token' ? shortToken(link.value) : link.value}
                         </span>
                     )}
-                    <span className="text-ink-3">· {link.strong ? words.strong : words.weak}</span>
+                    <span className="text-ink-3">
+                        {words.strength(link.strong ? words.strong : words.weak)}
+                    </span>
                 </li>
             ))}
         </ul>
@@ -701,9 +716,12 @@ function ForgetDialog({ profile, onClose }: { profile: PlayerProfile; onClose: (
     const forget = useMutation({
         mutationFn: () => forgetPlayer(profile.id),
         onSuccess: async () => {
+            // The list must not show them on the way back, even for a moment; the rest is read again
+            // where it shows. Their own profile goes once the page has left it.
+            client.removeQueries({ queryKey: ['players', 'list'] });
+            await client.invalidateQueries({ ...allPlayers, refetchType: 'none' });
             await navigate({ to: '/players', state: (previous) => ({ ...previous, forgotten: true }) });
             client.removeQueries({ queryKey: profileQuery(profile.id).queryKey });
-            await client.invalidateQueries({ queryKey: ['players'] });
         },
     });
     return (
