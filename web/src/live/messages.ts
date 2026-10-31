@@ -190,6 +190,9 @@ const AUDIT_ACTIONS = {
     crash_file_downloaded: true,
     crash_files_deleted: true,
     tree_records_full: true,
+    player_forgotten: true,
+    players_imported: true,
+    players_retention_changed: true,
 } satisfies Record<AuditAction, true>;
 
 const OUTCOMES = { success: true, failure: true, denied: true } satisfies Record<Outcome, true>;

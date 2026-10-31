@@ -26,6 +26,7 @@ import type { NoticeReason } from '../api/generated/NoticeReason';
 import type { OneSync } from '../api/generated/OneSync';
 import type { Outcome } from '../api/generated/Outcome';
 import type { PermissionArea } from '../api/generated/PermissionArea';
+import type { PlayersFileProblem } from '../api/generated/PlayersFileProblem';
 import type { Protection } from '../api/generated/Protection';
 import type { Range } from '../api/generated/Range';
 import type { ScheduleMode } from '../api/generated/ScheduleMode';
@@ -94,6 +95,15 @@ const permissions = {
         description:
             'Processes FXServer starts and their command lines, its connections, crash and hang analyses.',
     },
+    playersView: {
+        name: 'View players',
+        description: "Who is connected, and each player's names, licence, play time and disconnections.",
+    },
+    playerIdentifiersView: {
+        name: 'View player identifiers',
+        description:
+            'Every identifier a player showed, hardware tokens included, and the other licences they link to.',
+    },
 } satisfies Record<PermissionKey, { name: string; description: string }>;
 
 const permissionNames = (hex: string) =>
@@ -130,6 +140,19 @@ const healthProblems = {
     probeUnauthorized: 'its performance probe refuses Observer',
     watchdogBark: 'its watchdog reported a stuck thread',
 } satisfies Record<HealthProblem, string>;
+
+const playersFileProblems = {
+    missing: 'Nothing is at this path on the host.',
+    notAFile: 'This is not a plain file: a folder, a link or a device.',
+    tooLarge: 'This file is over 512 MB, more than a players database holds.',
+    unreadable: 'Observer cannot read this file: check its permissions.',
+    notPlayersDatabase: "This file is not txAdmin's players database.",
+    unsupportedVersion:
+        'txAdmin wrote this file in a format Observer does not read. Open it once with a current txAdmin, then import it again.',
+} satisfies Record<PlayersFileProblem, string>;
+
+const isPlayersFileProblem = (key: string): key is PlayersFileProblem =>
+    Object.hasOwn(playersFileProblems, key);
 
 const ranges = {
     '1h': '1h',
@@ -231,6 +254,7 @@ export const en = {
         users: 'Users',
         audit: 'Audit log',
         diagnostics: 'Diagnostics',
+        players: 'Players',
         alertCount: (value: number) => count(value, { one: 'alert', other: 'alerts' }),
     },
     theme: {
@@ -1803,6 +1827,9 @@ export const en = {
             crash_file_downloaded: 'Crash file downloaded',
             crash_files_deleted: 'Crash files deleted',
             tree_records_full: 'Process records full',
+            player_forgotten: 'Player forgotten',
+            players_imported: "txAdmin's players imported",
+            players_retention_changed: 'Player retention changed',
         } satisfies Record<AuditAction, string>,
         outcomes: {
             success: 'Success',
@@ -1956,7 +1983,22 @@ export const en = {
             crash: 'Crash',
             names: 'Files',
             unrecorded: 'Command lines not kept',
+            before: 'Before',
+            after: 'After',
+            linkDays: 'Identifiers and names',
+            addressDays: 'Address fingerprints',
+            dayDays: 'Play time per day',
+            profileDays: 'Profiles',
+            read: 'Read',
+            written: 'Written',
+            imported: 'New',
+            updated: 'Updated',
+            forgotten: 'Skipped as forgotten',
+            invalid: 'Invalid',
         },
+        days: (value: number) => count(value, { one: 'day', other: 'days' }),
+        // A profile whose retention is unset is never deleted.
+        keptForGood: 'kept for good',
         snapshotKinds: { dump: 'a stack dump', report: 'a thread report' },
         snapshotFailures: {
             lowDisk: 'less than 1 GB free',
@@ -2041,6 +2083,7 @@ export const en = {
         settings: 'Settings',
         logs: 'Logs',
         diagnostics: 'Diagnostics',
+        players: 'Players',
     } satisfies Record<PermissionArea, string>,
     danger: {
         sensitive: 'Sensitive',
@@ -2170,6 +2213,18 @@ export const en = {
             return Array.isArray(params.findings)
                 ? 'The cfg now keeps FXServer from starting under Observer, so nothing was saved: the check below says what blocks.'
                 : 'The server folder or its cfg keeps FXServer from starting under Observer. Check them again, fix what blocks, then save.';
+        },
+        player_not_found: 'This player is no longer recorded: they were forgotten, or their profile expired.',
+        address_search: 'A search never takes an address. Search by a name, a licence or another identifier.',
+        invalid_search:
+            'What follows this prefix is not a valid identifier of its kind. Check it, or search by a name.',
+        invalid_players_settings:
+            'Some retentions are out of range. Each one says its range below its field.',
+        invalid_players_file: (params) => {
+            const problem = stringParam(params, 'problem');
+            return isPlayersFileProblem(problem)
+                ? playersFileProblems[problem]
+                : "This file cannot be imported as txAdmin's players database.";
         },
     } satisfies Record<ErrorCode, ErrorMessage>,
     failure: {
