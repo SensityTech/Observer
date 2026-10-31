@@ -420,7 +420,7 @@ describe('DiagnosticsPage', () => {
             }),
         );
         const later = { ...HANG, runStarted: '2026-10-29T14:30:00Z', generation: 5 };
-        const { getAllByRole, live } = await page(false, { ...SNAPSHOT, crashes: [later, CRASH] }, '11000');
+        const { getAllByRole, live } = await page(false, { ...SNAPSHOT, crashes: [later, CRASH] }, '21000');
 
         await waitFor(() =>
             expect(

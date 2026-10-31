@@ -1,6 +1,12 @@
 import type { RunMarker } from '../api/generated/RunMarker';
 import { formatTimestamp } from '../i18n/format';
 
+/** A change of FXServer's build at a start, which the drops chart marks beside the runs. */
+export type BuildMarker = { kind: 'build'; at: number; build: number | null };
+
+/** What a chart marks above its plot: a moment of the server's runs, or a build change. */
+export type ChartMarker = RunMarker | BuildMarker;
+
 export type Side = 'left' | 'right' | 'hidden';
 
 /** A marker placed on the plot: its instant at `x`, how wide its label is, both in pixels, and how
@@ -35,7 +41,7 @@ export const sides = (placed: readonly Placed[], plotWidth: number): Side[] => {
 };
 
 /** Where a marker sits on the chart: the start of its bucket, the only times the grid has. */
-export const bucketOf = (marker: RunMarker, from: number, step: number) =>
+export const bucketOf = (marker: ChartMarker, from: number, step: number) =>
     from + Math.floor((marker.at - from) / step) * step;
 
 /** A marker on a narrow plot: where its line falls, and whether it is a crash. */

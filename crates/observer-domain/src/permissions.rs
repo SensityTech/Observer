@@ -31,8 +31,9 @@ impl Permissions {
     pub const FILES_MANAGE: Self = Self(1 << 13);
     pub const PLAYERS_VIEW: Self = Self(1 << 14);
     pub const PLAYER_IDENTIFIERS_VIEW: Self = Self(1 << 15);
-    pub const CHANGES_VIEW: Self = Self(1 << 16);
-    pub const CHANGES_CONTENT: Self = Self(1 << 17);
+    pub const DROPS_VIEW: Self = Self(1 << 16);
+    pub const CHANGES_VIEW: Self = Self(1 << 17);
+    pub const CHANGES_CONTENT: Self = Self(1 << 18);
 
     /// Every permission in the catalog, which is what the owner holds.
     pub fn all() -> Self {
@@ -198,6 +199,7 @@ pub enum PermissionArea {
     Diagnostics,
     Files,
     Players,
+    Drops,
     Changes,
 }
 
@@ -349,9 +351,9 @@ pub const CATALOG: &[PermissionInfo] = &[
         key: "playersView",
         area: PermissionArea::Players,
         // Players' names, licences and play time, and the texts resources wrote when they
-        // dropped someone.
+        // dropped someone. Whoever reads the drop log sees its statistics too.
         danger: Danger::Sensitive,
-        implies: Permissions::NONE,
+        implies: Permissions::DROPS_VIEW,
     },
     PermissionInfo {
         bit: 15,
@@ -364,6 +366,15 @@ pub const CATALOG: &[PermissionInfo] = &[
     },
     PermissionInfo {
         bit: 16,
+        constant: "DROPS_VIEW",
+        key: "dropsView",
+        area: PermissionArea::Drops,
+        // Rates, categories, crash signatures and kicking resources: no player's identity.
+        danger: Danger::Normal,
+        implies: Permissions::NONE,
+    },
+    PermissionInfo {
+        bit: 17,
         constant: "CHANGES_VIEW",
         key: "changesView",
         area: PermissionArea::Changes,
@@ -372,7 +383,7 @@ pub const CATALOG: &[PermissionInfo] = &[
         implies: Permissions::NONE,
     },
     PermissionInfo {
-        bit: 17,
+        bit: 18,
         constant: "CHANGES_CONTENT",
         key: "changesContent",
         area: PermissionArea::Changes,
@@ -410,8 +421,9 @@ mod tests {
                 "PLAYER_IDENTIFIERS_VIEW",
                 Permissions::PLAYER_IDENTIFIERS_VIEW,
             ),
-            (16, "CHANGES_VIEW", Permissions::CHANGES_VIEW),
-            (17, "CHANGES_CONTENT", Permissions::CHANGES_CONTENT),
+            (16, "DROPS_VIEW", Permissions::DROPS_VIEW),
+            (17, "CHANGES_VIEW", Permissions::CHANGES_VIEW),
+            (18, "CHANGES_CONTENT", Permissions::CHANGES_CONTENT),
         ];
 
         assert_eq!(CATALOG.len(), frozen.len());

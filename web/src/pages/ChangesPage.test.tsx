@@ -57,19 +57,19 @@ const CHECK: SnapshotSummary = {
 };
 
 // Bit 0 the dashboard, 16 the changes, 17 their contents.
-const OWNER: Me = { id: 1, username: 'ada', isOwner: true, permissions: '3ffff', mustChangePassword: false };
+const OWNER: Me = { id: 1, username: 'ada', isOwner: true, permissions: '7ffff', mustChangePassword: false };
 const VIEWER: Me = {
     id: 2,
     username: 'kenji',
     isOwner: false,
-    permissions: '10001',
+    permissions: '20001',
     mustChangePassword: false,
 };
 const READER: Me = {
     id: 3,
     username: 'bob',
     isOwner: false,
-    permissions: '30001',
+    permissions: '60001',
     mustChangePassword: false,
 };
 

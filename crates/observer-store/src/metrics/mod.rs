@@ -3,6 +3,7 @@
 //! is set aside and a new one started, and it is never backed up.
 
 mod columns;
+pub mod drops;
 pub mod growth;
 pub mod rollups;
 pub mod runs;
@@ -27,6 +28,7 @@ const MIGRATIONS: &[M<'static>] = &[
     M::up(include_str!("../../migrations/metrics/0001_samples.sql")),
     M::up(include_str!("../../migrations/metrics/0002_depth.sql")),
     M::up(include_str!("../../migrations/metrics/0003_sessions.sql")),
+    M::up(include_str!("../../migrations/metrics/0004_drops.sql")),
 ];
 
 const SHAPE: Shape = Shape {

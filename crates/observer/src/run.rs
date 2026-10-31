@@ -7,8 +7,9 @@ use axum::Router;
 use jiff::tz::TimeZone;
 use observer_app::{
     Accounts, Artifacts, ArtifactsSetup, ArtifactsTask, AuditLog, Changes, ChangesSetup, Clock,
-    DatabaseFiles, Diagnostics, DiagnosticsSetup, Metrics, MetricsSetup, PasswordCost, Players, PlayersSetup,
-    Running, Schedule, ScheduleSetup, ScheduleTask, Servers, Setup, Sources, Supervision,
+    DatabaseFiles, Diagnostics, DiagnosticsSetup, Drops, DropsSetup, Metrics, MetricsSetup, PasswordCost,
+    Players, PlayersSetup, Running, Schedule, ScheduleSetup, ScheduleTask, Servers, Setup, Sources,
+    Supervision,
 };
 use observer_artifacts::Http;
 use observer_artifacts::catalog::Catalog;
@@ -123,6 +124,14 @@ pub async fn run(config: Config, args: RunArgs) -> anyhow::Result<()> {
         data_dir: paths.root.clone(),
     })
     .await?;
+    // After the players, whose start closes what an earlier Observer left open.
+    let (drops, dropping) = Drops::start(DropsSetup {
+        db: db.clone(),
+        metrics: metrics.clone(),
+        clock: clock.clone(),
+        schedule: schedule.status(),
+        players: players.clone(),
+    });
 
     let listener = TcpListener::bind(config.http.listen)
         .await
@@ -165,6 +174,7 @@ pub async fn run(config: Config, args: RunArgs) -> anyhow::Result<()> {
         diagnostics,
         files: files.clone(),
         players,
+        drops,
         changes,
     };
     let state = observer_web::AppState::new(
@@ -248,6 +258,7 @@ pub async fn run(config: Config, args: RunArgs) -> anyhow::Result<()> {
     diagnosing.close().await;
     // After the supervision, so that FXServer's stop closes the sessions.
     playing.close().await;
+    dropping.close().await;
     // After the supervision: a stop of FXServer ends a snapshot's job, which this joins.
     following.close().await;
     // After the supervision, so that FXServer's stop is in the statistics.

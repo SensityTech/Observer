@@ -134,6 +134,13 @@ pub enum AuditAction {
     PlayersImported,
     /// The retentions of the players' identities, play time per day and profiles changed.
     PlayersRetentionChanged,
+    /// The drop log went out as CSV. The details hold the kinds of its filters, never their
+    /// values, and the row count.
+    PlayerDropsExported,
+    /// The daily drop rates went out as CSV.
+    DropRatesExported,
+    /// How long players' sessions and their texts are kept changed.
+    DropsRetentionChanged,
     /// A diff or a full file of the server's contents, once an hour per account, file and pair
     /// of starts.
     ChangeContentsViewed,
@@ -145,7 +152,7 @@ pub enum AuditAction {
 }
 
 impl AuditAction {
-    pub const ALL: [Self; 78] = [
+    pub const ALL: [Self; 81] = [
         Self::SetupCompleted,
         Self::SetupLinkCreated,
         Self::LoginSucceeded,
@@ -219,6 +226,9 @@ impl AuditAction {
         Self::PlayerForgotten,
         Self::PlayersImported,
         Self::PlayersRetentionChanged,
+        Self::PlayerDropsExported,
+        Self::DropRatesExported,
+        Self::DropsRetentionChanged,
         Self::ChangeContentsViewed,
         Self::ChangeSettingsChanged,
         Self::ChangeContentsPurged,
@@ -301,6 +311,9 @@ impl AuditAction {
             Self::PlayerForgotten => "player_forgotten",
             Self::PlayersImported => "players_imported",
             Self::PlayersRetentionChanged => "players_retention_changed",
+            Self::PlayerDropsExported => "player_drops_exported",
+            Self::DropRatesExported => "drop_rates_exported",
+            Self::DropsRetentionChanged => "drops_retention_changed",
             Self::ChangeContentsViewed => "change_contents_viewed",
             Self::ChangeSettingsChanged => "change_settings_changed",
             Self::ChangeContentsPurged => "change_contents_purged",

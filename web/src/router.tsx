@@ -13,6 +13,7 @@ import { allows, landing } from './auth/me';
 import { ReauthDialog } from './auth/ReauthDialog';
 import { RequireOwner, RequirePermission } from './auth/RequirePermission';
 import { changesSearch, resourceSearch } from './changes/search';
+import { parseDropsSearch, type DropsSearch } from './drops/search';
 import { lazyCode } from './lib/lazyCode';
 import { AccountPage } from './pages/AccountPage';
 import { LoginPage } from './pages/LoginPage';
@@ -24,8 +25,9 @@ import { SetupPage } from './pages/SetupPage';
 import { AppShell } from './shell/AppShell';
 
 // Pages beyond the Overview load when someone opens them: the console's virtual list and colour
-// parser, the restart schedule, the diagnostics, the players, the changes and their diffs, the
-// owner's launch settings and server setup, the accounts and the audit log are no one's landing page.
+// parser, the restart schedule, the diagnostics, the players and their drops, the changes and their
+// diffs, the owner's launch settings and server setup, the accounts and the audit log are no one's
+// landing page.
 const ConsolePage = lazyCode(() =>
     import('./pages/ConsolePage').then((page) => ({ default: page.ConsolePage })),
 );
@@ -60,6 +62,7 @@ const ChangesPage = lazyCode(() =>
 const ChangesResourcePage = lazyCode(() =>
     import('./pages/ChangesResourcePage').then((page) => ({ default: page.ChangesResourcePage })),
 );
+const DropsPage = lazyCode(() => import('./pages/DropsPage').then((page) => ({ default: page.DropsPage })));
 
 type RouterContext = { queryClient: QueryClient };
 
@@ -212,6 +215,19 @@ const playerRoute = createRoute({
     ),
 });
 
+// The range, the chart and the log's filters are in the address, so other pages link to a narrowed
+// view: the profile to a player's drops, Diagnostics to a crash's.
+const dropsRoute = createRoute({
+    getParentRoute: () => panelRoute,
+    path: '/drops',
+    validateSearch: (search: Record<string, unknown>): DropsSearch => parseDropsSearch(search),
+    component: () => (
+        <RequirePermission name="DropsView">
+            <DropsPage />
+        </RequirePermission>
+    ),
+});
+
 const changesRoute = createRoute({
     getParentRoute: () => panelRoute,
     path: '/changes',
@@ -311,6 +327,7 @@ const routeTree = rootRoute.addChildren([
         playerRoute,
         changesRoute,
         changesResourceRoute,
+        dropsRoute,
         serverRoute,
         serverSetupRoute,
         usersRoute,

@@ -33,6 +33,7 @@ import { Notice } from '../components/Notice';
 import { table } from '../components/table';
 import { applyEvent } from '../diagnostics/store';
 import { Code, exceptionWords, exitWords, threadWord } from '../diagnostics/words';
+import { CrashDrops } from '../drops/CrashDrops';
 import type { Messages } from '../i18n/en';
 import { errorMessage } from '../i18n/errors';
 import { useI18n } from '../i18n/I18nProvider';
@@ -41,6 +42,11 @@ import { cn } from '../lib/cn';
 import { useNow } from '../lib/useNow';
 
 const DAY = 24 * 60 * 60 * 1000;
+/**
+ * The most recent crashes whose dropped players are asked for: one request each, and the older
+ * ones of the 50 listed are rarely what someone looks into.
+ */
+const DROPS_ASKED = 5;
 
 export function DiagnosticsPage() {
     const { t } = useI18n();
@@ -233,6 +239,12 @@ function CrashesCard({
     const starts = useQuery({ ...startsQuery, enabled: changes });
     const [open, setOpen] = useState<number | null>(null);
     const [deleting, setDeleting] = useState<Crash | null>(null);
+    const asked = new Set(
+        crashes
+            .toSorted((a, b) => Date.parse(b.at) - Date.parse(a.at))
+            .slice(0, DROPS_ASKED)
+            .map((crash) => crash.id),
+    );
     const [deleted, setDeleted] = useState(0);
     const notice = useRef<HTMLDivElement>(null);
     // The deletion takes the row's button away with the dialog: the keyboard goes to the notice
@@ -288,6 +300,7 @@ function CrashesCard({
                                     crash={crash}
                                     changes={changes}
                                     start={startOf(crash, starts.data?.starts ?? [])}
+                                    dropsAsked={asked.has(crash.id)}
                                     open={open === crash.id}
                                     onToggle={() => setOpen(open === crash.id ? null : crash.id)}
                                     onDelete={() => setDeleting(crash)}
@@ -316,6 +329,7 @@ function CrashRow({
     crash,
     changes,
     start,
+    dropsAsked,
     open,
     onToggle,
     onDelete,
@@ -325,6 +339,8 @@ function CrashRow({
     changes: boolean;
     /** The start of the run it ended, when listed. */
     start: SnapshotSummary | undefined;
+    /** Whether to ask how many players it dropped: for the most recent crashes only. */
+    dropsAsked: boolean;
     open: boolean;
     onToggle: () => void;
     onDelete: () => void;
@@ -355,6 +371,7 @@ function CrashRow({
                         <span className="[overflow-wrap:anywhere]">{crashSentence(t, crash)}</span>
                     </div>
                     {facts.length > 0 && <div className={table.sub}>{facts.join(' · ')}</div>}
+                    {dropsAsked && <CrashDrops crash={crash} />}
                 </td>
                 <td className={cn(table.td, 'align-top whitespace-nowrap')}>
                     {crash.group !== null && crash.group.count > 1

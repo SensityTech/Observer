@@ -1,4 +1,4 @@
-//! The audit export's CSV: RFC 4180, made safe to open in a spreadsheet.
+//! The exports' CSV: RFC 4180, made safe to open in a spreadsheet.
 
 use std::fmt::Write as _;
 
@@ -33,6 +33,19 @@ pub(crate) fn rows(entries: &[AuditEntry]) -> String {
         lines.push_str("\r\n");
     }
     lines
+}
+
+/// One CSV line of any cells, each through the spreadsheet guard.
+pub(crate) fn line(cells: &[String]) -> String {
+    let mut line = String::new();
+    for (index, cell) in cells.iter().enumerate() {
+        if index > 0 {
+            line.push(',');
+        }
+        push_cell(&mut line, cell);
+    }
+    line.push_str("\r\n");
+    line
 }
 
 fn push_cell(line: &mut String, value: &str) {

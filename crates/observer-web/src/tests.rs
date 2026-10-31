@@ -4,6 +4,7 @@
 mod artifacts;
 mod changes;
 mod diagnostics;
+mod drops;
 mod files;
 mod live;
 mod metrics;
@@ -23,8 +24,9 @@ use http_body_util::BodyExt;
 use jiff::SignedDuration;
 use observer_app::{
     Accounts, Artifacts, ArtifactsSetup, ArtifactsTask, AuditLog, Changes, ChangesSetup, ChangesTask, Clock,
-    Diagnostics, DiagnosticsSetup, DiagnosticsTask, Metrics, MetricsSetup, PasswordCost, Players,
-    PlayersSetup, PlayersTask, Running, Schedule, ScheduleSetup, ScheduleTask, Servers, Setup, Supervision,
+    Diagnostics, DiagnosticsSetup, DiagnosticsTask, Drops, DropsSetup, DropsTask, Metrics, MetricsSetup,
+    PasswordCost, Players, PlayersSetup, PlayersTask, Running, Schedule, ScheduleSetup, ScheduleTask,
+    Servers, Setup, Supervision,
 };
 use observer_artifacts::Http;
 use observer_artifacts::catalog::{Catalog, Listing};
@@ -64,6 +66,7 @@ struct Server {
     _building: ArtifactsTask,
     _diagnosing: DiagnosticsTask,
     _playing: PlayersTask,
+    _dropping: DropsTask,
     _following: ChangesTask,
     cookie_name: String,
 }
@@ -216,6 +219,13 @@ impl Server {
         })
         .await
         .unwrap();
+        let (drops, dropping) = Drops::start(DropsSetup {
+            db: db.clone(),
+            metrics: metrics.clone(),
+            clock: clock.clone(),
+            schedule: schedule.status(),
+            players: players.clone(),
+        });
         let instance_id = db.instance_id().await.unwrap();
         let services = Services {
             accounts: accounts.clone(),
@@ -228,6 +238,7 @@ impl Server {
             diagnostics,
             files: observer_app::Files::new(db.clone(), clock.clone(), accounts.clone()),
             players,
+            drops,
             changes,
         };
         let state = AppState::new(
@@ -255,6 +266,7 @@ impl Server {
             _building: building,
             _diagnosing: diagnosing,
             _playing: playing,
+            _dropping: dropping,
             _following: following,
             cookie_name: format!("observer_session_{instance_id}"),
         }
@@ -576,7 +588,7 @@ async fn setup_signs_the_owner_in_with_a_strict_http_only_cookie() {
     assert_eq!(session["sessionKey"].as_str().unwrap().len(), 64);
     assert_eq!(session["me"]["username"], "ada");
     assert_eq!(session["me"]["isOwner"], true);
-    assert_eq!(session["me"]["permissions"], "3ffff");
+    assert_eq!(session["me"]["permissions"], "7ffff");
 
     let again = server.call(Method::POST, "/api/setup", None, Some(body)).await;
     assert_eq!(again.status, StatusCode::CONFLICT);

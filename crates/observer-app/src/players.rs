@@ -18,6 +18,7 @@ use std::time::{Duration, Instant};
 use jiff::tz::TimeZone;
 use jiff::{SignedDuration, Timestamp};
 use observer_domain::audit::{AuditAction, Outcome};
+use observer_domain::drops::DropPlayer;
 use observer_domain::drops::{DropCategory, DropKind};
 use observer_domain::error::{ApiError, ErrorCode};
 use observer_domain::permissions::Permissions;
@@ -51,6 +52,8 @@ const RUN_MISSING: Duration = Duration::from_secs(10);
 const UPKEEP_EVERY: Duration = Duration::from_hours(1);
 /// Sessions are kept this long after they end.
 const SESSION_DAYS: i64 = 90;
+/// The most players a drop log search or a linked group stands for.
+const GROUP_LIMIT: u32 = 50;
 const PAGE: u32 = 50;
 const DROPS_SHOWN: u32 = 20;
 const ACTIVITY_DAYS: i64 = 90;
@@ -251,21 +254,7 @@ impl Players {
         after: Option<&str>,
         held: Permissions,
     ) -> Result<PlayerPage, Error> {
-        let filter = match search.map(Search::parse).transpose() {
-            Err(SearchRefusal::Address) => return Err(ErrorCode::AddressSearch.into()),
-            Err(SearchRefusal::Malformed) => return Err(ErrorCode::InvalidSearch.into()),
-            Ok(None | Some(None)) => PlayerFilter::All,
-            Ok(Some(Some(Search::Name(name)))) => PlayerFilter::Name(name),
-            Ok(Some(Some(Search::License(license)))) => PlayerFilter::License(license),
-            Ok(Some(Some(Search::Identifier(identifier)))) => {
-                if !held.contains(Permissions::PLAYER_IDENTIFIERS_VIEW) {
-                    return Err(ApiError::new(ErrorCode::Forbidden)
-                        .with("permission", "playerIdentifiersView")
-                        .into());
-                }
-                PlayerFilter::Identifier(identifier.kind, identifier.value)
-            }
-        };
+        let filter = filter_of(search, held)?;
         let after = after.map(parse_cursor).transpose()?;
         let (_, today) = self.today();
         let query = PlayerQuery {
@@ -302,6 +291,83 @@ impl Players {
             next: next.flatten(),
             zone: zone_name(&self.inner.schedule.borrow()),
         })
+    }
+
+    /// The pseudonyms of the players a search finds, for the drop log, with the same rules as the
+    /// list's search. An empty search finds nobody.
+    pub async fn pseudonyms_matching(&self, search: &str, held: Permissions) -> Result<Vec<[u8; 16]>, Error> {
+        let filter = filter_of(Some(search), held)?;
+        if filter == PlayerFilter::All {
+            return Ok(Vec::new());
+        }
+        Ok(self
+            .inner
+            .db
+            .read(move |conn| stored::pseudonyms(conn, &filter, GROUP_LIMIT))
+            .await?)
+    }
+
+    /// The pseudonyms of a player and of the licences strongly linked to theirs: the group's drops.
+    /// Only with `PLAYER_IDENTIFIERS_VIEW`, as the links are.
+    pub async fn group_pseudonyms(&self, id: i64, held: Permissions) -> Result<Vec<[u8; 16]>, Error> {
+        if !held.contains(Permissions::PLAYER_IDENTIFIERS_VIEW) {
+            return Err(ApiError::new(ErrorCode::Forbidden)
+                .with("permission", "playerIdentifiersView")
+                .into());
+        }
+        Ok(self
+            .inner
+            .db
+            .read(move |conn| -> Result<_, StoreError> {
+                let mut players = vec![id];
+                players.extend(
+                    stored::links(conn, id)?
+                        .into_iter()
+                        .filter(|linked| linked.strong)
+                        .map(|linked| linked.player),
+                );
+                stored::pseudonyms_of(conn, &players)
+            })
+            .await?)
+    }
+
+    /// The pseudonym of one profile.
+    pub async fn pseudonym_of(&self, id: i64) -> Result<Option<[u8; 16]>, Error> {
+        Ok(self
+            .inner
+            .db
+            .read(move |conn| stored::pseudonyms_of(conn, &[id]))
+            .await?
+            .into_iter()
+            .next())
+    }
+
+    /// Who carries each pseudonym, for the drop pages.
+    pub async fn identities(
+        &self,
+        pseudonyms: Vec<[u8; 16]>,
+    ) -> Result<HashMap<[u8; 16], DropPlayer>, Error> {
+        if pseudonyms.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let found = self
+            .inner
+            .db
+            .read(move |conn| stored::by_pseudonym(conn, &pseudonyms))
+            .await?;
+        Ok(found
+            .into_iter()
+            .map(|(pseudonym, carrier)| {
+                (
+                    pseudonym,
+                    DropPlayer {
+                        id: carrier.id,
+                        license: carrier.license,
+                        name: (!carrier.name.is_empty()).then_some(carrier.name),
+                    },
+                )
+            })
+            .collect())
     }
 
     /// A player's profile. Identifiers and linked licences only with `PLAYER_IDENTIFIERS_VIEW`.
@@ -1210,23 +1276,18 @@ impl Worker {
                 .db
                 .write(move |tx| stored::expire(tx, now, &retention, &day_cutoff))
                 .await?;
-            let before_ms = (now - SignedDuration::from_hours(24 * SESSION_DAYS)).as_millisecond();
-            let sessions = self
-                .metrics
-                .write(move |tx| stored_sessions::expire(tx, before_ms))
-                .await?;
-            Ok::<_, StoreError>((expired, sessions))
+            Ok::<_, StoreError>(expired)
         }
         .await;
+        // The sessions themselves expire with the drops' retention, in the drops service.
         match result {
-            Ok((expired, sessions)) => {
+            Ok(expired) => {
                 let counts = self.sessions.counts;
                 info!(
                     links = expired.links,
                     names = expired.names,
                     days = expired.days,
                     players = expired.players,
-                    sessions,
                     dropped_identifiers = counts.dropped_identifiers,
                     unconfirmed = counts.unconfirmed,
                     clamped = counts.clamped,
@@ -1496,6 +1557,26 @@ fn unhex<const N: usize>(text: &str) -> Option<[u8; N]> {
         *byte = u8::from_str_radix(text.get(index * 2..index * 2 + 2)?, 16).ok()?;
     }
     Some(bytes)
+}
+
+/// What a players search looks for. A search by an identifier other than the licence needs
+/// `PLAYER_IDENTIFIERS_VIEW`, checked on what the search is before anything is looked up.
+fn filter_of(search: Option<&str>, held: Permissions) -> Result<PlayerFilter, Error> {
+    Ok(match search.map(Search::parse).transpose() {
+        Err(SearchRefusal::Address) => return Err(ErrorCode::AddressSearch.into()),
+        Err(SearchRefusal::Malformed) => return Err(ErrorCode::InvalidSearch.into()),
+        Ok(None | Some(None)) => PlayerFilter::All,
+        Ok(Some(Some(Search::Name(name)))) => PlayerFilter::Name(name),
+        Ok(Some(Some(Search::License(license)))) => PlayerFilter::License(license),
+        Ok(Some(Some(Search::Identifier(identifier)))) => {
+            if !held.contains(Permissions::PLAYER_IDENTIFIERS_VIEW) {
+                return Err(ApiError::new(ErrorCode::Forbidden)
+                    .with("permission", "playerIdentifiersView")
+                    .into());
+            }
+            PlayerFilter::Identifier(identifier.kind, identifier.value)
+        }
+    })
 }
 
 fn parse_cursor(text: &str) -> Result<(i64, i64), Error> {

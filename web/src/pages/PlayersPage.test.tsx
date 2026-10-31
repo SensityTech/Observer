@@ -358,6 +358,15 @@ describe('PlayerPage', () => {
         expect(screen.getAllByText('afk_kick')).toHaveLength(2);
     });
 
+    it('should open the drop log on this player from their disconnections', async () => {
+        await open('/players/7', MODERATOR);
+
+        const drops = card('player-drops');
+        expect(drops.getByRole('link', { name: en.drops.profileLog }).getAttribute('href')).toBe(
+            '/drops?range=90d&profile=7',
+        );
+    });
+
     it('should never show an address, only how many other licences shared it', async () => {
         await open(
             '/players/7',
