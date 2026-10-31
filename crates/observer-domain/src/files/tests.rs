@@ -402,3 +402,80 @@ fn rights_travel_as_a_list_of_names() {
     let back: Rights = serde_json::from_str(&json).unwrap();
     assert_eq!(back, Rights::UPLOAD);
 }
+
+#[test]
+fn only_the_owner_gives_to_a_pipeline_or_edits_their_own_access() {
+    use crate::delegation::Account;
+    use crate::permissions::Permissions as P;
+
+    let owner = Account {
+        id: 1,
+        is_owner: true,
+        permissions: P::NONE,
+    };
+    let manager = Account {
+        id: 2,
+        is_owner: false,
+        permissions: P::FILES_MANAGE | P::CONSOLE_VIEW,
+    };
+    let owner_access = AccessHolder {
+        user_id: 1,
+        is_owner: true,
+        permissions: P::NONE,
+    };
+    let own = AccessHolder {
+        user_id: 2,
+        is_owner: false,
+        permissions: manager.permissions,
+    };
+    let weaker = AccessHolder {
+        user_id: 3,
+        is_owner: false,
+        permissions: P::CONSOLE_VIEW,
+    };
+    let stronger = AccessHolder {
+        user_id: 4,
+        is_owner: false,
+        permissions: P::SERVER_CONTROL,
+    };
+
+    assert_eq!(
+        may_manage(&owner, Some(&owner_access), AccessChange::Give),
+        Ok(())
+    );
+    assert_eq!(may_manage(&owner, None, AccessChange::Give), Ok(()));
+    assert_eq!(
+        may_manage(&manager, None, AccessChange::Give),
+        Err(ErrorCode::OwnerOnly)
+    );
+    assert_eq!(may_manage(&manager, None, AccessChange::TakeAway), Ok(()));
+    assert_eq!(
+        may_manage(&manager, Some(&own), AccessChange::TakeAway),
+        Err(ErrorCode::SelfEdit)
+    );
+    assert_eq!(
+        may_manage(&manager, Some(&owner_access), AccessChange::TakeAway),
+        Err(ErrorCode::OwnerProtected)
+    );
+    assert_eq!(may_manage(&manager, Some(&weaker), AccessChange::Give), Ok(()));
+    assert_eq!(
+        may_manage(&manager, Some(&stronger), AccessChange::Give),
+        Err(ErrorCode::Hierarchy)
+    );
+    assert_eq!(
+        may_manage(&manager, Some(&stronger), AccessChange::TakeAway),
+        Ok(())
+    );
+}
+
+#[test]
+fn removing_a_group_lifts_a_denial_only_when_a_kept_group_allows_the_right() {
+    let no_cfg = [deny("", Depth::Tree, &["*.cfg"], Rights::of(&[Right::Modify]))];
+    let readers = [allow("resources", Depth::Tree, &[], Rights::VIEW)];
+    let editors = [allow("resources", Depth::Tree, &[], Rights::EDIT)];
+
+    assert!(!lifts_denial(&no_cfg, &[&readers]));
+    // A deny of one change denies the four, so an allowed create is lifted too.
+    assert!(lifts_denial(&no_cfg, &[&readers, &editors]));
+    assert!(!lifts_denial(&readers, &[&editors]));
+}

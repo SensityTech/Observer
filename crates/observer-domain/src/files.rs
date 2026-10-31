@@ -5,6 +5,10 @@
 use std::fmt;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+use crate::delegation::Account;
+use crate::error::ErrorCode;
+use crate::permissions::Permissions;
 use ts_rs::TS;
 
 /// One thing an access may do to an entry.
@@ -638,6 +642,65 @@ impl fmt::Display for Right {
         };
         f.write_str(name)
     }
+}
+
+/// Whether a change gives an access more than it had, or only takes some away.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AccessChange {
+    Give,
+    TakeAway,
+}
+
+/// The account whose access is edited; `None` for a pipeline's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AccessHolder {
+    pub user_id: i64,
+    pub is_owner: bool,
+    pub permissions: Permissions,
+}
+
+/// Whether `editor` may make `change` to the access of `holder`. The owner edits any access,
+/// their own included. Anyone else never edits their own (`SelfEdit`), never the owner's
+/// (`OwnerProtected`), and gives access only to an account holding no panel permission they lack
+/// (`Hierarchy`); taking access away skips that last rule. A pipeline's access belongs to no
+/// account: any manager may take from it, and only the owner gives to it.
+pub fn may_manage(
+    editor: &Account,
+    holder: Option<&AccessHolder>,
+    change: AccessChange,
+) -> Result<(), ErrorCode> {
+    if editor.is_owner {
+        return Ok(());
+    }
+    let Some(holder) = holder else {
+        return match change {
+            AccessChange::Give => Err(ErrorCode::OwnerOnly),
+            AccessChange::TakeAway => Ok(()),
+        };
+    };
+    if holder.user_id == editor.id {
+        return Err(ErrorCode::SelfEdit);
+    }
+    if holder.is_owner {
+        return Err(ErrorCode::OwnerProtected);
+    }
+    if change == AccessChange::Give && !editor.permissions.contains(holder.permissions) {
+        return Err(ErrorCode::Hierarchy);
+    }
+    Ok(())
+}
+
+/// Whether removing `removed` from an access that keeps `kept` lifts a denial: the removed group
+/// denies a right that a kept group allows. Rights are compared, folders and names are not, so the
+/// answer errs toward asking the owner.
+pub fn lifts_denial(removed: &[Rule], kept: &[&[Rule]]) -> bool {
+    let denied = removed
+        .iter()
+        .filter(|rule| rule.effect == Effect::Deny)
+        .fold(Rights::NONE, |rights, rule| rights.union(rule.rights.denied()));
+    kept.iter()
+        .flat_map(|rules| rules.iter())
+        .any(|rule| rule.effect == Effect::Allow && rule.rights.iter().any(|right| denied.contains(right)))
 }
 
 #[cfg(test)]
