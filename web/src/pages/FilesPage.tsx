@@ -118,12 +118,14 @@ export function FilesPage() {
                                                 <div className="flex gap-2">
                                                     <Button
                                                         tone="ghost"
+                                                        aria-label={t.files.editNamed(group.name)}
                                                         onClick={() => setOpen({ dialog: 'group', group })}
                                                     >
                                                         {t.files.edit}
                                                     </Button>
                                                     <Button
                                                         tone="ghost"
+                                                        aria-label={t.files.deleteGroup(group.name)}
                                                         onClick={() =>
                                                             setOpen({ dialog: 'deleteGroup', group })
                                                         }
@@ -179,6 +181,7 @@ export function FilesPage() {
                                             {(me.isOwner || (user.userId !== me.id && !user.isOwner)) && (
                                                 <Button
                                                     tone="ghost"
+                                                    aria-label={t.files.assign.title(user.username)}
                                                     onClick={() => setOpen({ dialog: 'assign', user })}
                                                 >
                                                     {t.files.assignGroups}
@@ -304,7 +307,7 @@ function ServiceRow({ service, onDelete }: { service: ServiceAccess; onDelete: (
                 {ends === null ? t.files.never : format.timestamp(ends, { seconds: false })}
             </td>
             <td className={cn(table.td, 'w-[1%] text-right whitespace-nowrap')}>
-                <Button tone="ghost" onClick={onDelete}>
+                <Button tone="ghost" aria-label={t.files.deletePipeline(service.name)} onClick={onDelete}>
                     {t.files.delete}
                 </Button>
             </td>

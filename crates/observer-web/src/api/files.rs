@@ -67,7 +67,7 @@ pub(crate) async fn set_user_groups(
 ) -> Result<StatusCode, Failure> {
     state
         .files
-        .set_user_groups(&caller, user_id, request.groups)
+        .set_user_groups(&caller, user_id, request.groups, request.previous)
         .await?;
     Ok(StatusCode::NO_CONTENT)
 }

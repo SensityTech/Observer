@@ -54,7 +54,7 @@ const draft = (rule: Rule): Draft => ({
     depth: rule.depth,
     names: rule.names.join(', '),
     rights: rule.rights,
-    maxMegabytes: rule.maxFileSize === null ? '' : String(Math.round(rule.maxFileSize / MEGABYTE)),
+    maxMegabytes: rule.maxFileSize === null ? '' : String(rule.maxFileSize / MEGABYTE),
 });
 
 const rule = (value: Draft): Rule => ({
@@ -68,7 +68,7 @@ const rule = (value: Draft): Rule => ({
     rights: value.rights,
     maxFileSize:
         value.effect === 'allow' && value.maxMegabytes.trim() !== ''
-            ? Number(value.maxMegabytes) * MEGABYTE
+            ? Math.round(Number(value.maxMegabytes) * MEGABYTE)
             : null,
 });
 
@@ -255,7 +255,7 @@ export function AssignDialog({
         setPending(true);
         setFailure(null);
         try {
-            await send('PUT', `/files/accesses/users/${userId}`, { groups: chosen });
+            await send('PUT', `/files/accesses/users/${userId}`, { groups: chosen, previous: held });
             onSaved();
         } catch (error) {
             setPending(false);
@@ -282,23 +282,26 @@ export function AssignDialog({
             {failure && <Notice tone="danger">{failure}</Notice>}
             {groups.isError && <Notice tone="danger">{errorMessage(t, groups.error)}</Notice>}
             {groups.data?.length === 0 && <Notice tone="neutral">{t.files.assign.none}</Notice>}
-            {groups.data?.map((group) => (
-                <label key={group.id} className="flex items-start gap-2 text-body text-ink">
-                    <Checkbox
-                        checked={chosen.includes(group.id)}
-                        onChange={(event) =>
-                            setChosen((current) =>
-                                event.target.checked
-                                    ? [...current, group.id]
-                                    : current.filter((id) => id !== group.id),
-                            )
-                        }
-                    />
-                    <span>
-                        {group.name} <span className="text-ink-3">· {t.files.reach[group.reach]}</span>
-                    </span>
-                </label>
-            ))}
+            <fieldset className="flex flex-col gap-2">
+                <legend className="sr-only">{t.files.service.groups}</legend>
+                {groups.data?.map((group) => (
+                    <label key={group.id} className="flex items-start gap-2 text-body text-ink">
+                        <Checkbox
+                            checked={chosen.includes(group.id)}
+                            onChange={(event) =>
+                                setChosen((current) =>
+                                    event.target.checked
+                                        ? [...current, group.id]
+                                        : current.filter((id) => id !== group.id),
+                                )
+                            }
+                        />
+                        <span>
+                            {group.name} <span className="text-ink-3">· {t.files.reach[group.reach]}</span>
+                        </span>
+                    </label>
+                ))}
+            </fieldset>
         </Dialog>
     );
 }
@@ -403,14 +406,24 @@ export function ServiceDialog({
     );
 }
 
-/** The private key of a new pipeline, shown once: closing the dialog is the only way out. */
+/** The private key of a new pipeline, shown once: only "I stored it" closes the dialog. */
 export function PrivateKeyDialog({ created, onClose }: Close & { created: CreatedServiceAccess }) {
     const { t } = useI18n();
+    const [copied, setCopied] = useState(false);
+    const download = () => {
+        const text = created.privateKey.endsWith('\n') ? created.privateKey : `${created.privateKey}\n`;
+        const link = document.createElement('a');
+        link.href = URL.createObjectURL(new Blob([text], { type: 'application/octet-stream' }));
+        link.download = `${created.access.name}.key`;
+        link.click();
+        URL.revokeObjectURL(link.href);
+    };
     return (
         <Dialog
             title={t.files.service.keyTitle(created.login)}
             onClose={onClose}
             closeOnBackdrop={false}
+            dismissible={false}
             footer={
                 <Button tone="ink" onClick={onClose}>
                     {t.files.service.saved}
@@ -419,7 +432,33 @@ export function PrivateKeyDialog({ created, onClose }: Close & { created: Create
         >
             <Notice tone="warning">{t.files.service.keyOnce}</Notice>
             <CopyField label={t.files.service.login} value={created.login} />
-            <CopyField label={t.files.service.privateKey} value={created.privateKey} />
+            <label className="flex flex-col gap-1.5 text-label text-ink-2">
+                {t.files.service.privateKey}
+                <textarea
+                    readOnly
+                    rows={8}
+                    spellCheck={false}
+                    className="field-input font-mono text-[12px] leading-snug"
+                    value={created.privateKey}
+                    onFocus={(event) => event.currentTarget.select()}
+                />
+            </label>
+            <div className="flex flex-wrap gap-2">
+                <Button
+                    tone="ghost"
+                    onClick={() => {
+                        void navigator.clipboard
+                            ?.writeText(created.privateKey)
+                            .then(() => setCopied(true))
+                            .catch(() => setCopied(false));
+                    }}
+                >
+                    {copied ? t.files.service.copied : t.files.service.copyKey}
+                </Button>
+                <Button tone="ghost" onClick={download}>
+                    {t.files.service.downloadKey(created.access.name)}
+                </Button>
+            </div>
         </Dialog>
     );
 }

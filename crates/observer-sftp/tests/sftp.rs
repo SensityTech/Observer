@@ -305,7 +305,7 @@ async fn a_session_ends_as_soon_as_its_groups_are_taken_away() {
     };
 
     lab.files
-        .set_user_groups(&owner, lab.linus, Vec::new())
+        .set_user_groups(&owner, lab.linus, Vec::new(), None)
         .await
         .unwrap();
 

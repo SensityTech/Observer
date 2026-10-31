@@ -218,6 +218,7 @@ impl Files {
         caller: &Caller,
         user_id: i64,
         group_ids: Vec<i64>,
+        previous: Option<Vec<i64>>,
     ) -> Result<(), Error> {
         let now = self.clock.now();
         let editor = Account {
@@ -237,6 +238,14 @@ impl Files {
                 };
                 let access = store::user_access_or_new(tx, user_id, now)?;
                 let before = store::access_groups(tx, access.id)?;
+                if let Some(mut previous) = previous {
+                    let mut held: Vec<i64> = before.iter().map(|group| group.id).collect();
+                    previous.sort_unstable();
+                    held.sort_unstable();
+                    if previous != held {
+                        return Err(ErrorCode::Conflict.into());
+                    }
+                }
                 let mut after = Vec::with_capacity(group_ids.len());
                 for id in &group_ids {
                     let group = store::group(tx, *id)?.ok_or(ErrorCode::NotFound)?;

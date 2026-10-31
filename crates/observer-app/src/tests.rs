@@ -1720,14 +1720,14 @@ async fn a_file_manager_gives_read_and_assets_groups_while_code_stays_the_owners
     let (assets, code_group, no_lua) = file_groups(&lab, &owner).await;
 
     lab.files
-        .set_user_groups(&manager, mapper, vec![assets.row.id])
+        .set_user_groups(&manager, mapper, vec![assets.row.id], None)
         .await
         .unwrap();
     assert_eq!(lab.files.user_groups(mapper).await.unwrap().len(), 1);
     assert_eq!(
         code(
             lab.files
-                .set_user_groups(&manager, mapper, vec![assets.row.id, code_group.row.id])
+                .set_user_groups(&manager, mapper, vec![assets.row.id, code_group.row.id], None)
                 .await
         ),
         ErrorCode::OwnerOnly
@@ -1735,19 +1735,23 @@ async fn a_file_manager_gives_read_and_assets_groups_while_code_stays_the_owners
     assert_eq!(
         code(
             lab.files
-                .set_user_groups(&manager, manager.user_id, vec![assets.row.id])
+                .set_user_groups(&manager, manager.user_id, vec![assets.row.id], None)
                 .await
         ),
         ErrorCode::SelfEdit
     );
     assert_eq!(
-        code(lab.files.set_user_groups(&manager, owner.user_id, vec![]).await),
+        code(
+            lab.files
+                .set_user_groups(&manager, owner.user_id, vec![], None)
+                .await
+        ),
         ErrorCode::OwnerProtected
     );
     assert_eq!(
         code(
             lab.files
-                .set_user_groups(&manager, operator, vec![assets.row.id])
+                .set_user_groups(&manager, operator, vec![assets.row.id], None)
                 .await
         ),
         ErrorCode::Hierarchy
@@ -1755,19 +1759,22 @@ async fn a_file_manager_gives_read_and_assets_groups_while_code_stays_the_owners
 
     // The owner gives a deny with the assets; a manager removing the deny would lift it.
     lab.files
-        .set_user_groups(&owner, mapper, vec![assets.row.id, no_lua.row.id])
+        .set_user_groups(&owner, mapper, vec![assets.row.id, no_lua.row.id], None)
         .await
         .unwrap();
     assert_eq!(
         code(
             lab.files
-                .set_user_groups(&manager, mapper, vec![assets.row.id])
+                .set_user_groups(&manager, mapper, vec![assets.row.id], None)
                 .await
         ),
         ErrorCode::OwnerOnly
     );
     // Taking everything away needs no more than the bit.
-    lab.files.set_user_groups(&manager, mapper, vec![]).await.unwrap();
+    lab.files
+        .set_user_groups(&manager, mapper, vec![], None)
+        .await
+        .unwrap();
 
     let denied = lab.entries(AuditAction::PermissionDenied).await;
     assert!(
@@ -1856,7 +1863,7 @@ async fn an_sftp_login_needs_a_registered_key_on_a_usable_access_and_locks_after
         .await
         .unwrap();
     lab.files
-        .set_user_groups(&owner, linus.id, vec![maps.row.id])
+        .set_user_groups(&owner, linus.id, vec![maps.row.id], None)
         .await
         .unwrap();
     assert_eq!(login("linus", "SHA256:linus").await.unwrap(), Login::NoServer);
@@ -1898,7 +1905,7 @@ async fn a_password_reset_takes_the_owner_for_code_access_and_drops_the_sftp_key
         .unwrap();
     let (_, code_group, _) = file_groups(&lab, &owner).await;
     lab.files
-        .set_user_groups(&owner, linus.id, vec![code_group.row.id])
+        .set_user_groups(&owner, linus.id, vec![code_group.row.id], None)
         .await
         .unwrap();
     let now = lab.clock.now();
@@ -1952,4 +1959,35 @@ async fn a_password_reset_takes_the_owner_for_code_access_and_drops_the_sftp_key
     let removed = lab.entries(AuditAction::FileKeyRemoved).await;
     assert_eq!(removed.len(), 1);
     assert_eq!(removed[0].details["reason"], json!("passwordReset"));
+}
+
+#[tokio::test]
+async fn a_save_of_groups_read_before_someone_elses_change_is_a_conflict() {
+    let lab = Lab::new().await;
+    let owner = lab.owner().await;
+    lab.user(&owner, "linus", P::CONSOLE_VIEW).await;
+    let owner = lab.caller(&owner).await;
+    let linus = lab
+        .db
+        .read(|conn| users::find(conn, "linus"))
+        .await
+        .unwrap()
+        .unwrap()
+        .id;
+    let (assets, _, no_lua) = file_groups(&lab, &owner).await;
+
+    lab.files
+        .set_user_groups(&owner, linus, vec![assets.row.id], Some(Vec::new()))
+        .await
+        .unwrap();
+    // A dialog opened before that save still believes linus held nothing.
+    assert_eq!(
+        code(
+            lab.files
+                .set_user_groups(&owner, linus, vec![no_lua.row.id], Some(Vec::new()))
+                .await
+        ),
+        ErrorCode::Conflict
+    );
+    assert_eq!(lab.files.user_groups(linus).await.unwrap().len(), 1);
 }

@@ -3,4 +3,9 @@
 /**
  * The groups an account is to hold, all of them.
  */
-export type UserGroupsRequest = { groups: Array<number>, };
+export type UserGroupsRequest = { groups: Array<number>, 
+/**
+ * The groups the account held when the dialog read them: a save over someone else's change
+ * is refused (`conflict`) rather than undoing it.
+ */
+previous?: Array<number>, };

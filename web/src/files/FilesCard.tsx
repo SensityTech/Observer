@@ -91,6 +91,9 @@ export function FilesCard() {
                                                 <Button
                                                     tone="ghost"
                                                     pending={remove.isPending && remove.variables === held.id}
+                                                    aria-label={t.myAccount.files.removeNamed(
+                                                        held.fingerprint,
+                                                    )}
                                                     onClick={() => remove.mutate(held.id)}
                                                 >
                                                     {t.myAccount.files.remove}

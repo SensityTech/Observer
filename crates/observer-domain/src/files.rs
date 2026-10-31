@@ -852,6 +852,11 @@ pub struct FileGroupRequest {
 #[ts(export)]
 pub struct UserGroupsRequest {
     pub groups: Vec<i64>,
+    /// The groups the account held when the dialog read them: a save over someone else's change
+    /// is refused (`conflict`) rather than undoing it.
+    #[serde(default)]
+    #[ts(optional)]
+    pub previous: Option<Vec<i64>>,
 }
 
 /// Whether a change gives an access more than it had, or only takes some away.
