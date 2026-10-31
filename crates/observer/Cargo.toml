@@ -5,6 +5,12 @@ edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 
+[features]
+# With OBSERVER_TEST_CATALOG=<port>, builds are listed and downloaded from the fake FXServer's
+# archive server on that port instead of Cfx.re. For the browser tests; `cargo xtask dist` never
+# turns it on.
+test-catalog = ["observer-artifacts/test-support"]
+
 [dependencies]
 anyhow.workspace = true
 axum.workspace = true
