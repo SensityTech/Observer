@@ -1,5 +1,7 @@
 //! Secrets hidden from every console line before it is stored, logged or sent anywhere.
 
+use std::ops::Range;
+
 use crate::command;
 
 /// Convars whose value is a secret: the user's, the ones FXServer derives from the licence key,
@@ -28,6 +30,12 @@ const SECRET_NAMES: [&str; 5] = ["password", "pwd", "token", "secret", "key"];
 /// printed (`"rcon_password" is "x"`, or `rcon_password = x` in `cmdlist`), the token of a Discord
 /// webhook URL, and anything that looks like a licence key.
 pub fn mask(text: &str) -> Option<String> {
+    let secrets = secrets(text);
+    (!secrets.is_empty()).then(|| redact(text, secrets))
+}
+
+/// What [`mask`] hides in `text`, as byte ranges in no particular order.
+pub(crate) fn secrets(text: &str) -> Vec<Range<usize>> {
     // ASCII lowercasing keeps every byte offset, and every needle is ASCII.
     let lower = text.to_ascii_lowercase();
     let mut secrets = Vec::new();
@@ -44,24 +52,63 @@ pub fn mask(text: &str) -> Option<String> {
             secrets.push(value..until(text, value, |c| !is_word(c)));
         }
     }
-
     secrets.retain(|secret| !secret.is_empty());
-    if secrets.is_empty() {
-        return None;
-    }
+    secrets
+}
+
+/// `text` with each range replaced by `[REDACTED]`; overlapping ranges count once.
+pub(crate) fn redact(text: &str, mut secrets: Vec<Range<usize>>) -> String {
     secrets.sort_by_key(|secret| secret.start);
     let mut masked = String::with_capacity(text.len());
     let mut copied = 0;
     for secret in secrets {
-        if secret.start < copied {
+        if secret.end <= copied {
             continue;
         }
-        masked.push_str(&text[copied..secret.start]);
-        masked.push_str(REDACTED);
+        let start = secret.start.max(copied);
+        masked.push_str(&text[copied..start]);
+        if start == secret.start {
+            masked.push_str(REDACTED);
+        }
         copied = secret.end;
     }
     masked.push_str(&text[copied..]);
-    Some(masked)
+    masked
+}
+
+/// Whether `name` is one of the convars whose value is a secret.
+pub(crate) fn secret_convar(name: &str) -> bool {
+    SECRET_CONVARS
+        .iter()
+        .any(|known| known.eq_ignore_ascii_case(name))
+}
+
+/// Whether `word` sets a convar: `set` or its kin, or `+set`.
+pub(crate) fn set_command(word: &str) -> bool {
+    SET_COMMANDS
+        .iter()
+        .chain(&["+set"])
+        .any(|command| command.eq_ignore_ascii_case(word))
+}
+
+/// For each command of `text` that sets a convar `secret` holds for, as `set` or its kin, `+set`
+/// or the convar's name alone, the range of the value it gives: everything after the name, read
+/// the way FXServer reads the command.
+pub(crate) fn set_values(text: &str, secret: impl Fn(&str) -> bool) -> Vec<Range<usize>> {
+    let mut values = Vec::new();
+    for span in command::spans(text) {
+        let words = command::word_spans(&text[span.clone()]);
+        let named = match words.as_slice() {
+            [(_, command), (name_span, name), _, ..] if set_command(command) && secret(name) => name_span.end,
+            [(name_span, name), _, ..] if !set_command(name) && secret_convar(name) => name_span.end,
+            _ => continue,
+        };
+        let end = words.last().map_or(named, |(last, _)| last.end);
+        let value = &text[span.start + named..span.start + end];
+        let start = span.start + named + value.len() - value.trim_start_matches(|c: char| c <= ' ').len();
+        values.push(start..span.start + end);
+    }
+    values
 }
 
 /// A command line as the console and the audit log may show it. Each command that sets a secret
@@ -105,11 +152,17 @@ pub fn mask_command(line: &str) -> Option<String> {
 /// `-enc <base64>` stays: it is what the program was told to run, not a secret.
 pub fn mask_command_line(line: &str) -> String {
     let line: String = line.chars().filter(|c| !c.is_control()).collect();
+    let shown = redact(&line, command_line_secrets(&line));
+    mask(&shown).unwrap_or(shown)
+}
+
+/// What [`mask_command_line`] hides beyond [`mask`], as byte ranges of `line` as it is given.
+pub(crate) fn command_line_secrets(line: &str) -> Vec<Range<usize>> {
     let lower = line.to_ascii_lowercase();
     let mut secrets = Vec::new();
     for (start, _) in lower.match_indices("://") {
         let authority = start + "://".len();
-        let end = until(&line, authority, |c| {
+        let end = until(line, authority, |c| {
             c == '/' || c.is_whitespace() || "\"'?#".contains(c)
         });
         if let Some(at) = line[authority..end].rfind('@') {
@@ -121,28 +174,28 @@ pub fn mask_command_line(line: &str) -> String {
         }
     }
     for (equals, _) in line.match_indices('=') {
-        if let Some(value) = assigned_secret(&line, &lower, equals) {
+        if let Some(value) = assigned_secret(line, &lower, equals) {
             secrets.push(value);
         }
     }
     for option in ["--password", "-password"] {
         for (start, _) in options(&lower, option) {
-            secrets.extend(next_word(&line, start + option.len()));
+            secrets.extend(next_word(line, start + option.len()));
         }
     }
     if lower
         .split(|c: char| !is_word(c))
         .any(|word| word.starts_with("mysql") || word.starts_with("mariadb"))
     {
-        for (start, quote) in options(&line, "-p") {
-            secrets.push(option_value(&line, start + "-p".len(), quote));
+        for (start, quote) in options(line, "-p") {
+            secrets.push(option_value(line, start + "-p".len(), quote));
         }
     }
     for option in ["-u", "--user"] {
-        for (start, quote) in options(&line, option) {
+        for (start, quote) in options(line, option) {
             let end = start + option.len();
-            let user = next_word(&line, end).unwrap_or_else(|| {
-                option_value(&line, end + usize::from(line[end..].starts_with('=')), quote)
+            let user = next_word(line, end).unwrap_or_else(|| {
+                option_value(line, end + usize::from(line[end..].starts_with('=')), quote)
             });
             if let Some(colon) = line[user.clone()].find(':') {
                 secrets.push(user.start + colon + 1..user.end);
@@ -152,33 +205,21 @@ pub fn mask_command_line(line: &str) -> String {
     for (start, _) in lower.match_indices("authorization:") {
         let scheme = start + "authorization:".len();
         let scheme = scheme + line[scheme..].len() - line[scheme..].trim_start().len();
-        let scheme_end = until(&line, scheme, |c| c.is_whitespace() || "\"'".contains(c));
+        let scheme_end = until(line, scheme, |c| c.is_whitespace() || "\"'".contains(c));
         let rest = &line[scheme_end..];
         let token = scheme_end + rest.len() - rest.trim_start_matches([' ', '\t']).len();
         let credentials = if token > scheme_end { token } else { scheme };
-        secrets.push(credentials..until(&line, credentials, |c| c.is_whitespace() || "\"'".contains(c)));
+        secrets.push(credentials..until(line, credentials, |c| c.is_whitespace() || "\"'".contains(c)));
     }
 
     secrets.retain(|secret| !secret.is_empty());
-    secrets.sort_by_key(|secret| secret.start);
-    let mut shown = String::with_capacity(line.len());
-    let mut copied = 0;
-    for secret in secrets {
-        if secret.start < copied {
-            continue;
-        }
-        shown.push_str(&line[copied..secret.start]);
-        shown.push_str(REDACTED);
-        copied = secret.end;
-    }
-    shown.push_str(&line[copied..]);
-    mask(&shown).unwrap_or(shown)
+    secrets
 }
 
 /// The value the `=` at `equals` gives a variable whose name ends in a secret word: `NAME=value`;
 /// cmd's `set NAME=value`, which runs to the next command, and `set "NAME=value"`, to the quote;
 /// PowerShell's `$name = 'value'` and `$env:NAME = 'value'`, with blanks around `=`.
-fn assigned_secret(line: &str, lower: &str, equals: usize) -> Option<std::ops::Range<usize>> {
+fn assigned_secret(line: &str, lower: &str, equals: usize) -> Option<Range<usize>> {
     if line[equals + 1..].starts_with('=') {
         return None;
     }
@@ -213,7 +254,7 @@ fn assigned_secret(line: &str, lower: &str, equals: usize) -> Option<std::ops::R
 
 /// The word that follows the blanks after `end`, inside its quotes when it has some. `None` when
 /// no blank follows.
-fn next_word(line: &str, end: usize) -> Option<std::ops::Range<usize>> {
+fn next_word(line: &str, end: usize) -> Option<Range<usize>> {
     let rest = &line[end..];
     let blanks = rest.len() - rest.trim_start_matches([' ', '\t']).len();
     (blanks > 0).then(|| option_value(line, end + blanks, None))
@@ -234,7 +275,7 @@ fn options<'a>(line: &'a str, option: &'a str) -> impl Iterator<Item = (usize, O
 
 /// The value written right at `start`: up to the quote that opened the word it is in, inside the
 /// quotes it starts with, or up to a blank, a quote or a separator.
-fn option_value(line: &str, start: usize, quote: Option<char>) -> std::ops::Range<usize> {
+fn option_value(line: &str, start: usize, quote: Option<char>) -> Range<usize> {
     if let Some(quote) = quote {
         return start..until(line, start, |c| c == quote);
     }
@@ -261,7 +302,7 @@ fn sets_secret(words: &[String]) -> Option<usize> {
     }
 }
 
-fn convar_values(text: &str, lower: &str, secrets: &mut Vec<std::ops::Range<usize>>) {
+fn convar_values(text: &str, lower: &str, secrets: &mut Vec<Range<usize>>) {
     for name in SECRET_CONVARS {
         let name = name.to_ascii_lowercase();
         for (start, _) in lower.match_indices(&name) {
@@ -307,7 +348,7 @@ fn starts_command(before: &str) -> bool {
 }
 
 /// The value that follows a convar name: a quoted string, or a word up to a blank or `;`.
-fn value_after(text: &str, end: usize) -> std::ops::Range<usize> {
+fn value_after(text: &str, end: usize) -> Range<usize> {
     let rest = &text[end..];
     let blanks = rest.len() - rest.trim_start_matches([' ', '\t']).len();
     if blanks == 0 {

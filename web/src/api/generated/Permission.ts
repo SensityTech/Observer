@@ -18,4 +18,6 @@ export const Permission = {
     PlayersView: 1n << 14n,
     PlayerIdentifiersView: 1n << 15n,
     DropsView: 1n << 16n,
+    ChangesView: 1n << 17n,
+    ChangesContent: 1n << 18n,
 } as const;

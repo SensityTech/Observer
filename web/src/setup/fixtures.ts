@@ -43,6 +43,7 @@ export const CFG: CfgReport = {
         onesync: null,
         hostname: '^2Lab ^7server',
         licence: 'set',
+        gameBuild: null,
     },
     findings: [
         finding('editedByTxAdmin', 'note', 12, { count: 2 }),

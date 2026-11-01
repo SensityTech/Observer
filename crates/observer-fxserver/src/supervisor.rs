@@ -9,6 +9,7 @@ use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant};
 
 use observer_domain::diagnostics::ProcessKind;
+use observer_domain::launch::LaunchSettings;
 use observer_domain::server::SpawnFailure;
 use observer_domain::server_data::CfgFinding;
 use observer_platform::{Exit, ExitWatch, Output, ProcessInfo, ProcessTree, TreeChange, TreeChanges};
@@ -165,6 +166,8 @@ pub enum EventKind {
         probe: SocketAddr,
         /// The build folder this run was started from.
         build: PathBuf,
+        /// The settings it was launched with.
+        launch: Box<LaunchSettings>,
     },
     /// A finding of the cfg of the run that just started, of severity warning or blocking.
     CfgWarning {
@@ -214,6 +217,10 @@ pub enum EventKind {
     },
     Resources {
         started: Vec<String>,
+        /// What started and stopped since the last report, in order.
+        events: Vec<ResourceEvent>,
+        /// Starts and stops past the 64 a report tells.
+        dropped: u32,
     },
     Heap {
         heap_used: u64,
@@ -221,6 +228,14 @@ pub enum EventKind {
         rss: u64,
         external: u64,
     },
+}
+
+/// A resource the server started or stopped while it ran.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ResourceEvent {
+    pub name: String,
+    /// `false` for a stop.
+    pub started: bool,
 }
 
 /// A process of the tree started or ended, the main process left out.
@@ -324,6 +339,8 @@ pub struct Status {
     pub players: Option<Players>,
     /// The build the running server reports, once it has.
     pub build: Option<u32>,
+    /// The game build it enforces, once it has said.
+    pub game_build: Option<u32>,
 }
 
 /// What the probes read last of the server that runs now, for the statistics. It changes every
@@ -434,6 +451,7 @@ impl Supervisor {
             started_ms: None,
             players: None,
             build: None,
+            game_build: None,
         };
         let (status_tx, status) = watch::channel(initial);
         let (readings_tx, readings) = watch::channel(Readings::default());
@@ -688,6 +706,7 @@ struct Run {
     started_ms: i64,
     players: Option<Players>,
     build: Option<u32>,
+    game_build: Option<u32>,
     layout: Layout,
     exit: ExitWatch,
     tree: Arc<ProcessTree>,
@@ -851,8 +870,9 @@ impl Actor {
                 run.players = Some(*players);
                 true
             }
-            Probe::Info(Ok(build)) if run.build != Some(*build) => {
-                run.build = Some(*build);
+            Probe::Info(Ok(info)) if run.build != Some(info.build) || run.game_build != info.game_build => {
+                run.build = Some(info.build);
+                run.game_build = info.game_build;
                 true
             }
             _ => false,
@@ -1324,7 +1344,25 @@ impl Actor {
                 run.bridge_ready = true;
                 return;
             }
-            Some(Report::Resources { started }) => EventKind::Resources { started },
+            Some(Report::Resources {
+                started,
+                events,
+                dropped,
+            }) => EventKind::Resources {
+                started,
+                events: events
+                    .into_iter()
+                    .filter_map(|(name, change)| {
+                        let started = match change.as_str() {
+                            "start" => true,
+                            "stop" => false,
+                            _ => return None,
+                        };
+                        Some(ResourceEvent { name, started })
+                    })
+                    .collect(),
+                dropped,
+            },
             Some(Report::Heap {
                 heap_used,
                 heap_total,
@@ -1398,7 +1436,7 @@ impl Actor {
 
     async fn spawn(&mut self, cause: Cause) -> Result<(), SpawnError> {
         match self.launch().await {
-            Ok((run, probe, warnings)) => {
+            Ok((run, probe, warnings, launch)) => {
                 let pid = run.pid;
                 let build = run.layout.build().to_path_buf();
                 self.readings.send_replace(Readings {
@@ -1417,7 +1455,12 @@ impl Actor {
                 self.last_tick = Instant::now();
                 self.set_state(State::Starting, cause);
                 self.note(&format!("FXServer started (pid {pid})"));
-                self.emit(EventKind::Spawned { pid, probe, build });
+                self.emit(EventKind::Spawned {
+                    pid,
+                    probe,
+                    build,
+                    launch: Box::new(launch),
+                });
                 for finding in warnings {
                     warn!(
                         kind = ?finding.kind,
@@ -1448,13 +1491,14 @@ impl Actor {
         }
     }
 
-    async fn launch(&mut self) -> Result<(Run, SocketAddr, Vec<CfgFinding>), SpawnError> {
+    async fn launch(&mut self) -> Result<(Run, SocketAddr, Vec<CfgFinding>, LaunchSettings), SpawnError> {
         let Some(server) = self.settings.launch.clone() else {
             return Err(SpawnError::new(
                 SpawnFailure::NotConfigured,
                 "no launch settings are configured",
             ));
         };
+        let settings = server.settings.clone();
         let prepared = prepare(server, self.settings.flavour).await?;
         let layout = prepared.layout.clone();
         self.install(&layout).await?;
@@ -1533,6 +1577,7 @@ impl Actor {
             started_ms: now_ms(),
             players: None,
             build: None,
+            game_build: None,
             layout,
             exit: spawned.exit,
             tree,
@@ -1547,7 +1592,7 @@ impl Actor {
             ending: None,
             killed: false,
         };
-        Ok((run, probe, prepared.warnings))
+        Ok((run, probe, prepared.warnings, settings))
     }
 
     /// Writes the bridge into the build, and moves away the dumps of a run Observer did not see
@@ -1776,6 +1821,7 @@ impl Actor {
             started_ms: run.map(|run| run.started_ms),
             players: run.and_then(|run| run.players),
             build: run.and_then(|run| run.build),
+            game_build: run.and_then(|run| run.game_build),
         });
     }
 

@@ -2,10 +2,11 @@ import { Link } from '@tanstack/react-router';
 import { ArrowRight, RotateCw } from 'lucide-react';
 import { Suspense, useId } from 'react';
 
+import { Permission } from '../api/generated/Permission';
 import type { ScheduleStatus } from '../api/generated/ScheduleStatus';
 import type { ServerStatus } from '../api/generated/ServerStatus';
 import { useArtifacts } from '../artifacts/context';
-import { useMe } from '../auth/me';
+import { allows, useMe } from '../auth/me';
 import { Button } from '../components/Button';
 import { ErrorBoundary } from '../components/ErrorBoundary';
 import { formatClock, formatDay, zoneDate } from '../i18n/format';
@@ -16,6 +17,7 @@ import { lazyCode } from '../lib/lazyCode';
 import { secondsSince, useNow } from '../lib/useNow';
 import { LiveMetricsProvider, useLiveMetrics } from '../metrics/live';
 import { Alerts } from '../overview/Alerts';
+import { ChangesFact } from '../overview/ChangesFact';
 import { ThreadsCard } from '../overview/ThreadsCard';
 import { Tiles } from '../overview/Tiles';
 import { TreeCard } from '../overview/TreeCard';
@@ -230,6 +232,7 @@ function ServerState({ status }: { status: ServerStatus }) {
                 {cause !== null && <span className="text-ink-3">{cause}</span>}
             </output>
             {facts.length > 0 && <p className="text-small text-ink-3">{facts.join(' · ')}</p>}
+            {allows(me, Permission.ChangesView) && <ChangesFact />}
             {launch !== null && (
                 <div className="flex flex-col items-start gap-2 text-small text-ink-2">
                     <p>

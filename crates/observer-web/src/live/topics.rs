@@ -55,6 +55,7 @@ pub(super) fn allows(topic: Topic, held: Permissions) -> bool {
         // The alert list names programs and modules, never a command line or a path.
         Topic::ServerAlerts => any(&[Permissions::DASHBOARD_VIEW, Permissions::DIAGNOSTICS_VIEW]),
         Topic::ServerDiagnostics => any(&[Permissions::DIAGNOSTICS_VIEW]),
+        Topic::ServerChanges => any(&[Permissions::CHANGES_VIEW]),
     }
 }
 
@@ -130,6 +131,14 @@ pub(super) async fn open(topic: Topic, since: Option<u64>, state: &AppState) -> 
             Ok(Feed {
                 snapshot: TopicSnapshot::ServerDiagnostics(snapshot),
                 events: Some(diagnostics_events(events)),
+            })
+        }
+        Topic::ServerChanges => {
+            let mut live = state.changes.live();
+            let snapshot = live.borrow_and_update().clone();
+            Ok(Feed {
+                snapshot: TopicSnapshot::ServerChanges(snapshot),
+                events: Some(status_events(live, TopicEvent::ServerChanges)),
             })
         }
     }

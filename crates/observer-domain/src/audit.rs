@@ -141,10 +141,18 @@ pub enum AuditAction {
     DropRatesExported,
     /// How long players' sessions and their texts are kept changed.
     DropsRetentionChanged,
+    /// A diff or a full file of the server's contents, once an hour per account, file and pair
+    /// of starts.
+    ChangeContentsViewed,
+    ChangeSettingsChanged,
+    ChangeContentsPurged,
+    ChangeVerifyRequested,
+    /// A check of the disk, which reads the server folder at the capped rate.
+    ChangeCheckRequested,
 }
 
 impl AuditAction {
-    pub const ALL: [Self; 76] = [
+    pub const ALL: [Self; 81] = [
         Self::SetupCompleted,
         Self::SetupLinkCreated,
         Self::LoginSucceeded,
@@ -221,6 +229,11 @@ impl AuditAction {
         Self::PlayerDropsExported,
         Self::DropRatesExported,
         Self::DropsRetentionChanged,
+        Self::ChangeContentsViewed,
+        Self::ChangeSettingsChanged,
+        Self::ChangeContentsPurged,
+        Self::ChangeVerifyRequested,
+        Self::ChangeCheckRequested,
     ];
 
     pub const fn as_str(self) -> &'static str {
@@ -301,6 +314,11 @@ impl AuditAction {
             Self::PlayerDropsExported => "player_drops_exported",
             Self::DropRatesExported => "drop_rates_exported",
             Self::DropsRetentionChanged => "drops_retention_changed",
+            Self::ChangeContentsViewed => "change_contents_viewed",
+            Self::ChangeSettingsChanged => "change_settings_changed",
+            Self::ChangeContentsPurged => "change_contents_purged",
+            Self::ChangeVerifyRequested => "change_verify_requested",
+            Self::ChangeCheckRequested => "change_check_requested",
         }
     }
 

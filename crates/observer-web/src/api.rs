@@ -7,6 +7,7 @@ mod account;
 mod artifacts;
 mod audit;
 mod auth;
+mod changes;
 mod diagnostics;
 mod drops;
 mod files;
@@ -44,7 +45,7 @@ pub(crate) struct Route {
 #[rustfmt::skip]
 #[expect(clippy::too_many_lines, reason = "every route of the API, read best as one table")]
 pub(crate) fn routes() -> Vec<Route> {
-    use Gate::{Account, Owner, Permission, Public, Reauthenticated, ReauthenticatedOwner, Session, Ticket};
+    use Gate::{Account, Owner, Permission, PermissionReadsAudited, Public, Reauthenticated, ReauthenticatedOwner, Session, Ticket};
     use Method as M;
     use Permissions as P;
 
@@ -85,6 +86,11 @@ pub(crate) fn routes() -> Vec<Route> {
     let erase = ReauthenticatedOwner;
     // Statistics name nobody; the log, its export and reason groups are `PLAYERS_VIEW`'s.
     let drops = Permission(P::DROPS_VIEW);
+    // What changed between starts: the history for its permission, the contents behind the critical
+    // one, a refused read of them audited; the settings, the purge and a full verification are the
+    // owner's, with the password again to change anything.
+    let changes = Permission(P::CHANGES_VIEW);
+    let contents = PermissionReadsAudited(P::CHANGES_CONTENT);
     vec![
         route(M::GET,    "/health",                     Public,       health),
         route(M::GET,    "/setup",                      Public,       setup::status),
@@ -174,6 +180,17 @@ pub(crate) fn routes() -> Vec<Route> {
         route(M::GET,    "/servers/default/drops/settings",    Owner,   drops::settings),
         route(M::PUT,    "/servers/default/drops/settings",    erase,   drops::change_settings),
         route(M::DELETE, "/servers/default/players/{id}",      erase,   players::forget),
+        route(M::GET,    "/servers/default/changes",          changes,  changes::compare),
+        route(M::GET,    "/servers/default/changes/starts",   changes,  changes::starts),
+        route(M::GET,    "/servers/default/changes/resource", changes,  changes::resource),
+        route(M::GET,    "/servers/default/changes/history",  changes,  changes::history),
+        route(M::POST,   "/servers/default/changes/check",    changes,  changes::check),
+        route(M::GET,    "/servers/default/changes/diff",     contents, changes::diff),
+        route(M::GET,    "/servers/default/changes/file",     contents, changes::file),
+        route(M::GET,    "/servers/default/changes/settings", Owner,    changes::settings),
+        route(M::PUT,    "/servers/default/changes/settings", ReauthenticatedOwner, changes::change_settings),
+        route(M::POST,   "/servers/default/changes/verify",   ReauthenticatedOwner, changes::verify),
+        route(M::DELETE, "/servers/default/changes/contents", ReauthenticatedOwner, changes::purge),
     ]
 }
 

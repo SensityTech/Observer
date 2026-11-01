@@ -32,6 +32,8 @@ impl Permissions {
     pub const PLAYERS_VIEW: Self = Self(1 << 14);
     pub const PLAYER_IDENTIFIERS_VIEW: Self = Self(1 << 15);
     pub const DROPS_VIEW: Self = Self(1 << 16);
+    pub const CHANGES_VIEW: Self = Self(1 << 17);
+    pub const CHANGES_CONTENT: Self = Self(1 << 18);
 
     /// Every permission in the catalog, which is what the owner holds.
     pub fn all() -> Self {
@@ -198,6 +200,7 @@ pub enum PermissionArea {
     Files,
     Players,
     Drops,
+    Changes,
 }
 
 /// One permission of the catalog, as `GET /api/permissions` returns it.
@@ -370,6 +373,24 @@ pub const CATALOG: &[PermissionInfo] = &[
         danger: Danger::Normal,
         implies: Permissions::NONE,
     },
+    PermissionInfo {
+        bit: 17,
+        constant: "CHANGES_VIEW",
+        key: "changesView",
+        area: PermissionArea::Changes,
+        // Paths, versions and attributions say who changed what on the server.
+        danger: Danger::Sensitive,
+        implies: Permissions::NONE,
+    },
+    PermissionInfo {
+        bit: 18,
+        constant: "CHANGES_CONTENT",
+        key: "changesContent",
+        area: PermissionArea::Changes,
+        // The server's code: custom scripts and the plain parts of paid ones.
+        danger: Danger::Critical,
+        implies: Permissions::CHANGES_VIEW,
+    },
 ];
 
 #[cfg(test)]
@@ -401,6 +422,8 @@ mod tests {
                 Permissions::PLAYER_IDENTIFIERS_VIEW,
             ),
             (16, "DROPS_VIEW", Permissions::DROPS_VIEW),
+            (17, "CHANGES_VIEW", Permissions::CHANGES_VIEW),
+            (18, "CHANGES_CONTENT", Permissions::CHANGES_CONTENT),
         ];
 
         assert_eq!(CATALOG.len(), frozen.len());

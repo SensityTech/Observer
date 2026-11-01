@@ -271,6 +271,14 @@ mod tests {
                 pid: 3312,
                 probe: "127.0.0.1:30120".parse().unwrap(),
                 build: "/srv/observer/artifacts/35245".into(),
+                launch: Box::new(observer_domain::launch::LaunchSettings {
+                    data_path: "/srv/fivem".to_owned(),
+                    cfg_file: "server.cfg".to_owned(),
+                    onesync: observer_domain::launch::OneSync::On,
+                    auto_start: false,
+                    txadmin_events: false,
+                    extra_arguments: Vec::new(),
+                }),
             },
         )
     }

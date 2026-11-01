@@ -5,6 +5,7 @@ import type { ReactNode } from 'react';
 
 import type { ActorKind } from '../api/generated/ActorKind';
 import type { ApplyMode } from '../api/generated/ApplyMode';
+import type { ArgumentChangeKind } from '../api/generated/ArgumentChangeKind';
 import type { ArtifactSettingsProblem } from '../api/generated/ArtifactSettingsProblem';
 import type { AuditAction } from '../api/generated/AuditAction';
 import type { BuildPlatform } from '../api/generated/BuildPlatform';
@@ -17,7 +18,11 @@ import type { DropCategory } from '../api/generated/DropCategory';
 import type { DropKind } from '../api/generated/DropKind';
 import type { DropsRange } from '../api/generated/DropsRange';
 import type { EndpointProtocol } from '../api/generated/EndpointProtocol';
+import type { EnvironmentFact } from '../api/generated/EnvironmentFact';
 import type { ErrorCode } from '../api/generated/ErrorCode';
+import type { FileChangeKind } from '../api/generated/FileChangeKind';
+import type { FileFlag } from '../api/generated/FileFlag';
+import type { FileKind } from '../api/generated/FileKind';
 import type { FindingKind } from '../api/generated/FindingKind';
 import type { FindingParams } from '../api/generated/FindingParams';
 import type { FolderProblem } from '../api/generated/FolderProblem';
@@ -30,24 +35,30 @@ import type { JobStep } from '../api/generated/JobStep';
 import type { LaunchProblem } from '../api/generated/LaunchProblem';
 import type { LicenceState } from '../api/generated/LicenceState';
 import type { LineKind } from '../api/generated/LineKind';
+import type { LiveChangeKind } from '../api/generated/LiveChangeKind';
 import type { NoticeReason } from '../api/generated/NoticeReason';
 import type { OneSync } from '../api/generated/OneSync';
 import type { Outcome } from '../api/generated/Outcome';
+import type { PartialReason } from '../api/generated/PartialReason';
 import type { PermissionArea } from '../api/generated/PermissionArea';
 import type { PlayerSort } from '../api/generated/PlayerSort';
 import type { PlayersFileProblem } from '../api/generated/PlayersFileProblem';
 import type { Protection } from '../api/generated/Protection';
 import type { Range } from '../api/generated/Range';
+import type { ResourceChangeKind } from '../api/generated/ResourceChangeKind';
 import type { ScheduleMode } from '../api/generated/ScheduleMode';
 import type { ScheduleProblem } from '../api/generated/ScheduleProblem';
 import type { ServerState } from '../api/generated/ServerState';
 import type { Severity } from '../api/generated/Severity';
+import type { SnapshotState } from '../api/generated/SnapshotState';
 import type { SpawnFailure } from '../api/generated/SpawnFailure';
+import type { StartCause } from '../api/generated/StartCause';
 import type { StopSource } from '../api/generated/StopSource';
 import type { SupportLevel } from '../api/generated/SupportLevel';
 import type { TileKind } from '../api/generated/TileKind';
 import type { TrendVerdict } from '../api/generated/TrendVerdict';
 import { parsePermissions, permissionKeys, type PermissionKey } from '../auth/permissions';
+import type { InvisibleKind } from '../changes/invisible';
 import type { LinkState } from '../live/realtime';
 import type { LaunchStep, SetupStep } from '../setup/state';
 import { formatBytes, formatDuration, formatNumber, plural } from './format';
@@ -123,6 +134,16 @@ const permissions = {
     dropsView: {
         name: 'View player drops',
         description: 'Drop rates, categories, crash signatures and kicking resources, without any player.',
+    },
+    changesView: {
+        name: 'View changes',
+        description:
+            'What each start of the server ran from: resources, versions, files, sizes and who changed them.',
+    },
+    changesContent: {
+        name: 'Read changed files',
+        description:
+            "Line diffs and whole files of the server's resources, secrets hidden. The server's code is its most valuable asset.",
     },
 } satisfies Record<PermissionKey, { name: string; description: string }>;
 
@@ -279,6 +300,7 @@ export const en = {
         diagnostics: 'Diagnostics',
         players: 'Players',
         drops: 'Drops',
+        changes: 'Changes',
         alertCount: (value: number) => count(value, { one: 'alert', other: 'alerts' }),
     },
     theme: {
@@ -1085,6 +1107,7 @@ export const en = {
             syscallsHidden: 'This host hides the system calls threads wait in (kernel.yama.ptrace_scope).',
             download: (name: string) => `Download ${name}`,
             deleteFiles: 'Delete files…',
+            whatChanged: 'What changed before this run',
             deleteTitle: 'Delete these files?',
             deleteBody:
                 "Its dumps hold FXServer's memory. They are deleted from the host; the analysis stays.",
@@ -1873,6 +1896,366 @@ export const en = {
             showInLog: 'Show their drops',
         },
         profileLog: 'Open in the drop log',
+    },
+    changes: {
+        title: 'Changes',
+        gloss: 'What each start of the server ran from.',
+        timeNote: 'Times in your time zone',
+        loading: 'Reading the changes',
+        empty: {
+            title: 'No start recorded yet',
+            body: 'Snapshots start with the next start of the server: each one records the build, the cfg and every resource it runs from.',
+            baselineTitle: 'Baseline taken',
+            baselineBody:
+                'The first start is the baseline: it records every resource as found. What changes shows from the next start.',
+            latest: 'Compare the latest starts',
+        },
+        bar: {
+            title: 'Compared',
+            from: 'From',
+            to: 'To',
+            disk: 'On disk now',
+            diskAt: (time: string) => `On disk now · checked ${time}`,
+            diskChecking: 'On disk now · checking',
+            check: 'Check the disk',
+            checking: 'Checking the disk',
+            checkHint: 'Lists and hashes the server folder now: what the next start would apply.',
+            option: (time: string, start: string, changes: string) => `${time} · ${start} · ${changes}`,
+        },
+        causes: {
+            requested: 'Started',
+            restart: 'Restarted',
+            scheduled: 'Scheduled restart',
+            recovery: 'Recovered',
+        } satisfies Record<StartCause, string>,
+        startBy: (cause: string, by: string) => `${cause} by ${by}`,
+        start: 'Start',
+        check: 'Disk check',
+        states: {
+            listing: 'Listing files',
+            hashing: 'Hashing files',
+            complete: 'Complete',
+            partial: 'Partial',
+            failed: 'Failed',
+        } satisfies Record<SnapshotState, string>,
+        partialReasons: {
+            limit: 'it reached the limits of a snapshot',
+            cancelled: 'the next start cut it short',
+            diskFloor: 'the disk was almost full, so no contents were kept',
+            unreadable: 'some files could not be read',
+        } satisfies Record<PartialReason, string>,
+        partial: (reason: string) =>
+            `This snapshot is partial: ${reason}. What it could not read shows as Unknown.`,
+        failed: 'This snapshot failed: the server folder could not be listed.',
+        busy: {
+            listing: 'The files are still being listed: the counts change as they are read.',
+            hashing: 'The files are still being hashed: resources marked Checking settle as they are read.',
+        },
+        counted: {
+            added: (value: number) => `${formatNumber('en', value)} added`,
+            removed: (value: number) => `${formatNumber('en', value)} removed`,
+            updated: (value: number) => `${formatNumber('en', value)} updated`,
+            sameVersion: (value: number) => `${formatNumber('en', value)} same version`,
+            renamed: (value: number) => `${formatNumber('en', value)} renamed`,
+            moved: (value: number) => `${formatNumber('en', value)} moved`,
+            didNotStart: (value: number) => `${formatNumber('en', value)} did not start`,
+            checking: (value: number) => `${formatNumber('en', value)} checking`,
+        },
+        resourcesChanged: (value: number) =>
+            count(value, { one: 'resource changed', other: 'resources changed' }),
+        // Resources neither changed nor unchanged yet, or left so by a partial snapshot.
+        beingChecked: (value: number) =>
+            `${count(value, { one: 'resource', other: 'resources' })} being checked`,
+        leftUnknown: (value: number) => `${count(value, { one: 'resource', other: 'resources' })} unknown`,
+        noChange: 'No change',
+        baseline: 'Baseline',
+        beingListed: 'Being listed',
+        snapshotFailed: 'Snapshot failed',
+        notCompared: 'No earlier start to compare with',
+        build: (build: number) => `build ${build}`,
+        lines: (added: string, removed: string) => `+${added} −${removed}`,
+        files: (added: string, modified: string, removed: string) => `+${added} ~${modified} −${removed}`,
+        fromTo: (from: string, to: string) => `${from} → ${to}`,
+        summary: {
+            label: 'What changed',
+            resources: 'Resources',
+            files: 'Files',
+            build: 'Build',
+            gameBuild: 'Game build',
+            cfg: 'cfg',
+            launch: 'Launch settings',
+            same: 'Same',
+            unchanged: (value: number) =>
+                `${count(value, { one: 'resource', other: 'resources' })} unchanged`,
+            baselineSub: 'first snapshot, every resource as found',
+            filesSub: 'added, removed or modified',
+            whileStarting: (value: number) =>
+                `${count(value, { one: 'file', other: 'files' })} changed while the server was starting`,
+            from: (value: string) => `from ${value}`,
+            cfgFiles: (value: number) => count(value, { one: 'file', other: 'files' }),
+            settings: (value: number) => count(value, { one: 'change', other: 'changes' }),
+        },
+        environment: {
+            title: 'Environment',
+            meta: 'What the server ran with besides its resources',
+            same: 'Same build, game build, launch settings and cfg.',
+            build: 'Build',
+            gameBuild: 'Game build',
+            game: 'Game',
+            settings: 'Launch settings',
+            arguments: 'Extra arguments',
+            cfg: 'cfg',
+            cfgStarted: 'Started by the cfg now',
+            cfgStopped: 'No longer started by the cfg',
+            cfgCount: (value: number) => `${count(value, { one: 'file', other: 'files' })} changed`,
+            settingNames: {
+                onesync: 'OneSync',
+                autoStart: 'Start with Observer',
+                txadminEvents: 'txAdmin events',
+                cfgFile: 'Config file',
+                dataPath: 'Server data folder',
+            } as Record<string, string>,
+            argumentChanges: {
+                set: 'set',
+                removed: 'removed',
+                changed: 'value changed',
+            } satisfies Record<ArgumentChangeKind, string>,
+            attribution: (action: string, by: string, at: string) => `${action} by ${by} · ${at}`,
+            observer: 'Observer',
+            showDiff: 'Show the diff',
+            hideDiff: 'Hide the diff',
+            notSet: 'not set',
+            yes: 'on',
+            no: 'off',
+        },
+        resources: {
+            title: 'Resources',
+            meta: (value: number) => count(value, { one: 'resource changed', other: 'resources changed' }),
+            filters: 'Changes shown',
+            search: 'Search by name or path',
+            caption: 'Resources that changed, those changed under the same version first',
+            resource: 'Resource',
+            change: 'Change',
+            version: 'Version',
+            files: 'Files',
+            lines: 'Lines',
+            by: 'By',
+            kinds: {
+                added: 'Added',
+                removed: 'Removed',
+                renamed: 'Renamed',
+                moved: 'Moved',
+                updated: 'Updated',
+                sameVersion: 'Same version',
+                checking: 'Checking',
+                unknown: 'Unknown',
+                didNotStart: 'Did not start',
+                unchanged: 'Unchanged',
+            } satisfies Record<ResourceChangeKind, string>,
+            escrowed: 'Escrowed',
+            duplicate: 'Duplicate',
+            fromPath: (path: string) => `from ${path}`,
+            filesToo: 'files changed too',
+            none: 'No resource changed between these two snapshots.',
+            noMatch: 'No resource matches the search and the changes shown.',
+            baseline:
+                'This start is a baseline: it lists every resource as found, so none of them counts as added.',
+        },
+        live: {
+            title: 'While the server ran',
+            caption: 'Resources started, stopped or restarted while the later start ran',
+            kinds: {
+                started: 'Started',
+                stopped: 'Stopped',
+                restarted: 'Restarted',
+            } satisfies Record<LiveChangeKind, string>,
+            by: (name: string) => `by ${name}`,
+            byUnknown: 'by unknown',
+            showAll: (value: number) => `Show all ${formatNumber('en', value)}`,
+            showFewer: 'Show fewer',
+        },
+        starts: {
+            title: 'Starts',
+            meta: 'Pick one to compare it with the start before',
+            caption: 'Starts, newest first',
+            compare: (time: string) => `Compare the start of ${time} with the one before`,
+            compared: 'Compared',
+            crashed: 'Crashed',
+            loadMore: 'Load older starts',
+        },
+        facts: {
+            build: 'build',
+            gameBuild: 'game build',
+            launch: 'launch settings',
+            cfg: 'cfg',
+        } satisfies Record<EnvironmentFact, string>,
+        resource: {
+            back: 'All changes',
+            loading: 'Reading the resource',
+            version: 'Version',
+            noVersion: 'no version',
+            path: 'Folder',
+            git: 'Git',
+            detached: 'detached',
+            packages: 'npm packages',
+            packageAdded: (version: string) => `added ${version}`,
+            packageRemoved: (version: string) => `removed, was ${version}`,
+            duplicate: (paths: string[]) =>
+                `FXServer loads only one folder of this name and warns about the others. Also found: ${list(paths)}.`,
+            files: 'Files',
+            showUnchanged: 'Show unchanged files',
+            root: 'At the root',
+            noFile: 'No file changed in this resource.',
+            pickFile: 'Pick a file to see what changed in it.',
+            pickFileNoContent:
+                'Pick a file to see its sizes, hashes and who wrote it. Its lines take the permission to read changed files.',
+            noContent:
+                'Your account sees which files changed, not their contents: reading them takes the permission to read changed files.',
+            sizes: (from: string, to: string) => `${from} → ${to}`,
+            writtenBy: (by: string, at: string) => `written over SFTP by ${by} at ${at}`,
+            purge: (name: string) => `Purge the kept contents of ${name}`,
+            purgeTitle: 'Purge the kept contents?',
+            purgeBody:
+                "Every kept version of this file leaves Observer's history, in every start and check. Its changes stay listed, without their lines. Add a never-show pattern so that it is not kept again.",
+            purgeConfirm: 'Purge contents',
+            purged: (path: string, versions: number, bytes: string) =>
+                `${path}: ${count(versions, { one: 'version', other: 'versions' })} cleared, ${bytes}.`,
+            history: 'History',
+            historyMeta: 'Each version kept over the starts',
+            historyCaption: 'Versions of the resource, newest first',
+            since: (time: string) => `since ${time}`,
+            historyEmpty: 'No version of this resource is kept.',
+        },
+        diff: {
+            label: (path: string) => `Changes in ${path}`,
+            lines: (path: string) => `Lines of ${path}`,
+            layout: 'Layout',
+            unified: 'Unified',
+            split: 'Split',
+            ignoreWhitespace: 'Ignore whitespace',
+            wrap: 'Wrap lines',
+            previous: 'Previous file',
+            next: 'Next file',
+            viewFile: 'View file',
+            viewDiff: 'View changes',
+            side: 'Version shown',
+            before: 'Before',
+            after: 'After',
+            added: 'added',
+            removed: 'removed',
+            hiddenSecret: 'Hidden secret',
+            redaction: '[REDACTED]',
+            secretChanged: 'secret changed',
+            invisible: {
+                bidi: (code: string) => `bidirectional control ${code}`,
+                zeroWidth: (code: string) => `zero-width character ${code}`,
+            } satisfies Record<InvisibleKind, (code: string) => string>,
+            invisibleWarning:
+                'This file holds characters that reorder or hide code, as a Trojan Source attack uses them. Each one shows as ⟨U+…⟩ in its place.',
+            moreLines: 'Show 20 more lines',
+            page: (page: number, pages: number) =>
+                `Page ${formatNumber('en', page)} of ${formatNumber('en', pages)}`,
+            previousPage: 'Previous page',
+            nextPage: 'Next page',
+            loading: 'Reading the lines',
+            noLine: 'No line changed.',
+            lineEndings: 'Line endings changed, nothing else.',
+            unchanged: 'This file did not change.',
+            binary: 'Binary',
+            sameSize: 'same size, contents changed',
+            encrypted: 'Encrypted by the Cfx.re escrow',
+            encryptedChanged: 'Encrypted by the Cfx.re escrow · changed',
+            hidden: 'Contents never shown: matches',
+            generated: 'Generated or minified: compared by size and hash.',
+            notKept: 'Contents no longer kept: the change stays listed, without its lines.',
+            beingRead: 'Still being read: its lines show once the files of this snapshot are hashed.',
+            renamed: (from: string) => `Renamed from ${from}; contents identical.`,
+            archive: 'Archive: compared by size and time, never read.',
+            offline: 'Cloud placeholder: listed by size and time, never read.',
+            link: 'Link: compared by where it points.',
+            unreadable: 'This file could not be read.',
+            flags: {
+                afterStart:
+                    'Changed while the server was starting: the running server may hold the earlier version.',
+                unsettled: 'Changed while it was being read: no contents kept for this version.',
+                reloadedLive: 'Reloaded live after it changed: the running server holds this version.',
+            } satisfies Record<FileFlag, string>,
+            flagNames: {
+                afterStart: 'changed while starting',
+                unsettled: 'changed while read',
+                reloadedLive: 'reloaded live',
+            } satisfies Record<FileFlag, string>,
+            shaBefore: 'SHA-256 before',
+            shaAfter: 'SHA-256 after',
+            fileKinds: {
+                text: 'Text',
+                generated: 'Generated',
+                encrypted: 'Encrypted',
+                binary: 'Binary',
+                hidden: 'Hidden',
+                archive: 'Archive',
+                offline: 'Placeholder',
+                link: 'Link',
+                unreadable: 'Unreadable',
+            } satisfies Record<FileKind, string>,
+            fileChanges: {
+                added: 'Added',
+                removed: 'Removed',
+                renamed: 'Renamed',
+                modified: 'Modified',
+                unchanged: 'Unchanged',
+            } satisfies Record<FileChangeKind, string>,
+        },
+        settings: {
+            title: 'Change tracking',
+            meta: 'Owner only',
+            loadFailed: 'The settings could not be loaded.',
+            enabled: 'Take a snapshot at each start',
+            enabledHint: 'Lists the server folder as FXServer starts and hashes what changed once it is up.',
+            extensions: 'Extensions with line diffs',
+            extensionsHint:
+                'Separated by spaces or commas, without the dot. Other files are compared by size and hash.',
+            extensionsInvalid:
+                'Each extension is 1 to 16 letters, digits, dashes or underscores, 200 at most.',
+            excluded: 'Never walked',
+            excludedHint:
+                'One pattern a line. * and ? are wildcards; a pattern with / is a path from the server data folder, one without names a file or folder anywhere.',
+            hidden: 'Contents never kept',
+            hiddenHint: 'Files compared by digest only: their lines are never stored nor shown.',
+            matches: (value: number) => `matches ${count(value, { one: 'file', other: 'files' })}`,
+            matchesNone: 'matches no file',
+            maxText: 'Largest text kept',
+            maxTextHint: 'In MB, up to 8. A larger text file is compared by digest only.',
+            budget: 'Contents kept at most',
+            budgetHint: 'In GB. Past it, the oldest contents go first; the last two starts stay whole.',
+            stored: (used: string) => `${used} kept now`,
+            retentionDays: 'Days a start is kept',
+            hashRate: 'Hashing rate',
+            hashRateHint: 'In MB/s while the server runs.',
+            verifyDays: 'Days between full verifications',
+            verifyDaysHint:
+                '0 for none. A full verification hashes every file again, which catches a copy that kept both size and time.',
+            startEvent: 'Raise observer:startChanges',
+            startEventHint: 'Once per run, for resources that post a changelog or tell the staff.',
+            outOfRange: 'Out of range.',
+            changes: (value: number) =>
+                `${count(value, { one: 'unsaved change', other: 'unsaved changes' })}`,
+            discard: 'Discard',
+            save: 'Save',
+            saved: 'Settings saved.',
+            verify: 'Verify all files',
+            verifyStarted: 'Verification started: every file is hashed again in the background.',
+        },
+        overview: {
+            since: (parts: string) => `Changes since the previous start: ${parts}`,
+            resources: (value: number) => count(value, { one: 'resource', other: 'resources' }),
+            none: 'No change since the previous start',
+            baseline: 'Baseline being taken',
+            baselineTaken: 'Baseline taken: changes show from the next start',
+            listing: 'Changes since the previous start: being listed',
+            failed: 'The snapshot of the latest start failed',
+            notCompared: 'No earlier start to compare the latest with',
+        },
     },
     server_state: {
         states: {
@@ -2671,6 +3054,11 @@ export const en = {
             player_drops_exported: 'Drop log exported',
             drop_rates_exported: 'Drop rates exported',
             drops_retention_changed: 'Drop retention changed',
+            change_contents_viewed: 'Changed file read',
+            change_settings_changed: 'Change tracking settings changed',
+            change_contents_purged: 'Kept contents of a file purged',
+            change_verify_requested: 'Full verification of the files asked for',
+            change_check_requested: 'Check of the disk asked for',
         } satisfies Record<AuditAction, string>,
         outcomes: {
             success: 'Success',
@@ -2692,6 +3080,12 @@ export const en = {
         // A schedule with no zone of its own follows the host's.
         hostZone: "the host's zone",
         minutes: (value: string) => `${value} min`,
+        rate: (value: string) => `${value}/s`,
+        // Change tracking's sizes, in the units its settings are typed in.
+        megabytes: (value: string) => `${value} MB`,
+        gigabytes: (value: string) => `${value} GB`,
+        // How a read of changed contents showed them.
+        views: { diff: 'the diff', file: 'the whole file' },
         // What a change of the schedule's settings took away with the occurrence it removed.
         dropped: {
             skip: 'a skip',
@@ -2825,6 +3219,22 @@ export const en = {
             crash: 'Crash',
             names: 'Files',
             unrecorded: 'Command lines not kept',
+            // A read of changed contents compares two snapshots: starts, or a start and a check of the disk.
+            fromSnapshot: 'From snapshot',
+            toSnapshot: 'To snapshot',
+            fromPath: 'Path before',
+            resource: 'Resource',
+            view: 'Read',
+            versions: 'Versions cleared',
+            extensions: 'Extensions with line diffs',
+            excluded: 'Never walked',
+            hidden: 'Contents never kept',
+            maxText: 'Largest text kept',
+            budget: 'Contents kept at most',
+            retentionDays: 'Starts kept',
+            hashRate: 'Hashing rate',
+            verifyDays: 'Full verification every',
+            startEvent: 'observer:startChanges',
             before: 'Before',
             after: 'After',
             linkDays: 'Identifiers and names',
@@ -2928,6 +3338,7 @@ export const en = {
         files: 'Files',
         players: 'Players',
         drops: 'Player drops',
+        changes: 'Changes',
     } satisfies Record<PermissionArea, string>,
     danger: {
         sensitive: 'Sensitive',
@@ -3096,6 +3507,21 @@ export const en = {
             typeof params.min === 'number' && typeof params.max === 'number'
                 ? `Keep sessions between ${params.min} and ${params.max} days.`
                 : 'This retention is out of range.',
+        changes_unavailable: 'The history of changes cannot be read right now. Try again in a moment.',
+        start_not_found: 'This start is no longer in the history.',
+        content_hidden: 'The contents of this file are never shown.',
+        content_not_kept: 'The contents of this version are no longer kept.',
+        diff_too_large: (params) =>
+            typeof params.lines === 'number'
+                ? `This file changed in ${count(params.lines, { one: 'line', other: 'lines' })}, more than a diff shows.`
+                : 'This file changed in more lines than a diff shows.',
+        check_running: 'A check of the files is already running. Wait for it to end.',
+        check_too_soon: (params) =>
+            `The files were checked moments ago. Try again in ${formatDuration('en', numberParam(params, 'retryAfter'))}.`,
+        invalid_glob: (params) =>
+            typeof params.index === 'number'
+                ? `Pattern ${params.index + 1} cannot be used: use * and ? as wildcards, / between folders, and no .. or drive letter.`
+                : 'A pattern cannot be used.',
     } satisfies Record<ErrorCode, ErrorMessage>,
     failure: {
         unknown: 'Something went wrong. Try again.',

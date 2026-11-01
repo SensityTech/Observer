@@ -155,6 +155,22 @@ pub enum ErrorCode {
     InvalidPlayersFile,
     /// The drop retention is out of its range. Params: `min`, `max`.
     InvalidDropsSettings,
+    /// The file changes' database could not be opened: it was set aside, or Observer is stopping.
+    ChangesUnavailable,
+    /// No start or check of the server has this id.
+    StartNotFound,
+    /// The file's contents are never shown. Params: `glob`, the never-show name or the owner's glob.
+    ContentHidden,
+    /// The contents of this version are no longer kept: the budget or a purge dropped them.
+    ContentNotKept,
+    /// The file changed in more lines than a diff shows. Params: `lines`, `maxLines`.
+    DiffTooLarge,
+    /// A check of the disk, or a snapshot's job, is running.
+    CheckRunning,
+    /// A check of the disk ran moments ago. Params: `retryAfter`, in seconds.
+    CheckTooSoon,
+    /// A glob of the settings is unusable. Params: `field`, `excluded` or `hidden`; `index`.
+    InvalidGlob,
 }
 
 /// The body of every error response.

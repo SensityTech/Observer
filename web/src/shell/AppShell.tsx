@@ -4,6 +4,7 @@ import {
     CalendarClock,
     Contact,
     FolderLock,
+    GitCompare,
     LayoutDashboard,
     Menu as MenuIcon,
     Package,
@@ -47,6 +48,7 @@ type NavEntry = {
         | '/artifacts'
         | '/diagnostics'
         | '/players'
+        | '/changes'
         | '/drops'
         | '/server'
         | '/users'
@@ -59,8 +61,8 @@ type NavEntry = {
     /** Shows how many alerts are live. */
     alerts?: boolean;
     /**
-     * Stays current on the pages under it, as a player's profile is under the players, and whatever
-     * its address holds, as the drops' filters.
+     * Stays current on the pages under it, as a player's profile is under the players and a resource
+     * under the changes, and whatever its address holds, as the drops' filters.
      */
     nested?: boolean;
 };
@@ -114,6 +116,13 @@ export function AppShell() {
             access: [Permission.DashboardView, Permission.ScheduleManage, Permission.ServerControl],
         },
         { to: '/artifacts', label: t.nav.artifacts, icon: Package, access: Permission.ArtifactsView },
+        {
+            to: '/changes',
+            label: t.nav.changes,
+            icon: GitCompare,
+            access: Permission.ChangesView,
+            nested: true,
+        },
         {
             to: '/diagnostics',
             label: t.nav.diagnostics,
@@ -258,7 +267,7 @@ function NavEntries({
                     key={to}
                     to={to}
                     className="nav-item"
-                    activeOptions={{ exact: nested !== true }}
+                    activeOptions={{ exact: nested !== true, includeSearch: false }}
                     onClick={onNavigate}
                 >
                     <Icon size={16} strokeWidth={1.5} aria-hidden="true" />

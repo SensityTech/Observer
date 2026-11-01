@@ -91,6 +91,30 @@ pub fn page(
     Ok(rows.collect::<Result<_, _>>()?)
 }
 
+/// The entries of `actions` from `from` to `to`, oldest first, at most `limit`.
+pub fn of_actions(
+    conn: &Connection,
+    actions: &[AuditAction],
+    from: Timestamp,
+    to: Timestamp,
+    limit: u32,
+) -> Result<Vec<AuditEntry>, StoreError> {
+    let names: Vec<&str> = actions.iter().map(|action| action.as_str()).collect();
+    let placeholders = (0..names.len())
+        .map(|index| format!("?{}", index + 4))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let sql = format!(
+        "SELECT id, at, actor_kind, actor_id, actor_name, ip, user_agent, action, target, outcome, details
+         FROM audit_log WHERE at >= ?1 AND at <= ?2 AND action IN ({placeholders}) ORDER BY id LIMIT ?3"
+    );
+    let mut values: Vec<Box<dyn ToSql>> = vec![Box::new(Utc(from)), Box::new(Utc(to)), Box::new(limit)];
+    values.extend(names.into_iter().map(|name| Box::new(name) as Box<dyn ToSql>));
+    let mut statement = conn.prepare(&sql)?;
+    let rows = statement.query_map(params_from_iter(values), read)?;
+    Ok(rows.collect::<Result<_, _>>()?)
+}
+
 /// The entries written after `after`, oldest first.
 pub fn after(conn: &Connection, after: i64, limit: u32) -> Result<Vec<AuditEntry>, StoreError> {
     let mut statement = conn.prepare(

@@ -58,3 +58,14 @@ AddEventHandler('observer:shuttingDown', function(payload)
     log('shuttingDown ' .. fields(payload, { 'delayMs', 'reason', 'by' }))
     -- Your saves go here: FXServer quits in payload.delayMs milliseconds.
 end)
+
+AddEventHandler('observer:startChanges', function(payload)
+    log('startChanges ' .. fields(payload, { 'at', 'previousAt', 'baseline', 'skipped', 'truncated' }))
+    local counts = payload.counts
+    log('  ' .. fields(counts, { 'added', 'removed', 'updated', 'sameVersion', 'renamed', 'moved',
+        'didNotStart', 'pending' }))
+    for _, resource in ipairs(payload.resources) do
+        log(('  %s %s %s -> %s'):format(resource.name, resource.change, show(resource.from), show(resource.to)))
+    end
+    -- Your changelog goes here: post what changed since the previous start to your staff's channel.
+end)

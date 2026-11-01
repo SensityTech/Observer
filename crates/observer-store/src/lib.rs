@@ -5,6 +5,7 @@
 pub mod artifacts;
 pub mod audit;
 mod backup;
+pub mod changes;
 mod database;
 pub mod diagnostics;
 pub mod files;
@@ -17,10 +18,12 @@ pub mod schedule;
 pub mod sessions;
 pub mod settings;
 pub mod setup_tokens;
+mod side;
 mod time;
 pub mod users;
 
 pub use backup::BackupKind;
+pub use changes::ChangesDatabase;
 pub use database::{Database, Inspection, StoreError};
 pub use metrics::MetricsDatabase;
 pub use rusqlite::{Connection, Error as RusqliteError, Transaction};

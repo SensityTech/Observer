@@ -22,6 +22,8 @@ pub const PERF_USER: &str = "observer";
 const TOKEN_BYTES: usize = 16;
 /// Longer than any event of the contract, short enough to refuse anything else.
 const MAX_BRIDGE_HEX: usize = 4096;
+/// The JSON of one event, which travels as hex at twice its length.
+pub const MAX_BRIDGE_JSON: usize = MAX_BRIDGE_HEX / 2;
 /// A server whose main loop is stuck stops reading; a write is reported pending after this.
 const WRITE_TIMEOUT: Duration = Duration::from_secs(2);
 const QUEUED_WRITES: usize = 32;

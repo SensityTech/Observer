@@ -308,7 +308,7 @@ function EntryRow({ entry }: { entry: AuditEntry }) {
             </td>
             <td className={cn(table.td, table.mono)}>{entry.ip ?? ''}</td>
             <td className={cn(table.td, 'min-w-60 font-mono text-meta text-ink-3 [overflow-wrap:anywhere]')}>
-                {auditDetails(t, format, entry.details)}
+                {auditDetails(t, format, entry.details, entry.action)}
             </td>
         </tr>
     );
