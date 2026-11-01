@@ -1310,9 +1310,9 @@ async fn a_dropped_notification_is_made_up_for_by_the_reconciliation() {
     let mut processes = lab.supervisor.processes();
     lab.supervisor.start("test").await.unwrap();
     lab.state(State::Online).await;
-    let spawned = Instant::now();
 
     // On Windows the first process of the tree is FXServer's console host; on Linux, this shell.
+    let typed = Instant::now();
     lab.type_command(&shell_command(20), "test").await;
 
     let first = if cfg!(windows) { "conhost.exe" } else { SHELL };
@@ -1323,8 +1323,10 @@ async fn a_dropped_notification_is_made_up_for_by_the_reconciliation() {
         ProcessKind::Shell
     };
     assert_eq!(kind, expected);
+    // A notification reports the shell within milliseconds of its start; the reconciliation only
+    // takes processes at least two seconds old, whenever its next tick falls after the spawn.
     assert!(
-        cfg!(windows) || spawned.elapsed() >= Duration::from_secs(4),
+        cfg!(windows) || typed.elapsed() >= Duration::from_millis(1_900),
         "the shell came before the reconciliation"
     );
     lab.shut_down(false).await;
