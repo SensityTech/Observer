@@ -2639,6 +2639,9 @@ export const en = {
         hangNoHeartbeat:
             'Not responding: the observer bridge stopped reporting in, so its main loop is stuck.',
         hangNoHttp: 'Not responding: its HTTP endpoint stopped answering.',
+        hangAdvice: (minutes: number) =>
+            `FXServer stayed silent for ${count(minutes, { one: 'minute', other: 'minutes' })}, the delay set under Server → Hang detection. A first start that builds its caches of clothing and vehicles can take longer: raise the delay there, or turn hang detection off for that start.`,
+        openHang: 'Open hang detection',
         exited: (description: string) => `FXServer exited: ${description}.`,
         fatalError: (message: string) => `FXServer reported a fatal error: ${message}`,
         bindError: (address: string) => `${address} is already in use by another program.`,
@@ -2872,7 +2875,7 @@ export const en = {
     server: {
         title: 'Server',
         gloss: 'How Observer starts FXServer.',
-        nextStart: 'Changes apply at the next start of FXServer',
+        nextStart: 'Changes apply at the next start of FXServer; hang detection applies at once',
         loadFailed: 'The launch settings could not be loaded.',
         unsaved: 'Nothing is saved yet: Observer needs these settings to start FXServer.',
         runSetup: 'Run the setup',
@@ -2899,6 +2902,14 @@ export const en = {
         txadminEvents: "Send txAdmin's events too",
         txadminEventsHint:
             "Resources written for txAdmin also receive txAdmin's events, such as txAdmin:events:scheduledRestart, next to Observer's.",
+        hang: 'Hang detection',
+        hangMeta: 'Applies at once, to a running server too',
+        hangDetection: 'Restart FXServer when it stops responding',
+        hangDetectionHint:
+            'Observer restarts FXServer once its main loop or its HTTP endpoints have stayed silent for the delay below. Off, it waits as long as they stay silent. A crash restarts FXServer either way.',
+        hangTimeout: 'Restart after, in minutes',
+        hangTimeoutHint:
+            'From 1 to 60, 6 by default. Raise it if a first start takes longer, while resources build their caches of clothing and vehicles.',
         arguments: 'Extra arguments',
         argumentsMeta: 'Each one goes on the command line as +set <name> <value>, after the cfg.',
         argument: (position: number) => `Argument ${formatNumber('en', position)}`,
@@ -2913,6 +2924,9 @@ export const en = {
         discarded: 'Changes discarded: the form shows the settings as stored.',
         save: 'Save',
         saved: 'Saved. FXServer uses these settings from its next start, a restart after a crash included.',
+        savedHang: 'Saved. Hang detection applies at once, to a running server too.',
+        savedBoth:
+            'Saved. Hang detection applies at once, to a running server too; the other settings from the next start of FXServer, a restart after a crash included.',
         problems: {
             required: 'Fill this in.',
             tooLong: 'Too long: 1,024 characters at most.',
@@ -2933,6 +2947,7 @@ export const en = {
             secret: 'This holds a secret: set it in the cfg, never on the command line, which anyone on the host can read.',
             duplicate: 'An argument above already sets this name.',
             tooMany: 'At most 64 extra arguments.',
+            outOfRange: 'A whole number of minutes, from 1 to 60.',
         } satisfies Record<LaunchProblem, string>,
     },
     serverSetup: {
@@ -3080,6 +3095,8 @@ export const en = {
             saveAndStart: 'Save and start',
             saveAndRestart: 'Save and restart',
             saveOnly: 'Save only',
+            // Its own: the setup changes nothing that reaches a running server at once.
+            saved: 'Saved. FXServer uses these settings from its next start, a restart after a crash included.',
             withoutBuild:
                 'No build is selected, so FXServer cannot start yet: save now, then start it once a build is selected.',
             starting: 'Saved. FXServer is starting: its first launch is followed below.',
@@ -3535,6 +3552,8 @@ export const en = {
             onesync: 'OneSync',
             autoStart: 'Start with Observer',
             txadminEvents: 'txAdmin events',
+            hangDetection: 'Hang detection',
+            hangTimeoutSeconds: 'Restart a hung server after',
             extraArguments: 'Extra arguments',
             setup: 'From the server setup',
             command: 'Command',

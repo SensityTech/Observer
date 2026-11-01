@@ -1,6 +1,16 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
-import { ArrowRight, FolderOpen, FolderSearch, Plus, Power, RotateCw, SquareTerminal, X } from 'lucide-react';
+import {
+    ArrowRight,
+    FolderOpen,
+    FolderSearch,
+    HeartPulse,
+    Plus,
+    Power,
+    RotateCw,
+    SquareTerminal,
+    X,
+} from 'lucide-react';
 import { useEffect, useId, useRef, useState, type FormEvent, type Ref } from 'react';
 
 import { ApiError } from '../api/client';
@@ -8,15 +18,25 @@ import type { LaunchField } from '../api/generated/LaunchField';
 import type { LaunchIssue } from '../api/generated/LaunchIssue';
 import type { LaunchSettings } from '../api/generated/LaunchSettings';
 import type { StoredLaunch } from '../api/generated/StoredLaunch';
-import { cleaned, countChanges, DEFAULT_LAUNCH, launchIssues, launchQuery, saveLaunch } from '../api/launch';
+import {
+    changedSettings,
+    cleaned,
+    countChanges,
+    DEFAULT_LAUNCH,
+    HANG_SETTINGS,
+    launchIssues,
+    launchQuery,
+    saveLaunch,
+} from '../api/launch';
 import { useArtifacts } from '../artifacts/context';
 import { Button, buttonVariants } from '../components/Button';
 import { Card } from '../components/Card';
 import { CheckRow } from '../components/CheckRow';
-import { FieldError, inputClass } from '../components/Field';
+import { FieldError, inputClass, TextField } from '../components/Field';
 import { Notice } from '../components/Notice';
 import { OneSyncChoice } from '../components/OneSyncChoice';
 import { PathField } from '../components/PathField';
+import type { Messages } from '../i18n/en';
 import { errorMessage } from '../i18n/errors';
 import { useI18n } from '../i18n/I18nProvider';
 import { cn } from '../lib/cn';
@@ -29,6 +49,31 @@ type Outcome = { tone: 'neutral' | 'success' | 'warning' | 'danger'; message: st
 let lastRow = 0;
 const toRows = (settings: LaunchSettings): Row[] =>
     settings.extraArguments.map((argument) => ({ id: ++lastRow, ...argument }));
+
+/**
+ * The hang timeout as the form edits it, in minutes. Observer takes whole minutes only, but a value
+ * stored otherwise reads 8.33 rather than 8.333333333333334.
+ */
+const minutesOf = (settings: LaunchSettings) =>
+    String(Math.round((settings.hangTimeoutSeconds / 60) * 100) / 100);
+/** The minutes typed as they are sent, in seconds: rounded, as 0.1 × 60 makes 6.000000000000001. */
+const secondsOf = (minutes: string) =>
+    minutes.trim() === '' ? Number.NaN : Math.round(Number(minutes) * 60);
+/** A whole number of minutes from 1 to 60, as Observer takes it in seconds. */
+const minutesFit = (minutes: string) => {
+    const value = Number(minutes);
+    return minutes.trim() !== '' && Number.isInteger(value) && value >= 1 && value <= 60;
+};
+
+/** What a save says: hang detection reaches a running server at once, the rest its next start. */
+const savedMessage = (t: Messages, before: LaunchSettings, after: LaunchSettings) => {
+    const changed = changedSettings(before, after);
+    const hang = changed.some((key) => HANG_SETTINGS.has(key));
+    if (!hang) {
+        return t.server.saved;
+    }
+    return changed.every((key) => HANG_SETTINGS.has(key)) ? t.server.savedHang : t.server.savedBoth;
+};
 
 export function ServerPage() {
     const { t } = useI18n();
@@ -78,6 +123,7 @@ function LaunchForm({ saved }: { saved: StoredLaunch | null }) {
     const baseline = shown?.settings ?? DEFAULT_LAUNCH;
     const [fields, setFields] = useState<LaunchSettings>(baseline);
     const [rows, setRows] = useState<Row[]>(() => toRows(baseline));
+    const [minutes, setMinutes] = useState(() => minutesOf(baseline));
     const [issues, setIssues] = useState<LaunchIssue[]>([]);
     const [outcome, setOutcome] = useState<Outcome | null>(null);
     const notice = useRef<HTMLDivElement>(null);
@@ -91,6 +137,10 @@ function LaunchForm({ saved }: { saved: StoredLaunch | null }) {
     const draft: LaunchSettings = {
         ...fields,
         extraArguments: rows.map(({ name, value }) => ({ name, value })),
+        // Compared in the minutes the field shows: left as it was, it gives back the seconds stored,
+        // so one the field cannot show exactly is never an unsaved change nobody made.
+        hangTimeoutSeconds:
+            minutes === minutesOf(baseline) ? baseline.hangTimeoutSeconds : secondsOf(minutes),
     };
     const changes = countChanges(baseline, draft);
     const stale = (saved?.version ?? null) !== (shown?.version ?? null);
@@ -99,6 +149,7 @@ function LaunchForm({ saved }: { saved: StoredLaunch | null }) {
         const settings = stored?.settings ?? DEFAULT_LAUNCH;
         setShown(stored);
         setFields(settings);
+        setMinutes(minutesOf(settings));
         // Rows keep their ids by position, so their inputs, and the keyboard in one, stay put.
         setRows((current) =>
             settings.extraArguments.map((argument, index) => ({
@@ -114,13 +165,15 @@ function LaunchForm({ saved }: { saved: StoredLaunch | null }) {
         startFrom(saved);
     }
 
+    // What the save started from goes with it: by the time it answers, the form may show another.
     const save = useMutation({
-        mutationFn: () => saveLaunch({ settings: cleaned(draft), version: shown?.version ?? null }),
-        onSuccess: (stored) => {
+        mutationFn: ({ settings }: { settings: LaunchSettings; before: LaunchSettings }) =>
+            saveLaunch({ settings, version: shown?.version ?? null }),
+        onSuccess: (stored, { settings, before }) => {
             queryClient.setQueryData(launchQuery.queryKey, stored);
             startFrom(stored);
             setIssues([]);
-            setOutcome({ tone: 'success', message: t.server.saved });
+            setOutcome({ tone: 'success', message: savedMessage(t, before, settings) });
         },
         onError: (error) => {
             const conflict = error instanceof ApiError && error.code === 'conflict';
@@ -196,8 +249,18 @@ function LaunchForm({ saved }: { saved: StoredLaunch | null }) {
     const submit = (event: FormEvent) => {
         event.preventDefault();
         setOutcome(null);
+        // A fraction or an emptied field would be refused as a malformed request rather than next
+        // to its field: it is checked before sending.
+        if (!minutesFit(minutes)) {
+            showFirstIssue.current = true;
+            setIssues((current) => [
+                ...current.filter((each) => each.field !== 'hangTimeoutSeconds'),
+                { field: 'hangTimeoutSeconds', index: null, problem: 'outOfRange' },
+            ]);
+            return;
+        }
         if (!save.isPending) {
-            save.mutate();
+            save.mutate({ settings: cleaned(draft), before: baseline });
         }
     };
 
@@ -267,6 +330,36 @@ function LaunchForm({ saved }: { saved: StoredLaunch | null }) {
                             onChange={(checked) => edit('txadminEvents', checked)}
                         />
                     </div>
+                </div>
+            </Card>
+
+            <Card id="server-hang" icon={HeartPulse} title={t.server.hang} meta={t.server.hangMeta}>
+                <div className="flex max-w-2xl flex-col gap-4">
+                    <div className="-mx-2 flex flex-col gap-1">
+                        <CheckRow
+                            label={t.server.hangDetection}
+                            description={t.server.hangDetectionHint}
+                            checked={fields.hangDetection}
+                            onChange={(checked) => edit('hangDetection', checked)}
+                        />
+                    </div>
+                    {/* Left editable with detection off: the delay is kept for when it is back on. */}
+                    <TextField
+                        label={t.server.hangTimeout}
+                        hint={t.server.hangTimeoutHint}
+                        type="number"
+                        inputMode="numeric"
+                        min={1}
+                        max={60}
+                        className="max-w-48"
+                        value={minutes}
+                        error={issue('hangTimeoutSeconds')}
+                        onChange={(event) => {
+                            setMinutes(event.target.value);
+                            setOutcome(null);
+                            forget('hangTimeoutSeconds');
+                        }}
+                    />
                 </div>
             </Card>
 

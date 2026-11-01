@@ -1,13 +1,17 @@
+import { useQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { ArrowRight, Rocket } from 'lucide-react';
 import { useId, useState } from 'react';
 
+import type { LaunchSettings } from '../api/generated/LaunchSettings';
 import type { ServerStatus } from '../api/generated/ServerStatus';
+import { launchQuery } from '../api/launch';
 import { Card } from '../components/Card';
 import { Steps } from '../components/Steps';
 import { useI18n } from '../i18n/I18nProvider';
 import { cn } from '../lib/cn';
 import { useServerStatus } from '../server/context';
+import { HangAdvice } from '../server/HangAdvice';
 import { STATE_INK, STATE_LED, causeText } from '../server/state';
 import { LAUNCH_STEPS, checklist } from './state';
 
@@ -20,11 +24,16 @@ export function FirstLaunch({ before }: { before: ServerStatus | null }) {
     const id = useId();
     const words = t.serverSetup.launch;
     const { status: live } = useServerStatus();
-    const [ended, setEnded] = useState<ServerStatus | null>(null);
-    const status = ended ?? live;
+    const launch = useQuery(launchQuery);
+    // The settings are kept with the end too: a delay raised since is not the one that ran out.
+    const [ended, setEnded] = useState<{ status: ServerStatus; settings: LaunchSettings | null } | null>(
+        null,
+    );
+    const status = ended?.status ?? live;
+    const settings = ended === null ? (launch.data?.settings ?? null) : ended.settings;
     const list = status === null ? null : checklist(before, status);
     if (ended === null && live !== null && list !== null && !list.waiting) {
-        setEnded(live);
+        setEnded({ status: live, settings });
     }
     const current =
         list === null
@@ -65,6 +74,7 @@ export function FirstLaunch({ before }: { before: ServerStatus | null }) {
                         </>
                     )}
                 </output>
+                {status !== null && <HangAdvice status={status} settings={settings} />}
                 <div className="flex flex-col items-start gap-2 text-small text-ink-2">
                     <p>{words.console}</p>
                     <Link

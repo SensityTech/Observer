@@ -184,7 +184,7 @@ function Setup({ saved }: { saved: StoredLaunch | null }) {
             queryClient.setQueryData(launchQuery.queryKey, stored);
             setShown(stored);
             if (after === null) {
-                setOutcome({ tone: 'success', message: t.server.saved });
+                setOutcome({ tone: 'success', message: t.serverSetup.start.saved });
             } else if (failure !== null) {
                 setOutcome({
                     tone: 'danger',

@@ -115,6 +115,12 @@ describe('auditDetails', () => {
             }),
         ).toBe('OneSync: on → legacy · Start with Observer: not set → yes');
         expect(auditDetails(en, format, { ownerOnly: true })).toBe('Owner only: yes');
+        expect(
+            auditDetails(en, format, {
+                hangDetection: { before: true, after: false },
+                hangTimeoutSeconds: { before: 360, after: 900 },
+            }),
+        ).toBe('Hang detection: yes → no · Restart a hung server after: 6 min → 15 min');
     });
 
     it('should name the step a failed launch stopped at', () => {

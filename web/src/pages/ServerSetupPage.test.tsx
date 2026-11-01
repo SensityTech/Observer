@@ -22,10 +22,20 @@ import { ServerStatusProvider } from '../server/context';
 import { CFG, DATA_PATH, FOLDER, finding } from '../setup/fixtures';
 import { ServerSetupPage } from './ServerSetupPage';
 
-// The page links to the Artifacts page and the console; no router runs here.
+// The page links to the Artifacts page, the console and the Server page; no router runs here.
 vi.mock('@tanstack/react-router', () => ({
-    Link: ({ to, children, className }: { to: string; children: ReactNode; className?: string }) => (
-        <a href={to} className={className}>
+    Link: ({
+        to,
+        hash,
+        children,
+        className,
+    }: {
+        to: string;
+        hash?: string;
+        children: ReactNode;
+        className?: string;
+    }) => (
+        <a href={hash === undefined ? to : `${to}#${hash}`} className={className}>
             {children}
         </a>
     ),
@@ -454,7 +464,7 @@ describe('ServerSetupPage', () => {
         expect(queryByRole('button', { name: words.start.saveAndStart })).toBeNull();
         await press(words.start.saveOnly);
 
-        await waitFor(() => getByText(en.server.saved));
+        await waitFor(() => getByText(words.start.saved));
         expect(api.of(SAVE_ROUTE)).toEqual([
             { settings: { ...DEFAULT_LAUNCH, dataPath: DATA_PATH, cfgFile: 'server.cfg' }, version: null },
         ]);
@@ -530,6 +540,49 @@ describe('ServerSetupPage', () => {
         const port = within(getByRole('list', { name: words.launch.title })).getAllByRole('listitem')[1];
         expect(port?.textContent).toContain(words.said.failed);
         getByText(en.server_state.bindError('0.0.0.0:30120'));
+    });
+
+    it('should keep a first launch that hung on the delay that ran out, with the way to raise it', async () => {
+        serve({
+            [FOLDER_ROUTE]: json(FOLDER),
+            [CFG_ROUTE]: json(CFG),
+            [SAVE_ROUTE]: json(stored(1)),
+            'POST /servers/default/start': () => new Response(null, { status: 204 }),
+        });
+        const { client, getByRole, getByText, press, say, toCfg } = await page();
+        await toCfg();
+        await press(words.continue);
+        await press(words.continue);
+        await press(words.start.saveAndStart);
+        await waitFor(() => getByText(words.start.starting));
+
+        const run = { ...STOPPED, generation: 1, since: '2026-10-30T14:00:05Z' };
+        say({
+            type: 'event',
+            topic: 'server.status',
+            data: { ...run, state: 'hung', cause: { kind: 'hang', cause: 'noHeartbeat' } },
+        });
+        // Raised once the owner has read why: the delay that ran out is still the one said.
+        const raised: StoredLaunch = {
+            ...stored(2),
+            settings: { ...stored(2).settings, hangTimeoutSeconds: 900 },
+        };
+        act(() => {
+            client.setQueryData(launchQuery.queryKey, raised);
+        });
+        say({
+            type: 'event',
+            topic: 'server.status',
+            data: { ...run, state: 'starting', generation: 2, cause: { kind: 'recovery' } },
+        });
+
+        const bridge = within(getByRole('list', { name: words.launch.title })).getAllByRole('listitem')[3];
+        expect(bridge?.textContent).toContain(words.said.failed);
+        getByText(en.server_state.hangNoHeartbeat);
+        getByText(en.server_state.hangAdvice(6));
+        expect(getByRole('link', { name: en.server_state.openHang }).getAttribute('href')).toBe(
+            '/server#server-hang',
+        );
     });
 
     it('should fail the first launch at its start when FXServer was tried and did not start', async () => {
