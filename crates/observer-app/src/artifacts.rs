@@ -34,6 +34,7 @@ use observer_domain::launch::{LaunchProblem, Platform as PathRules, folder_probl
 use observer_domain::permissions::Permissions;
 use observer_domain::schedule::ScheduleStatus;
 use observer_domain::server::ServerState;
+use observer_fxserver::health::Problem;
 use observer_fxserver::supervisor::{Cause, Event, EventKind, State};
 use observer_store::artifacts::{self as stored, ArtifactState};
 use observer_store::{Database, Transaction};
@@ -1128,7 +1129,9 @@ impl Driver {
             EventKind::State { to, cause, .. } => {
                 match to {
                     State::Online | State::Degraded => {
-                        self.probation_step(Input::Ready { generation }, false).await;
+                        let silent = matches!(&cause, Cause::Unhealthy { problems } if late(problems));
+                        self.probation_step(Input::Ready { generation, silent }, false)
+                            .await;
                     }
                     State::Stopping => {
                         let end = End::Requested;
@@ -1162,6 +1165,13 @@ impl Driver {
                     self.rollback_after = None;
                     self.start_last_healthy().await;
                 }
+                self.publish();
+            }
+            // Only a degraded run's problems change.
+            EventKind::Health { problems } => {
+                let silent = late(&problems);
+                self.probation_step(Input::Ready { generation, silent }, false)
+                    .await;
                 self.publish();
             }
             _ => {}
@@ -1583,6 +1593,15 @@ enum Fallback {
     Kept(NoticeReason),
     /// The last healthy build is selected again.
     RolledBack(u32),
+}
+
+/// Whether a degraded run's problems hold a late heartbeat or HTTP: the silence a hang starts
+/// with, which holds a probation's pass. A slow tick, a refused probe or a watchdog bark say the
+/// server still answers.
+fn late(problems: &[Problem]) -> bool {
+    problems
+        .iter()
+        .any(|problem| matches!(problem, Problem::HeartbeatLate | Problem::HttpLate))
 }
 
 /// Whether two paths name the same folder, as the file system resolves them when it can.

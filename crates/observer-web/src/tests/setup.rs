@@ -55,6 +55,8 @@ fn settings(data_path: &str) -> Value {
         "autoStart": false,
         "txadminEvents": false,
         "extraArguments": [],
+        "hangDetection": true,
+        "hangTimeoutSeconds": 360,
     })
 }
 

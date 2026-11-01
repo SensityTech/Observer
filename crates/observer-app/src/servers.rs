@@ -130,7 +130,13 @@ pub(crate) fn follow_rules(settings: &LaunchSettings) -> Result<(), Error> {
 
 /// The settings whose values anyone reading the log may see. Only the owner reads the others,
 /// and an argument may well hold a token: the log only says they changed.
-const SHOWN: [&str; 3] = ["onesync", "autoStart", "txadminEvents"];
+const SHOWN: [&str; 5] = [
+    "onesync",
+    "autoStart",
+    "txadminEvents",
+    "hangDetection",
+    "hangTimeoutSeconds",
+];
 
 /// Each setting that differs: its value before and after for the shown ones, `true` for a hidden
 /// one, and the names of the arguments set or removed. Before the first save, every setting was

@@ -1,6 +1,7 @@
 //! Builds switched under a running server, against the fake installed as builds of their own in
 //! Observer's artifacts folder: a switch at the next start and its probation, a build that crashes
-//! and the return to the last healthy one, a build waiting for the scheduled restart, and the
+//! and the return to the last healthy one, a build silent when its probation ends, a build waiting
+//! for the scheduled restart, and the
 //! process check that keeps a build in use. Also the install of the fake's own archive, which the
 //! browser tests' catalog lists.
 // The helpers below are test code too, though not inside a `#[test]` function.
@@ -52,6 +53,8 @@ const SELECTION_ROUTE: (&str, &str) = ("PUT", "/api/servers/default/artifacts/se
 /// The build on probation crashes late enough that Observer has seen it online and read its
 /// number first, which a loaded machine can take a few seconds to do.
 const CRASH_ON_PROBATION: &str = "set fake_crash_after_ms 8000";
+/// The main loop of the build on probation freezes once it is ready, well before its window ends.
+const HANG_ON_PROBATION: &str = "set fake_hang_after_ms 5000";
 
 /// Ports of their own, apart from the other test binaries'.
 static PORTS: LazyLock<Mutex<Vec<u16>>> = LazyLock::new(|| Mutex::new((41960..=41962).collect()));
@@ -82,6 +85,7 @@ struct Lab {
     clock: Clock,
     audit: AuditLog,
     supervision: Supervision,
+    servers: Servers,
     running: Option<Running>,
     schedule: Schedule,
     scheduling: Option<ScheduleTask>,
@@ -145,7 +149,7 @@ impl Lab {
                 clock: system.clone(),
                 root,
                 accounts,
-                servers,
+                servers: servers.clone(),
                 supervision: supervision.clone(),
                 schedule: schedule.status(),
                 catalog: Catalog::fixed(Ok(listing)),
@@ -161,6 +165,7 @@ impl Lab {
             _port: port,
             clock,
             supervision,
+            servers,
             running: Some(running),
             schedule,
             scheduling: Some(scheduling),
@@ -250,6 +255,8 @@ async fn seed(db: &Database, servers: &Servers, owner: &Caller, data: &Path) {
             name: "fake_heartbeat_ms".to_owned(),
             value: "200".to_owned(),
         }],
+        hang_detection: true,
+        hang_timeout_seconds: 360,
     };
     servers
         .change_launch_settings(owner, Servers::DEFAULT, launch, None)
@@ -522,6 +529,64 @@ async fn a_build_that_crashes_in_probation_is_rolled_back_and_the_last_healthy_o
         lab.root().join(NEW.to_string()).exists(),
         "a failed build is never deleted"
     );
+    lab.stop().await;
+}
+
+/// With hang detection off, nothing ever declares the frozen build hung: its probation waits for it
+/// to answer again rather than passing it, which would make it the last healthy build.
+#[tokio::test]
+async fn a_build_silent_when_its_probation_ends_does_not_pass_it() {
+    let stable_for = Duration::from_secs(10);
+    let mut lab = Lab::new(stable_for, HANG_ON_PROBATION).await;
+    let stored = lab
+        .servers
+        .launch_settings(Servers::DEFAULT)
+        .await
+        .unwrap()
+        .unwrap();
+    let off = LaunchSettings {
+        hang_detection: false,
+        ..stored.settings
+    };
+    lab.servers
+        .change_launch_settings(&lab.owner, Servers::DEFAULT, off, Some(stored.version))
+        .await
+        .unwrap();
+    lab.supervision.start_server(&lab.owner).await.unwrap();
+    lab.online_on(HEALTHY).await;
+
+    lab.select(NEW, ApplyMode::Now).await;
+    lab.online_on(NEW).await;
+    let ready_at = lab
+        .builds_until(|status| {
+            status
+                .probation
+                .is_some_and(|probation| probation.ready_at.is_some())
+        })
+        .await
+        .probation
+        .and_then(|probation| probation.ready_at)
+        .unwrap();
+    lab.until(|status| status.state == ServerState::Degraded).await;
+    let silent = lab
+        .builds_until(|status| {
+            status
+                .probation
+                .is_some_and(|probation| probation.passes_at.is_none())
+        })
+        .await;
+    let past_the_window =
+        ready_at + SignedDuration::try_from(stable_for).unwrap() + SignedDuration::from_secs(2);
+    let wait = Timestamp::now().duration_until(past_the_window);
+    tokio::time::sleep(Duration::try_from(wait).unwrap_or_default()).await;
+    let after = lab.artifacts.status().borrow().clone();
+
+    assert_eq!(silent.probation.map(|probation| probation.build), Some(NEW));
+    let probation = after.probation.unwrap();
+    assert_eq!((probation.build, probation.passes_at), (NEW, None));
+    assert_eq!(after.last_healthy.map(|healthy| healthy.build), Some(HEALTHY));
+    assert_eq!(lab.supervision.status().borrow().state, ServerState::Degraded);
+    assert_eq!(lab.audited(AuditAction::ProbationPassed).await.len(), 0);
     lab.stop().await;
 }
 

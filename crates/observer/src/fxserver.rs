@@ -13,7 +13,10 @@ use std::time::Duration;
 use anyhow::Context;
 use clap::Args;
 use jiff::tz::TimeZone;
-use observer_domain::launch::{ExtraArgument, LaunchSettings, OneSync};
+use observer_domain::launch::{
+    DEFAULT_HANG_TIMEOUT_SECONDS, ExtraArgument, LaunchSettings, MAX_HANG_TIMEOUT_SECONDS,
+    MIN_HANG_TIMEOUT_SECONDS, OneSync,
+};
 use observer_fxserver::console::{ConsoleHub, ConsoleLine, ConsoleLog, LineKind, LogLimits, plain};
 use observer_fxserver::launch::ServerLaunch;
 use observer_fxserver::stdin::{StdinError, UserCommand};
@@ -56,6 +59,19 @@ pub struct RunArgs {
     /// An extra convar, passed as `+set NAME VALUE`. Repeat for more.
     #[arg(long = "set", value_name = "NAME=VALUE", value_parser = convar)]
     extra: Vec<(String, String)>,
+    /// How long FXServer's main loop or HTTP endpoints may stay silent before it is restarted as
+    /// hung, in whole minutes from 1 to 60. Raise it for a first start that builds caches.
+    #[arg(
+        long,
+        value_name = "MINUTES",
+        default_value_t = DEFAULT_HANG_TIMEOUT_SECONDS / 60,
+        value_parser = hang_minutes,
+        conflicts_with = "no_hang_detection"
+    )]
+    hang_timeout: u32,
+    /// Never restart FXServer as hung, however long it stays silent. A crash still restarts it.
+    #[arg(long)]
+    no_hang_detection: bool,
 }
 
 fn convar(text: &str) -> Result<(String, String), String> {
@@ -66,6 +82,42 @@ fn convar(text: &str) -> Result<(String, String), String> {
 
 fn onesync(text: &str) -> Result<OneSync, String> {
     OneSync::from_name(text).ok_or_else(|| "expected off, on or legacy".to_owned())
+}
+
+/// Whole minutes only, within the range the launch settings take in seconds.
+fn hang_minutes(text: &str) -> Result<u32, String> {
+    let minutes = MIN_HANG_TIMEOUT_SECONDS / 60..=MAX_HANG_TIMEOUT_SECONDS / 60;
+    text.parse()
+        .ok()
+        .filter(|value| minutes.contains(value))
+        .ok_or_else(|| {
+            format!(
+                "expected whole minutes from {} to {}",
+                minutes.start(),
+                minutes.end()
+            )
+        })
+}
+
+/// The launch the command line describes: started here by hand, without txAdmin's events.
+fn server_launch(args: RunArgs) -> anyhow::Result<ServerLaunch> {
+    Ok(ServerLaunch {
+        build: PathBuf::from(full_path(&args.build)?),
+        settings: LaunchSettings {
+            data_path: full_path(&args.data)?,
+            cfg_file: args.cfg,
+            onesync: args.onesync,
+            auto_start: false,
+            txadmin_events: false,
+            extra_arguments: args
+                .extra
+                .into_iter()
+                .map(|(name, value)| ExtraArgument { name, value })
+                .collect(),
+            hang_detection: !args.no_hang_detection,
+            hang_timeout_seconds: args.hang_timeout * 60,
+        },
+    })
 }
 
 /// The launch rules take full paths only; the command line also takes them relative to here.
@@ -89,27 +141,11 @@ pub async fn run(config: Config, args: RunArgs) -> anyhow::Result<()> {
     )
     .context("cannot open the console log")?;
     let console = Arc::new(ConsoleHub::new(Some(&console_log)));
-    let mut settings = Settings::new(
-        Some(ServerLaunch {
-            build: PathBuf::from(full_path(&args.build)?),
-            settings: LaunchSettings {
-                data_path: full_path(&args.data)?,
-                cfg_file: args.cfg,
-                onesync: args.onesync,
-                auto_start: false,
-                txadmin_events: false,
-                extra_arguments: args
-                    .extra
-                    .into_iter()
-                    .map(|(name, value)| ExtraArgument { name, value })
-                    .collect(),
-            },
-        }),
-        &paths.root,
-    );
-    settings.probe = args
+    let probe = args
         .port
         .map(|port| SocketAddr::from((Ipv4Addr::LOCALHOST, port)));
+    let mut settings = Settings::new(Some(server_launch(args)?), &paths.root);
+    settings.probe = probe;
     let (supervisor, mut task) = Supervisor::spawn(settings, Arc::clone(&console));
 
     let (terminal, terminal_drained) =
@@ -325,7 +361,63 @@ async fn print_events(mut events: broadcast::Receiver<Event>, terminal: Terminal
 mod tests {
     use std::time::Instant;
 
+    use clap::Parser;
+
     use super::*;
+
+    #[derive(Debug, Parser)]
+    struct Command {
+        #[command(flatten)]
+        args: RunArgs,
+    }
+
+    fn parsed(extra: &[&str]) -> Result<LaunchSettings, clap::Error> {
+        let line = ["fxserver", "--build", "build", "--data", "server-data"];
+        let command = Command::try_parse_from(line.iter().chain(extra))?;
+        Ok(server_launch(command.args).unwrap().settings)
+    }
+
+    #[test]
+    fn hang_detection_is_on_after_six_minutes_unless_the_command_line_says_otherwise() {
+        let default = parsed(&[]).unwrap();
+        assert!(default.hang_detection);
+        assert_eq!(default.hang_timeout_seconds, DEFAULT_HANG_TIMEOUT_SECONDS);
+
+        let longer = parsed(&["--hang-timeout", "20"]).unwrap();
+        assert!(longer.hang_detection);
+        assert_eq!(longer.hang_timeout_seconds, 1200);
+        for minutes in ["1", "60"] {
+            let edge = parsed(&["--hang-timeout", minutes]).unwrap();
+            assert!(
+                edge.issues(observer_domain::launch::Platform::host()).is_empty(),
+                "{minutes}"
+            );
+        }
+
+        let off = parsed(&["--no-hang-detection"]).unwrap();
+        assert!(!off.hang_detection);
+        assert_eq!(off.hang_timeout_seconds, DEFAULT_HANG_TIMEOUT_SECONDS);
+    }
+
+    #[test]
+    fn a_hang_timeout_outside_one_to_sixty_whole_minutes_or_with_detection_off_is_refused() {
+        for minutes in ["0", "61", "1.5", "six"] {
+            let refused = parsed(&["--hang-timeout", minutes]).unwrap_err();
+            assert_eq!(
+                refused.kind(),
+                clap::error::ErrorKind::ValueValidation,
+                "{minutes}"
+            );
+            assert!(
+                refused
+                    .to_string()
+                    .contains("expected whole minutes from 1 to 60"),
+                "{refused}"
+            );
+        }
+        let both = parsed(&["--hang-timeout", "10", "--no-hang-detection"]).unwrap_err();
+        assert_eq!(both.kind(), clap::error::ErrorKind::ArgumentConflict);
+    }
 
     /// A terminal that takes nothing until it is released, like a console window with a text
     /// selection held. It says when a write reaches it.

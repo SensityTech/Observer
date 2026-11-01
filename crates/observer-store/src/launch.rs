@@ -12,7 +12,8 @@ pub fn get(conn: &Connection, server_id: &str) -> Result<Option<StoredLaunch>, S
     Ok(conn
         .query_row(
             "SELECT launch.data_path, launch.cfg_file, launch.onesync, launch.auto_start,
-                 launch.txadmin_events, launch.extra_arguments, launch.version, state.legacy_build_path
+                 launch.txadmin_events, launch.extra_arguments, launch.version, state.legacy_build_path,
+                 launch.hang_detection, launch.hang_timeout_seconds
              FROM launch_settings AS launch
              LEFT JOIN artifact_state AS state ON state.server_id = launch.server_id
              WHERE launch.server_id = ?1",
@@ -35,13 +36,14 @@ pub fn save(
         .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
     conn.execute(
         "INSERT INTO launch_settings (server_id, data_path, cfg_file, onesync, auto_start,
-             txadmin_events, extra_arguments, version, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+             txadmin_events, extra_arguments, version, updated_at, hang_detection, hang_timeout_seconds)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
          ON CONFLICT (server_id) DO UPDATE SET
              data_path = excluded.data_path, cfg_file = excluded.cfg_file, onesync = excluded.onesync,
              auto_start = excluded.auto_start, txadmin_events = excluded.txadmin_events,
              extra_arguments = excluded.extra_arguments, version = excluded.version,
-             updated_at = excluded.updated_at",
+             updated_at = excluded.updated_at, hang_detection = excluded.hang_detection,
+             hang_timeout_seconds = excluded.hang_timeout_seconds",
         params![
             server_id,
             settings.data_path,
@@ -52,6 +54,8 @@ pub fn save(
             arguments,
             stored.version,
             Utc(now),
+            settings.hang_detection,
+            settings.hang_timeout_seconds,
         ],
     )?;
     Ok(())
@@ -74,6 +78,8 @@ fn read(row: &Row<'_>) -> rusqlite::Result<StoredLaunch> {
         txadmin_events: row.get(4)?,
         extra_arguments: serde_json::from_str(&arguments)
             .map_err(|error| rusqlite::Error::FromSqlConversionFailure(5, Type::Text, Box::new(error)))?,
+        hang_detection: row.get(8)?,
+        hang_timeout_seconds: row.get(9)?,
     };
     Ok(StoredLaunch {
         settings,
@@ -106,6 +112,8 @@ mod tests {
                     value: "Observer lab".to_owned(),
                 },
             ],
+            hang_detection: true,
+            hang_timeout_seconds: 360,
         }
     }
 
@@ -127,6 +135,8 @@ mod tests {
         let changed = LaunchSettings {
             onesync: OneSync::Off,
             extra_arguments: Vec::new(),
+            hang_detection: false,
+            hang_timeout_seconds: 900,
             ..settings()
         };
         save(&conn, "other", &stored(changed.clone(), 1), now).unwrap();

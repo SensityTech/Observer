@@ -159,6 +159,8 @@ async fn stored_settings_this_host_refuses_are_named_before_anything_starts() {
             auto_start: true,
             txadmin_events: false,
             extra_arguments: Vec::new(),
+            hang_detection: true,
+            hang_timeout_seconds: 360,
         },
         version: 1,
         legacy_build_path: None,

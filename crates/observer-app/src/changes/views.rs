@@ -59,6 +59,9 @@ const WRITES: [AuditAction; 3] = [
 /// data folder.
 const SHOWN_SETTINGS: [&str; 3] = ["onesync", "autoStart", "txadminEvents"];
 const OWNER_SETTINGS: [&str; 2] = ["cfgFile", "dataPath"];
+/// Launch settings a snapshot leaves out, as `launch_record` does: they apply at once to the
+/// running server rather than at a start, so they are no part of what a start ran with.
+const UNCOMPARED_SETTINGS: [&str; 2] = ["hangDetection", "hangTimeoutSeconds"];
 
 /// The later side of a comparison.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -438,6 +441,25 @@ fn cfg_change(
     Ok((cfg, chain))
 }
 
+/// Whether an entry may explain what changed between two starts. A change of the launch settings
+/// that touched hang detection alone cannot: shown next to a change someone else made, it would
+/// name its author among those who changed what the run started with.
+fn attributes(action: AuditAction, details: &Value) -> bool {
+    if action != AuditAction::LaunchSettingsChanged {
+        return true;
+    }
+    let Value::Object(fields) = details else {
+        return true;
+    };
+    // A save from the setup says so beside the settings it changed.
+    let settings: Vec<&str> = fields
+        .keys()
+        .map(String::as_str)
+        .filter(|name| *name != "setup")
+        .collect();
+    settings.is_empty() || !settings.iter().all(|name| UNCOMPARED_SETTINGS.contains(name))
+}
+
 /// What an attribution tells: a change of the launch settings shows others than the owner the
 /// settings the comparison shows them, never the cfg file, the data folder or the arguments' names.
 fn shown_details(action: AuditAction, details: Value, owner: bool) -> Value {
@@ -755,6 +777,7 @@ impl Changes {
         let mut environment = environment(&from, &to, caller.is_owner);
         environment.attributions = environment_entries
             .into_iter()
+            .filter(|entry| attributes(entry.action, &entry.details))
             .map(|entry| Attribution {
                 details: shown_details(entry.action, entry.details, caller.is_owner),
                 action: entry.action,
@@ -1331,5 +1354,30 @@ mod tests {
         assert_eq!(shown, json!({ "onesync": { "before": "on", "after": "legacy" } }));
         assert_eq!(owner, details);
         assert_eq!(build, details);
+    }
+
+    #[test]
+    fn a_change_of_hang_detection_alone_attributes_nothing_a_start_ran_with() {
+        let delay = json!({ "before": 360, "after": 900 });
+        let switch = json!({ "before": true, "after": false });
+        let launch = |details: &Value| attributes(AuditAction::LaunchSettingsChanged, details);
+
+        assert!(!launch(&json!({ "hangTimeoutSeconds": delay })));
+        assert!(!launch(
+            &json!({ "hangDetection": switch, "hangTimeoutSeconds": delay })
+        ));
+        assert!(!launch(&json!({ "hangDetection": switch, "setup": true })));
+        assert!(launch(
+            &json!({ "onesync": { "before": "on", "after": "legacy" }, "hangDetection": switch })
+        ));
+        assert!(launch(&json!({ "cfgFile": true, "setup": true })));
+        assert!(launch(
+            &json!({ "extraArguments": { "set": ["sv_hostname"], "removed": [] } })
+        ));
+        assert!(launch(&json!({})));
+        assert!(attributes(
+            AuditAction::BuildSelected,
+            &json!({ "hangTimeoutSeconds": delay })
+        ));
     }
 }

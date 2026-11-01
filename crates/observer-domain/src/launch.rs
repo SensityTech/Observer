@@ -12,6 +12,13 @@ use ts_rs::TS;
 pub const MAX_TEXT_CHARS: usize = 1024;
 /// The most extra arguments one server takes.
 pub const MAX_EXTRA_ARGUMENTS: usize = 64;
+/// How long a stuck server is left before Observer restarts it, in seconds: by default, and at the
+/// extremes. Six minutes lets a big server build its caches on a first start, clothing and vehicles
+/// above all, while its main loop answers nothing. Only whole minutes are taken, as the panel sets
+/// it in minutes: a stored 90 s would show there as 1.5 and block every save of the form.
+pub const DEFAULT_HANG_TIMEOUT_SECONDS: u32 = 360;
+pub const MIN_HANG_TIMEOUT_SECONDS: u32 = 60;
+pub const MAX_HANG_TIMEOUT_SECONDS: u32 = 3600;
 
 /// Names an extra argument may not set. Some would make FXServer escape Observer's supervision
 /// (`exec`, `citizen_dir`) or behave as if txAdmin ran it; the rest are Observer's own: two
@@ -69,6 +76,24 @@ pub struct LaunchSettings {
     pub txadmin_events: bool,
     /// Each becomes `+set <name> <value>`, after the cfg and Observer's own convars.
     pub extra_arguments: Vec<ExtraArgument>,
+    /// Restart a server whose main loop or HTTP endpoints stay silent for the hang timeout. Off,
+    /// only a crash restarts it: the process exiting is never left alone. Settings saved before it
+    /// existed have it on.
+    #[serde(default = "hang_detection_default")]
+    pub hang_detection: bool,
+    /// How long a stuck server is left before it is restarted: whole minutes, in seconds, from
+    /// `MIN_HANG_TIMEOUT_SECONDS` to `MAX_HANG_TIMEOUT_SECONDS`. A change applies at once, to a
+    /// running server too, and the silence then counts from the change.
+    #[serde(default = "hang_timeout_default")]
+    pub hang_timeout_seconds: u32,
+}
+
+const fn hang_detection_default() -> bool {
+    true
+}
+
+const fn hang_timeout_default() -> u32 {
+    DEFAULT_HANG_TIMEOUT_SECONDS
 }
 
 /// `GET /api/servers/default/launch` once the owner saved the settings, and what a change returns.
@@ -160,6 +185,7 @@ pub enum LaunchField {
     ExtraArguments,
     ArgumentName,
     ArgumentValue,
+    HangTimeoutSeconds,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
@@ -195,6 +221,9 @@ pub enum LaunchProblem {
     Duplicate,
     /// More than `MAX_EXTRA_ARGUMENTS`.
     TooMany,
+    /// A hang timeout outside `MIN_HANG_TIMEOUT_SECONDS` to `MAX_HANG_TIMEOUT_SECONDS`, or not a
+    /// whole number of minutes.
+    OutOfRange,
 }
 
 impl LaunchSettings {
@@ -232,6 +261,15 @@ impl LaunchSettings {
                 LaunchField::ArgumentValue,
                 Some(index),
                 value_problem(&argument.value),
+            );
+        }
+        // Checked with detection off too: the delay is kept for when it is turned back on.
+        let timeout = MIN_HANG_TIMEOUT_SECONDS..=MAX_HANG_TIMEOUT_SECONDS;
+        if !timeout.contains(&self.hang_timeout_seconds) || !self.hang_timeout_seconds.is_multiple_of(60) {
+            note(
+                LaunchField::HangTimeoutSeconds,
+                None,
+                Some(LaunchProblem::OutOfRange),
             );
         }
         issues
@@ -399,6 +437,8 @@ mod tests {
             auto_start: true,
             txadmin_events: false,
             extra_arguments: vec![argument("sv_enforceGameBuild", "3258")],
+            hang_detection: true,
+            hang_timeout_seconds: DEFAULT_HANG_TIMEOUT_SECONDS,
         }
     }
 
@@ -763,6 +803,41 @@ mod tests {
     }
 
     #[test]
+    fn the_hang_timeout_is_whole_minutes_from_one_to_sixty_whether_detection_is_on_or_off() {
+        let timeout = |seconds: u32, hang_detection: bool| {
+            LaunchSettings {
+                hang_detection,
+                hang_timeout_seconds: seconds,
+                ..settings()
+            }
+            .issues(Platform::Windows)
+        };
+
+        // Seconds that are not whole minutes are refused too, as the panel could not show them.
+        for seconds in [0, 59, 61, 90, 359, 500, 3599, 3601, u32::MAX] {
+            for detection in [true, false] {
+                assert_eq!(
+                    timeout(seconds, detection),
+                    [issue(
+                        LaunchField::HangTimeoutSeconds,
+                        None,
+                        LaunchProblem::OutOfRange
+                    )],
+                    "{seconds} s, detection {detection}"
+                );
+            }
+        }
+        for seconds in [60, 120, 360, 900, 3600] {
+            assert_eq!(timeout(seconds, true), [], "{seconds} s");
+        }
+        assert_eq!(timeout(420, false), []);
+        assert_eq!(
+            serde_json::to_value(timeout(30, true)[0]).unwrap(),
+            serde_json::json!({ "field": "hangTimeoutSeconds", "index": null, "problem": "outOfRange" })
+        );
+    }
+
+    #[test]
     fn issues_name_their_field_and_the_argument_they_concern() {
         let broken = LaunchSettings {
             data_path: String::new(),
@@ -803,10 +878,21 @@ mod tests {
                 "autoStart": true,
                 "txadminEvents": false,
                 "extraArguments": [{ "name": "sv_enforceGameBuild", "value": "3258" }],
+                "hangDetection": true,
+                "hangTimeoutSeconds": 360,
             })
         );
         assert_eq!(
             serde_json::from_value::<LaunchSettings>(json.clone()).unwrap(),
+            settings()
+        );
+        // A body from before hang detection could be set still reads, with it on after six minutes.
+        let mut before = json.clone();
+        let fields = before.as_object_mut().unwrap();
+        fields.remove("hangDetection");
+        fields.remove("hangTimeoutSeconds");
+        assert_eq!(
+            serde_json::from_value::<LaunchSettings>(before).unwrap(),
             settings()
         );
         let mut extra = json.clone();

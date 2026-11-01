@@ -114,6 +114,8 @@ impl Lab {
             auto_start: false,
             txadmin_events: false,
             extra_arguments,
+            hang_detection: true,
+            hang_timeout_seconds: 360,
         };
         let launch = ServerLaunch {
             build: dir.path().join("build"),
@@ -809,6 +811,75 @@ async fn a_hung_main_loop_is_detected_and_the_server_restarted() {
     );
     assert_eq!(lab.state(State::Starting).await, Cause::Recovery);
     lab.state(State::Online).await;
+    lab.shut_down(false).await;
+}
+
+/// Launch settings with hang detection off; the lab's own launch keeps it on.
+fn without_hang_detection(settings: &mut Settings) {
+    if let Some(launch) = &mut settings.launch {
+        launch.settings.hang_detection = false;
+    }
+}
+
+fn hung_or_exited(kind: &EventKind) -> bool {
+    matches!(
+        kind,
+        EventKind::State { to: State::Hung, .. } | EventKind::Exited { .. }
+    )
+}
+
+#[tokio::test]
+async fn with_hang_detection_off_a_hung_server_is_left_running_and_a_crash_still_restarts_it() {
+    let mut lab = Lab::tuned(&[], without_hang_detection).await;
+    lab.supervisor.start("test").await.unwrap();
+    lab.state(State::Online).await;
+
+    lab.type_command("fake_crash", "test").await;
+    assert!(matches!(lab.state(State::Crashed).await, Cause::Exited { .. }));
+    assert_eq!(lab.state(State::Starting).await, Cause::Recovery);
+    lab.state(State::Online).await;
+    lab.type_command("fake_hang", "test").await;
+
+    let degraded = lab.state(State::Degraded).await;
+    assert!(
+        matches!(&degraded, Cause::Unhealthy { problems } if problems.contains(&Problem::HeartbeatLate)),
+        "{degraded:?}"
+    );
+    // The lab's limits would call it hung two seconds into the silence.
+    lab.none_within(Duration::from_secs(5), hung_or_exited).await;
+    assert_eq!(lab.supervisor.status().borrow().state, State::Degraded);
+    assert_eq!(lab.generation(), 2);
+    lab.shut_down(false).await;
+}
+
+#[tokio::test]
+async fn hang_detection_turned_back_on_reaches_the_running_server_and_counts_from_the_change() {
+    let mut lab = Lab::tuned(&[], without_hang_detection).await;
+    lab.supervisor.start("test").await.unwrap();
+    lab.state(State::Online).await;
+    lab.type_command("fake_hang", "test").await;
+    lab.state(State::Degraded).await;
+    lab.none_within(Duration::from_secs(3), hung_or_exited).await;
+
+    lab.supervisor.configure(lab.launch.clone()).await;
+
+    // Silent longer than the lab's two seconds already, it gets them again from the change.
+    lab.none_within(Duration::from_secs(1), hung_or_exited).await;
+    assert_eq!(
+        lab.state(State::Hung).await,
+        Cause::Hang {
+            cause: HangCause::NoHeartbeat
+        }
+    );
+    assert_eq!(
+        lab.state(State::Crashed).await,
+        Cause::Hang {
+            cause: HangCause::NoHeartbeat
+        }
+    );
+    assert_eq!(lab.state(State::Starting).await, Cause::Recovery);
+    lab.state(State::Online).await;
+    assert_eq!(lab.generation(), 2);
     lab.shut_down(false).await;
 }
 

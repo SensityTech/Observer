@@ -545,6 +545,9 @@ async fn the_audit_log_names_changed_launch_settings_without_showing_what_only_t
             "autoStart": { "before": null, "after": true },
             "txadminEvents": { "before": null, "after": false },
             "extraArguments": { "set": ["sv_hostname", "discord_webhook"], "removed": [] },
+            // Left out of the body, as a client from before sends it: the defaults.
+            "hangDetection": { "before": null, "after": true },
+            "hangTimeoutSeconds": { "before": null, "after": 360 },
         })
     );
     for shown in [event.to_string(), listed.text, exported.text] {

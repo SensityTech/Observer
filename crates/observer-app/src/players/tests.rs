@@ -316,6 +316,8 @@ fn a_run_is_written_with_its_spawn_so_a_start_stopped_or_restarted_before_it_wri
                 auto_start: false,
                 txadmin_events: false,
                 extra_arguments: Vec::new(),
+                hang_detection: true,
+                hang_timeout_seconds: 360,
             }),
         },
     };
