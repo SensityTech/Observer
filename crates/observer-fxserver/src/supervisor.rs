@@ -161,7 +161,8 @@ impl Default for StopTimings {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Event {
     pub at_ms: i64,
-    /// The spawn the event is about; 0 before the first.
+    /// The spawn the event is about, from the start that leads to it; 0 before the first. A start
+    /// stopped or failed before its spawn leaves its generation without one.
     pub generation: u32,
     pub kind: EventKind,
 }
@@ -793,7 +794,8 @@ impl Ready {
 struct PreLaunching {
     task: JoinHandle<PreLaunchResult>,
     cancel: Arc<AtomicBool>,
-    /// The generation the spawn takes, which the work's lines are written with.
+    /// The generation the start took as the phase began, which the work's lines are written with
+    /// and the spawn carries.
     generation: u32,
     cause: Cause,
     ready: Ready,
@@ -1079,20 +1081,7 @@ impl Actor {
         }
         match self.phase {
             Phase::Idle | Phase::Backoff { .. } => self.start(by).await,
-            // As for a server that runs: the work is told to end, then the start begins anew.
-            Phase::PreLaunch { .. } => {
-                let Some(work) = &mut self.pre_launch else {
-                    return Err(ControlError::NotRunning);
-                };
-                if work.instead.is_some() {
-                    return Err(ControlError::Stopping);
-                }
-                let cause = Cause::Restart { by };
-                work.tell_to_end(Instead::Restart { cause: cause.clone() });
-                self.phase = Phase::PreLaunch { deadline: None };
-                self.set_state(State::Stopping, cause);
-                Ok(())
-            }
+            Phase::PreLaunch { .. } => self.restart_pre_launch(Cause::Restart { by }),
             Phase::Notice { .. } | Phase::Quitting { .. } => Err(ControlError::Stopping),
             Phase::Ending { .. } => {
                 if let Some(run) = &mut self.run {
@@ -1130,13 +1119,29 @@ impl Actor {
                 );
                 Ok(())
             }
-            Phase::PreLaunch { .. } if self.pre_launch_ending() => Err(ControlError::Stopping),
+            // The spawn would go by the launch prepared when the phase began, before the schedule
+            // handed over the build this restart applies.
+            Phase::PreLaunch { .. } => self.restart_pre_launch(Cause::Scheduled { by }),
             Phase::Notice { .. } | Phase::Quitting { .. } => Err(ControlError::Stopping),
-            // A server still before its spawn starts with the launch of now anyway.
-            Phase::Idle | Phase::PreLaunch { .. } | Phase::Backoff { .. } | Phase::Ending { .. } => {
-                Err(ControlError::NotRunning)
-            }
+            // A server stopped, or between a failure and its recovery, starts with the launch of
+            // now anyway, and the schedule never starts one.
+            Phase::Idle | Phase::Backoff { .. } | Phase::Ending { .. } => Err(ControlError::NotRunning),
         }
+    }
+
+    /// A restart during the pre-launch phase, as for a server that runs: the work is told to end,
+    /// then the start begins anew, with fresh work and the launch configured by then.
+    fn restart_pre_launch(&mut self, cause: Cause) -> Result<(), ControlError> {
+        let Some(work) = &mut self.pre_launch else {
+            return Err(ControlError::NotRunning);
+        };
+        if work.instead.is_some() {
+            return Err(ControlError::Stopping);
+        }
+        work.tell_to_end(Instead::Restart { cause: cause.clone() });
+        self.phase = Phase::PreLaunch { deadline: None };
+        self.set_state(State::Stopping, cause);
+        Ok(())
     }
 
     fn announce(&self, event: BridgeEvent) -> Result<(), ControlError> {
@@ -1596,10 +1601,10 @@ impl Actor {
         }
     }
 
-    /// Spawns a prepared launch. `announced` when the pre-launch phase already set the state to
-    /// starting with the cause.
+    /// Spawns a prepared launch. `announced` when the pre-launch phase already took the generation
+    /// and set the state to starting with the cause.
     async fn spawn_ready(&mut self, cause: Cause, ready: Ready, announced: bool) -> Result<(), SpawnError> {
-        match self.launch(ready).await {
+        match self.launch(ready, announced).await {
             Ok((run, probe, warnings, launch)) => {
                 let pid = run.pid;
                 let build = run.layout.build().to_path_buf();
@@ -1664,7 +1669,9 @@ impl Actor {
     }
 
     /// Starts the pre-launch work as a task and shows the server as starting, with the cause the
-    /// spawn will go by.
+    /// spawn will go by. The start takes its generation here, so that its state, the work's lines
+    /// and the run that follows all carry the one the statistics know the run by; a start that
+    /// never spawns leaves it unused.
     fn begin_pre_launch(
         &mut self,
         work: Arc<dyn PreLaunch>,
@@ -1673,7 +1680,7 @@ impl Actor {
         ready: Ready,
         scan: cfg::Scan,
     ) {
-        let generation = self.generation + 1;
+        let generation = self.take_generation();
         let cancel = Arc::new(AtomicBool::new(false));
         let request = PreLaunchRequest {
             launch: server,
@@ -1776,9 +1783,19 @@ impl Actor {
         Ok((server, prepared))
     }
 
+    /// Takes the generation of a coming spawn: the events and lines that follow carry it, and the
+    /// trace decoders of an earlier one fall silent.
+    fn take_generation(&mut self) -> u32 {
+        self.generation += 1;
+        self.current.send_replace(self.generation);
+        self.generation
+    }
+
+    /// Spawns FXServer. `taken` when the pre-launch phase took the generation as it began.
     async fn launch(
         &mut self,
         prepared: Ready,
+        taken: bool,
     ) -> Result<(Run, SocketAddr, Vec<CfgFinding>, LaunchSettings), SpawnError> {
         let layout = prepared.layout.clone();
         self.install(&layout).await?;
@@ -1787,9 +1804,11 @@ impl Actor {
             SpawnError::new(SpawnFailure::Spawn, message)
         })?;
 
-        self.generation += 1;
-        let generation = self.generation;
-        self.current.send_replace(generation);
+        let generation = if taken {
+            self.generation
+        } else {
+            self.take_generation()
+        };
         let spawned = observer_platform::spawn(&prepared.launch)
             .map_err(|error| SpawnError::new(SpawnFailure::Spawn, error.to_string()))?;
         let tree = Arc::new(spawned.tree);

@@ -282,6 +282,63 @@ fn the_writes_of_a_run_never_recorded_are_set_aside_and_the_others_kept() {
     assert!(later.lost_runs.contains(&lost));
 }
 
+#[test]
+fn a_run_is_written_with_its_spawn_so_a_start_stopped_or_restarted_before_it_writes_none() {
+    const AT: i64 = 1_761_642_000_000;
+    let run = |generation| RunKey {
+        generation,
+        ..EARLIER
+    };
+    let state = |generation, at_ms, to, cause| Event {
+        at_ms,
+        generation,
+        kind: EventKind::State {
+            from: State::Stopped,
+            to,
+            cause,
+        },
+    };
+    let ada = || Cause::Requested { by: "ada".to_owned() };
+    let restart = || Cause::Restart {
+        by: "grace".to_owned(),
+    };
+    let spawned = Event {
+        at_ms: AT + 20_000,
+        generation: 3,
+        kind: EventKind::Spawned {
+            pid: 1,
+            probe: "127.0.0.1:30120".parse().unwrap(),
+            build: "builds/1".into(),
+            launch: Box::new(observer_domain::launch::LaunchSettings {
+                data_path: "/srv/fivem".to_owned(),
+                cfg_file: "server.cfg".to_owned(),
+                onesync: observer_domain::launch::OneSync::On,
+                auto_start: false,
+                txadmin_events: false,
+                extra_arguments: Vec::new(),
+            }),
+        },
+    };
+    let mut later = Later::default();
+
+    for event in [
+        state(1, AT, State::Starting, ada()),
+        state(1, AT + 1_000, State::Stopping, ada()),
+        state(1, AT + 2_000, State::Stopped, ada()),
+        state(2, AT + 10_000, State::Starting, ada()),
+        state(2, AT + 11_000, State::Stopping, restart()),
+        state(3, AT + 12_000, State::Starting, restart()),
+    ] {
+        later.follow(run(event.generation), &event);
+    }
+    let before_the_spawn = later.runs.clone();
+    later.follow(run(3), &spawned);
+
+    assert_eq!(before_the_spawn, []);
+    assert_eq!(later.runs, [(run(3), AT + 12_000, StartCause::Restart)]);
+    assert_eq!(later.starting, None);
+}
+
 #[tokio::test]
 async fn a_forgotten_licence_a_restored_backup_brought_back_is_forgotten_again_at_start() {
     let lab = Lab::new().await;

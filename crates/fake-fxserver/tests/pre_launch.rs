@@ -244,12 +244,17 @@ impl Lab {
 
     /// The next event that `wanted` accepts, skipping the others.
     async fn event(&mut self, wanted: impl Fn(&EventKind) -> bool) -> EventKind {
+        self.next(wanted).await.kind
+    }
+
+    /// As [`Lab::event`], with the generation the event carries.
+    async fn next(&mut self, wanted: impl Fn(&EventKind) -> bool) -> Event {
         let found = timeout(WAIT, async {
             loop {
                 let event = self.events.recv().await.unwrap();
                 self.seen.push(event.kind.clone());
                 if wanted(&event.kind) {
-                    return event.kind;
+                    return event;
                 }
             }
         })
@@ -336,13 +341,12 @@ fn spawned(kind: &EventKind) -> bool {
 }
 
 fn starting(kind: &EventKind) -> bool {
-    matches!(
-        kind,
-        EventKind::State {
-            to: State::Starting,
-            ..
-        }
-    )
+    to(State::Starting)(kind)
+}
+
+/// Accepts the transition into `state`.
+fn to(state: State) -> impl Fn(&EventKind) -> bool {
+    move |kind| matches!(kind, EventKind::State { to, .. } if *to == state)
 }
 
 fn by(name: &str) -> String {
@@ -413,7 +417,8 @@ async fn a_start_is_answered_while_the_work_runs_and_nothing_spawns_before_it_en
     let status = lab.supervisor.status().borrow().clone();
     assert_eq!(
         (status.state, status.pid, status.generation),
-        (State::Starting, None, 0)
+        (State::Starting, None, 1),
+        "the start took its generation as the work began"
     );
     assert_eq!(
         lab.supervisor.start("test").await,
@@ -465,7 +470,11 @@ async fn a_stop_during_the_work_tells_it_to_end_and_never_spawns() {
     assert_eq!(started_again, Err(ControlError::Stopping));
     lab.none_within(Duration::from_secs(1), |kind| spawned(kind) || starting(kind))
         .await;
-    assert_eq!(lab.generation(), 0);
+    assert_eq!(
+        lab.generation(),
+        1,
+        "the start that never spawned keeps its generation"
+    );
     let seen = work.seen();
     assert_eq!(seen.len(), 1);
     assert!(seen[0].told_to_end);
@@ -476,11 +485,12 @@ async fn a_stop_during_the_work_tells_it_to_end_and_never_spawns() {
         lab.console()
     );
 
-    // A start after it runs work of its own.
+    // A start after it runs work of its own, with a generation of its own.
     lab.supervisor.start("test").await.unwrap();
     lab.state(State::Online).await;
-    assert_eq!(lab.generation(), 1);
-    assert_eq!(work.seen().len(), 2);
+    assert_eq!(lab.generation(), 2);
+    let generations: Vec<u32> = work.seen().iter().map(|seen| seen.generation).collect();
+    assert_eq!(generations, [1, 2]);
     lab.shut_down(false).await;
 }
 
@@ -513,7 +523,7 @@ async fn a_shutdown_during_the_work_waits_for_it_and_ends_without_spawning() {
             (State::Stopped, Cause::Shutdown)
         ]
     );
-    assert_eq!(lab.generation(), 0);
+    assert_eq!(lab.generation(), 1);
 }
 
 #[tokio::test]
@@ -647,7 +657,7 @@ async fn a_restart_during_the_work_starts_it_over_with_the_restart_s_cause() {
         Cause::Restart { by: by("grace") }
     );
     lab.state(State::Online).await;
-    assert_eq!(lab.generation(), 1, "the work told to end spawned nothing");
+    assert_eq!(lab.generation(), 2, "each start takes a generation of its own");
     let runs: Vec<(Cause, u32, bool)> = work
         .seen()
         .into_iter()
@@ -657,7 +667,89 @@ async fn a_restart_during_the_work_starts_it_over_with_the_restart_s_cause() {
         runs,
         [
             (Cause::Requested { by: by("test") }, 1, true),
-            (Cause::Restart { by: by("grace") }, 1, false),
+            (Cause::Restart { by: by("grace") }, 2, false),
+        ]
+    );
+    lab.shut_down(false).await;
+}
+
+#[tokio::test]
+async fn a_start_through_the_work_carries_one_generation_from_its_state_to_its_exit() {
+    let work = Work::new([]);
+    let mut lab = Lab::new(&work).await;
+
+    lab.supervisor.start("test").await.unwrap();
+    let first = [
+        lab.next(starting).await.generation,
+        lab.next(spawned).await.generation,
+        lab.next(to(State::Online)).await.generation,
+    ];
+    lab.supervisor.restart("grace").await.unwrap();
+    let ended = [
+        lab.next(to(State::Stopping)).await.generation,
+        lab.next(|kind| matches!(kind, EventKind::Exited { .. }))
+            .await
+            .generation,
+    ];
+    let second = [
+        lab.next(starting).await.generation,
+        lab.next(spawned).await.generation,
+        lab.next(to(State::Online)).await.generation,
+    ];
+
+    assert_eq!(
+        (first, ended, second),
+        ([1, 1, 1], [1, 1], [2, 2, 2]),
+        "the statistics know a run by the generation of its start"
+    );
+    let tools: Vec<u32> = lab
+        .console()
+        .iter()
+        .filter(|(_, actor, _)| actor.as_deref() == Some(TOOLS))
+        .map(|(generation, _, _)| *generation)
+        .collect();
+    assert_eq!(tools, [1, 2]);
+    lab.shut_down(false).await;
+}
+
+#[tokio::test]
+async fn a_scheduled_restart_during_the_work_starts_it_over_with_the_launch_configured_by_then() {
+    let work = Work::new([Act::UntilTold {
+        linger: Duration::from_millis(100),
+    }]);
+    let mut lab = Lab::new(&work).await;
+    lab.supervisor.start("test").await.unwrap();
+    lab.state(State::Starting).await;
+    let mut promoted = lab.launch.clone();
+    promoted.settings.extra_arguments.push(ExtraArgument {
+        name: "sv_maxclients".to_owned(),
+        value: "16".to_owned(),
+    });
+
+    // As the schedule does: it hands over the launch of the build it applies, then restarts.
+    lab.supervisor.configure(promoted.clone()).await;
+    lab.supervisor.restart_scheduled("observer").await.unwrap();
+    let again = lab.supervisor.restart_scheduled("observer").await;
+
+    let scheduled = Cause::Scheduled { by: by("observer") };
+    assert_eq!(again, Err(ControlError::Stopping));
+    assert_eq!(lab.state(State::Stopping).await, scheduled);
+    assert_eq!(lab.state(State::Starting).await, scheduled);
+    let EventKind::Spawned { launch, .. } = lab.event(spawned).await else {
+        unreachable!()
+    };
+    assert_eq!(*launch, promoted.settings, "the spawn goes by the launch of now");
+    lab.state(State::Online).await;
+    let runs: Vec<(Cause, bool, bool)> = work
+        .seen()
+        .into_iter()
+        .map(|seen| (seen.cause, seen.told_to_end, seen.launch == promoted))
+        .collect();
+    assert_eq!(
+        runs,
+        [
+            (Cause::Requested { by: by("test") }, true, false),
+            (scheduled, false, true),
         ]
     );
     lab.shut_down(false).await;

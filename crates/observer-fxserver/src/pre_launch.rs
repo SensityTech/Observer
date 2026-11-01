@@ -39,8 +39,9 @@ pub struct PreLaunchRequest {
     pub scan: Scan,
     /// Why the server starts: `Requested`, `Restart`, `Scheduled` or `Recovery`.
     pub cause: Cause,
-    /// The generation the spawn takes, which the lines handed back are written with. A start
-    /// stopped during the work leaves it to the next spawn.
+    /// The generation the start took as the phase began, which its state, the lines handed back
+    /// and the spawn carry. A start stopped during the work leaves it unused: the next start
+    /// takes the one after.
     pub generation: u32,
     /// Set once the work must end: a stop or Observer's shutdown came, or its time ran out. The
     /// work checks it between steps and returns what it did so far; nothing is spawned before it

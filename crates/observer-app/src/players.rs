@@ -663,6 +663,8 @@ impl Players {
 #[derive(Default)]
 struct Later {
     runs: Vec<(RunKey, i64, StartCause)>,
+    /// The start taken on last, until its spawn makes it a run.
+    starting: Option<(RunKey, i64, StartCause)>,
     sessions: Vec<SessionWrite>,
     attaches: Vec<(i64, [u8; 16], [u8; 16])>,
     /// Runs the statistics never recorded: their sessions are left out of them.
@@ -672,6 +674,22 @@ struct Later {
 impl Later {
     fn is_empty(&self) -> bool {
         self.sessions.is_empty() && self.attaches.is_empty()
+    }
+
+    /// Follows the starts of `run`, the run of the event, which is written with its spawn. The
+    /// server shows as starting from before the work that precedes it, and a start stopped,
+    /// restarted or failed meanwhile never ran: written at once, it would stay open with nothing
+    /// to end it.
+    fn follow(&mut self, run: RunKey, event: &Event) {
+        match Change::of(event) {
+            Some(Change::Started { at_ms, cause }) => self.starting = Some((run, at_ms, cause)),
+            Some(Change::Spawned { .. }) => {
+                if let Some((_, started_ms, cause)) = self.starting.take().filter(|(of, _, _)| *of == run) {
+                    self.started(run, started_ms, cause);
+                }
+            }
+            _ => {}
+        }
     }
 
     fn started(&mut self, run: RunKey, started_ms: i64, cause: StartCause) {
@@ -798,9 +816,7 @@ impl Worker {
     }
 
     fn event(&mut self, event: &Event) {
-        if let Some(Change::Started { at_ms, cause }) = Change::of(event) {
-            self.later.started(self.run_key(event.generation), at_ms, cause);
-        }
+        self.later.follow(self.run_key(event.generation), event);
         match &event.kind {
             EventKind::Spawned { .. } => {
                 self.sessions
