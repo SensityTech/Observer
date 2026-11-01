@@ -98,8 +98,10 @@ const failedAt = (status: ServerStatus): LaunchStep | null => {
     if (cause?.kind === 'licenceRejected') {
         return 'licence';
     }
-    if (cause?.kind === 'hang' && cause.cause === 'noHeartbeat') {
-        return 'bridge';
+    // A hang ends the run as a crash does, and the restart after it is another launch: the first
+    // one stays on the hang, where the delay that ran out is said.
+    if (cause?.kind === 'hang') {
+        return cause.cause === 'noHeartbeat' ? 'bridge' : 'ready';
     }
     const ended =
         status.state === 'crashed' ||

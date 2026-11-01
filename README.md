@@ -10,7 +10,9 @@ documented server events, and your own resources decide what to do with them.
 > between versions.
 
 - **Supervision.** Start, stop and restart with a graceful stop. Crashes and hangs are detected and
-  recovered from, a crash loop stops the retries, and FXServer's whole process tree stops with it.
+  recovered from, a crash loop stops the retries (5 failures within 10 minutes, or 5 starts in a row
+  that never got ready), and FXServer's whole process tree stops with it. A server stuck for 6 minutes
+  is restarted; the delay can be raised, or hang detection turned off.
 - **Live console.** Search and filters, commands gated by permission, secrets masked, daily log files.
 - **Scheduled restarts.** Fixed times or an interval in the time zone you choose, with warnings to your
   resources, skip, delay and one-off restarts.
@@ -130,13 +132,33 @@ configured, and again from **Server → Run the setup**. It has four steps:
    and the **First launch** checklist follows it: started, port open, licence accepted, Observer bridge
    connected, server ready. Without a build, **Save only** keeps the settings for later.
 
-The **Server** page holds the same settings, and extra arguments that go on the command line as
-`+set <name> <value>` after the cfg. It refuses secrets there, since anyone on the host can read a
-command line: `sv_licenseKey`, passwords and connection strings belong in the cfg.
+The **Server** page holds the same settings, [hang detection](#hang-detection), and extra arguments
+that go on the command line as `+set <name> <value>` after the cfg. It refuses secrets there, since
+anyone on the host can read a command line: `sv_licenseKey`, passwords and connection strings belong in
+the cfg.
 
 Builds go to `data/artifacts/<build>/`. The **Artifacts** page lists the catalog, installs and imports
 builds, chooses the one FXServer runs, and cleans up old ones. A new build is on probation: until it has
-stayed up 10 minutes once ready, a crash or a hang sends FXServer back to the last healthy build.
+stayed up 10 minutes once ready, a crash or a hang sends FXServer back to the last healthy build. A
+server whose heartbeat or HTTP is late when those minutes end passes only once it answers again, so a
+hang that began within them fails the probation however long the [hang delay](#hang-detection). With
+hang detection off, only a crash fails it, and a silent server still waits to answer before it passes.
+
+### Hang detection
+
+Observer watches two signals while FXServer runs: the heartbeat of its bridge resource, which only
+comes while the main loop turns, and FXServer's HTTP endpoints. Once the server is up, one of them
+silent for 10 seconds marks it degraded. Silent for the delay under **Server → Hang detection**, 6
+minutes by default and counted from the start until the first answer, the server is hung: Observer
+writes a dump of it (a report of its threads on Linux), kills its process tree and starts it again.
+
+A big server's first start can keep its main loop busy for minutes while resources build their caches of
+clothing and vehicles, which reads as a hang. Raise the delay, from 1 to 60 minutes, or turn hang detection
+off: FXServer is then left running however long it stays silent, until someone restarts it. Either change
+applies at once, to a server already starting too, and the delay then counts from the change: turning
+detection back on never kills a server that was silent before. A crash is another matter: whenever
+FXServer's process exits on its own, Observer restarts it, whatever these settings say, until a crash loop
+stops the retries.
 
 ## systemd
 
@@ -283,7 +305,7 @@ Cfx.re's [Platform License Agreement](https://fivem.net/terms) covers the server
 | `observer artifacts install <build>` | Download, verify and install a build into `data/artifacts/`. `--branch <name>`, `--allow-end-of-life`. |
 | `observer db check` | The database's integrity and schema version, while Observer is stopped. |
 | `observer db backup` | A manual backup, while Observer is stopped. |
-| `observer fxserver run --build <folder> --data <folder>` | FXServer under the supervisor in the foreground, without the panel or the database, while Observer is stopped. `--cfg`, `--onesync`, `--port`, `--set NAME=VALUE`. |
+| `observer fxserver run --build <folder> --data <folder>` | FXServer under the supervisor in the foreground, without the panel or the database, while Observer is stopped. `--cfg`, `--onesync`, `--port`, `--set NAME=VALUE`, `--hang-timeout <minutes>` from 1 to 60 (6 by default) or `--no-hang-detection`, see [Hang detection](#hang-detection). |
 | `observer service print-unit` | Linux: the systemd unit, see [systemd](#systemd). |
 | `observer tools run duplicate-archetypes` | Find duplicate archetypes and print the report. `--fix` while Observer is stopped, `--json`, `--data <folder>`, `--cfg <file>` or `--all-resources`. Exits with 2 while duplicates are left, 1 on an error. See [Server tools](#server-tools). |
 | `observer tools undo duplicate-archetypes` | Put back what fixes took out, while Observer is stopped: `--run <id>` or `--all`, and `--data <folder>`. |

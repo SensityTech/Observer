@@ -1198,6 +1198,8 @@ fn launch_settings() -> LaunchSettings {
         auto_start: false,
         txadmin_events: false,
         extra_arguments: Vec::new(),
+        hang_detection: true,
+        hang_timeout_seconds: 360,
     }
 }
 
@@ -1218,6 +1220,8 @@ async fn launch_settings_are_stored_once_checked_with_what_changed_in_the_audit_
             name: "sv_enforceGameBuild".to_owned(),
             value: "3258".to_owned(),
         }],
+        hang_detection: false,
+        hang_timeout_seconds: 900,
         ..launch_settings()
     };
     let second = lab
@@ -1249,6 +1253,8 @@ async fn launch_settings_are_stored_once_checked_with_what_changed_in_the_audit_
         json!({
             "onesync": { "before": "on", "after": "legacy" },
             "extraArguments": { "set": ["sv_enforceGameBuild"], "removed": [] },
+            "hangDetection": { "before": true, "after": false },
+            "hangTimeoutSeconds": { "before": 360, "after": 900 },
         })
     );
     assert_eq!(
@@ -1259,6 +1265,8 @@ async fn launch_settings_are_stored_once_checked_with_what_changed_in_the_audit_
             "onesync": { "before": null, "after": "on" },
             "autoStart": { "before": null, "after": false },
             "txadminEvents": { "before": null, "after": false },
+            "hangDetection": { "before": null, "after": true },
+            "hangTimeoutSeconds": { "before": null, "after": 360 },
         })
     );
 }

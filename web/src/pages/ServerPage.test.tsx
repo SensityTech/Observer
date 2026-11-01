@@ -32,6 +32,12 @@ const stored = (cfgFile: string, version: number): StoredLaunch => ({
     legacyBuildPath: null,
 });
 
+/** Settings stored with a hang delay of `seconds`. */
+const delayed = (seconds: number, version = 1, cfgFile = 'server.cfg'): StoredLaunch => {
+    const launch = stored(cfgFile, version);
+    return { ...launch, settings: { ...launch.settings, hangTimeoutSeconds: seconds } };
+};
+
 const follows = (first: Node, second: Node) =>
     Boolean(first.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING);
 
@@ -156,6 +162,116 @@ describe('ServerPage', () => {
         await waitFor(() => getByText(en.server.saved));
 
         expect(document.activeElement).toBe(value);
+    });
+
+    it('should save hang detection with the other settings, its delay typed in minutes and sent in seconds', async () => {
+        const fetch = vi.fn(async () => Response.json(stored('server.cfg', 2)));
+        vi.stubGlobal('fetch', fetch);
+        const { input, getByText } = page(stored('server.cfg', 1));
+        const detection = input(en.server.hangDetection);
+        expect(detection.checked).toBe(true);
+        expect(input(en.server.hangTimeout).value).toBe('6');
+
+        fireEvent.click(detection);
+        fireEvent.change(input(en.server.hangTimeout), { target: { value: '15' } });
+        getByText(en.server.changes(2));
+        fireEvent.click(getByText(en.server.save));
+
+        await waitFor(() => getByText(en.server.savedHang));
+        const [, init] = fetch.mock.calls[0] as unknown as [string, RequestInit];
+        expect(JSON.parse(String(init.body))).toEqual({
+            settings: { ...stored('server.cfg', 1).settings, hangDetection: false, hangTimeoutSeconds: 900 },
+            version: 1,
+        });
+    });
+
+    it('should say hang detection applies at once and the rest at the next start when a save changes both', async () => {
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(async () => Response.json(stored('configs/live.cfg', 2))),
+        );
+        const { input, getByText, queryByText } = page(stored('server.cfg', 1));
+        getByText(en.server.nextStart);
+
+        fireEvent.change(input(en.server.cfgFile), { target: { value: 'configs/live.cfg' } });
+        fireEvent.change(input(en.server.hangTimeout), { target: { value: '15' } });
+        fireEvent.click(getByText(en.server.save));
+
+        await waitFor(() => getByText(en.server.savedBoth));
+        expect(queryByText(en.server.saved)).toBeNull();
+    });
+
+    it('should never count a stored delay the field cannot show exactly as an unsaved change', async () => {
+        const { input, getByText, queryByText, storedElsewhere } = page(delayed(500));
+
+        expect(input(en.server.hangTimeout).value).toBe('8.33');
+        expect(queryByText(en.server.changes(1))).toBeNull();
+
+        // With nothing typed, what another session stores still replaces what the form shows.
+        await storedElsewhere(delayed(500, 2, 'configs/live.cfg'));
+        expect(input(en.server.cfgFile).value).toBe('configs/live.cfg');
+        expect(queryByText(en.server.changedElsewhere)).toBeNull();
+
+        fireEvent.click(input(en.server.onesyncModes.legacy));
+        getByText(en.server.changes(1));
+        fireEvent.click(getByText(en.server.discard));
+        expect(queryByText(en.server.changes(1))).toBeNull();
+    });
+
+    it('should take the stored delay written another way as no change', () => {
+        const { input, queryByText } = page(stored('server.cfg', 1));
+
+        for (const typed of ['6.0', '06', '6.000']) {
+            fireEvent.change(input(en.server.hangTimeout), { target: { value: typed } });
+            expect(queryByText(en.server.changes(1)), typed).toBeNull();
+        }
+        fireEvent.change(input(en.server.hangTimeout), { target: { value: '7' } });
+        expect(queryByText(en.server.changes(1))).not.toBeNull();
+    });
+
+    it('should ask for whole minutes over a stored delay that is not, as Observer does, then send the one typed', async () => {
+        const fetch = vi.fn(async () => Response.json(stored('server.cfg', 2)));
+        vi.stubGlobal('fetch', fetch);
+        Element.prototype.scrollIntoView = vi.fn();
+        const { input, getByText } = page(delayed(90));
+        const delay = input(en.server.hangTimeout);
+        expect(delay.value).toBe('1.5');
+
+        fireEvent.click(input(en.server.onesyncModes.legacy));
+        fireEvent.click(getByText(en.server.save));
+        getByText(en.server.problems.outOfRange);
+        expect(document.activeElement).toBe(delay);
+        expect(fetch).not.toHaveBeenCalled();
+
+        fireEvent.change(delay, { target: { value: '2' } });
+        fireEvent.click(getByText(en.server.save));
+        await waitFor(() => getByText(en.server.savedBoth));
+        const [, init] = fetch.mock.calls[0] as unknown as [string, RequestInit];
+        expect(JSON.parse(String(init.body))).toEqual({
+            settings: { ...delayed(90).settings, onesync: 'legacy', hangTimeoutSeconds: 120 },
+            version: 1,
+        });
+    });
+
+    it('should refuse a delay that is not 1 to 60 whole minutes next to its field, without sending it', () => {
+        const fetch = vi.fn();
+        vi.stubGlobal('fetch', fetch);
+        Element.prototype.scrollIntoView = vi.fn();
+        const { input, getByText, queryByText } = page(stored('server.cfg', 1));
+        const delay = input(en.server.hangTimeout);
+
+        for (const typed of ['0', '61', '1.5', '']) {
+            fireEvent.change(delay, { target: { value: typed } });
+            expect(queryByText(en.server.problems.outOfRange)).toBeNull();
+            fireEvent.click(getByText(en.server.save));
+
+            getByText(en.server.problems.outOfRange);
+            expect(delay.getAttribute('aria-invalid')).toBe('true');
+            expect(document.activeElement).toBe(delay);
+        }
+        expect(fetch).not.toHaveBeenCalled();
+        fireEvent.change(delay, { target: { value: '60' } });
+        expect(queryByText(en.server.problems.outOfRange)).toBeNull();
     });
 
     it('should put each refused argument message under its own field, and the keyboard on the first', async () => {

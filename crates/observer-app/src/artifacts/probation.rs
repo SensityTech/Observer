@@ -1,7 +1,10 @@
 //! The probation of a new build: once its run is ready, it must stay up for a while before it is
 //! the last healthy build. A crash or a hang before then fails it; a stop someone asked for, a
 //! port already taken or a refused licence key say nothing about the build and leave it open.
-//! Pure: the artifacts task feeds it what the supervisor reports and does what it says.
+//! A run whose heartbeat or HTTP is late when the window ends does not pass until it answers
+//! again: the hang delay is the owner's, up to an hour, so the hang it may be heading for can come
+//! long after the window. Pure: the artifacts task feeds it what the supervisor reports and does
+//! what it says.
 
 use std::time::Duration;
 
@@ -27,13 +30,25 @@ pub(crate) struct Watched {
     pub generation: u32,
     /// When the run got ready: online, or degraded, which counts as up.
     pub ready_at: Option<Timestamp>,
+    /// Its heartbeat or HTTP is late, which a hang starts with: no pass is due until it answers.
+    pub silent: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Input {
-    Spawned { generation: u32, build: u32 },
-    Ready { generation: u32 },
-    Ended { generation: u32, end: End },
+    Spawned {
+        generation: u32,
+        build: u32,
+    },
+    /// The run is up: online, or degraded, `silent` when its heartbeat or HTTP is late.
+    Ready {
+        generation: u32,
+        silent: bool,
+    },
+    Ended {
+        generation: u32,
+        end: End,
+    },
     Tick,
 }
 
@@ -113,14 +128,14 @@ pub(crate) fn step(
                 state.run = Some(Watched {
                     generation,
                     ready_at: None,
+                    silent: false,
                 });
             }
         }
-        Input::Ready { generation } => {
-            if let Some(run) = state.run.as_mut().filter(|run| run.generation == generation)
-                && run.ready_at.is_none()
-            {
-                run.ready_at = Some(now);
+        Input::Ready { generation, silent } => {
+            if let Some(run) = state.run.as_mut().filter(|run| run.generation == generation) {
+                run.ready_at.get_or_insert(now);
+                run.silent = silent;
             }
         }
         Input::Ended { generation, end } if current(&state, generation) => {
@@ -152,10 +167,11 @@ pub(crate) fn step(
     (state, verdicts)
 }
 
-/// When the run on probation passes, once it is ready.
+/// When the run on probation passes, once it is ready and while it answers.
 pub(crate) fn passes_at(state: &Probation, stable_for: Duration) -> Option<Timestamp> {
     state.open?;
-    let ready_at = state.run?.ready_at?;
+    let run = state.run.filter(|run| !run.silent)?;
+    let ready_at = run.ready_at?;
     let window = SignedDuration::try_from(stable_for).unwrap_or(SignedDuration::MAX);
     ready_at.checked_add(window).ok()
 }

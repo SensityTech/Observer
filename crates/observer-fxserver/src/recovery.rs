@@ -10,7 +10,9 @@ pub struct RecoveryPolicy {
     pub backoff_cap: Duration,
     /// A server up this long since it was ready starts the sequence over.
     pub healthy_reset: Duration,
-    /// This many failures within `breaker_window` stop automatic restarts.
+    /// This many failures within `breaker_window` stop automatic restarts, and so do this many in
+    /// a row of runs that never got ready, however far apart: a server that hangs at every start
+    /// takes the whole hang delay to fail, up to an hour, which no window of minutes would hold.
     pub breaker_failures: usize,
     pub breaker_window: Duration,
     /// A taken port adds this much to the wait each time, up to `bind_cap`.
@@ -48,6 +50,8 @@ pub enum Next {
 pub struct Recovery {
     policy: RecoveryPolicy,
     failures: VecDeque<Instant>,
+    /// Failures since a run last got ready.
+    unready: usize,
     attempt: u32,
     bind_delay: Duration,
 }
@@ -57,6 +61,7 @@ impl Recovery {
         Self {
             policy,
             failures: VecDeque::new(),
+            unready: 0,
             attempt: 0,
             bind_delay: Duration::ZERO,
         }
@@ -64,6 +69,12 @@ impl Recovery {
 
     /// A crash, a hang or a fatal error.
     pub fn failure(&mut self, now: Instant) -> Next {
+        self.unready += 1;
+        if self.unready >= self.policy.breaker_failures {
+            return Next::CrashLoop {
+                failures: self.unready,
+            };
+        }
         self.failures.push_back(now);
         while self
             .failures
@@ -88,9 +99,11 @@ impl Recovery {
         self.bind_delay
     }
 
-    /// The server became ready: the port is free again.
+    /// The server became ready: the port is free again, and the failures before no longer make a
+    /// row of starts that never got ready.
     pub fn ready(&mut self) {
         self.bind_delay = Duration::ZERO;
+        self.unready = 0;
     }
 
     /// The server has been up since it was ready for `up`.
@@ -103,6 +116,7 @@ impl Recovery {
     /// Someone started the server by hand: the past no longer counts.
     pub fn reset(&mut self) {
         self.failures.clear();
+        self.unready = 0;
         self.attempt = 0;
         self.bind_delay = Duration::ZERO;
     }
@@ -137,8 +151,14 @@ mod tests {
     fn restarts_back_off_then_double_up_to_the_cap() {
         let mut recovery = Recovery::new(RecoveryPolicy::default());
 
-        // Failures far enough apart never trip the breaker.
-        let next = delays(&mut recovery, Instant::now(), 9, Duration::from_mins(11));
+        // Failures far enough apart, of runs that got ready, never trip the breaker.
+        let start = Instant::now();
+        let next: Vec<Next> = (0..9)
+            .map(|index| {
+                recovery.ready();
+                recovery.failure(start + Duration::from_mins(11) * index)
+            })
+            .collect();
 
         assert_eq!(
             next,
@@ -171,6 +191,7 @@ mod tests {
         let mut recovery = Recovery::new(RecoveryPolicy::default());
         let start = Instant::now();
         delays(&mut recovery, start, 4, Duration::from_mins(1));
+        recovery.ready();
 
         assert!(matches!(
             recovery.failure(start + Duration::from_mins(11)),
@@ -184,8 +205,10 @@ mod tests {
         let start = Instant::now();
         delays(&mut recovery, start, 3, Duration::from_mins(11));
 
+        recovery.ready();
         recovery.up_for(Duration::from_mins(9));
         assert_eq!(recovery.failure(start + Duration::from_mins(40)), restart(30_000));
+        recovery.ready();
         recovery.up_for(Duration::from_mins(10));
         assert_eq!(recovery.failure(start + Duration::from_mins(60)), restart(500));
     }
@@ -199,6 +222,65 @@ mod tests {
         assert_eq!(waits, [5, 10, 15, 20, 25, 30, 35, 40, 45, 45, 45]);
         recovery.ready();
         assert_eq!(recovery.bind_error().as_secs(), 5);
+    }
+
+    /// Each start hangs the default six minutes after its spawn, then the backoff before the next.
+    fn hangs_at_every_start(recovery: &mut Recovery, start: Instant, count: usize) -> Vec<Next> {
+        let hang = Duration::from_mins(6);
+        let mut now = start;
+        (0..count)
+            .map(|_| {
+                now += hang;
+                let next = recovery.failure(now);
+                if let Next::RestartIn(delay) = next {
+                    now += delay;
+                }
+                next
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_server_that_hangs_at_every_start_trips_the_breaker_however_long_the_delay() {
+        let mut recovery = Recovery::new(RecoveryPolicy::default());
+
+        // No two of these fall within ten minutes of the first of a set of five.
+        let next = hangs_at_every_start(&mut recovery, Instant::now(), 5);
+
+        assert_eq!(
+            next,
+            [
+                restart(500),
+                restart(5_000),
+                restart(15_000),
+                restart(30_000),
+                Next::CrashLoop { failures: 5 },
+            ]
+        );
+    }
+
+    #[test]
+    fn a_run_that_got_ready_breaks_the_row_of_starts_that_never_did() {
+        let mut recovery = Recovery::new(RecoveryPolicy::default());
+        let start = Instant::now();
+        hangs_at_every_start(&mut recovery, start, 4);
+
+        recovery.ready();
+        let next = hangs_at_every_start(&mut recovery, start + Duration::from_hours(1), 4);
+
+        assert!(
+            next.iter().all(|next| matches!(next, Next::RestartIn(_))),
+            "{next:?}"
+        );
+        assert_eq!(
+            hangs_at_every_start(&mut recovery, start + Duration::from_hours(2), 1),
+            [Next::CrashLoop { failures: 5 }]
+        );
+        recovery.reset();
+        assert_eq!(
+            hangs_at_every_start(&mut recovery, start + Duration::from_hours(3), 1),
+            [restart(500)]
+        );
     }
 
     #[test]

@@ -1,20 +1,46 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, cleanup, render, within } from '@testing-library/react';
+import type { ReactNode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { ApiError } from '../api/client';
 import type { LiveSample } from '../api/generated/LiveSample';
+import type { Me } from '../api/generated/Me';
+import type { ServerStatus } from '../api/generated/ServerStatus';
+import type { StoredLaunch } from '../api/generated/StoredLaunch';
 import type { MetricsSeries } from '../api/generated/MetricsSeries';
 import type { RunGrowth } from '../api/generated/RunGrowth';
 import type { ThreadShares } from '../api/generated/ThreadShares';
 import { healthQuery } from '../api/health';
+import { DEFAULT_LAUNCH, launchQuery } from '../api/launch';
+import { MeContext } from '../auth/me';
 import { growthQuery, seriesQuery, threadsQuery } from '../api/metrics';
 import { en } from '../i18n/en';
 import { I18nProvider } from '../i18n/I18nProvider';
 import { LiveContext } from '../live/context';
 import { Realtime, type SocketEvents } from '../live/realtime';
 import { TILE_SERIES } from '../overview/Tiles';
+import { ServerStatusProvider } from '../server/context';
 import { OverviewPage } from './OverviewPage';
+
+// The state card links to other pages; no router runs here.
+vi.mock('@tanstack/react-router', () => ({
+    Link: ({
+        to,
+        hash,
+        children,
+        className,
+    }: {
+        to: string;
+        hash?: string;
+        children: ReactNode;
+        className?: string;
+    }) => (
+        <a href={hash === undefined ? to : `${to}#${hash}`} className={className}>
+            {children}
+        </a>
+    ),
+}));
 
 const chart = vi.hoisted(() => ({ fails: false }));
 
@@ -135,7 +161,14 @@ const page = async (
         growth = null,
         started = null,
         threads = null,
-    }: { growth?: RunGrowth | null; started?: number | null; threads?: ThreadShares | null } = {},
+        me = null,
+    }: {
+        growth?: RunGrowth | null;
+        started?: number | null;
+        threads?: ThreadShares | null;
+        /** Signed in, with the server's state followed: the state card shows it. */
+        me?: Me | null;
+    } = {},
 ) => {
     const client = new QueryClient({
         defaultOptions: { queries: { staleTime: Infinity, retry: false, refetchInterval: false } },
@@ -157,11 +190,25 @@ const page = async (
         },
         refetch: () => {},
     });
+    const launch: StoredLaunch = {
+        settings: { ...DEFAULT_LAUNCH, dataPath: '/srv/fxserver/server-data', hangTimeoutSeconds: 900 },
+        version: 1,
+        legacyBuildPath: null,
+    };
+    client.setQueryData(launchQuery.queryKey, launch);
     const view = render(
         <QueryClientProvider client={client}>
             <I18nProvider>
                 <LiveContext value={live}>
-                    <OverviewPage />
+                    {me === null ? (
+                        <OverviewPage />
+                    ) : (
+                        <MeContext value={me}>
+                            <ServerStatusProvider>
+                                <OverviewPage />
+                            </ServerStatusProvider>
+                        </MeContext>
+                    )}
                 </LiveContext>
             </I18nProvider>
         </QueryClientProvider>,
@@ -197,6 +244,35 @@ const card = (title: string) => {
         throw new Error(`no ${title} card`);
     }
     return within(section);
+};
+
+const OWNER: Me = { id: 1, username: 'ada', isOwner: true, permissions: 'fff', mustChangePassword: false };
+
+/** The page for `me` while FXServer is declared hung for its silent HTTP endpoint. */
+const hungFor = async (me: Me) => {
+    // The tiles `me` may see read what the test does not serve.
+    vi.stubGlobal(
+        'fetch',
+        vi.fn(async () => Response.json({ code: 'not_found' }, { status: 404 })),
+    );
+    const view = await page(hour(), { me });
+    view.say({
+        type: 'snapshot',
+        topic: 'server.status',
+        data: {
+            state: 'hung',
+            cause: { kind: 'hang', cause: 'noHttp' },
+            since: new Date().toISOString(),
+            startedAt: new Date(Date.now() - 600_000).toISOString(),
+            generation: 1,
+            problems: [],
+            build: null,
+            players: null,
+            restartAt: null,
+            launch: 'ready',
+        } satisfies ServerStatus,
+    });
+    return view;
 };
 
 const lastHitch = () =>
@@ -583,6 +659,33 @@ describe('OverviewPage', () => {
 
         expect(tile(en.tiles.observer.label).queryByText(/^0\.1\.0 · up \d min$/)).toBeNull();
         live.stop();
+    });
+
+    it('should tell the owner the hang delay that ran out, and the way to the card that sets it', async () => {
+        const { live, getByText, getByRole } = await hungFor(OWNER);
+
+        getByText(en.server_state.hangNoHttp);
+        getByText(en.server_state.hangAdvice(15));
+        expect(getByRole('link', { name: en.server_state.openHang }).getAttribute('href')).toBe(
+            '/server#server-hang',
+        );
+        live.stop();
+        vi.unstubAllGlobals();
+    });
+
+    it('should leave the hang delay out for another account, which cannot change it', async () => {
+        const { live, getByText, queryByText, queryByRole } = await hungFor({
+            ...OWNER,
+            id: 2,
+            username: 'grace',
+            isOwner: false,
+        });
+
+        getByText(en.server_state.hangNoHttp);
+        expect(queryByText(en.server_state.hangAdvice(15))).toBeNull();
+        expect(queryByRole('link', { name: en.server_state.openHang })).toBeNull();
+        live.stop();
+        vi.unstubAllGlobals();
     });
 
     it('should say Observer cannot be reached rather than that it runs once it stops answering', async () => {

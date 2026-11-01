@@ -289,6 +289,8 @@ mod tests {
             auto_start: false,
             txadmin_events: false,
             extra_arguments: Vec::new(),
+            hang_detection: true,
+            hang_timeout_seconds: 360,
         }
     }
 

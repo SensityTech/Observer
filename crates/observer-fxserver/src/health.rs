@@ -11,6 +11,7 @@ use hyper::body::Bytes;
 use hyper::header::{AUTHORIZATION, HOST, USER_AGENT};
 use hyper::{Request, StatusCode};
 use hyper_util::rt::TokioIo;
+use observer_domain::launch::LaunchSettings;
 use observer_domain::metrics;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -35,25 +36,57 @@ const MAX_BODY: usize = 256 * 1024;
 const MAX_PLAYERS_BODY: usize = 4 * 1024 * 1024;
 const PLAYERS_TOKEN_HEADER: &str = "x-players-token";
 
-/// When a silent signal makes the server degraded, then hung. The defaults are txAdmin's.
+/// When a silent signal makes the server degraded, then hung. The boot grace and the thresholds
+/// that only degrade it are txAdmin's; when it is hung is the owner's choice, in the launch
+/// settings, which [`HealthLimits::under`] applies.
 #[derive(Debug, Clone, Copy)]
 pub struct HealthLimits {
     /// No hang is declared this soon after the start: big servers take a while to load.
     pub boot_grace: Duration,
     pub heartbeat_late: Duration,
+    /// The longest the heartbeat may stay silent before a hang, whatever the launch settings
+    /// allow: [`NEVER`] by default, so their delay decides. Tests shorten it, as the settings take
+    /// a minute at least.
     pub heartbeat_fatal: Duration,
     pub http_late: Duration,
+    /// The same for HTTP.
     pub http_fatal: Duration,
 }
+
+/// A silence that never comes: no signal stays quiet this long.
+pub const NEVER: Duration = Duration::MAX;
 
 impl Default for HealthLimits {
     fn default() -> Self {
         Self {
             boot_grace: Duration::from_secs(45),
             heartbeat_late: Duration::from_secs(10),
-            heartbeat_fatal: Duration::from_secs(60),
+            heartbeat_fatal: NEVER,
             http_late: Duration::from_secs(10),
-            http_fatal: Duration::from_secs(180),
+            http_fatal: NEVER,
+        }
+    }
+}
+
+impl HealthLimits {
+    /// These limits under the owner's launch settings: a server whose heartbeat or HTTP stays
+    /// silent for their hang timeout is hung, unless these limits say so sooner, and with hang
+    /// detection off it never is. Whether it is degraded does not change, nor does a crash restart
+    /// it any less: that is the process exiting, which no limit weighs.
+    #[must_use]
+    pub fn under(self, settings: &LaunchSettings) -> Self {
+        let delay = Duration::from_secs(u64::from(settings.hang_timeout_seconds));
+        let fatal = |limit: Duration| {
+            if settings.hang_detection {
+                limit.min(delay)
+            } else {
+                NEVER
+            }
+        };
+        Self {
+            heartbeat_fatal: fatal(self.heartbeat_fatal),
+            http_fatal: fatal(self.http_fatal),
+            ..self
         }
     }
 }
@@ -103,6 +136,8 @@ pub struct Health {
     refusals: u32,
     /// A watchdog bark since the last heartbeat.
     bark: bool,
+    /// When hang detection was last turned on, or given another delay, during this run.
+    armed: Option<Instant>,
 }
 
 impl Health {
@@ -116,7 +151,17 @@ impl Health {
             unauthorized: false,
             refusals: 0,
             bark: false,
+            armed: None,
         }
+    }
+
+    /// Hang detection was turned on, or given another delay, at `now`. A silence counts toward a
+    /// hang from then at the earliest: an owner who turns it back on during a long first start,
+    /// or shortens the delay, means from now on, not a kill at once of a server already silent
+    /// longer than that. Whether the server is late, and so degraded, still counts from its last
+    /// answer.
+    pub fn arm(&mut self, now: Instant) {
+        self.armed = Some(now);
     }
 
     pub fn heartbeat(&mut self, now: Instant) {
@@ -161,11 +206,14 @@ impl Health {
         let silent = |last: Option<Instant>| now.saturating_duration_since(last.unwrap_or(self.spawned));
         let heartbeat = silent(self.heartbeat);
         let http = silent(self.http);
+        let armed = self
+            .armed
+            .map_or(Duration::MAX, |armed| now.saturating_duration_since(armed));
         if now.saturating_duration_since(self.spawned) >= limits.boot_grace {
-            if heartbeat >= limits.heartbeat_fatal {
+            if heartbeat.min(armed) >= limits.heartbeat_fatal {
                 return Verdict::Hung(HangCause::NoHeartbeat);
             }
-            if http >= limits.http_fatal {
+            if http.min(armed) >= limits.http_fatal {
                 return Verdict::Hung(HangCause::NoHttp);
             }
         }
@@ -651,6 +699,130 @@ mod tests {
         assert_eq!(
             health.verdict(start + secs(182), &LIMITS),
             Verdict::Hung(HangCause::NoHttp)
+        );
+    }
+
+    fn launch(hang_detection: bool, hang_timeout_seconds: u32) -> LaunchSettings {
+        LaunchSettings {
+            data_path: "/srv/fivem/server-data".to_owned(),
+            cfg_file: "server.cfg".to_owned(),
+            onesync: observer_domain::launch::OneSync::On,
+            auto_start: false,
+            txadmin_events: false,
+            extra_arguments: Vec::new(),
+            hang_detection,
+            hang_timeout_seconds,
+        }
+    }
+
+    #[test]
+    fn the_launch_settings_choose_how_long_a_silent_server_is_left_before_it_is_hung() {
+        let limits = HealthLimits::default().under(&launch(true, 120));
+        let start = Instant::now();
+        let starting = Health::new(start);
+        let mut silent_http = ready(start);
+        for second in (10..200).step_by(3) {
+            silent_http.heartbeat(start + secs(second));
+        }
+
+        assert_eq!(starting.verdict(start + secs(119), &limits), Verdict::Starting);
+        assert_eq!(
+            starting.verdict(start + secs(120), &limits),
+            Verdict::Hung(HangCause::NoHeartbeat)
+        );
+        // Its last answer came 2 s after the start.
+        assert_eq!(
+            silent_http.verdict(start + secs(121), &limits),
+            Verdict::Degraded(vec![Problem::HttpLate])
+        );
+        assert_eq!(
+            silent_http.verdict(start + secs(122), &limits),
+            Verdict::Hung(HangCause::NoHttp)
+        );
+        // Six minutes by default: what the defaults alone used to hang is still starting.
+        let defaults = HealthLimits::default().under(&launch(true, 360));
+        assert_eq!(starting.verdict(start + secs(359), &defaults), Verdict::Starting);
+        assert_eq!(
+            starting.verdict(start + secs(360), &defaults),
+            Verdict::Hung(HangCause::NoHeartbeat)
+        );
+    }
+
+    #[test]
+    fn with_hang_detection_off_a_silent_server_is_never_hung() {
+        let limits = LIMITS.under(&launch(false, 60));
+        let start = Instant::now();
+        let starting = Health::new(start);
+        let stuck = ready(start);
+        let a_day = secs(24 * 60 * 60);
+
+        assert_eq!(starting.verdict(start + a_day, &limits), Verdict::Starting);
+        assert_eq!(
+            stuck.verdict(start + a_day, &limits),
+            Verdict::Degraded(vec![Problem::HttpLate, Problem::HeartbeatLate])
+        );
+        assert_eq!(limits.boot_grace, LIMITS.boot_grace);
+        assert_eq!(limits.heartbeat_late, LIMITS.heartbeat_late);
+    }
+
+    #[test]
+    fn shorter_limits_than_the_launch_settings_win() {
+        let limits = LIMITS.under(&launch(true, 360));
+        let start = Instant::now();
+
+        assert_eq!(limits.heartbeat_fatal, secs(60));
+        assert_eq!(limits.http_fatal, secs(180));
+        assert_eq!(
+            Health::new(start).verdict(start + secs(60), &limits),
+            Verdict::Hung(HangCause::NoHeartbeat)
+        );
+        assert_eq!(LIMITS.under(&launch(true, 120)).http_fatal, secs(120));
+    }
+
+    #[test]
+    fn a_silence_counts_toward_a_hang_from_when_detection_was_armed_at_the_earliest() {
+        let start = Instant::now();
+        let six = HealthLimits::default().under(&launch(true, 360));
+        let five = HealthLimits::default().under(&launch(true, 300));
+        // A first start silent for twelve minutes, with detection turned back on at the tenth.
+        let mut starting = Health::new(start);
+        starting.arm(start + secs(600));
+
+        assert_eq!(starting.verdict(start + secs(720), &six), Verdict::Starting);
+        assert_eq!(starting.verdict(start + secs(959), &six), Verdict::Starting);
+        assert_eq!(
+            starting.verdict(start + secs(960), &six),
+            Verdict::Hung(HangCause::NoHeartbeat)
+        );
+        // A ready server whose main loop froze at the second, its delay lowered to five minutes
+        // at the seventh: still degraded, hung five minutes after the change.
+        let mut frozen = ready(start);
+        for second in (10..1000).step_by(3) {
+            frozen.probed(&http_ok(), start + secs(second));
+        }
+        frozen.arm(start + secs(420));
+        assert_eq!(
+            frozen.verdict(start + secs(421), &five),
+            Verdict::Degraded(vec![Problem::HeartbeatLate])
+        );
+        assert_eq!(
+            frozen.verdict(start + secs(720), &five),
+            Verdict::Hung(HangCause::NoHeartbeat)
+        );
+        // An answer after the change counts as before: the silence runs from the later of the two.
+        let mut answered = ready(start);
+        answered.arm(start + secs(60));
+        for second in (60..=120).step_by(3) {
+            answered.probed(&http_ok(), start + secs(second));
+        }
+        answered.heartbeat(start + secs(120));
+        assert_eq!(
+            answered.verdict(start + secs(479), &six),
+            Verdict::Degraded(vec![Problem::HttpLate, Problem::HeartbeatLate])
+        );
+        assert_eq!(
+            answered.verdict(start + secs(480), &six),
+            Verdict::Hung(HangCause::NoHeartbeat)
         );
     }
 

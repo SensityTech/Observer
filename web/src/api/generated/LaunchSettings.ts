@@ -25,4 +25,16 @@ txadminEvents: boolean,
 /**
  * Each becomes `+set <name> <value>`, after the cfg and Observer's own convars.
  */
-extraArguments: Array<ExtraArgument>, };
+extraArguments: Array<ExtraArgument>, 
+/**
+ * Restart a server whose main loop or HTTP endpoints stay silent for the hang timeout. Off,
+ * only a crash restarts it: the process exiting is never left alone. Settings saved before it
+ * existed have it on.
+ */
+hangDetection: boolean, 
+/**
+ * How long a stuck server is left before it is restarted: whole minutes, in seconds, from
+ * `MIN_HANG_TIMEOUT_SECONDS` to `MAX_HANG_TIMEOUT_SECONDS`. A change applies at once, to a
+ * running server too, and the silence then counts from the change.
+ */
+hangTimeoutSeconds: number, };

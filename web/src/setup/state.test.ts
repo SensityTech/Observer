@@ -198,6 +198,8 @@ describe('checklist', () => {
                 'licence',
             ],
             [status({ ...run, state: 'hung', cause: { kind: 'hang', cause: 'noHeartbeat' } }), 'bridge'],
+            // Ready needs an HTTP answer, which never came in the delay.
+            [status({ ...run, state: 'hung', cause: { kind: 'hang', cause: 'noHttp' } }), 'ready'],
             [
                 status({ ...run, state: 'crashed', cause: { kind: 'exited', description: 'exit code 1' } }),
                 'ready',

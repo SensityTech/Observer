@@ -1,3 +1,4 @@
+import { useQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { ArrowRight, RotateCw } from 'lucide-react';
 import { Suspense, useId } from 'react';
@@ -5,6 +6,7 @@ import { Suspense, useId } from 'react';
 import { Permission } from '../api/generated/Permission';
 import type { ScheduleStatus } from '../api/generated/ScheduleStatus';
 import type { ServerStatus } from '../api/generated/ServerStatus';
+import { launchQuery } from '../api/launch';
 import { useArtifacts } from '../artifacts/context';
 import { allows, useMe } from '../auth/me';
 import { Button } from '../components/Button';
@@ -23,6 +25,7 @@ import { Tiles } from '../overview/Tiles';
 import { TreeCard } from '../overview/TreeCard';
 import { useSchedule } from '../schedule/context';
 import { useServerStatus } from '../server/context';
+import { HangAdvice } from '../server/HangAdvice';
 import { STATE_INK, STATE_LED, buildFact, causeText, isRunning } from '../server/state';
 
 // The chart library is the heaviest part of the panel: it loads after the page has painted.
@@ -177,6 +180,8 @@ function ServerState({ status }: { status: ServerStatus }) {
     const { latest } = useLiveMetrics();
     const { schedule, zone } = useSchedule();
     const { status: builds } = useArtifacts();
+    // Only the owner reads the launch settings, and can change the delay a hang names.
+    const launchSettings = useQuery({ ...launchQuery, enabled: me.isOwner });
     const cause = causeText(t, status);
     const running = isRunning(status.state);
     const resources = running ? (latest?.values.resources ?? null) : null;
@@ -232,6 +237,7 @@ function ServerState({ status }: { status: ServerStatus }) {
                 {cause !== null && <span className="text-ink-3">{cause}</span>}
             </output>
             {facts.length > 0 && <p className="text-small text-ink-3">{facts.join(' · ')}</p>}
+            {me.isOwner && <HangAdvice status={status} settings={launchSettings.data?.settings ?? null} />}
             {allows(me, Permission.ChangesView) && <ChangesFact />}
             {launch !== null && (
                 <div className="flex flex-col items-start gap-2 text-small text-ink-2">

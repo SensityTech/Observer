@@ -1119,6 +1119,8 @@ fn launch_settings() -> Value {
         "autoStart": true,
         "txadminEvents": false,
         "extraArguments": [{ "name": "sv_enforceGameBuild", "value": "3258" }],
+        "hangDetection": true,
+        "hangTimeoutSeconds": 360,
     })
 }
 
@@ -1181,6 +1183,7 @@ async fn launch_settings_with_issues_are_refused_with_each_issue() {
     let mut settings = launch_settings();
     settings["cfgFile"] = json!("../server.cfg");
     settings["extraArguments"] = json!([{ "name": "exec", "value": "other.cfg; quit" }]);
+    settings["hangTimeoutSeconds"] = json!(30);
     let mut unknown = launch_settings();
     unknown["onesync"] = json!("sometimes");
 
@@ -1203,6 +1206,7 @@ async fn launch_settings_with_issues_are_refused_with_each_issue() {
                 { "field": "cfgFile", "index": null, "problem": "invalidCfgFile" },
                 { "field": "argumentName", "index": 0, "problem": "reserved" },
                 { "field": "argumentValue", "index": 0, "problem": "forbiddenCharacter" },
+                { "field": "hangTimeoutSeconds", "index": null, "problem": "outOfRange" },
             ] },
         })
     );

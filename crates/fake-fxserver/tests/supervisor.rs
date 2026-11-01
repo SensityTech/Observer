@@ -114,6 +114,8 @@ impl Lab {
             auto_start: false,
             txadmin_events: false,
             extra_arguments,
+            hang_detection: true,
+            hang_timeout_seconds: 360,
         };
         let launch = ServerLaunch {
             build: dir.path().join("build"),
@@ -812,6 +814,75 @@ async fn a_hung_main_loop_is_detected_and_the_server_restarted() {
     lab.shut_down(false).await;
 }
 
+/// Launch settings with hang detection off; the lab's own launch keeps it on.
+fn without_hang_detection(settings: &mut Settings) {
+    if let Some(launch) = &mut settings.launch {
+        launch.settings.hang_detection = false;
+    }
+}
+
+fn hung_or_exited(kind: &EventKind) -> bool {
+    matches!(
+        kind,
+        EventKind::State { to: State::Hung, .. } | EventKind::Exited { .. }
+    )
+}
+
+#[tokio::test]
+async fn with_hang_detection_off_a_hung_server_is_left_running_and_a_crash_still_restarts_it() {
+    let mut lab = Lab::tuned(&[], without_hang_detection).await;
+    lab.supervisor.start("test").await.unwrap();
+    lab.state(State::Online).await;
+
+    lab.type_command("fake_crash", "test").await;
+    assert!(matches!(lab.state(State::Crashed).await, Cause::Exited { .. }));
+    assert_eq!(lab.state(State::Starting).await, Cause::Recovery);
+    lab.state(State::Online).await;
+    lab.type_command("fake_hang", "test").await;
+
+    let degraded = lab.state(State::Degraded).await;
+    assert!(
+        matches!(&degraded, Cause::Unhealthy { problems } if problems.contains(&Problem::HeartbeatLate)),
+        "{degraded:?}"
+    );
+    // The lab's limits would call it hung two seconds into the silence.
+    lab.none_within(Duration::from_secs(5), hung_or_exited).await;
+    assert_eq!(lab.supervisor.status().borrow().state, State::Degraded);
+    assert_eq!(lab.generation(), 2);
+    lab.shut_down(false).await;
+}
+
+#[tokio::test]
+async fn hang_detection_turned_back_on_reaches_the_running_server_and_counts_from_the_change() {
+    let mut lab = Lab::tuned(&[], without_hang_detection).await;
+    lab.supervisor.start("test").await.unwrap();
+    lab.state(State::Online).await;
+    lab.type_command("fake_hang", "test").await;
+    lab.state(State::Degraded).await;
+    lab.none_within(Duration::from_secs(3), hung_or_exited).await;
+
+    lab.supervisor.configure(lab.launch.clone()).await;
+
+    // Silent longer than the lab's two seconds already, it gets them again from the change.
+    lab.none_within(Duration::from_secs(1), hung_or_exited).await;
+    assert_eq!(
+        lab.state(State::Hung).await,
+        Cause::Hang {
+            cause: HangCause::NoHeartbeat
+        }
+    );
+    assert_eq!(
+        lab.state(State::Crashed).await,
+        Cause::Hang {
+            cause: HangCause::NoHeartbeat
+        }
+    );
+    assert_eq!(lab.state(State::Starting).await, Cause::Recovery);
+    lab.state(State::Online).await;
+    assert_eq!(lab.generation(), 2);
+    lab.shut_down(false).await;
+}
+
 #[tokio::test]
 async fn a_taken_port_backs_off_more_each_time_without_tripping_the_breaker() {
     let lab_port = Port::lease().await;
@@ -1239,9 +1310,9 @@ async fn a_dropped_notification_is_made_up_for_by_the_reconciliation() {
     let mut processes = lab.supervisor.processes();
     lab.supervisor.start("test").await.unwrap();
     lab.state(State::Online).await;
-    let spawned = Instant::now();
 
     // On Windows the first process of the tree is FXServer's console host; on Linux, this shell.
+    let typed = Instant::now();
     lab.type_command(&shell_command(20), "test").await;
 
     let first = if cfg!(windows) { "conhost.exe" } else { SHELL };
@@ -1252,8 +1323,10 @@ async fn a_dropped_notification_is_made_up_for_by_the_reconciliation() {
         ProcessKind::Shell
     };
     assert_eq!(kind, expected);
+    // A notification reports the shell within milliseconds of its start; the reconciliation only
+    // takes processes at least two seconds old, whenever its next tick falls after the spawn.
     assert!(
-        cfg!(windows) || spawned.elapsed() >= Duration::from_secs(4),
+        cfg!(windows) || typed.elapsed() >= Duration::from_millis(1_900),
         "the shell came before the reconciliation"
     );
     lab.shut_down(false).await;

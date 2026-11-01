@@ -27,6 +27,8 @@ export const DEFAULT_LAUNCH: LaunchSettings = {
     autoStart: false,
     txadminEvents: false,
     extraArguments: [],
+    hangDetection: true,
+    hangTimeoutSeconds: 360,
 };
 
 const FIELDS = {
@@ -35,6 +37,7 @@ const FIELDS = {
     extraArguments: true,
     argumentName: true,
     argumentValue: true,
+    hangTimeoutSeconds: true,
 } satisfies Record<LaunchField, true>;
 
 const PROBLEMS = {
@@ -54,6 +57,7 @@ const PROBLEMS = {
     secret: true,
     duplicate: true,
     tooMany: true,
+    outOfRange: true,
 } satisfies Record<LaunchProblem, true>;
 
 const isIssue = (value: unknown): value is LaunchIssue =>
@@ -76,11 +80,21 @@ export const launchProblem = (value: unknown): LaunchProblem | null =>
 export const launchIssues = (params: Record<string, unknown>): LaunchIssue[] =>
     Array.isArray(params.issues) ? params.issues.filter(isIssue) : [];
 
-/** How many settings differ, the list of extra arguments counting as one. */
-export const countChanges = (saved: LaunchSettings, draft: LaunchSettings) =>
+/** The settings that differ, the list of extra arguments counting as one. */
+export const changedSettings = (saved: LaunchSettings, draft: LaunchSettings) =>
     (Object.keys(draft) as (keyof LaunchSettings)[]).filter(
         (key) => JSON.stringify(saved[key]) !== JSON.stringify(draft[key]),
-    ).length;
+    );
+
+/** How many settings differ, the list of extra arguments counting as one. */
+export const countChanges = (saved: LaunchSettings, draft: LaunchSettings) =>
+    changedSettings(saved, draft).length;
+
+/** The settings a running server takes at once; every other one waits for the next start. */
+export const HANG_SETTINGS: ReadonlySet<keyof LaunchSettings> = new Set([
+    'hangDetection',
+    'hangTimeoutSeconds',
+]);
 
 /** The draft as it is sent: names and paths lose the spaces a paste leaves around them. */
 export const cleaned = (draft: LaunchSettings): LaunchSettings => ({

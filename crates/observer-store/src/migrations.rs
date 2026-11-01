@@ -19,6 +19,7 @@ const MIGRATIONS: &[M<'static>] = &[
     M::up(include_str!("../migrations/0008_file_access.sql")),
     M::up(include_str!("../migrations/0009_players.sql")),
     M::up(include_str!("../migrations/0010_tools.sql")),
+    M::up(include_str!("../migrations/0011_hang_detection.sql")),
 ];
 
 /// The schema version this build migrates to.
@@ -205,5 +206,43 @@ mod tests {
         let (settings, version) = crate::tools::settings(&conn, "default", tool).unwrap();
         assert_eq!(settings, observer_domain::tools::ToolSettings::default());
         assert_eq!(version, None);
+    }
+
+    #[test]
+    fn a_0010_database_detects_hangs_after_six_minutes_and_keeps_its_launch_settings() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        let migrations = Migrations::from_slice(MIGRATIONS);
+        migrations.to_version(&mut conn, 10).unwrap();
+        conn.execute(
+            "INSERT INTO launch_settings (server_id, data_path, cfg_file, onesync, auto_start,
+                 txadmin_events, extra_arguments, version, updated_at)
+             VALUES ('default', ?1, 'configs/live.cfg', 'legacy', 1, 1,
+                 '[{\"name\":\"sv_hostname\",\"value\":\"Lab\"}]', 4, '2026-10-31T09:00:00.000Z')",
+            [r"C:\FXServer\server-data"],
+        )
+        .unwrap();
+
+        migrations.to_latest(&mut conn).unwrap();
+
+        let stored = crate::launch::get(&conn, "default").unwrap().unwrap();
+        assert_eq!(stored.version, 4);
+        assert_eq!(stored.settings.data_path, r"C:\FXServer\server-data");
+        assert_eq!(stored.settings.cfg_file, "configs/live.cfg");
+        assert!(stored.settings.auto_start && stored.settings.txadmin_events);
+        assert_eq!(stored.settings.extra_arguments.len(), 1);
+        assert!(stored.settings.hang_detection);
+        assert_eq!(stored.settings.hang_timeout_seconds, 360);
+        for (detection, seconds) in [(2, 360), (1, 59), (0, 3601), (1, 90), (1, 3599)] {
+            let refused = conn.execute(
+                "UPDATE launch_settings SET hang_detection = ?1, hang_timeout_seconds = ?2",
+                [detection, seconds],
+            );
+            assert!(refused.is_err(), "{detection} {seconds}");
+        }
+        conn.execute(
+            "UPDATE launch_settings SET hang_detection = 0, hang_timeout_seconds = 3600",
+            [],
+        )
+        .unwrap();
     }
 }

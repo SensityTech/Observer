@@ -179,6 +179,10 @@ const word = (t: Messages, format: Format, key: string, value: unknown): string 
         if (key === 'lateBySeconds') {
             return t.audit.seconds(format.number(value));
         }
+        // Kept in seconds, in the minutes the Server page takes it in.
+        if (key === 'hangTimeoutSeconds') {
+            return t.audit.minutes(format.number(value / 60));
+        }
         if (MINUTES.has(key)) {
             return t.audit.minutes(format.number(value));
         }

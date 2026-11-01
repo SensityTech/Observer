@@ -196,6 +196,8 @@ impl Lab {
                 name: "fake_heartbeat_ms".to_owned(),
                 value: HEARTBEAT_MS.to_owned(),
             }],
+            hang_detection: true,
+            hang_timeout_seconds: 360,
         };
         let launch = ServerLaunch {
             build: dir.path().join("build"),

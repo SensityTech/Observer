@@ -258,6 +258,8 @@ impl Observer {
                     value: value.to_owned(),
                 })
                 .collect(),
+            hang_detection: true,
+            hang_timeout_seconds: 360,
         };
         services
             .servers

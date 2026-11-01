@@ -102,6 +102,8 @@ impl Lab {
                     auto_start: false,
                     txadmin_events: false,
                     extra_arguments: Vec::new(),
+                    hang_detection: true,
+                    hang_timeout_seconds: 360,
                 }),
             },
         )
@@ -583,6 +585,8 @@ async fn the_processes_an_earlier_observer_left_running_end_when_the_next_one_st
                     auto_start: false,
                     txadmin_events: false,
                     extra_arguments: Vec::new(),
+                    hang_detection: true,
+                    hang_timeout_seconds: 360,
                 }),
             },
         })

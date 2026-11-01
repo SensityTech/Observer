@@ -99,6 +99,8 @@ pub struct Settings {
     pub probe: Option<SocketAddr>,
     /// Observer's data folder: crash dumps go to its `crashes/`.
     pub data_dir: PathBuf,
+    /// The boot grace and the thresholds that degrade a server. Whether a stuck one is restarted,
+    /// and after how long, comes from the launch settings, which apply at once to a running server.
     pub health: HealthLimits,
     pub recovery: RecoveryPolicy,
     pub stop: StopTimings,
@@ -571,7 +573,8 @@ impl Supervisor {
     }
 
     /// Sets what the next spawn launches, whether started by hand or after a failure. A running
-    /// server keeps the launch it was started with.
+    /// server keeps the launch it was started with, but for hang detection, which applies to it at
+    /// once and counts its silence from the change.
     pub async fn configure(&self, launch: ServerLaunch) {
         let _ = self.requests.send(Request::Configure(Box::new(launch))).await;
     }
@@ -941,8 +944,21 @@ impl Actor {
                 let _ = reply.send(self.command(command, actor));
             }
             Request::Shutdown { shortened } => self.shutdown(shortened),
-            Request::Configure(launch) => self.settings.launch = Some(*launch),
+            Request::Configure(launch) => self.configure(*launch),
         }
+    }
+
+    /// What the next spawn launches. Hang detection reaches the running server too, from now on:
+    /// see [`Health::arm`].
+    fn configure(&mut self, launch: ServerLaunch) {
+        let hang = |settings: &LaunchSettings| (settings.hang_detection, settings.hang_timeout_seconds);
+        let before = self.settings.launch.as_ref().map(|old| hang(&old.settings));
+        if before != Some(hang(&launch.settings))
+            && let Some(run) = &mut self.run
+        {
+            run.health.arm(Instant::now());
+        }
+        self.settings.launch = Some(launch);
     }
 
     fn probed(&mut self, generation: u32, probe: Probe) {
@@ -1408,10 +1424,16 @@ impl Actor {
     }
 
     async fn weigh_health(&mut self, now: Instant) {
+        // The launch settings given last, rather than the spawn's: turning hang detection off, or
+        // giving a big first start more time, must reach the server that is starting now.
+        let limits = match &self.settings.launch {
+            Some(launch) => self.settings.health.under(&launch.settings),
+            None => self.settings.health,
+        };
         let Some(run) = &mut self.run else {
             return;
         };
-        let verdict = run.health.verdict(now, &self.settings.health);
+        let verdict = run.health.verdict(now, &limits);
         let newly_ready = !matches!(verdict, Verdict::Starting | Verdict::Hung(_)) && run.ready_at.is_none();
         if newly_ready {
             run.ready_at = Some(now);

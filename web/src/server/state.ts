@@ -1,4 +1,5 @@
 import type { ArtifactsStatus } from '../api/generated/ArtifactsStatus';
+import type { LaunchSettings } from '../api/generated/LaunchSettings';
 import type { ServerState } from '../api/generated/ServerState';
 import type { ServerStatus } from '../api/generated/ServerStatus';
 import type { Messages } from '../i18n/en';
@@ -88,6 +89,20 @@ export const causeText = (t: Messages, status: ServerStatus): string | null => {
             return words.spawnFailed(cause.reason);
     }
 };
+
+/**
+ * What a hang verdict leaves the owner, who alone reads the launch settings: the delay that ran
+ * out and where it is set. A first start that builds caches stays silent past the default, and
+ * without this reads as a stuck bridge. Null for any other cause, or without the settings.
+ */
+export const hangAdvice = (
+    t: Messages,
+    status: ServerStatus,
+    launch: LaunchSettings | null,
+): string | null =>
+    status.cause?.kind === 'hang' && launch !== null
+        ? t.server_state.hangAdvice(launch.hangTimeoutSeconds / 60)
+        : null;
 
 /**
  * Whether the command line can send now, and what its field says otherwise. FXServer takes commands

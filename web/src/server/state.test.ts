@@ -2,9 +2,10 @@ import { describe, expect, it } from 'vitest';
 
 import type { ArtifactsStatus } from '../api/generated/ArtifactsStatus';
 import type { ServerStatus } from '../api/generated/ServerStatus';
+import { DEFAULT_LAUNCH } from '../api/launch';
 import { ARTIFACTS } from '../artifacts/fixtures';
 import { en } from '../i18n/en';
-import { blocked, buildFact, causeText, commandLine } from './state';
+import { blocked, buildFact, causeText, commandLine, hangAdvice } from './state';
 
 const status = (overrides: Partial<ServerStatus>): ServerStatus => ({
     state: 'stopped',
@@ -129,6 +130,34 @@ describe('causeText', () => {
         expect(causeText(en, status({ state: 'starting', cause: planned }))).toBe(
             'Restarted as ada planned.',
         );
+    });
+});
+
+describe('hangAdvice', () => {
+    const hung = status({ state: 'hung', cause: { kind: 'hang', cause: 'noHeartbeat' } });
+
+    it('should name the delay that ran out, and where to raise it, for either silence', () => {
+        const advice = hangAdvice(en, hung, { ...DEFAULT_LAUNCH, hangTimeoutSeconds: 900 });
+
+        expect(advice).toBe(en.server_state.hangAdvice(15));
+        expect(advice).toContain('FXServer stayed silent for 15 minutes');
+        expect(advice).toContain('Server → Hang detection');
+        expect(
+            hangAdvice(en, { ...hung, cause: { kind: 'hang', cause: 'noHttp' } }, DEFAULT_LAUNCH),
+        ).toContain('6 minutes');
+        expect(hangAdvice(en, hung, { ...DEFAULT_LAUNCH, hangTimeoutSeconds: 60 })).toContain('1 minute,');
+    });
+
+    it('should say nothing for another cause, or to whoever cannot read the settings', () => {
+        expect(hangAdvice(en, hung, null)).toBeNull();
+        expect(
+            hangAdvice(
+                en,
+                status({ state: 'crashed', cause: { kind: 'exited', description: 'exit code 1' } }),
+                DEFAULT_LAUNCH,
+            ),
+        ).toBeNull();
+        expect(hangAdvice(en, status({}), DEFAULT_LAUNCH)).toBeNull();
     });
 });
 
