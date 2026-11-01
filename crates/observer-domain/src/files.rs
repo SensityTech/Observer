@@ -223,32 +223,34 @@ fn valid_glob(glob: &str) -> bool {
 /// Whether `name` matches `glob`: `*` is any run of characters, `?` one character, and every other
 /// character, `[` and `]` included, stands for itself, since FiveM names its categories `[maps]`.
 pub fn glob_matches(glob: &str, name: &str, ignore_case: bool) -> bool {
-    let glob: Vec<char> = glob.chars().map(|c| fold(c, ignore_case)).collect();
-    let name: Vec<char> = name.chars().map(|c| fold(c, ignore_case)).collect();
+    // Byte offsets into both, read a character at a time: it runs for every name of every path a
+    // listing walks, so nothing is allocated.
+    let at = |text: &str, offset: usize| text[offset..].chars().next();
     let (mut g, mut n) = (0, 0);
     // Where the last `*` was, and the name position it currently stands for the run up to.
     let mut star: Option<(usize, usize)> = None;
-    while n < name.len() {
-        match glob.get(g) {
+    while let Some(c) = at(name, n) {
+        match at(glob, g) {
             Some('*') => {
                 star = Some((g, n));
                 g += 1;
             }
-            Some(&c) if c == '?' || c == name[n] => {
-                g += 1;
-                n += 1;
+            Some(p) if p == '?' || fold(p, ignore_case) == fold(c, ignore_case) => {
+                g += p.len_utf8();
+                n += c.len_utf8();
             }
             _ => match star {
                 Some((star_g, star_n)) => {
+                    let next = star_n + at(name, star_n).map_or(1, char::len_utf8);
                     g = star_g + 1;
-                    n = star_n + 1;
-                    star = Some((star_g, star_n + 1));
+                    n = next;
+                    star = Some((star_g, next));
                 }
                 None => return false,
             },
         }
     }
-    glob[g..].iter().all(|&c| c == '*')
+    glob[g..].chars().all(|c| c == '*')
 }
 
 /// Each character's simple uppercase, one to one as NTFS compares names: never expanded (ß stays ß).

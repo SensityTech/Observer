@@ -84,6 +84,12 @@ fn the_glob_matcher_takes_brackets_literally() {
     assert!(!glob_matches("Server.cfg", "server.cfg", false));
     assert!(glob_matches("Server.cfg", "SERVER.CFG", true));
     assert!(glob_matches("*.CFG", "permissions.cfg", true));
+    // Names beyond ASCII: `?` and `*` stand for characters, not bytes.
+    assert!(glob_matches("caf?", "café", false));
+    assert!(glob_matches("*é?", "caféé", false));
+    assert!(glob_matches("C*É", "café", true));
+    assert!(!glob_matches("caf??", "café", false));
+    assert!(glob_matches("*_données_*", "x_données_y", false));
 }
 
 #[test]

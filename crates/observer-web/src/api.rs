@@ -7,7 +7,9 @@ mod account;
 mod artifacts;
 mod audit;
 mod auth;
+mod changes;
 mod diagnostics;
+mod drops;
 mod files;
 mod metrics;
 mod players;
@@ -42,9 +44,9 @@ pub(crate) struct Route {
 }
 
 #[rustfmt::skip]
-#[expect(clippy::too_many_lines, reason = "the whole table, one route a line, read in one place")]
+#[expect(clippy::too_many_lines, reason = "every route of the API, read best as one table")]
 pub(crate) fn routes() -> Vec<Route> {
-    use Gate::{Account, Owner, Permission, Public, Reauthenticated, ReauthenticatedOwner, Session, Ticket};
+    use Gate::{Account, Owner, Permission, PermissionReadsAudited, Public, Reauthenticated, ReauthenticatedOwner, Session, Ticket};
     use Method as M;
     use Permissions as P;
 
@@ -83,6 +85,13 @@ pub(crate) fn routes() -> Vec<Route> {
     // too, which the service checks on what is asked. Retentions and erasures are the owner's.
     let players = Permission(P::PLAYERS_VIEW);
     let erase = ReauthenticatedOwner;
+    // Statistics name nobody; the log, its export and reason groups are `PLAYERS_VIEW`'s.
+    let drops = Permission(P::DROPS_VIEW);
+    // What changed between starts: the history for its permission, the contents behind the critical
+    // one, a refused read of them audited; the settings, the purge and a full verification are the
+    // owner's, with the password again to change anything.
+    let changes = Permission(P::CHANGES_VIEW);
+    let contents = PermissionReadsAudited(P::CHANGES_CONTENT);
     // The server tools read the whole server folder, which is the owner's; a fix, an undo or the
     // settings write into it, now or at every start, so they take the password again.
     let read_tools = Owner;
@@ -163,7 +172,30 @@ pub(crate) fn routes() -> Vec<Route> {
         route(M::GET,    "/servers/default/players/import",    Owner,   players::import_status),
         route(M::POST,   "/servers/default/players/import",    erase,   players::import),
         route(M::GET,    "/servers/default/players/{id}",      players, players::profile),
+        route(M::GET,    "/servers/default/drops/summary",     drops,   drops::summary),
+        route(M::GET,    "/servers/default/drops/series",      drops,   drops::series),
+        route(M::GET,    "/servers/default/drops/signatures",  drops,   drops::signatures),
+        route(M::GET,    "/servers/default/drops/resources",   drops,   drops::resources),
+        route(M::GET,    "/servers/default/drops/changes",     drops,   drops::changes),
+        route(M::GET,    "/servers/default/drops/uptime",      drops,   drops::uptime),
+        route(M::GET,    "/servers/default/drops/rates.csv",   drops,   drops::export_rates),
+        route(M::GET,    "/servers/default/drops/crash",       drops,   drops::crash),
+        route(M::GET,    "/servers/default/drops/log",         players, drops::log),
+        route(M::GET,    "/servers/default/drops/log.csv",     players, drops::export_log),
+        route(M::GET,    "/servers/default/drops/settings",    Owner,   drops::settings),
+        route(M::PUT,    "/servers/default/drops/settings",    erase,   drops::change_settings),
         route(M::DELETE, "/servers/default/players/{id}",      erase,   players::forget),
+        route(M::GET,    "/servers/default/changes",          changes,  changes::compare),
+        route(M::GET,    "/servers/default/changes/starts",   changes,  changes::starts),
+        route(M::GET,    "/servers/default/changes/resource", changes,  changes::resource),
+        route(M::GET,    "/servers/default/changes/history",  changes,  changes::history),
+        route(M::POST,   "/servers/default/changes/check",    changes,  changes::check),
+        route(M::GET,    "/servers/default/changes/diff",     contents, changes::diff),
+        route(M::GET,    "/servers/default/changes/file",     contents, changes::file),
+        route(M::GET,    "/servers/default/changes/settings", Owner,    changes::settings),
+        route(M::PUT,    "/servers/default/changes/settings", ReauthenticatedOwner, changes::change_settings),
+        route(M::POST,   "/servers/default/changes/verify",   ReauthenticatedOwner, changes::verify),
+        route(M::DELETE, "/servers/default/changes/contents", ReauthenticatedOwner, changes::purge),
         route(M::GET,    "/tools",                                   read_tools,   tools::view),
         route(M::POST,   "/tools/duplicate-archetypes/scan",         read_tools,   tools::scan),
         route(M::POST,   "/tools/duplicate-archetypes/fix",          change_tools, tools::fix),

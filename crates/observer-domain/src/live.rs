@@ -8,6 +8,7 @@ use ts_rs::TS;
 
 use crate::artifacts::ArtifactsStatus;
 use crate::audit::AuditEntry;
+use crate::changes::ChangesLive;
 use crate::diagnostics::{AlertList, DiagnosticsEvent, DiagnosticsSnapshot};
 use crate::error::ErrorCode;
 use crate::metrics::{LiveSample, MetricsSnapshot};
@@ -63,10 +64,14 @@ pub enum Topic {
     /// permission.
     #[serde(rename = "server.diagnostics")]
     ServerDiagnostics,
+    /// The latest start's snapshot and what changed against the one before, as it is taken. Needs
+    /// the changes permission.
+    #[serde(rename = "server.changes")]
+    ServerChanges,
 }
 
 impl Topic {
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 10] = [
         Self::Status,
         Self::Audit,
         Self::ServerStatus,
@@ -76,6 +81,7 @@ impl Topic {
         Self::ServerArtifacts,
         Self::ServerAlerts,
         Self::ServerDiagnostics,
+        Self::ServerChanges,
     ];
 }
 
@@ -149,6 +155,8 @@ pub enum TopicSnapshot {
     ServerAlerts(AlertList),
     #[serde(rename = "server.diagnostics")]
     ServerDiagnostics(DiagnosticsSnapshot),
+    #[serde(rename = "server.changes")]
+    ServerChanges(ChangesLive),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, TS)]
@@ -174,6 +182,9 @@ pub enum TopicEvent {
     ServerAlerts(AlertList),
     #[serde(rename = "server.diagnostics")]
     ServerDiagnostics(DiagnosticsEvent),
+    /// The whole state again, whenever a snapshot moves: during a job, at most twice a second.
+    #[serde(rename = "server.changes")]
+    ServerChanges(ChangesLive),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]

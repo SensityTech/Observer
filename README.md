@@ -222,6 +222,7 @@ Two environment variables apply to the log of `observer run` and `observer fxser
 data/
 ├── observer.sqlite3       the state: accounts, sessions, audit log, settings, schedule, builds
 ├── metrics.sqlite3        the statistics, never backed up
+├── changes.sqlite3        what each start of FXServer ran from, never backed up
 ├── observer.lock          held by the Observer that uses this folder
 ├── backups/               observer-<UTC time>-<kind>.sqlite3
 ├── logs/
@@ -428,6 +429,37 @@ database string), `cache/`, Observer's own folders and `observer.toml`, `.git`, 
 files. Every change is in the audit log; uploads are written to a temporary file and swapped in only
 when complete, so FXServer never reads half a file. Observer never restarts a resource after an
 upload: restart it from the console, or let your own resource react.
+
+## What changed since the last start
+
+At each start of FXServer, Observer records what the server runs from: the build and the game build,
+the launch settings, the cfg files `exec` reaches, and every resource under `resources/` with its
+manifest's version, its git head, its npm packages and a digest of each file. The server never waits
+for it: the folder is listed as FXServer boots, and the files that changed are read once the server
+is online, at 64 MB/s at most. The first start reads everything once, in the background; later starts
+read only what changed.
+
+The **Changes** page compares the last two starts, any two, or the last start with the disk now
+(**Check the disk**: what the next restart will apply). When a restart cut the previous start's reading
+short, the last start is compared with the latest one that was read in full. It shows what txAdmin cannot: a resource whose
+files changed while its version did not. Text files (Lua, JS, JSON, cfg, YAML and the like, up to
+1 MiB) get line diffs; escrow-encrypted, binary and minified files are compared by size and hash.
+
+- **Secrets.** Contents are masked before they are stored: convar secrets, webhook URLs, bot tokens,
+  API keys, private keys, `Authorization` headers, credentials in connection strings and values given
+  to names such as `password` or `token` (in code, JSON, YAML, TOML or XML) become `[REDACTED]`, and the diff only says when one changed. `.env`, key files and
+  `txData` are never stored. A secret in a shape no rule knows stays visible to whoever may read
+  contents, so the owner can hide more files with patterns and purge what a file left in the history.
+- **Who sees what.** *View changes* shows the history, versions, files and counts; *Read changed
+  files* adds the diffs and whole files and is critical: it is the server's code. Reading contents is
+  in the audit log. The cfg files and the launch configuration stay the owner's alone, as they are in
+  the launch settings.
+- **Storage.** `changes.sqlite3` keeps starts 180 days and 2 GB of compressed text by default, the
+  oldest contents dropped first; it is never in the daily backup, and a copy that cannot be read is set
+  aside and started again, as the statistics are. Every file is read again once a week to catch a copy
+  that kept both size and time.
+- **For resources.** `observer:startChanges` tells your resources what changed once a start's files are
+  read: post it to your staff's channel your way (see the contract).
 
 ## Server tools
 
@@ -653,6 +685,9 @@ that does.
 - **SFTP: folders are not renamed or moved,** files are; every `*.cfg` file is refused until Observer
   reads which ones the server executes; a file FXServer holds open on Windows cannot be replaced until
   it lets go of it.
+- **Changes: who changed a file** is told only for SFTP writes, by path and time: a hint, since a file
+  can be written again after. Changes made while the server runs show at the next start or with
+  **Check the disk**, not as they happen.
 
 ## Licence
 

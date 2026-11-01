@@ -1,18 +1,28 @@
 // The source catalog. Every other locale is typed against it, so a key missing there fails the type
 // check. Messages that take values are functions; they format with the helpers bound to this locale.
 
+import type { ReactNode } from 'react';
+
 import type { ActorKind } from '../api/generated/ActorKind';
 import type { ApplyMode } from '../api/generated/ApplyMode';
+import type { ArgumentChangeKind } from '../api/generated/ArgumentChangeKind';
 import type { ArtifactSettingsProblem } from '../api/generated/ArtifactSettingsProblem';
 import type { AuditAction } from '../api/generated/AuditAction';
 import type { BuildPlatform } from '../api/generated/BuildPlatform';
 import type { CfgFileProblem } from '../api/generated/CfgFileProblem';
 import type { CfgFileState } from '../api/generated/CfgFileState';
+import type { ChartCategory } from '../api/generated/ChartCategory';
 import type { CommandRefusal } from '../api/generated/CommandRefusal';
+import type { CrashForm } from '../api/generated/CrashForm';
 import type { DropCategory } from '../api/generated/DropCategory';
 import type { DropKind } from '../api/generated/DropKind';
+import type { DropsRange } from '../api/generated/DropsRange';
 import type { EndpointProtocol } from '../api/generated/EndpointProtocol';
+import type { EnvironmentFact } from '../api/generated/EnvironmentFact';
 import type { ErrorCode } from '../api/generated/ErrorCode';
+import type { FileChangeKind } from '../api/generated/FileChangeKind';
+import type { FileFlag } from '../api/generated/FileFlag';
+import type { FileKind } from '../api/generated/FileKind';
 import type { FindingKind } from '../api/generated/FindingKind';
 import type { FindingParams } from '../api/generated/FindingParams';
 import type { FolderProblem } from '../api/generated/FolderProblem';
@@ -25,22 +35,30 @@ import type { JobStep } from '../api/generated/JobStep';
 import type { LaunchProblem } from '../api/generated/LaunchProblem';
 import type { LicenceState } from '../api/generated/LicenceState';
 import type { LineKind } from '../api/generated/LineKind';
+import type { LiveChangeKind } from '../api/generated/LiveChangeKind';
 import type { NoticeReason } from '../api/generated/NoticeReason';
 import type { OneSync } from '../api/generated/OneSync';
 import type { Outcome } from '../api/generated/Outcome';
+import type { PartialReason } from '../api/generated/PartialReason';
 import type { PermissionArea } from '../api/generated/PermissionArea';
 import type { PlayerSort } from '../api/generated/PlayerSort';
 import type { PlayersFileProblem } from '../api/generated/PlayersFileProblem';
 import type { Protection } from '../api/generated/Protection';
 import type { Range } from '../api/generated/Range';
+import type { ResourceChangeKind } from '../api/generated/ResourceChangeKind';
 import type { ScheduleMode } from '../api/generated/ScheduleMode';
 import type { ScheduleProblem } from '../api/generated/ScheduleProblem';
 import type { ServerState } from '../api/generated/ServerState';
 import type { Severity } from '../api/generated/Severity';
+import type { SnapshotState } from '../api/generated/SnapshotState';
 import type { SpawnFailure } from '../api/generated/SpawnFailure';
+import type { StartCause } from '../api/generated/StartCause';
 import type { StopSource } from '../api/generated/StopSource';
 import type { SupportLevel } from '../api/generated/SupportLevel';
+import type { TileKind } from '../api/generated/TileKind';
+import type { TrendVerdict } from '../api/generated/TrendVerdict';
 import { parsePermissions, permissionKeys, type PermissionKey } from '../auth/permissions';
+import type { InvisibleKind } from '../changes/invisible';
 import type { LinkState } from '../live/realtime';
 import type { LaunchStep, SetupStep } from '../setup/state';
 import { formatBytes, formatDuration, formatNumber, plural } from './format';
@@ -112,6 +130,20 @@ const permissions = {
         name: 'View player identifiers',
         description:
             'Every identifier a player showed, hardware tokens included, and the other licences they link to.',
+    },
+    dropsView: {
+        name: 'View player drops',
+        description: 'Drop rates, categories, crash signatures and kicking resources, without any player.',
+    },
+    changesView: {
+        name: 'View changes',
+        description:
+            'What each start of the server ran from: resources, versions, files, sizes and who changed them.',
+    },
+    changesContent: {
+        name: 'Read changed files',
+        description:
+            "Line diffs and whole files of the server's resources, secrets hidden. The server's code is its most valuable asset.",
     },
 } satisfies Record<PermissionKey, { name: string; description: string }>;
 
@@ -267,6 +299,8 @@ export const en = {
         files: 'Files',
         diagnostics: 'Diagnostics',
         players: 'Players',
+        drops: 'Drops',
+        changes: 'Changes',
         alertCount: (value: number) => count(value, { one: 'alert', other: 'alerts' }),
     },
     theme: {
@@ -850,6 +884,7 @@ export const en = {
             start: 'Start',
             restart: 'Restart',
             crash: 'Crash',
+            build: (build: number | null) => (build === null ? 'Build changed' : `Build ${build}`),
             backOnline: (time: string) => ` · back online ${time}`,
             inWords: (marker: string, time: string, backOnline: string | null) =>
                 backOnline === null ? `${marker} ${time}` : `${marker} ${time}, back online ${backOnline}`,
@@ -1072,6 +1107,7 @@ export const en = {
             syscallsHidden: 'This host hides the system calls threads wait in (kernel.yama.ptrace_scope).',
             download: (name: string) => `Download ${name}`,
             deleteFiles: 'Delete files…',
+            whatChanged: 'What changed before this run',
             deleteTitle: 'Delete these files?',
             deleteBody:
                 "Its dumps hold FXServer's memory. They are deleted from the host; the analysis stays.",
@@ -1459,6 +1495,766 @@ export const en = {
                 `Imported ${at}: ${count(imported, { one: 'new profile', other: 'new profiles' })}, ${formatNumber('en', updated)} updated, ${formatNumber('en', forgotten)} skipped as forgotten, ${formatNumber('en', invalid)} without a valid licence.`,
             stopped: (at: string, written: number, read: number) =>
                 `The import of ${at} stopped after ${formatNumber('en', written)} of ${count(read, { one: 'player', other: 'players' })}. Import the file again to finish: what was written stays.`,
+        },
+    },
+    drops: {
+        title: 'Player drops',
+        gloss: 'How sessions end, and whether it changes.',
+        range: 'Player drops range',
+        ranges: { '24h': '24h', '7d': '7d', '30d': '30d', '90d': '90d' } satisfies Record<DropsRange, string>,
+        over: {
+            '24h': 'the last 24 hours',
+            '7d': 'the last 7 days',
+            '30d': 'the last 30 days',
+            '90d': 'the last 90 days',
+        } satisfies Record<DropsRange, string>,
+        unit: 'per 100 h',
+        rate: (rate: string) => `${rate} per 100 h`,
+        unknown: 'n/a',
+        playersCounted: 'Players counted',
+        since: (day: string) => `since ${day}`,
+        playersSince: (day: string) => `players counted since ${day}`,
+        rates: 'Rates are drops per 100 player-hours, an hour of one player connected: a busier day does not raise them.',
+        exportRates: 'Export rates',
+        exportFailed: 'The export could not be made.',
+        loading: 'Reading the player drops',
+        failed: 'The player drops could not be read. They are read again in 30 s.',
+        coverage: (closed: number, sessions: number, share: string, missed: number, lost: number) =>
+            `Observer closed ${formatNumber('en', closed)} of ${count(sessions, { one: 'session', other: 'sessions' })} itself (${share}): ${formatNumber('en', missed)} left FXServer's player list without a drop, ${formatNumber('en', lost)} were still open when Observer stopped. How they ended is not known, so they stay out of the rates and the breakdown.`,
+        categories: {
+            quit: 'Quits',
+            kick: 'Kicks',
+            timeout: 'Timeouts',
+            crash: 'Crashes',
+            security: 'Security',
+            serverStop: 'Server stops',
+            serverCrash: 'Server crashes',
+            unknown: 'Unknown',
+        } satisfies Record<DropCategory, string>,
+        categoriesInline: {
+            quit: 'quits',
+            kick: 'kicks',
+            timeout: 'timeouts',
+            crash: 'crashes',
+            security: 'security drops',
+            serverStop: 'server stops',
+            serverCrash: 'server crashes',
+            unknown: 'unknown drops',
+        } satisfies Record<DropCategory, string>,
+        kinds: {
+            exit: 'Left the game',
+            disconnect: 'Disconnected',
+            otherServer: 'Joined another server',
+            reconnect: 'Reconnected',
+            editor: 'Opened the Rockstar Editor',
+            reload: 'Reloaded the game',
+            quitMessage: 'Quit with a message',
+            resource: 'By a resource',
+            connection: 'Connection lost',
+            pendingCommands: 'Too many commands waiting',
+            missedFrames: 'Missed frames',
+            replaced: 'Replaced by a new connection',
+            stateBagRate: 'Too many state bag changes',
+            netEventRate: 'Too many net events',
+            latentNetEventRate: 'Too many latent net events',
+            commandRate: 'Too many commands',
+            netGameEventRate: 'Too many game events',
+            serverInitiated: 'Refused by the server',
+            stop: 'Stopped',
+            restart: 'Restarted',
+            scheduled: 'Scheduled restart',
+            shutdown: 'Observer stopped',
+            crashLoop: 'Crash loop',
+            console: 'Quit in the console',
+            crash: 'Server crash',
+            hang: 'Server stopped responding',
+            lost: 'Lost when Observer stopped',
+            missed: 'Missed',
+            other: 'Other',
+        } satisfies Record<DropKind, string>,
+        verdicts: {
+            rising: 'Rising',
+            falling: 'Falling',
+            noClearChange: 'No clear change',
+            notEnoughDrops: 'Not enough drops',
+        } satisfies Record<TrendVerdict, string>,
+        verdict: {
+            interval: (change: string, low: string, high: string) => `${change} (between ${low} and ${high})`,
+            rates: (now: string, before: string) =>
+                `Every drop: ${now} now, ${before} before, per 100 player-hours`,
+            events: (now: number, before: number) =>
+                `The test counts a burst of drops once: ${count(now, { one: 'event', other: 'events' })} now, ${formatNumber('en', before)} before`,
+            notEnough: 'At least 20 events are needed to tell a change from chance.',
+            noClearChange: "Within what this server's days vary by.",
+        },
+        windows: {
+            today: (since: string, from: string, to: string) =>
+                `Today since ${since} against yesterday from ${from} to ${to}.`,
+            day: "Today since midnight against yesterday's same hours.",
+            '7d': 'The last 7 days against the 7 days before.',
+            '30d': 'The last 30 days against the 30 days before.',
+            '90d': 'The last 90 days against the 90 days before.',
+            change: 'The 72 hours before the change against the 72 hours after, cut at the next change.',
+        },
+        tiles: {
+            labels: {
+                crashes: 'Crashes',
+                timeouts: 'Timeouts',
+                kicks: 'Kicks',
+                unexpected: 'Sessions ending unexpectedly',
+            } satisfies Record<TileKind, string>,
+            what: {
+                crashes: 'crashes',
+                timeouts: 'timeouts',
+                kicks: 'kicks',
+                unexpected: 'unexpected drops',
+            } satisfies Record<TileKind, string>,
+            ended: 'Ended this way',
+            oneIn: (sessions: number) => `1 session in ${formatNumber('en', sessions)}`,
+            drops: 'Drops',
+            onePlayer: 'One player',
+            onePlayerShare: (share: string, what: string) => `${share} of ${what}`,
+            trend: (what: string, range: string) => `${what} per 100 player-hours over ${range}`,
+        },
+        chart: {
+            title: 'Drop rate',
+            category: 'Drops the chart shows',
+            categories: {
+                unexpected: 'Unexpected',
+                crash: 'Crashes',
+                timeout: 'Timeouts',
+                kick: 'Kicks',
+                security: 'Security',
+            } satisfies Record<ChartCategory, string>,
+            what: {
+                unexpected: 'unexpected drops',
+                crash: 'crashes',
+                timeout: 'timeouts',
+                kick: 'kicks',
+                security: 'security drops',
+            } satisfies Record<ChartCategory, string>,
+            every: (step: string) => `Every ${step} · per 100 player-hours`,
+            rate: 'Rate',
+            baseline: '4-week baseline',
+            drops: 'Drops',
+            tooltipRate: (rate: string) => `${rate} per 100 h`,
+            tooltipNobody: 'Nobody played',
+            tooltipDrops: (drops: number) => count(drops, { one: 'drop', other: 'drops' }),
+            tooltipBaseline: (rate: string) => `baseline ${rate}`,
+            summary: (drops: number, what: string, range: string, rate: string | null) =>
+                rate === null
+                    ? `${formatNumber('en', drops)} ${what} over ${range}.`
+                    : `${formatNumber('en', drops)} ${what} over ${range}, ${rate} per 100 player-hours.`,
+            peak: (rate: string, at: string) => `Highest ${rate} per 100 h, at ${at}.`,
+            baselineSpan: (low: string, high: string) =>
+                low === high
+                    ? `The 4-week baseline is ${low} per 100 h.`
+                    : `The 4-week baseline runs from ${low} to ${high} per 100 h.`,
+            noBaseline: 'No 4-week baseline yet: the weeks before are not known.',
+            unplayed: (buckets: number, total: number) =>
+                `Nobody played in ${formatNumber('en', buckets)} of its ${formatNumber('en', total)} buckets: the line breaks there.`,
+            empty: 'Nobody played over this range.',
+            loading: 'Loading the drop rate chart',
+            failed: 'The drop rate chart could not be read. It is read again in 30 s.',
+        },
+        breakdown: {
+            title: 'Breakdown',
+            meta: (sessions: number, played: string) =>
+                `${count(sessions, { one: 'session', other: 'sessions' })} ended · ${played} played`,
+            caption: 'Drops by category over the range, unexpected ones first, most drops first',
+            category: 'Category',
+            drops: 'Drops',
+            share: 'Share of all drops',
+            rate: 'Per 100 h',
+            verdict: 'Trend',
+            loading: 'Reading the breakdown',
+            loadingShare: (share: string) => `${share} while loading`,
+            unexpected: 'Unexpected',
+            expected: 'Expected',
+            notPlayers: 'Not a player rate',
+            filterHint:
+                'Pick a category to narrow the log to it. Crashes, timeouts, kicks and security narrow the chart too; unknown drops show it as unexpected ones.',
+            filterHintChart:
+                'Pick crashes, timeouts, kicks or security to narrow the chart to them; unknown drops show it as unexpected ones.',
+            empty: 'No drop over this range.',
+            failed: 'The breakdown could not be read.',
+        },
+        signatures: {
+            title: 'Crash signatures',
+            meta: (crashes: number) => count(crashes, { one: 'crash', other: 'crashes' }),
+            groupBy: 'Group crashes by',
+            tabs: { signatures: 'Signatures', modules: 'Modules', builds: 'Game builds' },
+            caption: 'Crash signatures over the range, most crashes first',
+            modulesCaption: 'Crashes by the module they happened in, most crashes first',
+            buildsCaption: 'Crashes by game build, most crashes first',
+            signature: 'Signature',
+            module: 'Module',
+            build: 'Game build',
+            crashes: 'Crashes',
+            share: 'Share of crashes',
+            players: 'Players',
+            firstSeen: 'First seen',
+            verdict: 'Trend',
+            signaturesCount: 'Signatures',
+            new: 'New',
+            newHint: 'First seen in this range, after 28 days without it.',
+            hidden: 'Hidden until a second player crashes with it.',
+            hiddenHint:
+                'A client can write anything after its crash: a text one player alone wrote is not shown.',
+            gameBuild: (build: number) => `game build ${build}`,
+            playersCount: (players: number) => count(players, { one: 'player', other: 'players' }),
+            forms: {
+                hash: 'Code name',
+                symbol: 'Symbol',
+                error: 'Error code',
+                load: 'Asset load',
+                exception: 'Exception',
+                text: 'Text',
+            } satisfies Record<CrashForm, string>,
+            asset: (resource: string) => `while loading an asset of ${resource}`,
+            examples: 'Examples',
+            hideExamples: 'Hide the examples',
+            examplesTitle: 'Latest crash texts, identifiers taken out',
+            noExamples: 'No crash text is kept for it.',
+            noSharedExample: 'No example shared by two players yet.',
+            loadingShare: (share: string) => `${share} of these crashes happened while loading.`,
+            noModule: 'No module named',
+            noBuild: 'No game build named',
+            showInLog: 'Show in the log',
+            empty: 'No crash over this range.',
+            loading: 'Reading the crash signatures',
+            failed: 'The crash signatures could not be read.',
+            repeat: (players: number) =>
+                `${count(players, { one: 'player', other: 'players' })} crashed 3 times or more in the last 7 days.`,
+            repeatNamed: (names: ReactNode, others: number): ReactNode => [
+                'Crashed 3 times or more in the last 7 days: ',
+                names,
+                others > 0 ? `, and ${count(others, { one: 'other player', other: 'other players' })}.` : '.',
+            ],
+            repeatCrashes: (crashes: number) => count(crashes, { one: 'crash', other: 'crashes' }),
+        },
+        resources: {
+            title: 'Kicking resources',
+            meta: (kicks: number) => count(kicks, { one: 'kick', other: 'kicks' }),
+            caption: 'Resources that kicked players over the range, most kicks first',
+            resource: 'Resource',
+            kicks: 'Kicks',
+            share: 'Share of kicks',
+            players: 'Players',
+            verdict: 'Trend',
+            noResource: 'No resource named',
+            reasons: 'Reasons',
+            hideReasons: 'Hide the reasons',
+            reasonsCaption: (resource: string) => `What ${resource} gave as its reasons, most kicks first`,
+            reasonsNote: 'Numbers, names and quoted words are taken out, so alike reasons group.',
+            reasonKicks: (kicks: number) => count(kicks, { one: 'kick', other: 'kicks' }),
+            playersCount: (players: number) => count(players, { one: 'player', other: 'players' }),
+            noReason: 'No reason is kept for these kicks.',
+            showInLog: 'Show in the log',
+            empty: 'No resource kicked a player over this range.',
+            loading: 'Reading the kicking resources',
+            failed: 'The kicking resources could not be read.',
+        },
+        changes: {
+            title: 'Changes and incidents',
+            caption: 'Restarts, build changes, server crashes and incidents over the range, newest first',
+            chips: {
+                restart: 'Restart',
+                build: 'Build',
+                serverCrash: 'Crash',
+                hang: 'Hang',
+                incident: 'Incident',
+            },
+            restart: 'FXServer started.',
+            build: (from: number | null, to: number | null) =>
+                from === null || to === null
+                    ? `FXServer started on build ${to ?? from ?? '?'}.`
+                    : `FXServer went from build ${from} to ${to}.`,
+            crash: (players: number | null) =>
+                players === null
+                    ? 'FXServer crashed.'
+                    : `FXServer crashed, dropping ${count(players, { one: 'player', other: 'players' })}.`,
+            hang: (players: number | null) =>
+                players === null
+                    ? 'FXServer stopped responding.'
+                    : `FXServer stopped responding, dropping ${count(players, { one: 'player', other: 'players' })}.`,
+            incident: (drops: number | null, hitch: string | null) => {
+                const what =
+                    drops === null ? 'Players dropped' : count(drops, { one: 'drop', other: 'drops' });
+                return hitch === null ? `${what} within 10 s.` : `${what} during a ${hitch} hitch.`;
+            },
+            incidentCategory: (drops: number, category: string) => `${formatNumber('en', drops)} ${category}`,
+            online: (players: number) => `${count(players, { one: 'player', other: 'players' })} online`,
+            after: (category: string, before: string, after: string) =>
+                `After it: ${category} ${before} to ${after} per 100 h`,
+            newSignatures: (signatures: number, named: ReactNode): ReactNode => [
+                `${count(signatures, { one: 'new signature', other: 'new signatures' })} after it: `,
+                named,
+            ],
+            seconds: (seconds: string) => `${seconds} s`,
+            run: (run: number) => `run ${run}`,
+            showInLog: 'Show their drops',
+            snapshots:
+                'Resource, cfg and file changes join this timeline once file changes is installed. Until then it holds restarts, FXServer builds, server crashes and incidents.',
+            empty: 'No restart, build change, server crash or incident over this range.',
+            loading: 'Reading the changes',
+            failed: 'The changes could not be read.',
+        },
+        uptime: {
+            title: 'Uptime',
+            meta: 'Unexpected drops per 100 h, by time since the start',
+            bin: (from: number, to: number | null) => (to === null ? `${from}h+` : `${from}-${to}h`),
+            higher: 'Higher',
+            higherBins: (bins: string[]) => `${list(bins)}, against the other hours since a start.`,
+            notEnough: 'Not enough drops',
+            summary: (bins: readonly string[]) =>
+                `Unexpected drops per 100 player-hours, a burst counting once, by hours since FXServer started: ${bins.join(', ')}.`,
+            summaryBin: (bin: string, rate: string, verdict: string | null) =>
+                verdict === null ? `${bin} ${rate}` : `${bin} ${rate} (${verdict})`,
+            note: 'A burst of drops counts once. A rate that climbs with the hours since the start points to a leak or a resource that degrades.',
+            since: (day: string) => `Sessions counted since ${day}: older ones are no longer kept.`,
+            empty: 'Nobody played over this range.',
+            loading: 'Reading the uptime figures',
+            failed: 'The uptime figures could not be read.',
+        },
+        log: {
+            title: 'Drop log',
+            meta: (range: string) => `Over ${range}, newest first`,
+            filters: 'Filter the log',
+            category: 'Category',
+            anyCategory: 'Any category',
+            kind: 'Kind',
+            anyKind: 'Any kind',
+            resource: 'Resource',
+            signature: 'Crash signature',
+            anySignature: 'Any signature',
+            signatureId: (id: number) => `Signature ${id}`,
+            player: 'Player',
+            playerHint: 'Player: the start of a name, or a licence.',
+            playerHintIdentifiers:
+                'Player: the start of a name, a licence, or any identifier with its prefix, such as discord:. Never an address. A player typed takes the place of a profile kept.',
+            run: 'Run',
+            runInvalid: 'A run is a number, as the log shows it.',
+            apply: 'Apply',
+            clear: 'Clear',
+            export: 'Export CSV',
+            profile: (id: number) => `Player ${id}`,
+            group: (id: number) => `Player ${id} and their linked licences`,
+            removeFilter: (filter: string) => `Remove the filter: ${filter}`,
+            caption: 'Drops over the range under the filters, newest first',
+            time: 'Time',
+            playerColumn: 'Player',
+            categoryColumn: 'Category',
+            detail: 'Detail',
+            session: 'Session',
+            phase: 'Phase',
+            runColumn: 'Run',
+            unconfirmed: 'Unconfirmed',
+            unconfirmedHint: 'Who this was was never confirmed, or the player was forgotten.',
+            noPlayer: 'Not known',
+            loadingPhase: 'Loading',
+            inGame: 'In game',
+            byResource: (resource: ReactNode): ReactNode => ['by ', resource],
+            closedByObserver: 'Closed by Observer',
+            duringIncident: 'During an incident',
+            runValue: (run: number) => `Run ${run}`,
+            filterRun: (run: number) => `Show run ${run} only`,
+            filterSignature: (signature: string) => `Show the signature ${signature} only`,
+            empty: 'No drop over this range.',
+            noMatch: 'No drop matches these filters over this range.',
+            loadMore: 'Load more',
+            shown: (drops: number) => `${count(drops, { one: 'drop', other: 'drops' })} shown`,
+            allShown: (drops: number) => `All ${count(drops, { one: 'drop', other: 'drops' })} shown`,
+            reading: 'Reading the drop log',
+            failed: 'The drop log could not be read.',
+        },
+        settings: {
+            title: 'Drop data',
+            meta: 'Owner only',
+            lead: "How long Observer keeps each player's sessions, with their crash and kick texts. The hourly figures behind the charts and the rates stay.",
+            sessionDays: 'Keep sessions for',
+            hint: 'Days, from 14 to 365.',
+            outOfRange: 'Out of range. Days, from 14 to 365.',
+            changes: (changes: number) => `${count(changes, { one: 'change', other: 'changes' })} not saved`,
+            discard: 'Discard',
+            discarded: 'Changes discarded.',
+            save: 'Save the retention',
+            saved: 'Retention saved. Older sessions go within the hour.',
+            loading: 'Reading the retention',
+            failed: 'The retention could not be read.',
+        },
+        overview: {
+            label: 'Player drops · 24h',
+            failed: 'The player drops could not be read. They are read again in 30 s.',
+            ended: 'Ended unexpectedly',
+            drops: 'Unexpected drops',
+            trend: 'Unexpected drops per 100 player-hours over the last 24 hours',
+            open: 'Open Player drops',
+        },
+        crash: {
+            dropped: (players: number) => `${count(players, { one: 'player', other: 'players' })} dropped`,
+            showInLog: 'Show their drops',
+        },
+        profileLog: 'Open in the drop log',
+    },
+    changes: {
+        title: 'Changes',
+        gloss: 'What each start of the server ran from.',
+        timeNote: 'Times in your time zone',
+        loading: 'Reading the changes',
+        empty: {
+            title: 'No start recorded yet',
+            body: 'Snapshots start with the next start of the server: each one records the build, the cfg and every resource it runs from.',
+            baselineTitle: 'Baseline taken',
+            baselineBody:
+                'The first start is the baseline: it records every resource as found. What changes shows from the next start.',
+            latest: 'Compare the latest starts',
+        },
+        bar: {
+            title: 'Compared',
+            from: 'From',
+            to: 'To',
+            disk: 'On disk now',
+            diskAt: (time: string) => `On disk now · checked ${time}`,
+            diskChecking: 'On disk now · checking',
+            check: 'Check the disk',
+            checking: 'Checking the disk',
+            checkHint: 'Lists and hashes the server folder now: what the next start would apply.',
+            option: (time: string, start: string, changes: string) => `${time} · ${start} · ${changes}`,
+        },
+        causes: {
+            requested: 'Started',
+            restart: 'Restarted',
+            scheduled: 'Scheduled restart',
+            recovery: 'Recovered',
+        } satisfies Record<StartCause, string>,
+        startBy: (cause: string, by: string) => `${cause} by ${by}`,
+        start: 'Start',
+        check: 'Disk check',
+        states: {
+            listing: 'Listing files',
+            hashing: 'Hashing files',
+            complete: 'Complete',
+            partial: 'Partial',
+            failed: 'Failed',
+        } satisfies Record<SnapshotState, string>,
+        partialReasons: {
+            limit: 'it reached the limits of a snapshot',
+            cancelled: 'the next start cut it short',
+            diskFloor: 'the disk was almost full, so no contents were kept',
+            unreadable: 'some files could not be read',
+        } satisfies Record<PartialReason, string>,
+        partial: (reason: string) =>
+            `This snapshot is partial: ${reason}. What it could not read shows as Unknown.`,
+        failed: 'This snapshot failed: the server folder could not be listed.',
+        busy: {
+            listing: 'The files are still being listed: the counts change as they are read.',
+            hashing: 'The files are still being hashed: resources marked Checking settle as they are read.',
+        },
+        counted: {
+            added: (value: number) => `${formatNumber('en', value)} added`,
+            removed: (value: number) => `${formatNumber('en', value)} removed`,
+            updated: (value: number) => `${formatNumber('en', value)} updated`,
+            sameVersion: (value: number) => `${formatNumber('en', value)} same version`,
+            renamed: (value: number) => `${formatNumber('en', value)} renamed`,
+            moved: (value: number) => `${formatNumber('en', value)} moved`,
+            didNotStart: (value: number) => `${formatNumber('en', value)} did not start`,
+            checking: (value: number) => `${formatNumber('en', value)} checking`,
+        },
+        resourcesChanged: (value: number) =>
+            count(value, { one: 'resource changed', other: 'resources changed' }),
+        // Resources neither changed nor unchanged yet, or left so by a partial snapshot.
+        beingChecked: (value: number) =>
+            `${count(value, { one: 'resource', other: 'resources' })} being checked`,
+        leftUnknown: (value: number) => `${count(value, { one: 'resource', other: 'resources' })} unknown`,
+        noChange: 'No change',
+        baseline: 'Baseline',
+        beingListed: 'Being listed',
+        snapshotFailed: 'Snapshot failed',
+        notCompared: 'No earlier start to compare with',
+        build: (build: number) => `build ${build}`,
+        lines: (added: string, removed: string) => `+${added} −${removed}`,
+        files: (added: string, modified: string, removed: string) => `+${added} ~${modified} −${removed}`,
+        fromTo: (from: string, to: string) => `${from} → ${to}`,
+        summary: {
+            label: 'What changed',
+            resources: 'Resources',
+            files: 'Files',
+            build: 'Build',
+            gameBuild: 'Game build',
+            cfg: 'cfg',
+            launch: 'Launch settings',
+            same: 'Same',
+            unchanged: (value: number) =>
+                `${count(value, { one: 'resource', other: 'resources' })} unchanged`,
+            baselineSub: 'first snapshot, every resource as found',
+            filesSub: 'added, removed or modified',
+            whileStarting: (value: number) =>
+                `${count(value, { one: 'file', other: 'files' })} changed while the server was starting`,
+            from: (value: string) => `from ${value}`,
+            cfgFiles: (value: number) => count(value, { one: 'file', other: 'files' }),
+            settings: (value: number) => count(value, { one: 'change', other: 'changes' }),
+        },
+        environment: {
+            title: 'Environment',
+            meta: 'What the server ran with besides its resources',
+            same: 'Same build, game build, launch settings and cfg.',
+            build: 'Build',
+            gameBuild: 'Game build',
+            game: 'Game',
+            settings: 'Launch settings',
+            arguments: 'Extra arguments',
+            cfg: 'cfg',
+            cfgStarted: 'Started by the cfg now',
+            cfgStopped: 'No longer started by the cfg',
+            cfgCount: (value: number) => `${count(value, { one: 'file', other: 'files' })} changed`,
+            settingNames: {
+                onesync: 'OneSync',
+                autoStart: 'Start with Observer',
+                txadminEvents: 'txAdmin events',
+                cfgFile: 'Config file',
+                dataPath: 'Server data folder',
+            } as Record<string, string>,
+            argumentChanges: {
+                set: 'set',
+                removed: 'removed',
+                changed: 'value changed',
+            } satisfies Record<ArgumentChangeKind, string>,
+            attribution: (action: string, by: string, at: string) => `${action} by ${by} · ${at}`,
+            observer: 'Observer',
+            showDiff: 'Show the diff',
+            hideDiff: 'Hide the diff',
+            notSet: 'not set',
+            yes: 'on',
+            no: 'off',
+        },
+        resources: {
+            title: 'Resources',
+            meta: (value: number) => count(value, { one: 'resource changed', other: 'resources changed' }),
+            filters: 'Changes shown',
+            search: 'Search by name or path',
+            caption: 'Resources that changed, those changed under the same version first',
+            resource: 'Resource',
+            change: 'Change',
+            version: 'Version',
+            files: 'Files',
+            lines: 'Lines',
+            by: 'By',
+            kinds: {
+                added: 'Added',
+                removed: 'Removed',
+                renamed: 'Renamed',
+                moved: 'Moved',
+                updated: 'Updated',
+                sameVersion: 'Same version',
+                checking: 'Checking',
+                unknown: 'Unknown',
+                didNotStart: 'Did not start',
+                unchanged: 'Unchanged',
+            } satisfies Record<ResourceChangeKind, string>,
+            escrowed: 'Escrowed',
+            duplicate: 'Duplicate',
+            fromPath: (path: string) => `from ${path}`,
+            filesToo: 'files changed too',
+            none: 'No resource changed between these two snapshots.',
+            noMatch: 'No resource matches the search and the changes shown.',
+            baseline:
+                'This start is a baseline: it lists every resource as found, so none of them counts as added.',
+        },
+        live: {
+            title: 'While the server ran',
+            caption: 'Resources started, stopped or restarted while the later start ran',
+            kinds: {
+                started: 'Started',
+                stopped: 'Stopped',
+                restarted: 'Restarted',
+            } satisfies Record<LiveChangeKind, string>,
+            by: (name: string) => `by ${name}`,
+            byUnknown: 'by unknown',
+            showAll: (value: number) => `Show all ${formatNumber('en', value)}`,
+            showFewer: 'Show fewer',
+        },
+        starts: {
+            title: 'Starts',
+            meta: 'Pick one to compare it with the start before',
+            caption: 'Starts, newest first',
+            compare: (time: string) => `Compare the start of ${time} with the one before`,
+            compared: 'Compared',
+            crashed: 'Crashed',
+            loadMore: 'Load older starts',
+        },
+        facts: {
+            build: 'build',
+            gameBuild: 'game build',
+            launch: 'launch settings',
+            cfg: 'cfg',
+        } satisfies Record<EnvironmentFact, string>,
+        resource: {
+            back: 'All changes',
+            loading: 'Reading the resource',
+            version: 'Version',
+            noVersion: 'no version',
+            path: 'Folder',
+            git: 'Git',
+            detached: 'detached',
+            packages: 'npm packages',
+            packageAdded: (version: string) => `added ${version}`,
+            packageRemoved: (version: string) => `removed, was ${version}`,
+            duplicate: (paths: string[]) =>
+                `FXServer loads only one folder of this name and warns about the others. Also found: ${list(paths)}.`,
+            files: 'Files',
+            showUnchanged: 'Show unchanged files',
+            root: 'At the root',
+            noFile: 'No file changed in this resource.',
+            pickFile: 'Pick a file to see what changed in it.',
+            pickFileNoContent:
+                'Pick a file to see its sizes, hashes and who wrote it. Its lines take the permission to read changed files.',
+            noContent:
+                'Your account sees which files changed, not their contents: reading them takes the permission to read changed files.',
+            sizes: (from: string, to: string) => `${from} → ${to}`,
+            writtenBy: (by: string, at: string) => `written over SFTP by ${by} at ${at}`,
+            purge: (name: string) => `Purge the kept contents of ${name}`,
+            purgeTitle: 'Purge the kept contents?',
+            purgeBody:
+                "Every kept version of this file leaves Observer's history, in every start and check. Its changes stay listed, without their lines. Add a never-show pattern so that it is not kept again.",
+            purgeConfirm: 'Purge contents',
+            purged: (path: string, versions: number, bytes: string) =>
+                `${path}: ${count(versions, { one: 'version', other: 'versions' })} cleared, ${bytes}.`,
+            history: 'History',
+            historyMeta: 'Each version kept over the starts',
+            historyCaption: 'Versions of the resource, newest first',
+            since: (time: string) => `since ${time}`,
+            historyEmpty: 'No version of this resource is kept.',
+        },
+        diff: {
+            label: (path: string) => `Changes in ${path}`,
+            lines: (path: string) => `Lines of ${path}`,
+            layout: 'Layout',
+            unified: 'Unified',
+            split: 'Split',
+            ignoreWhitespace: 'Ignore whitespace',
+            wrap: 'Wrap lines',
+            previous: 'Previous file',
+            next: 'Next file',
+            viewFile: 'View file',
+            viewDiff: 'View changes',
+            side: 'Version shown',
+            before: 'Before',
+            after: 'After',
+            added: 'added',
+            removed: 'removed',
+            hiddenSecret: 'Hidden secret',
+            redaction: '[REDACTED]',
+            secretChanged: 'secret changed',
+            invisible: {
+                bidi: (code: string) => `bidirectional control ${code}`,
+                zeroWidth: (code: string) => `zero-width character ${code}`,
+            } satisfies Record<InvisibleKind, (code: string) => string>,
+            invisibleWarning:
+                'This file holds characters that reorder or hide code, as a Trojan Source attack uses them. Each one shows as ⟨U+…⟩ in its place.',
+            moreLines: 'Show 20 more lines',
+            page: (page: number, pages: number) =>
+                `Page ${formatNumber('en', page)} of ${formatNumber('en', pages)}`,
+            previousPage: 'Previous page',
+            nextPage: 'Next page',
+            loading: 'Reading the lines',
+            noLine: 'No line changed.',
+            lineEndings: 'Line endings changed, nothing else.',
+            unchanged: 'This file did not change.',
+            binary: 'Binary',
+            sameSize: 'same size, contents changed',
+            encrypted: 'Encrypted by the Cfx.re escrow',
+            encryptedChanged: 'Encrypted by the Cfx.re escrow · changed',
+            hidden: 'Contents never shown: matches',
+            generated: 'Generated or minified: compared by size and hash.',
+            notKept: 'Contents no longer kept: the change stays listed, without its lines.',
+            beingRead: 'Still being read: its lines show once the files of this snapshot are hashed.',
+            renamed: (from: string) => `Renamed from ${from}; contents identical.`,
+            archive: 'Archive: compared by size and time, never read.',
+            offline: 'Cloud placeholder: listed by size and time, never read.',
+            link: 'Link: compared by where it points.',
+            unreadable: 'This file could not be read.',
+            flags: {
+                afterStart:
+                    'Changed while the server was starting: the running server may hold the earlier version.',
+                unsettled: 'Changed while it was being read: no contents kept for this version.',
+                reloadedLive: 'Reloaded live after it changed: the running server holds this version.',
+            } satisfies Record<FileFlag, string>,
+            flagNames: {
+                afterStart: 'changed while starting',
+                unsettled: 'changed while read',
+                reloadedLive: 'reloaded live',
+            } satisfies Record<FileFlag, string>,
+            shaBefore: 'SHA-256 before',
+            shaAfter: 'SHA-256 after',
+            fileKinds: {
+                text: 'Text',
+                generated: 'Generated',
+                encrypted: 'Encrypted',
+                binary: 'Binary',
+                hidden: 'Hidden',
+                archive: 'Archive',
+                offline: 'Placeholder',
+                link: 'Link',
+                unreadable: 'Unreadable',
+            } satisfies Record<FileKind, string>,
+            fileChanges: {
+                added: 'Added',
+                removed: 'Removed',
+                renamed: 'Renamed',
+                modified: 'Modified',
+                unchanged: 'Unchanged',
+            } satisfies Record<FileChangeKind, string>,
+        },
+        settings: {
+            title: 'Change tracking',
+            meta: 'Owner only',
+            loadFailed: 'The settings could not be loaded.',
+            enabled: 'Take a snapshot at each start',
+            enabledHint: 'Lists the server folder as FXServer starts and hashes what changed once it is up.',
+            extensions: 'Extensions with line diffs',
+            extensionsHint:
+                'Separated by spaces or commas, without the dot. Other files are compared by size and hash.',
+            extensionsInvalid:
+                'Each extension is 1 to 16 letters, digits, dashes or underscores, 200 at most.',
+            excluded: 'Never walked',
+            excludedHint:
+                'One pattern a line. * and ? are wildcards; a pattern with / is a path from the server data folder, one without names a file or folder anywhere.',
+            hidden: 'Contents never kept',
+            hiddenHint: 'Files compared by digest only: their lines are never stored nor shown.',
+            matches: (value: number) => `matches ${count(value, { one: 'file', other: 'files' })}`,
+            matchesNone: 'matches no file',
+            maxText: 'Largest text kept',
+            maxTextHint: 'In MB, up to 8. A larger text file is compared by digest only.',
+            budget: 'Contents kept at most',
+            budgetHint: 'In GB. Past it, the oldest contents go first; the last two starts stay whole.',
+            stored: (used: string) => `${used} kept now`,
+            retentionDays: 'Days a start is kept',
+            hashRate: 'Hashing rate',
+            hashRateHint: 'In MB/s while the server runs.',
+            verifyDays: 'Days between full verifications',
+            verifyDaysHint:
+                '0 for none. A full verification hashes every file again, which catches a copy that kept both size and time.',
+            startEvent: 'Raise observer:startChanges',
+            startEventHint: 'Once per run, for resources that post a changelog or tell the staff.',
+            outOfRange: 'Out of range.',
+            changes: (value: number) =>
+                `${count(value, { one: 'unsaved change', other: 'unsaved changes' })}`,
+            discard: 'Discard',
+            save: 'Save',
+            saved: 'Settings saved.',
+            verify: 'Verify all files',
+            verifyStarted: 'Verification started: every file is hashed again in the background.',
+        },
+        overview: {
+            since: (parts: string) => `Changes since the previous start: ${parts}`,
+            resources: (value: number) => count(value, { one: 'resource', other: 'resources' }),
+            none: 'No change since the previous start',
+            baseline: 'Baseline being taken',
+            baselineTaken: 'Baseline taken: changes show from the next start',
+            listing: 'Changes since the previous start: being listed',
+            failed: 'The snapshot of the latest start failed',
+            notCompared: 'No earlier start to compare the latest with',
         },
     },
     server_state: {
@@ -2255,6 +3051,14 @@ export const en = {
             player_forgotten: 'Player forgotten',
             players_imported: "txAdmin's players imported",
             players_retention_changed: 'Player retention changed',
+            player_drops_exported: 'Drop log exported',
+            drop_rates_exported: 'Drop rates exported',
+            drops_retention_changed: 'Drop retention changed',
+            change_contents_viewed: 'Changed file read',
+            change_settings_changed: 'Change tracking settings changed',
+            change_contents_purged: 'Kept contents of a file purged',
+            change_verify_requested: 'Full verification of the files asked for',
+            change_check_requested: 'Check of the disk asked for',
             tool_settings_changed: 'Tool settings changed',
             tool_files_changed: 'Files changed by a tool',
             tool_files_restored: 'Files restored by a tool',
@@ -2279,6 +3083,12 @@ export const en = {
         // A schedule with no zone of its own follows the host's.
         hostZone: "the host's zone",
         minutes: (value: string) => `${value} min`,
+        rate: (value: string) => `${value}/s`,
+        // Change tracking's sizes, in the units its settings are typed in.
+        megabytes: (value: string) => `${value} MB`,
+        gigabytes: (value: string) => `${value} GB`,
+        // How a read of changed contents showed them.
+        views: { diff: 'the diff', file: 'the whole file' },
         // What a change of the schedule's settings took away with the occurrence it removed.
         dropped: {
             skip: 'a skip',
@@ -2412,6 +3222,22 @@ export const en = {
             crash: 'Crash',
             names: 'Files',
             unrecorded: 'Command lines not kept',
+            // A read of changed contents compares two snapshots: starts, or a start and a check of the disk.
+            fromSnapshot: 'From snapshot',
+            toSnapshot: 'To snapshot',
+            fromPath: 'Path before',
+            resource: 'Resource',
+            view: 'Read',
+            versions: 'Versions cleared',
+            extensions: 'Extensions with line diffs',
+            excluded: 'Never walked',
+            hidden: 'Contents never kept',
+            maxText: 'Largest text kept',
+            budget: 'Contents kept at most',
+            retentionDays: 'Starts kept',
+            hashRate: 'Hashing rate',
+            verifyDays: 'Full verification every',
+            startEvent: 'observer:startChanges',
             before: 'Before',
             after: 'After',
             linkDays: 'Identifiers and names',
@@ -2514,6 +3340,8 @@ export const en = {
         diagnostics: 'Diagnostics',
         files: 'Files',
         players: 'Players',
+        drops: 'Player drops',
+        changes: 'Changes',
     } satisfies Record<PermissionArea, string>,
     danger: {
         sensitive: 'Sensitive',
@@ -2678,6 +3506,25 @@ export const en = {
                 ? playersFileProblems[problem]
                 : "This file cannot be imported as txAdmin's players database.";
         },
+        invalid_drops_settings: (params) =>
+            typeof params.min === 'number' && typeof params.max === 'number'
+                ? `Keep sessions between ${params.min} and ${params.max} days.`
+                : 'This retention is out of range.',
+        changes_unavailable: 'The history of changes cannot be read right now. Try again in a moment.',
+        start_not_found: 'This start is no longer in the history.',
+        content_hidden: 'The contents of this file are never shown.',
+        content_not_kept: 'The contents of this version are no longer kept.',
+        diff_too_large: (params) =>
+            typeof params.lines === 'number'
+                ? `This file changed in ${count(params.lines, { one: 'line', other: 'lines' })}, more than a diff shows.`
+                : 'This file changed in more lines than a diff shows.',
+        check_running: 'A check of the files is already running. Wait for it to end.',
+        check_too_soon: (params) =>
+            `The files were checked moments ago. Try again in ${formatDuration('en', numberParam(params, 'retryAfter'))}.`,
+        invalid_glob: (params) =>
+            typeof params.index === 'number'
+                ? `Pattern ${params.index + 1} cannot be used: use * and ? as wildcards, / between folders, and no .. or drive letter.`
+                : 'A pattern cannot be used.',
         plan_changed:
             'The duplicates changed since this report, so nothing was applied. Check the new report, then fix again.',
         server_not_stopped: 'Stop FXServer first: the tools change files only while it is stopped.',

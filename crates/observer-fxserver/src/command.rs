@@ -45,6 +45,11 @@ pub fn spans(buffer: &str) -> Vec<Range<usize>> {
 /// compilers, so it may do the same; reading them as separators errs toward seeing a command
 /// where FXServer might not, never the other way.
 pub fn words(command: &str) -> Vec<String> {
+    word_spans(command).into_iter().map(|(_, word)| word).collect()
+}
+
+/// [`words`] with where each lies in the command, its quotes included.
+pub fn word_spans(command: &str) -> Vec<(Range<usize>, String)> {
     let bytes = command.as_bytes();
     let blank = |byte: u8| byte <= b' ' || byte > 0x7f;
     let mut words = Vec::new();
@@ -65,6 +70,7 @@ pub fn words(command: &str) -> Vec<String> {
             continue;
         }
 
+        let start = i;
         let mut word = Vec::new();
         if bytes[i] == b'"' {
             i += 1;
@@ -86,7 +92,7 @@ pub fn words(command: &str) -> Vec<String> {
                 i += 1;
             }
         }
-        words.push(String::from_utf8_lossy(&word).into_owned());
+        words.push((start..i, String::from_utf8_lossy(&word).into_owned()));
     }
 }
 

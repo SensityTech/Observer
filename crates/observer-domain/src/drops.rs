@@ -1,8 +1,14 @@
 //! Why a player's session ended: FiveM's drop category first, the reason's text second, as
 //! FiveM's `ClientDropReasons.h` and txAdmin's rules have it.
 
+use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
+
+use crate::metrics::RunMarker;
+
+pub mod signature;
+pub mod stats;
 
 /// The resource name FXServer gives the drops it makes itself: no resource dropped the player.
 const INTERNAL_RESOURCE: &str = "__cfx_internal:server";
@@ -450,6 +456,561 @@ fn has_code_name(reason: &str) -> bool {
         let module = reason[at + 2..].split(')').next().unwrap_or("");
         named && module.contains('+')
     })
+}
+
+/// The ranges of the Player drops page. Each ends now.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub enum DropsRange {
+    #[serde(rename = "24h")]
+    Day,
+    #[serde(rename = "7d")]
+    Week,
+    #[serde(rename = "30d")]
+    Month,
+    #[serde(rename = "90d")]
+    Quarter,
+}
+
+impl DropsRange {
+    pub const ALL: [Self; 4] = [Self::Day, Self::Week, Self::Month, Self::Quarter];
+
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Day => "24h",
+            Self::Week => "7d",
+            Self::Month => "30d",
+            Self::Quarter => "90d",
+        }
+    }
+
+    pub fn parse(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|range| range.name() == name)
+    }
+
+    pub const fn days(self) -> i64 {
+        match self {
+            Self::Day => 1,
+            Self::Week => 7,
+            Self::Month => 30,
+            Self::Quarter => 90,
+        }
+    }
+
+    /// The chart's bucket, in seconds: an hour up to a week, a day beyond.
+    pub const fn step(self) -> i64 {
+        match self {
+            Self::Day | Self::Week => 3600,
+            Self::Month | Self::Quarter => 86_400,
+        }
+    }
+}
+
+/// What a comparison of two windows says.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum TrendVerdict {
+    Rising,
+    Falling,
+    NoClearChange,
+    NotEnoughDrops,
+}
+
+/// A rate now against the rate before, with what the test made of it.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct Trend {
+    pub verdict: TrendVerdict,
+    /// The change, `0.38` for +38 %, and its 95 % interval, tested on the events: a burst of
+    /// drops counts once.
+    pub change: Option<f64>,
+    pub low: Option<f64>,
+    pub high: Option<f64>,
+    /// Drops per 100 player-hours now and before, every drop counted.
+    pub now: Option<f64>,
+    pub before: Option<f64>,
+    /// The events the test counted now and before, an incident counting once per category.
+    pub events_now: u64,
+    pub events_before: u64,
+}
+
+/// One of the four tiles.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum TileKind {
+    Crashes,
+    Timeouts,
+    Kicks,
+    /// Every way a player's session ends badly: timeouts, crashes, security and unknown drops.
+    Unexpected,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct DropTile {
+    pub kind: TileKind,
+    pub drops: i64,
+    /// Drops per 100 player-hours.
+    pub rate: Option<f64>,
+    /// "1 session in N" ended this way.
+    pub one_in: Option<f64>,
+    pub trend: Trend,
+    /// The rate of each bucket of the range, oldest first, for the sparkline.
+    pub spark: Vec<Option<f64>>,
+    /// When one player made more than 30 % of these drops: their share, never who.
+    pub one_player_share: Option<f64>,
+}
+
+/// A category in the breakdown.
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct CategoryShare {
+    pub category: DropCategory,
+    /// Quits, kicks and server stops are expected; the others are not.
+    pub expected: bool,
+    pub drops: i64,
+    /// Of every drop in the range.
+    pub share: f64,
+    /// `None` for the server's own stops and crashes: no player rate.
+    pub rate: Option<f64>,
+    pub trend: Option<Trend>,
+    /// Of these drops, the share of players still loading, when FXServer could tell.
+    pub loading_share: Option<f64>,
+}
+
+/// A player who crashed again and again: always counted, named only for `PLAYERS_VIEW`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct RepeatCrasher {
+    pub crashes: i64,
+    pub player: Option<DropPlayer>,
+}
+
+/// A player as the drop pages name them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct DropPlayer {
+    /// The profile's id, for its page.
+    pub id: i64,
+    pub license: String,
+    pub name: Option<String>,
+}
+
+/// How much of what happened Observer saw: sessions it closed itself because their drop never came.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct Coverage {
+    pub sessions: i64,
+    /// Gone from FXServer's list without a drop.
+    pub missed: i64,
+    /// Left open when Observer stopped.
+    pub lost: i64,
+}
+
+/// `GET /servers/default/drops/summary`.
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct DropsSummary {
+    pub range: DropsRange,
+    /// The schedule's time zone, in which days start.
+    pub zone: String,
+    pub from: Timestamp,
+    pub to: Timestamp,
+    /// The trends compare from here to `to` with the window before: a day's, today since midnight
+    /// with yesterday's same hours.
+    pub trend_from: Timestamp,
+    pub before_from: Timestamp,
+    pub before_to: Timestamp,
+    pub tiles: Vec<DropTile>,
+    pub categories: Vec<CategoryShare>,
+    pub played_ms: i64,
+    pub sessions: i64,
+    /// Players with at least 3 crashes in the last 7 days.
+    pub repeat_crashers: Vec<RepeatCrasher>,
+    pub coverage: Coverage,
+    /// What counts players reads only the sessions kept since then: later than `from` when the
+    /// session retention is shorter than the range.
+    pub kept_from: Timestamp,
+}
+
+/// What the chart shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum ChartCategory {
+    Unexpected,
+    Crash,
+    Timeout,
+    Kick,
+    Security,
+}
+
+impl ChartCategory {
+    pub const ALL: [Self; 5] = [
+        Self::Unexpected,
+        Self::Crash,
+        Self::Timeout,
+        Self::Kick,
+        Self::Security,
+    ];
+
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Unexpected => "unexpected",
+            Self::Crash => "crash",
+            Self::Timeout => "timeout",
+            Self::Kick => "kick",
+            Self::Security => "security",
+        }
+    }
+
+    pub fn parse(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|category| category.name() == name)
+    }
+}
+
+/// `GET /servers/default/drops/series`: buckets from `from`, `step` seconds each.
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct DropSeries {
+    pub range: DropsRange,
+    pub category: ChartCategory,
+    /// Unix seconds.
+    pub from: i64,
+    pub step: i64,
+    /// Each bucket's start, Unix seconds: days of the schedule's time zone are not all 24 hours.
+    pub starts: Vec<i64>,
+    /// Drops per 100 player-hours; `null` where nobody played, which the chart leaves as a gap.
+    pub rates: Vec<Option<f64>>,
+    /// The median rate of the same hour (or weekday) over the 4 weeks before.
+    pub baseline: Vec<Option<f64>>,
+    pub drops: Vec<i64>,
+    pub markers: Vec<RunMarker>,
+    /// FXServer builds that changed at a start.
+    pub changes: Vec<ChangeMarker>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ChangeMarker {
+    /// Unix seconds.
+    pub at: i64,
+    pub build: Option<u32>,
+}
+
+/// How a crash text was turned into its signature.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum CrashForm {
+    /// A code name and the blamed module's offset.
+    Hash,
+    Symbol,
+    Error,
+    /// An exception while loading a resource's asset.
+    Load,
+    Exception,
+    /// Anything else the client wrote.
+    Text,
+}
+
+impl CrashForm {
+    pub fn parse(name: &str) -> Option<Self> {
+        Some(match name {
+            "hash" => Self::Hash,
+            "symbol" => Self::Symbol,
+            "error" => Self::Error,
+            "load" => Self::Load,
+            "exception" => Self::Exception,
+            "text" => Self::Text,
+            _ => return None,
+        })
+    }
+
+    /// Written by the client: shown to statistics viewers only once two players produced it.
+    pub const fn free_text(self) -> bool {
+        matches!(self, Self::Exception | Self::Text)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SignatureEntry {
+    pub id: i64,
+    /// `None` when a client's free text only one player produced is hidden from this viewer.
+    pub signature: Option<String>,
+    pub form: CrashForm,
+    pub label: Option<String>,
+    pub module: Option<String>,
+    pub game_build: Option<u32>,
+    /// For a crash while loading an asset.
+    pub resource: Option<String>,
+    pub drops: i64,
+    /// Of every crash in the range.
+    pub share: f64,
+    pub players: i64,
+    pub first_seen: Timestamp,
+    /// First seen in the range, after 28 days without it.
+    pub new: bool,
+    pub loading_share: Option<f64>,
+    pub trend: Trend,
+    /// The latest redacted crash texts; none when the signature is hidden.
+    pub examples: Vec<String>,
+}
+
+/// Crashes gathered by blamed module or by game build.
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct CrashRollup {
+    /// The module's name, or the build's number; `None` for crashes that name none.
+    pub key: Option<String>,
+    pub drops: i64,
+    pub share: f64,
+    pub signatures: i64,
+}
+
+/// `GET /servers/default/drops/signatures`.
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SignatureTable {
+    pub range: DropsRange,
+    pub crashes: i64,
+    pub signatures: Vec<SignatureEntry>,
+    pub modules: Vec<CrashRollup>,
+    pub builds: Vec<CrashRollup>,
+    /// Players are counted over the sessions kept since then.
+    pub kept_from: Timestamp,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ReasonGroup {
+    /// The reason with its numbers, names and quoted words taken out.
+    pub template: String,
+    pub kicks: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ResourceEntry {
+    /// `None` for kicks no resource is named for.
+    pub resource: Option<String>,
+    pub kicks: i64,
+    pub share: f64,
+    pub players: i64,
+    pub trend: Trend,
+    /// Only for `PLAYERS_VIEW`: what the resource said.
+    pub reasons: Option<Vec<ReasonGroup>>,
+}
+
+/// `GET /servers/default/drops/resources`.
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ResourceTable {
+    pub range: DropsRange,
+    pub kicks: i64,
+    pub resources: Vec<ResourceEntry>,
+    /// Players and reasons are read from the sessions kept since then.
+    pub kept_from: Timestamp,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum ChangeKind {
+    /// FXServer started again after a stop or a restart.
+    Restart,
+    /// A start on another FXServer build.
+    Build,
+    /// FXServer crashed or hung, and dropped its players.
+    ServerCrash,
+    /// A burst of drops.
+    Incident,
+}
+
+/// A category's rate in the 72 hours before a change and the 72 after.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct BeforeAfter {
+    pub category: DropCategory,
+    pub trend: Trend,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ChangeEvent {
+    pub at: Timestamp,
+    pub kind: ChangeKind,
+    /// The run it belongs to, for the log's filter.
+    pub run: i64,
+    pub generation: u32,
+    pub build_from: Option<u32>,
+    pub build_to: Option<u32>,
+    /// The players the server's crash dropped.
+    pub players_dropped: Option<i64>,
+    /// An incident's drops.
+    pub drops: Option<i64>,
+    pub hang: bool,
+    /// An incident's drops by category, and the longest hitch of its seconds.
+    pub incident_categories: Vec<CategoryCount>,
+    pub hitch_ms: Option<i64>,
+    pub players_online: Option<i64>,
+    /// For a build change: the unexpected categories before and after.
+    pub before_after: Vec<BeforeAfter>,
+    /// Signatures first seen in the 72 hours after a build change.
+    pub new_signatures: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct CategoryCount {
+    pub category: DropCategory,
+    pub drops: i64,
+}
+
+/// `GET /servers/default/drops/changes`.
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct DropChanges {
+    pub range: DropsRange,
+    /// Whether file changes' snapshots feed the timeline. Until then it holds builds, restarts,
+    /// server crashes and incidents only.
+    pub snapshots: bool,
+    /// Newest first.
+    pub events: Vec<ChangeEvent>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum UptimeVerdict {
+    /// Significantly above the rest of the run's time.
+    Higher,
+    Usual,
+    NotEnoughDrops,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct UptimeBin {
+    /// Hours since the run started.
+    pub from_hours: u32,
+    pub to_hours: Option<u32>,
+    /// Unexpected drops, a burst counting once.
+    pub drops: i64,
+    pub played_ms: i64,
+    pub rate: Option<f64>,
+    pub verdict: UptimeVerdict,
+}
+
+/// `GET /servers/default/drops/uptime`.
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct DropUptime {
+    pub range: DropsRange,
+    pub bins: Vec<UptimeBin>,
+    /// The sessions kept since then are the ones binned.
+    pub kept_from: Timestamp,
+}
+
+/// A row of the drop log.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct DropLogRow {
+    pub id: i64,
+    pub at: Timestamp,
+    /// `None` when the identity was never confirmed, or the player was forgotten.
+    pub player: Option<DropPlayer>,
+    pub category: DropCategory,
+    pub kind: Option<DropKind>,
+    pub resource: Option<String>,
+    /// The signature's id, for the log's own filter, and its text.
+    pub signature_id: Option<i64>,
+    pub signature: Option<String>,
+    pub label: Option<String>,
+    /// The redacted reason a resource gave, or an unknown drop's text.
+    pub reason: Option<String>,
+    pub length_ms: Option<i64>,
+    pub loading: Option<bool>,
+    pub run: i64,
+    pub generation: u32,
+    /// Closed by Observer rather than reported.
+    pub synthesized: bool,
+    pub incident: bool,
+}
+
+/// `GET /servers/default/drops/log`: newest first.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct DropLog {
+    pub rows: Vec<DropLogRow>,
+    /// The `before` of the next page.
+    pub next: Option<String>,
+}
+
+/// `GET /servers/default/drops/crash`: the players a crash of FXServer dropped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct CrashDrops {
+    pub run: i64,
+    pub players: i64,
+}
+
+/// How long players' sessions and their texts are kept, in days.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct DropsSettings {
+    pub session_days: u32,
+}
+
+impl DropsSettings {
+    pub const LEAST_DAYS: u32 = 14;
+    pub const MOST_DAYS: u32 = 365;
+
+    pub fn check(&self) -> bool {
+        (Self::LEAST_DAYS..=Self::MOST_DAYS).contains(&self.session_days)
+    }
+
+    /// A value edited by hand out of its range, brought back into it.
+    #[must_use]
+    pub fn clamped(self) -> Self {
+        Self {
+            session_days: self.session_days.clamp(Self::LEAST_DAYS, Self::MOST_DAYS),
+        }
+    }
+}
+
+impl Default for DropsSettings {
+    fn default() -> Self {
+        Self { session_days: 90 }
+    }
 }
 
 #[cfg(test)]

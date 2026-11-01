@@ -3,6 +3,7 @@
 //! is set aside and a new one started, and it is never backed up.
 
 mod columns;
+pub mod drops;
 pub mod growth;
 pub mod rollups;
 pub mod runs;
@@ -11,15 +12,15 @@ pub mod series;
 pub mod sessions;
 pub mod threads;
 
-use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::path::PathBuf;
 
-use rusqlite::config::DbConfig;
-use rusqlite::{Connection, ErrorCode, OpenFlags, Transaction, TransactionBehavior};
-use rusqlite_migration::{M, Migrations, SchemaVersion};
-use tracing::{info, warn};
+use rusqlite::{Connection, Transaction};
+use rusqlite_migration::M;
+#[cfg(test)]
+use rusqlite_migration::Migrations;
 
 use crate::database::StoreError;
+use crate::side::{Beside, Shape};
 
 pub use columns::{Affinity, Column, Kind, Values};
 
@@ -27,14 +28,20 @@ const MIGRATIONS: &[M<'static>] = &[
     M::up(include_str!("../../migrations/metrics/0001_samples.sql")),
     M::up(include_str!("../../migrations/metrics/0002_depth.sql")),
     M::up(include_str!("../../migrations/metrics/0003_sessions.sql")),
+    M::up(include_str!("../../migrations/metrics/0004_drops.sql")),
 ];
+
+const SHAPE: Shape = Shape {
+    name: "metrics",
+    migrations: MIGRATIONS,
+    foreign_keys: false,
+};
 
 /// The metrics database. One connection writes, as for the state database; reads have their own
 /// beside it, which the write-ahead log allows, so that a burst of them never holds up a sample.
 #[derive(Clone)]
 pub struct MetricsDatabase {
-    conn: tokio_rusqlite::Connection,
-    reader: tokio_rusqlite::Connection,
+    inner: Beside,
 }
 
 impl MetricsDatabase {
@@ -42,23 +49,8 @@ impl MetricsDatabase {
     /// wrote, is renamed `metrics.sqlite3.set-aside-<time>` with its journal files, and a new one
     /// takes its place.
     pub async fn open(path: impl Into<PathBuf>) -> Result<Self, StoreError> {
-        let path = path.into();
-        let (conn, reader) = tokio::task::spawn_blocking(move || {
-            let conn = match open_blocking(&path) {
-                Err(error) if unreadable(&error) => {
-                    let aside = set_aside(&path)?;
-                    warn!(%error, set_aside = %aside.display(), "the metrics database could not be read; starting a new one");
-                    open_blocking(&path)
-                }
-                opened => opened,
-            }?;
-            Ok::<_, StoreError>((conn, open_reader(&path)?))
-        })
-        .await
-        .map_err(|_| StoreError::Closed)??;
         Ok(Self {
-            conn: conn.into(),
-            reader: reader.into(),
+            inner: Beside::open(path.into(), SHAPE).await?,
         })
     }
 
@@ -69,15 +61,7 @@ impl MetricsDatabase {
         E: From<StoreError> + Send + 'static,
         F: FnOnce(&Transaction<'_>) -> Result<R, E> + Send + 'static,
     {
-        call(&self.conn, move |conn| {
-            let transaction = conn
-                .transaction_with_behavior(TransactionBehavior::Immediate)
-                .map_err(StoreError::from)?;
-            let value = function(&transaction)?;
-            transaction.commit().map_err(StoreError::from)?;
-            Ok(value)
-        })
-        .await
+        self.inner.write(function).await
     }
 
     /// Runs `function` on the read-only connection, which sees what was committed last.
@@ -87,118 +71,20 @@ impl MetricsDatabase {
         E: From<StoreError> + Send + 'static,
         F: FnOnce(&Connection) -> Result<R, E> + Send + 'static,
     {
-        call(&self.reader, move |conn| function(conn)).await
+        self.inner.read(function).await
     }
 
     /// Writes the log back into the file and truncates it, so that what was overwritten leaves
     /// both.
     pub async fn checkpoint(&self) -> Result<(), StoreError> {
-        call(&self.conn, |conn| crate::database::checkpoint(conn)).await
+        self.inner
+            .maintain(|conn| crate::database::checkpoint(conn))
+            .await
     }
 
     pub async fn close(self) -> Result<(), StoreError> {
-        // The writer goes last: closing it checkpoints the log into the file.
-        self.reader.close().await.map_err(|_| StoreError::Closed)?;
-        self.conn.close().await.map_err(|_| StoreError::Closed)
+        self.inner.close().await
     }
-}
-
-async fn call<R, E, F>(conn: &tokio_rusqlite::Connection, function: F) -> Result<R, E>
-where
-    R: Send + 'static,
-    E: From<StoreError> + Send + 'static,
-    F: FnOnce(&mut Connection) -> Result<R, E> + Send + 'static,
-{
-    conn.call(function).await.map_err(|error| match error {
-        tokio_rusqlite::Error::Error(error) => error,
-        _ => StoreError::Closed.into(),
-    })
-}
-
-fn open_blocking(path: &Path) -> Result<Connection, StoreError> {
-    let flags =
-        OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE | OpenFlags::SQLITE_OPEN_NO_MUTEX;
-    let mut conn = Connection::open_with_flags(path, flags)?;
-    // Only takes effect before the first table exists, which is the point: the hourly upkeep
-    // gives back the pages the retention frees.
-    conn.pragma_update(None, "auto_vacuum", "INCREMENTAL")?;
-    conn.set_db_config(DbConfig::SQLITE_DBCONFIG_DEFENSIVE, true)?;
-    conn.pragma_update_and_check(None, "journal_mode", "WAL", |row| row.get::<_, String>(0))?;
-    // Losing the last samples to a power cut is acceptable; a sync on every one of them is not.
-    conn.pragma_update(None, "synchronous", "NORMAL")?;
-    conn.pragma_update(None, "trusted_schema", false)?;
-    conn.pragma_update(None, "journal_size_limit", 64 * 1024 * 1024)?;
-    // A forgotten player's texts are overwritten, not only unlinked, where that costs no I/O.
-    conn.pragma_update(None, "secure_delete", "FAST")?;
-    conn.busy_timeout(Duration::from_secs(5))?;
-    let verdict: String = conn.query_row("PRAGMA quick_check", [], |row| row.get(0))?;
-    if verdict != "ok" {
-        return Err(StoreError::Corrupt(verdict));
-    }
-    let migrations = Migrations::from_slice(MIGRATIONS);
-    match migrations.current_version(&conn)? {
-        SchemaVersion::Outside(found) => {
-            return Err(StoreError::TooNew {
-                found: found.get(),
-                known: MIGRATIONS.len(),
-            });
-        }
-        // A year of aggregates takes a second or two, before the panel answers.
-        SchemaVersion::Inside(current) if current.get() < MIGRATIONS.len() => {
-            info!(
-                from = current.get(),
-                to = MIGRATIONS.len(),
-                "migrating the metrics database"
-            );
-        }
-        SchemaVersion::NoneSet | SchemaVersion::Inside(_) => {}
-    }
-    migrations.to_latest(&mut conn)?;
-    Ok(conn)
-}
-
-/// Opened once the writer has migrated the file.
-fn open_reader(path: &Path) -> Result<Connection, StoreError> {
-    let conn = Connection::open_with_flags(
-        path,
-        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-    )?;
-    conn.set_db_config(DbConfig::SQLITE_DBCONFIG_DEFENSIVE, true)?;
-    conn.pragma_update(None, "trusted_schema", false)?;
-    conn.busy_timeout(Duration::from_secs(5))?;
-    Ok(conn)
-}
-
-/// What makes the file useless to this build, as opposed to a folder it cannot write to.
-fn unreadable(error: &StoreError) -> bool {
-    match error {
-        StoreError::Corrupt(_) | StoreError::TooNew { .. } => true,
-        StoreError::Sqlite(error) => matches!(
-            error.sqlite_error_code(),
-            Some(ErrorCode::NotADatabase | ErrorCode::DatabaseCorrupt)
-        ),
-        _ => false,
-    }
-}
-
-fn set_aside(path: &Path) -> Result<PathBuf, StoreError> {
-    let stamp = jiff::Timestamp::now().strftime("%Y%m%d-%H%M%S").to_string();
-    let aside = path.with_file_name(format!(
-        "{}.set-aside-{stamp}",
-        path.file_name().unwrap_or_default().to_string_lossy()
-    ));
-    std::fs::rename(path, &aside)?;
-    for suffix in ["-wal", "-shm"] {
-        let mut journal = path.as_os_str().to_owned();
-        journal.push(suffix);
-        let mut moved = aside.as_os_str().to_owned();
-        moved.push(suffix);
-        match std::fs::rename(&journal, &moved) {
-            Err(error) if error.kind() != std::io::ErrorKind::NotFound => return Err(error.into()),
-            _ => {}
-        }
-    }
-    Ok(aside)
 }
 
 /// A migrated in-memory metrics database, for the tests.
@@ -212,6 +98,9 @@ pub(crate) fn memory() -> Connection {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+    use std::time::Duration;
+
     use super::*;
 
     #[test]

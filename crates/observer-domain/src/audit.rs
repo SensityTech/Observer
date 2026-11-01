@@ -134,6 +134,21 @@ pub enum AuditAction {
     PlayersImported,
     /// The retentions of the players' identities, play time per day and profiles changed.
     PlayersRetentionChanged,
+    /// The drop log went out as CSV. The details hold the kinds of its filters, never their
+    /// values, and the row count.
+    PlayerDropsExported,
+    /// The daily drop rates went out as CSV.
+    DropRatesExported,
+    /// How long players' sessions and their texts are kept changed.
+    DropsRetentionChanged,
+    /// A diff or a full file of the server's contents, once an hour per account, file and pair
+    /// of starts.
+    ChangeContentsViewed,
+    ChangeSettingsChanged,
+    ChangeContentsPurged,
+    ChangeVerifyRequested,
+    /// A check of the disk, which reads the server folder at the capped rate.
+    ChangeCheckRequested,
     /// The owner changed a tool's settings. The target is the tool; `details` holds each changed
     /// setting with its value before and after.
     ToolSettingsChanged,
@@ -147,7 +162,7 @@ pub enum AuditAction {
 }
 
 impl AuditAction {
-    pub const ALL: [Self; 76] = [
+    pub const ALL: [Self; 84] = [
         Self::SetupCompleted,
         Self::SetupLinkCreated,
         Self::LoginSucceeded,
@@ -221,6 +236,14 @@ impl AuditAction {
         Self::PlayerForgotten,
         Self::PlayersImported,
         Self::PlayersRetentionChanged,
+        Self::PlayerDropsExported,
+        Self::DropRatesExported,
+        Self::DropsRetentionChanged,
+        Self::ChangeContentsViewed,
+        Self::ChangeSettingsChanged,
+        Self::ChangeContentsPurged,
+        Self::ChangeVerifyRequested,
+        Self::ChangeCheckRequested,
         Self::ToolSettingsChanged,
         Self::ToolFilesChanged,
         Self::ToolFilesRestored,
@@ -301,6 +324,14 @@ impl AuditAction {
             Self::PlayerForgotten => "player_forgotten",
             Self::PlayersImported => "players_imported",
             Self::PlayersRetentionChanged => "players_retention_changed",
+            Self::PlayerDropsExported => "player_drops_exported",
+            Self::DropRatesExported => "drop_rates_exported",
+            Self::DropsRetentionChanged => "drops_retention_changed",
+            Self::ChangeContentsViewed => "change_contents_viewed",
+            Self::ChangeSettingsChanged => "change_settings_changed",
+            Self::ChangeContentsPurged => "change_contents_purged",
+            Self::ChangeVerifyRequested => "change_verify_requested",
+            Self::ChangeCheckRequested => "change_check_requested",
             Self::ToolSettingsChanged => "tool_settings_changed",
             Self::ToolFilesChanged => "tool_files_changed",
             Self::ToolFilesRestored => "tool_files_restored",

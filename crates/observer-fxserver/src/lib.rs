@@ -2,6 +2,7 @@
 
 pub mod bridge;
 pub mod cfg;
+pub mod changes;
 pub mod command;
 pub mod console;
 pub mod crashes;

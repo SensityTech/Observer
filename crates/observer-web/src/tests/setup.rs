@@ -150,6 +150,7 @@ async fn a_cfg_is_reported_with_its_files_facts_and_findings() {
             "onesync": null,
             "hostname": "Observer lab",
             "licence": "set",
+            "gameBuild": null,
         })
     );
     assert_eq!(

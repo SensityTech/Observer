@@ -2,7 +2,9 @@
 //! database in a temporary directory.
 
 mod artifacts;
+mod changes;
 mod diagnostics;
+mod drops;
 mod files;
 mod live;
 mod metrics;
@@ -22,15 +24,16 @@ use axum::http::{HeaderMap, Method, Request, StatusCode, header};
 use http_body_util::BodyExt;
 use jiff::SignedDuration;
 use observer_app::{
-    Accounts, Artifacts, ArtifactsSetup, ArtifactsTask, AuditLog, Clock, Diagnostics, DiagnosticsSetup,
-    DiagnosticsTask, Metrics, MetricsSetup, OwnPaths, PasswordCost, Players, PlayersSetup, PlayersTask,
-    Running, Schedule, ScheduleSetup, ScheduleTask, Servers, Setup, Supervision, Tools, ToolsSetup,
+    Accounts, Artifacts, ArtifactsSetup, ArtifactsTask, AuditLog, Changes, ChangesSetup, ChangesTask, Clock,
+    Diagnostics, DiagnosticsSetup, DiagnosticsTask, Drops, DropsSetup, DropsTask, Metrics, MetricsSetup,
+    OwnPaths, PasswordCost, Players, PlayersSetup, PlayersTask, Running, Schedule, ScheduleSetup,
+    ScheduleTask, Servers, Setup, Supervision, Tools, ToolsSetup,
 };
 use observer_artifacts::Http;
 use observer_artifacts::catalog::{Catalog, Listing};
 use observer_domain::about::Build;
 use observer_domain::audit::ActorKind;
-use observer_store::Database;
+use observer_store::{ChangesDatabase, Database};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 use tower::ServiceExt;
@@ -64,6 +67,8 @@ struct Server {
     _building: ArtifactsTask,
     _diagnosing: DiagnosticsTask,
     _playing: PlayersTask,
+    _dropping: DropsTask,
+    _following: ChangesTask,
     cookie_name: String,
 }
 
@@ -193,6 +198,18 @@ impl Server {
         })
         .await
         .unwrap();
+        let (changes, following) = Changes::start(ChangesSetup {
+            db: db.clone(),
+            store: ChangesDatabase::open(dir.path().join("changes.sqlite3"))
+                .await
+                .unwrap(),
+            clock: clock.clone(),
+            supervision: supervision.clone(),
+            data_dir: dir.path().join("data"),
+            artifacts: dir.path().join("data/artifacts"),
+        })
+        .await
+        .unwrap();
         let (players, playing) = Players::start(PlayersSetup {
             db: db.clone(),
             metrics: metrics.clone(),
@@ -203,6 +220,13 @@ impl Server {
         })
         .await
         .unwrap();
+        let (drops, dropping) = Drops::start(DropsSetup {
+            db: db.clone(),
+            metrics: metrics.clone(),
+            clock: clock.clone(),
+            schedule: schedule.status(),
+            players: players.clone(),
+        });
         let instance_id = db.instance_id().await.unwrap();
         let files = observer_app::Files::new(db.clone(), clock.clone(), accounts.clone());
         let tools = Tools::new(ToolsSetup {
@@ -225,6 +249,8 @@ impl Server {
             diagnostics,
             files,
             players,
+            drops,
+            changes,
             tools,
         };
         let state = AppState::new(
@@ -252,6 +278,8 @@ impl Server {
             _building: building,
             _diagnosing: diagnosing,
             _playing: playing,
+            _dropping: dropping,
+            _following: following,
             cookie_name: format!("observer_session_{instance_id}"),
         }
     }
@@ -572,7 +600,7 @@ async fn setup_signs_the_owner_in_with_a_strict_http_only_cookie() {
     assert_eq!(session["sessionKey"].as_str().unwrap().len(), 64);
     assert_eq!(session["me"]["username"], "ada");
     assert_eq!(session["me"]["isOwner"], true);
-    assert_eq!(session["me"]["permissions"], "ffff");
+    assert_eq!(session["me"]["permissions"], "7ffff");
 
     let again = server.call(Method::POST, "/api/setup", None, Some(body)).await;
     assert_eq!(again.status, StatusCode::CONFLICT);

@@ -286,13 +286,27 @@ impl Accounts {
         method: &str,
         path: &str,
     ) -> Result<(), Error> {
+        self.authorize_audited(caller, permission, method, path, false)
+            .await
+    }
+
+    /// [`Accounts::authorize`], auditing a refused read too when `reads_audited`: what the route
+    /// reads is the server's own code.
+    pub async fn authorize_audited(
+        &self,
+        caller: &Caller,
+        permission: Permissions,
+        method: &str,
+        path: &str,
+        reads_audited: bool,
+    ) -> Result<(), Error> {
         if caller.permissions.contains(permission) {
             return Ok(());
         }
         let info = permission.iter().next();
         let key = info.map_or("", |info| info.key);
         let mutation = !matches!(method, "GET" | "HEAD");
-        if mutation && info.is_some_and(|info| info.danger >= Danger::Sensitive) {
+        if (mutation || reads_audited) && info.is_some_and(|info| info.danger >= Danger::Sensitive) {
             let route = format!("{method} {path}");
             let record = Record::by(caller, AuditAction::PermissionDenied)
                 .target(&route)

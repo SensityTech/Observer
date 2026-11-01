@@ -97,6 +97,8 @@ pub struct DataPaths {
     pub database: PathBuf,
     /// The statistics, apart from the state: never backed up.
     pub metrics: PathBuf,
+    /// What each start of FXServer ran from, apart from the state: never backed up either.
+    pub changes: PathBuf,
     pub backups: PathBuf,
     pub logs: PathBuf,
     pub artifacts: PathBuf,
@@ -107,6 +109,7 @@ impl DataPaths {
         Self {
             database: root.join("observer.sqlite3"),
             metrics: root.join("metrics.sqlite3"),
+            changes: root.join("changes.sqlite3"),
             backups: root.join("backups"),
             logs: root.join("logs"),
             artifacts: root.join("artifacts"),

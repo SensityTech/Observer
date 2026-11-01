@@ -314,6 +314,16 @@ pub fn crashes_holding(conn: &Connection, name: &str, now: Timestamp) -> Result<
         .collect()
 }
 
+/// The runs that ended in a crash or a hang since `since`, by start and generation.
+pub fn crashed_runs(conn: &Connection, since: Timestamp) -> Result<Vec<(Timestamp, u32)>, StoreError> {
+    let mut statement = conn.prepare(
+        "SELECT run_started, generation FROM crash
+         WHERE kind IN ('crash', 'hang') AND at >= ?1 AND run_started IS NOT NULL AND generation IS NOT NULL",
+    )?;
+    let rows = statement.query_map([Utc(since)], |row| Ok((row.get::<_, Utc>(0)?.0, row.get(1)?)))?;
+    Ok(rows.collect::<Result<_, _>>()?)
+}
+
 pub fn purge_crashes(conn: &Connection, before: Timestamp) -> Result<usize, StoreError> {
     Ok(conn.execute("DELETE FROM crash WHERE at < ?1", [Utc(before)])?)
 }

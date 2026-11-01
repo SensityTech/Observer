@@ -2,10 +2,11 @@
 import type { AlertList } from "./AlertList";
 import type { ArtifactsStatus } from "./ArtifactsStatus";
 import type { AuditEntry } from "./AuditEntry";
+import type { ChangesLive } from "./ChangesLive";
 import type { ConsoleBatch } from "./ConsoleBatch";
 import type { DiagnosticsEvent } from "./DiagnosticsEvent";
 import type { LiveSample } from "./LiveSample";
 import type { ScheduleStatus } from "./ScheduleStatus";
 import type { ServerStatus } from "./ServerStatus";
 
-export type TopicEvent = { "topic": "audit", "data": AuditEntry } | { "topic": "server.status", "data": ServerStatus } | { "topic": "console", "data": ConsoleBatch } | { "topic": "metrics.live", "data": LiveSample } | { "topic": "server.schedule", "data": ScheduleStatus } | { "topic": "server.artifacts", "data": ArtifactsStatus } | { "topic": "server.alerts", "data": AlertList } | { "topic": "server.diagnostics", "data": DiagnosticsEvent };
+export type TopicEvent = { "topic": "audit", "data": AuditEntry } | { "topic": "server.status", "data": ServerStatus } | { "topic": "console", "data": ConsoleBatch } | { "topic": "metrics.live", "data": LiveSample } | { "topic": "server.schedule", "data": ScheduleStatus } | { "topic": "server.artifacts", "data": ArtifactsStatus } | { "topic": "server.alerts", "data": AlertList } | { "topic": "server.diagnostics", "data": DiagnosticsEvent } | { "topic": "server.changes", "data": ChangesLive };

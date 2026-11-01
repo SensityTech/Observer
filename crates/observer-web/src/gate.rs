@@ -26,6 +26,9 @@ pub(crate) enum Gate {
     /// Any session whose user has a password of their own.
     Session,
     Permission(Permissions),
+    /// The permission, and a refused read is audited as a refused change would be: the server's
+    /// code is read behind it.
+    PermissionReadsAudited(Permissions),
     /// The permission, and the password entered within the last ten minutes.
     Reauthenticated(Permissions),
     /// The owner, whatever anyone else holds: launch configuration amounts to running code on the
@@ -100,6 +103,11 @@ async fn admit(
     match guard.gate {
         Gate::Permission(permission) | Gate::Reauthenticated(permission) => {
             accounts.authorize(&caller, permission, method, path).await?;
+        }
+        Gate::PermissionReadsAudited(permission) => {
+            accounts
+                .authorize_audited(&caller, permission, method, path, true)
+                .await?;
         }
         Gate::Owner => accounts.authorize_owner(&caller, method, path, false).await?,
         Gate::ReauthenticatedOwner => accounts.authorize_owner(&caller, method, path, true).await?,

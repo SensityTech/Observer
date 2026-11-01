@@ -1,9 +1,13 @@
-import { act, cleanup, fireEvent, render, within } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { createMemoryHistory, createRootRoute, createRouter, RouterProvider } from '@tanstack/react-router';
+import { act, cleanup, fireEvent, render, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import type { DiagnosticsSnapshot } from '../api/generated/DiagnosticsSnapshot';
+import type { StartList } from '../api/generated/StartList';
 import { MeContext } from '../auth/me';
 import { ReauthDialog } from '../auth/ReauthDialog';
+import { LATEST, RESTART } from '../changes/fixtures';
 import { CRASH, HANG, SHELL, SNAPSHOT } from '../diagnostics/fixtures';
 import { en } from '../i18n/en';
 import { I18nProvider } from '../i18n/I18nProvider';
@@ -13,8 +17,11 @@ import { DiagnosticsPage } from './DiagnosticsPage';
 
 const settle = () => act(() => new Promise((resolve) => setTimeout(resolve, 0)));
 
-/** The page for the owner or someone else, the records as the topic says. */
-const page = async (isOwner: boolean, snapshot: DiagnosticsSnapshot = SNAPSHOT) => {
+/**
+ * The page for the owner or someone else, the records as the topic says. Neither holds the changes
+ * unless `permissions` says so.
+ */
+const page = async (isOwner: boolean, snapshot: DiagnosticsSnapshot = SNAPSHOT, permissions?: string) => {
     let socket: SocketEvents | undefined;
     const live = new Realtime({
         ticket: async () => 'ticket',
@@ -24,22 +31,34 @@ const page = async (isOwner: boolean, snapshot: DiagnosticsSnapshot = SNAPSHOT) 
         },
         refetch: () => {},
     });
-    const view = render(
-        <I18nProvider>
-            <MeContext
-                value={{
-                    id: isOwner ? 1 : 2,
-                    username: isOwner ? 'ada' : 'kenji',
-                    isOwner,
-                    permissions: isOwner ? '1fff' : '1000',
-                    mustChangePassword: false,
-                }}
-            >
-                <LiveContext value={live}>
+    const router = createRouter({
+        routeTree: createRootRoute({
+            component: () => (
+                <>
                     <DiagnosticsPage />
                     <ReauthDialog />
-                </LiveContext>
-            </MeContext>
+                </>
+            ),
+        }),
+        history: createMemoryHistory({ initialEntries: ['/diagnostics'] }),
+    });
+    const view = render(
+        <I18nProvider>
+            <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+                <MeContext
+                    value={{
+                        id: isOwner ? 1 : 2,
+                        username: isOwner ? 'ada' : 'kenji',
+                        isOwner,
+                        permissions: permissions ?? (isOwner ? '1fff' : '1000'),
+                        mustChangePassword: false,
+                    }}
+                >
+                    <LiveContext value={live}>
+                        <RouterProvider router={router} />
+                    </LiveContext>
+                </MeContext>
+            </QueryClientProvider>
         </I18nProvider>,
     );
     live.start();
@@ -376,6 +395,52 @@ describe('DiagnosticsPage', () => {
         });
 
         expect(getByText(/^Ended \d\d:\d\d$/)).not.toBeNull();
+        live.stop();
+    });
+
+    it("should open the changes of the start that began a crash's run, and the latest ones when it is not listed", async () => {
+        const fetched: string[] = [];
+        // The start began the crash's run; the hang ended a later run no start listed began.
+        const starts: StartList = {
+            starts: [
+                { ...LATEST, runStarted: '2026-10-29T10:00:00.000Z', generation: 4 },
+                { ...RESTART, runStarted: '2026-10-28T10:00:00Z', generation: 3 },
+            ],
+            next: null,
+            check: null,
+        };
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(async (url: string) => {
+                fetched.push(url);
+                return new Response(JSON.stringify(starts), {
+                    status: 200,
+                    headers: { 'content-type': 'application/json' },
+                });
+            }),
+        );
+        const later = { ...HANG, runStarted: '2026-10-29T14:30:00Z', generation: 5 };
+        const { getAllByRole, live } = await page(false, { ...SNAPSHOT, crashes: [later, CRASH] }, '21000');
+
+        await waitFor(() =>
+            expect(
+                getAllByRole('link', { name: en.diagnostics.crashes.whatChanged }).map((link) =>
+                    link.getAttribute('href'),
+                ),
+            ).toEqual(['/changes', '/changes?to=3']),
+        );
+        expect(fetched).toEqual(['/api/servers/default/changes/starts']);
+        live.stop();
+    });
+
+    it('should not read the starts for an account that cannot see the changes', async () => {
+        const fetch = vi.fn();
+        vi.stubGlobal('fetch', fetch);
+        const { queryByRole, live } = await page(false);
+        await settle();
+
+        expect(queryByRole('link', { name: en.diagnostics.crashes.whatChanged })).toBeNull();
+        expect(fetch).not.toHaveBeenCalled();
         live.stop();
     });
 });

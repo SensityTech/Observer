@@ -7,6 +7,8 @@ local CONTRACT_VERSION = 1
 local HEARTBEAT_MS = 3000
 local RESOURCES_SETTLE_MS = 500
 local PLAYERS_PAGE = 100
+-- Starts and stops told in one report, past which they are only counted.
+local RESOURCE_EVENTS_MAX = 64
 
 -- The events Observer may raise, and nothing else.
 local EVENTS = {
@@ -14,6 +16,7 @@ local EVENTS = {
     restartSkipped = true,
     restartRescheduled = true,
     shuttingDown = true,
+    startChanges = true,
 }
 
 local function report(kind, fields)
@@ -96,9 +99,11 @@ AddEventHandler('playerDropped', function(reason, resource, category)
     end
     report('drop', { id = id, t = GetGameTimer(), reason = reason, resource = resource, category = category, ped = ped })
 end)
+local cfgRan = false
 
 -- The thread first runs once the cfg has run, so `ready` means its resources were started.
 CreateThread(function()
+    cfgRan = true
     report('ready', { contractVersion = CONTRACT_VERSION })
     report('resources', { started = startedResources() })
     reportPlayers()
@@ -109,7 +114,18 @@ CreateThread(function()
 end)
 
 local resourcesPending = false
-local function resourcesChanged()
+-- What started and stopped since the last report, once the cfg has run: a restart leaves the list
+-- of started resources as it was, so only these tell it.
+local resourceEvents = {}
+local resourceEventsDropped = 0
+local function resourcesChanged(name, change)
+    if cfgRan then
+        if #resourceEvents < RESOURCE_EVENTS_MAX then
+            resourceEvents[#resourceEvents + 1] = { name, change }
+        else
+            resourceEventsDropped = resourceEventsDropped + 1
+        end
+    end
     if resourcesPending then
         return
     end
@@ -117,11 +133,21 @@ local function resourcesChanged()
     -- A restart stops and starts in a row; one report covers both.
     SetTimeout(RESOURCES_SETTLE_MS, function()
         resourcesPending = false
-        report('resources', { started = startedResources() })
+        local events, dropped = resourceEvents, resourceEventsDropped
+        resourceEvents, resourceEventsDropped = {}, 0
+        report('resources', {
+            started = startedResources(),
+            events = #events > 0 and events or nil,
+            dropped = dropped > 0 and dropped or nil,
+        })
     end)
 end
-AddEventHandler('onResourceStart', resourcesChanged)
-AddEventHandler('onResourceStop', resourcesChanged)
+AddEventHandler('onResourceStart', function(name)
+    resourcesChanged(name, 'start')
+end)
+AddEventHandler('onResourceStop', function(name)
+    resourcesChanged(name, 'stop')
+end)
 
 local function secondsUntil(at)
     if type(at) ~= 'number' then

@@ -92,6 +92,8 @@ pub struct Scan {
     pub findings: Vec<CfgFinding>,
     /// The first `endpoint_add_tcp`, reached from this host: where health is probed.
     pub endpoint: Option<SocketAddr>,
+    /// The resources the chain starts, in lower case, each once, in the order first started.
+    pub started: Vec<String>,
     /// Every command that starts or stops resources, in the order FXServer runs them: those of a
     /// file `exec` reaches come where it is run. Which resources end up started is left to the
     /// reader, who knows the folder's resources and their dependencies.
@@ -188,6 +190,9 @@ pub fn scan(data: &Path, cfg_file: &str, text: &str, resources: &Resources, cont
         game: None,
         onesync: None,
         hostname: None,
+        game_build: None,
+        started: Vec::new(),
+        started_names: HashSet::new(),
         resource_commands: Vec::new(),
         resource_command_bytes: 0,
         resource_commands_cut: false,
@@ -255,6 +260,9 @@ struct Scanner<'a> {
     game: Option<(String, Place)>,
     onesync: Option<OneSync>,
     hostname: Option<String>,
+    game_build: Option<u32>,
+    started: Vec<String>,
+    started_names: HashSet<String>,
     resource_commands: Vec<ResourceCommand>,
     /// What the resource commands take, counted against `MAX_RESOURCE_COMMAND_BYTES`.
     resource_command_bytes: usize,
@@ -343,6 +351,8 @@ impl Scanner<'_> {
                 self.report_at(FindingKind::GameTwice, place, params);
             }
             self.game = Some((value, place.clone()));
+        } else if named("sv_enforceGameBuild") {
+            self.game_build = value.trim().parse().ok();
         } else if named("txAdminServerMode") {
             self.report_at(FindingKind::SetsServerMode, place, FindingParams::default());
         } else if named("monitorMode") {
@@ -373,6 +383,9 @@ impl Scanner<'_> {
             return;
         }
         let lower = resource.to_ascii_lowercase();
+        if self.started.len() < MAX_MISSING_NAMES && self.started_names.insert(lower.clone()) {
+            self.started.push(lower.clone());
+        }
         // Each name is reported once, where it is first started.
         let missing = !self.resources.holds(&lower)
             && !self.system.contains(&lower)
@@ -631,12 +644,14 @@ impl Scanner<'_> {
             onesync: self.onesync,
             hostname: self.hostname.take(),
             licence,
+            game_build: self.game_build,
         };
         Scan {
             files: self.files,
             facts,
             findings: self.findings,
             endpoint: self.health,
+            started: self.started,
             resource_commands: self.resource_commands,
             resource_commands_complete: !self.unchecked && !self.resource_commands_cut,
         }
@@ -1115,6 +1130,21 @@ mod tests {
     }
 
     #[test]
+    fn the_resources_the_chain_starts_are_listed_once_in_order() {
+        let folder = Folder::new();
+
+        let scan = folder.scan(
+            "ensure chat
+start [qb]
+ensure Chat
+restart spawnmanager
+",
+        );
+
+        assert_eq!(scan.started, ["chat", "[qb]", "spawnmanager"]);
+    }
+
+    #[test]
     fn each_convar_is_set_by_its_bare_name_or_any_set_command() {
         for form in ["", "set ", "sets ", "setr ", "seta ", "SET "] {
             let folder = Folder::new();
@@ -1125,6 +1155,7 @@ mod tests {
                 "sv_hostname \"^2Observer\tlab\"",
                 "sv_maxclients 48",
                 "gamename rdr3",
+                "sv_enforceGameBuild 1491",
                 "onesync legacy",
                 "txAdminServerMode true",
                 "monitorMode true",
@@ -1159,6 +1190,7 @@ mod tests {
                     onesync: Some(OneSync::Legacy),
                     hostname: Some("^2Observerlab".to_owned()),
                     licence: LicenceState::Set,
+                    game_build: Some(1491),
                 },
                 "{form:?}"
             );

@@ -473,7 +473,7 @@ impl Assembler {
                     total: *heap_total,
                 });
             }
-            EventKind::Resources { started } => self.resources = Some((event.generation, started.len())),
+            EventKind::Resources { started, .. } => self.resources = Some((event.generation, started.len())),
             _ => {}
         }
     }

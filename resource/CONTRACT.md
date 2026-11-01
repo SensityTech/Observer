@@ -39,6 +39,7 @@ who signs in to nothing. No account can take either name.
 | `observer:restartSkipped` | A restart announced since this start of FXServer will not happen. |
 | `observer:restartRescheduled` | A restart announced since this start of FXServer moved to another time. |
 | `observer:shuttingDown` | FXServer quits in `delayMs`: save now. |
+| `observer:startChanges` | Once per start of FXServer, when its files are hashed: what changed since the start before. |
 
 ### `observer:restartScheduled`
 
@@ -79,6 +80,28 @@ window.
 | `reason` | string | `stop`, `restart` (asked in the panel or the host's window), `scheduled` (the schedule or a single restart someone planned), or `shutdown` (Observer itself is stopping). |
 | `by` | string | Who asked, `local`, or `observer`. |
 
+### `observer:startChanges`
+
+Raised once per start of FXServer, after the server is online and Observer has read the files that
+changed, even when nothing did. The owner can turn it off.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `at` | integer | When this start's snapshot was taken. |
+| `previousAt` | integer, or nil | When the start it compares with was taken; nil for a baseline. |
+| `baseline` | boolean | The first snapshot of the server, which compares with nothing: no resource is listed. |
+| `build` | table, or nil | `{ from, to }`: the FXServer builds, when it changed. |
+| `gameBuild` | table, or nil | `{ from, to }`: the enforced game builds, when it changed. |
+| `counts` | table | `added`, `removed`, `updated` (files and version changed), `sameVersion` (files changed, version did not), `renamed`, `moved` (another category), `didNotStart` (started last time, not this time), `pending` (files not all read yet, left out of `resources`). |
+| `resources` | array | One table per resource: `name`, `change` (`added`, `removed`, `updated`, `sameVersion`, `renamed`, `moved` or `didNotStart`), `from` and `to` (the manifest's versions, when it has them), `fromHidden` and `toHidden` (true when a version was left out, see below). Added first, then updated, then changed under the same version, then the rest. |
+| `skipped` | integer | Resources left out because of their name. |
+| `truncated` | boolean | Resources left out to keep the event within what the console takes: the panel lists them all. |
+
+Every name and version in the event is safe to put in a console command: a name that is not 1 to 64
+letters, digits, `_`, `.` or `-` is counted in `skipped` and never listed, and a version that is not 1
+to 32 of those or `+` and `~` is left out, with `fromHidden` or `toHidden` set. Manifests are written
+by third parties. Nothing else of a file's name or contents is ever sent.
+
 ## Ordering and delivery
 
 - Observer is the only writer, so the events of one run of FXServer arrive in the order they were
@@ -97,6 +120,7 @@ window.
   overtakes a restart: the latest one says what happens.
 - Nothing comes after `quit`.
 - Delivery is best effort. A main loop that is stuck gets an event late, or never.
+- `observer:startChanges` comes once a run, never for a run that ended before its files were read.
 - An announced restart can also vanish without `observer:restartSkipped` when the server stops or
   crashes first: the run ends anyway.
 

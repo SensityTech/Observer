@@ -58,12 +58,15 @@ fn status(code: ErrorCode) -> StatusCode {
         | ErrorCode::Escalation
         | ErrorCode::Hierarchy
         | ErrorCode::InvalidSetupToken
-        | ErrorCode::OriginMismatch => StatusCode::FORBIDDEN,
+        | ErrorCode::OriginMismatch
+        | ErrorCode::ContentHidden => StatusCode::FORBIDDEN,
         ErrorCode::NotFound
         | ErrorCode::BuildNotListed
         | ErrorCode::CrashNotFound
         | ErrorCode::CrashFileNotFound
+        | ErrorCode::StartNotFound
         | ErrorCode::PlayerNotFound => StatusCode::NOT_FOUND,
+        ErrorCode::ContentNotKept => StatusCode::GONE,
         ErrorCode::Conflict
         | ErrorCode::NameTaken
         | ErrorCode::AlreadySetUp
@@ -88,6 +91,7 @@ fn status(code: ErrorCode) -> StatusCode {
         | ErrorCode::BuildProtected
         | ErrorCode::BuildInUse
         | ErrorCode::KeyInUse
+        | ErrorCode::CheckRunning
         | ErrorCode::PlanChanged
         | ErrorCode::ServerNotStopped
         | ErrorCode::ToolNotAvailable => StatusCode::CONFLICT,
@@ -103,7 +107,9 @@ fn status(code: ErrorCode) -> StatusCode {
         | ErrorCode::InvalidPublicKey
         | ErrorCode::TooManyKeys
         | ErrorCode::InvalidAccess
-        | ErrorCode::InvalidPlayersFile => StatusCode::UNPROCESSABLE_ENTITY,
+        | ErrorCode::DiffTooLarge
+        | ErrorCode::InvalidPlayersFile
+        | ErrorCode::InvalidDropsSettings => StatusCode::UNPROCESSABLE_ENTITY,
         ErrorCode::JsonRequired => StatusCode::UNSUPPORTED_MEDIA_TYPE,
         ErrorCode::UnknownHost => StatusCode::MISDIRECTED_REQUEST,
         ErrorCode::InvalidUsername
@@ -117,15 +123,18 @@ fn status(code: ErrorCode) -> StatusCode {
         | ErrorCode::InvalidSchedule
         | ErrorCode::InvalidArtifactSettings
         | ErrorCode::InvalidImportFolder
+        | ErrorCode::InvalidGlob
         | ErrorCode::AddressSearch
         | ErrorCode::InvalidSearch
         | ErrorCode::InvalidPlayersSettings => StatusCode::BAD_REQUEST,
-        ErrorCode::TooManyAttempts | ErrorCode::TooManySockets | ErrorCode::TooManyCommands => {
-            StatusCode::TOO_MANY_REQUESTS
-        }
-        ErrorCode::Busy | ErrorCode::ShuttingDown | ErrorCode::CatalogUnavailable => {
-            StatusCode::SERVICE_UNAVAILABLE
-        }
+        ErrorCode::TooManyAttempts
+        | ErrorCode::TooManySockets
+        | ErrorCode::TooManyCommands
+        | ErrorCode::CheckTooSoon => StatusCode::TOO_MANY_REQUESTS,
+        ErrorCode::Busy
+        | ErrorCode::ShuttingDown
+        | ErrorCode::CatalogUnavailable
+        | ErrorCode::ChangesUnavailable => StatusCode::SERVICE_UNAVAILABLE,
         ErrorCode::Internal => StatusCode::INTERNAL_SERVER_ERROR,
     }
 }
