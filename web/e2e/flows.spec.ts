@@ -262,8 +262,15 @@ test.describe.serial('Observer in a browser', () => {
 
     test('the installed build starts at the next start, on probation', async () => {
         test.skip(windows, 'Windows refuses the unsigned fake at validation');
+        test.setTimeout(120_000);
         // Wide enough for the status bar to say why the build is shown.
         await page.setViewportSize({ width: 1680, height: 900 });
+        // The fake went on probation at its first start, and the status bar says so before it
+        // says the next build: it must have passed, up for the window since its last restart.
+        await expect(buildCell()).toHaveText(env('E2E_BUILD'), {
+            useInnerText: true,
+            timeout: Number(env('E2E_PROBATION')) * 1000 + 15_000,
+        });
         const job = page.getByRole('region', { name: artifacts.job.install(CATALOG_BUILD) });
         await job.getByRole('button', { name: artifacts.job.use }).click();
         const dialog = page.getByRole('dialog', { name: artifacts.use.title(CATALOG_BUILD) });

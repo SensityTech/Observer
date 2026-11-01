@@ -7,8 +7,9 @@ publish.workspace = true
 
 [features]
 # With OBSERVER_TEST_CATALOG=<port>, builds are listed and downloaded from the fake FXServer's
-# archive server on that port instead of Cfx.re. For the browser tests; `cargo xtask dist` never
-# turns it on.
+# archive server on that port instead of Cfx.re; with OBSERVER_TEST_PROBATION=<seconds>, a new
+# build passes its probation once up that long instead of ten minutes. For the browser tests;
+# `cargo xtask dist` never turns it on.
 test-catalog = ["observer-artifacts/test-support"]
 
 [dependencies]
