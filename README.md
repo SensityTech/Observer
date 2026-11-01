@@ -285,12 +285,12 @@ Cfx.re's [Platform License Agreement](https://fivem.net/terms) covers the server
 | `observer db backup` | A manual backup, while Observer is stopped. |
 | `observer fxserver run --build <folder> --data <folder>` | FXServer under the supervisor in the foreground, without the panel or the database, while Observer is stopped. `--cfg`, `--onesync`, `--port`, `--set NAME=VALUE`. |
 | `observer service print-unit` | Linux: the systemd unit, see [systemd](#systemd). |
-| `observer tools run duplicate-archetypes` | Find duplicate archetypes and print the report. `--fix`, `--json`, `--data <folder> --cfg <file>` or `--all-resources`. Exit code 2 when groups are left. See [Server tools](#server-tools). |
-| `observer tools undo duplicate-archetypes` | Put back what a run took out: `--run <id>` or `--all`. |
-| `observer tools config duplicate-archetypes` | The tool's settings: `--at-start`, `--differences`, `--escrowed`. |
+| `observer tools run duplicate-archetypes` | Find duplicate archetypes and print the report. `--fix` while Observer is stopped, `--json`, `--data <folder>`, `--cfg <file>` or `--all-resources`. Exits with 2 while duplicates are left, 1 on an error. See [Server tools](#server-tools). |
+| `observer tools undo duplicate-archetypes` | Put back what fixes took out, while Observer is stopped: `--run <id>` or `--all`. |
+| `observer tools config duplicate-archetypes` | Print the tool's settings, or change them: `--at-start`, `--differences`, `--escrowed`, `--exclude <name>`, `--include <name>`. |
 
-The `user`, `setup-link` and `artifacts` commands, and `tools run` without `--fix`, work while Observer
-runs. `--version` names the commit a release was built from.
+The `user`, `setup-link` and `artifacts` commands, `tools run` without `--fix` and `tools config` work
+while Observer runs. `--version` names the commit a release was built from.
 
 ## HTTPS
 
@@ -529,63 +529,89 @@ would take more.
   `<sha256>.json` naming the server folder, the file and the time, so that it can be copied back by
   hand even without the database. A backup is verified before every restore, and kept while a fix
   relies on it and for 30 days after the last one ends.
-- **Heal** runs before every start of FXServer, whatever the settings and the cause of the start, a
-  crash included. It puts back every entry whose kept copy no longer stands in for it: its file gone
-  or no longer defining the archetype, another file now able to take its place, its resource
-  excluded, or escrowed while escrowed resources are skipped. When unsure, it puts the entry back: a
-  duplicate warning is harmless, a missing prop is not. A file someone else has changed since is
-  left as it is, and no longer counted as fixed.
-- **Undo** puts back what one run took out, or everything, by rebuilding each file from its backup.
-  A file changed since Observer wrote it is left alone.
+- **Heal** runs before every start Observer makes of FXServer, whatever the settings and the cause
+  of the start, an automatic restart after a crash included, and before every fix. It puts back
+  every entry whose kept copy no longer stands in for it: its file gone or no longer defining the
+  archetype, another file now able to take its place, its resource excluded, or escrowed while
+  escrowed resources are skipped. When unsure, it puts the entry back: a duplicate warning is
+  harmless, a missing prop is not. A file someone else has changed since is left as it is, and no
+  longer counted as fixed. A scan heals nothing: it says how many files hold a fix.
+- **Undo** puts back what fixes took out, by rebuilding each file from its backup: what one run took
+  out, one file's entries, or everything. A file changed since Observer wrote it is left alone.
 
-**Settings**, per server:
+**Settings**, per server, on the **Tools** page or with `observer tools config`:
 
-- **At start**: `off` (the default), the tool runs only when asked; `report`, it scans before every
-  start and writes to the console when the result has changed; `fix`, it scans and applies the fixes
-  before every start.
-- **Differences**: `identical` (the default) fixes identical copies only; `keepLatest` fixes copies
-  that differ too, keeping the last one registered. The client keeps every copy, and which one the
-  game uses when they differ is not known for sure: "the last one" is a prediction. If the game uses
-  another, `keepLatest` changes the model, the textures or the draw distance players see.
-- **Escrowed**: `skip` (the default) only reports escrowed resources; `allow` fixes their plain files
-  too.
-- **Excluded resources**: resources never changed, by name. Put there those a pipeline or a file group
-  keeps: otherwise each deploy brings their duplicates back, and the next fix changes the file again.
+- **At start**: **Off** (the default), the tool runs only when asked; **Report**, it scans before
+  every start and writes to the console when the result has changed; **Fix**, it scans and applies
+  the fixes before every start. Heal runs whatever this says.
+- **Differences**: **Identical only** (the default) fixes identical copies only; **Keep the latest
+  copy** fixes copies that differ too, keeping the last one registered. The client keeps every copy,
+  and which one the game uses when they differ is not known for sure: "the last one" is a
+  prediction. If the game uses another, **Keep the latest copy** changes the model, the textures or
+  the draw distance players see.
+- **Escrowed resources**: **Skip** (the default) only reports escrowed resources; **Allow** fixes
+  their plain files too.
+- **Excluded resources**: resources never changed, by name as FXServer knows them, case included.
+  Put there those a pipeline or a file group keeps: otherwise each deploy brings their duplicates
+  back, and the next fix changes the file again.
 
-Excluding a resource puts its entries back at the next heal, and so does setting **Escrowed** back to
-`skip` for escrowed resources.
+Excluding a resource puts its entries back at the next heal, and so does setting **Escrowed
+resources** back to **Skip** for escrowed resources.
 
-The **Tools** page is the owner's. It shows the last run and every group: its copies, how they differ
-(only in draw distances and bounds, or in more), what the tool does and why, and the files changed
-with their backups. **Scan now** makes a new report. **Fix** applies the plan on screen: if a fresh
-scan plans something else, the page shows the new plan instead. **Fix**, **Undo** and the settings
-ask for the owner's password again, and **Fix** and **Undo** run only while FXServer is stopped.
-Writes and settings changes are in the audit log; report runs are not.
+The **Tools** page is the owner's. **Last run** shows the latest run and what it found or changed.
+**Groups** lists every group: its copies, how they differ (only in draw distances and bounds, or in
+more), what the tool does and why. **Files changed** lists the files the fixes changed, with their
+backups. **Scan now** makes a new report and writes nothing, even while FXServer runs. **Fix**
+applies the plan on screen: if a fresh scan plans something else, it writes nothing and the page
+shows the new plan instead. **Undo** puts back the entries taken out of one file, **Undo all** those
+of every file. **Fix**, **Undo**, **Undo all** and the settings ask for the owner's password again,
+and the three buttons run only while FXServer is stopped. Writes and settings changes are in the
+audit log; report runs are not.
 
 Before a start, FXServer waits for the tool. Past 60 seconds, the tool is told to stop between two
-files, and FXServer starts once it has; a stop in the meantime cancels the start. After a crash, the
-tool only heals. Its console lines appear under `tools`, a summary and at most 10 more, and the
-**Tools** page has the rest. Uploads over SFTP wait while a tool writes. `observer fxserver run` runs
-no tool, and says so.
+files, and FXServer starts once it has; a stop in the meantime cancels the start. FXServer never
+starts while a tool writes: a start asked during a fix or an undo waits for it to end, even past 60
+seconds. On an automatic restart after a crash, the tool only heals. Its console lines appear under
+`tools`, a summary and at most 10 more, and the **Tools** page has the rest; a report, or a fix that
+wrote nothing, says nothing when its result is that of the last report. Uploads, renames and
+deletions over SFTP wait while a tool writes. `observer fxserver run` runs no tool, not even the
+heal, and says so.
 
 From the host:
 
 ```sh
-observer tools run duplicate-archetypes [--fix] [--json] [--data DIR --cfg FILE | --all-resources]
-observer tools undo duplicate-archetypes [--run ID | --all]
+observer tools run duplicate-archetypes [--fix] [--json] [--data DIR] [--cfg FILE | --all-resources]
+                                        [--differences D] [--escrowed E]
+observer tools undo duplicate-archetypes --run ID | --all
 observer tools config duplicate-archetypes [--at-start M] [--differences D] [--escrowed E]
+                                           [--exclude NAME]... [--include NAME]...
 ```
 
-- `run` reads the server folder and the cfg of the launch settings, or those `--data` and `--cfg`
-  name; `--all-resources` reads no cfg and takes every resource FXServer accepts as started, in name
-  order. It prints the report, as JSON with `--json`, and writes nothing without `--fix`. It exits
-  with code 2 when groups are left, 1 on an error.
-- `undo --run ID` puts back what that run took out, `undo --all` everything.
-- `config` sets `--at-start` (`off`, `report` or `fix`), `--differences` (`identical` or
-  `keepLatest`) and `--escrowed` (`skip` or `allow`). Excluded resources are set on the **Tools** page.
+- `run` reads the server folder and the cfg of the launch settings, or the folder `--data` names
+  with the cfg `--cfg` names in it (`server.cfg` by default); `--all-resources` reads no cfg and
+  takes every resource FXServer accepts as started, in name order. `--differences` and `--escrowed`
+  change the saved settings for this run only. It prints the report, as JSON with `--json`.
+- Without `--fix`, `run` writes nothing, the database included: it heals nothing, and its report is
+  not in the **Tools** page's **Last run**. It needs no database either: with `--data`, it works
+  before Observer's first start, with the default settings.
+- With `--fix`, `run` applies the plan and prints what became of each file, and the run's number,
+  which `undo --run` takes. The run is recorded and audited like a fix from the **Tools** page.
+- `run` exits with 0 when no duplicate is left once it ends, and with 2 when some are: for a report,
+  every group it finds, fixable or not, since it fixes none; with `--fix`, every group it did not
+  fix. It exits with 1 when it cannot run, or when a fix stops before the end, such as on a full
+  volume, once it has printed what it wrote. A mistyped command also exits with 2, and prints its
+  usage.
+- `undo --run ID` puts back what that run took out, `undo --all` everything, in the folder of the
+  launch settings.
+- `config` prints the settings and changes those its options name: `--at-start` (`off`, `report` or
+  `fix`), `--differences` (`identical` or `keep-latest`), `--escrowed` (`skip` or `allow`),
+  `--exclude NAME` to add a resource to the excluded ones and `--include NAME` to take one off, both
+  repeatable. A change takes effect at the next start.
+- `undo` and `config` exit with 0, or 1 on an error.
 
-`run` without `--fix` takes no lock and works while Observer runs; `--fix` and `undo` take Observer's
-lock, so stop Observer first.
+`run` without `--fix` takes no lock, and `config` checks that no one changed the settings meanwhile:
+both work while Observer runs. `--fix` and `undo` take Observer's lock, so stop Observer first, or
+use the **Tools** page.
 
 **Limits.**
 
@@ -593,7 +619,8 @@ lock, so stop Observer first.
   runs are not seen, nor constraints such as `/assetpacks` that only FXServer decides: the report may
   list groups the clients never meet, or miss some. No fix depends on them, since the copies of a
   fixed group share one resource.
-- **RedM** is not supported: when the cfg sets `gamename rdr3`, the tool does nothing.
+- **RedM** is not supported: when the cfg sets `gamename rdr3`, a scan or a fix is refused, and the
+  next start puts back whatever an earlier fix took out. An undo still works.
 - **File metadata.** A replaced file is a new file: on Linux it keeps its mode, not its ACLs or
   extended attributes; on Windows it takes the permissions its folder gives new files. A read-only
   file is never changed.

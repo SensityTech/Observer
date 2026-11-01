@@ -1,8 +1,9 @@
 //! `observer tools`: the server tools by hand. A report reads the server folder and writes nothing,
-//! whether Observer runs or not. A fix and an undo write into the server folder, so they take
-//! Observer's lock: while Observer runs, they belong to its Tools page, which runs them with
-//! FXServer stopped. The folder and the cfg are those of the launch settings unless the command
-//! names others.
+//! the database included, whether Observer runs or not. A fix and an undo write into the server
+//! folder, so they take Observer's lock: while Observer runs, they belong to its Tools page, which
+//! runs them with FXServer stopped. The settings change while Observer runs too: they carry a
+//! version. The folder and the cfg are those of the launch settings unless the command names
+//! others.
 
 use std::fmt::Write as _;
 use std::path::PathBuf;
@@ -16,7 +17,8 @@ use observer_domain::error::ErrorCode;
 use observer_domain::launch::StoredLaunch;
 use observer_domain::tools::{
     ArchetypeCopy, ArchetypeGroup, ArchetypeReport, Contest, CopySource, Difference, Differences,
-    EscrowPolicy, GroupAction, LeaveReason, NotWritable, ToolMode, ToolNoteKind, ToolSettings, ToolUndoScope,
+    EscrowPolicy, GroupAction, LeaveReason, NotWritable, ToolMode, ToolNoteKind, ToolRunOutcome,
+    ToolRunSummary, ToolSettings, ToolUndoScope,
 };
 use observer_fxserver::layout::{Flavour, Layout};
 use observer_store::{Database, artifacts, launch};
@@ -26,17 +28,19 @@ use serde_json::json;
 use crate::config::{Config, DataPaths};
 use crate::lock;
 
-/// What `observer tools` exits with when duplicates are left: groups the plan leaves, or a report
-/// that found any. A failure exits with 1.
+/// What `observer tools run` exits with when duplicates are left once it ends: every group a
+/// report finds, since it fixes none, and the groups a fix did not fix. An error, or a fix that
+/// stopped before the end, exits with 1.
 const GROUPS_LEFT: u8 = 2;
 
 #[derive(Debug, Subcommand)]
 pub enum ToolsCommand {
     /// Scan the server folder and report what the tool finds; with --fix, apply what it can fix.
+    /// Exits with 2 while duplicates are left, 1 on an error.
     Run(RunArgs),
     /// Put back what fixes took out, in the folder of the launch settings. Stop Observer first.
     Undo(UndoArgs),
-    /// Show what a tool does at every start, or change it.
+    /// Show what a tool does at every start, or change it. Works while Observer runs.
     Config(ConfigArgs),
 }
 
@@ -66,11 +70,11 @@ pub struct RunArgs {
     /// Read no cfg: take every resource as started, in name order.
     #[arg(long)]
     all_resources: bool,
-    /// Which duplicates may be fixed; the saved setting by default.
+    /// Which duplicates may be fixed, for this run only; the saved setting by default.
     #[arg(long, value_enum)]
     differences: Option<DifferencesArg>,
-    /// Whether resources protected by the asset escrow may be changed; the saved setting by
-    /// default.
+    /// Whether resources protected by the asset escrow may be changed, for this run only; the
+    /// saved setting by default.
     #[arg(long, value_enum)]
     escrowed: Option<EscrowedArg>,
 }
@@ -93,10 +97,19 @@ pub struct ConfigArgs {
     /// What the tool does at every start of the server.
     #[arg(long, value_enum)]
     at_start: Option<ModeArg>,
+    /// Which duplicates may be fixed.
     #[arg(long, value_enum)]
     differences: Option<DifferencesArg>,
+    /// Whether resources protected by the asset escrow may be changed.
     #[arg(long, value_enum)]
     escrowed: Option<EscrowedArg>,
+    /// Never change this resource: its name as FXServer knows it, case included. Repeat it for
+    /// several.
+    #[arg(long, value_name = "NAME")]
+    exclude: Vec<String>,
+    /// Take this resource off the excluded ones. Repeat it for several.
+    #[arg(long, value_name = "NAME")]
+    include: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -114,13 +127,16 @@ enum DifferencesArg {
     /// Only copies identical in every field.
     Identical,
     /// Copies that differ too, keeping the last registered: unverified in game.
+    // The name the panel's API and the database use is taken too.
     #[value(alias = "keepLatest")]
     KeepLatest,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum EscrowedArg {
+    /// Report them only: their author ships the fix.
     Skip,
+    /// Fix their files the escrow does not encrypt too.
     Allow,
 }
 
@@ -148,6 +164,34 @@ impl From<EscrowedArg> for EscrowPolicy {
         match escrowed {
             EscrowedArg::Skip => Self::Skip,
             EscrowedArg::Allow => Self::Allow,
+        }
+    }
+}
+
+impl From<ToolMode> for ModeArg {
+    fn from(mode: ToolMode) -> Self {
+        match mode {
+            ToolMode::Off => Self::Off,
+            ToolMode::Report => Self::Report,
+            ToolMode::Fix => Self::Fix,
+        }
+    }
+}
+
+impl From<Differences> for DifferencesArg {
+    fn from(differences: Differences) -> Self {
+        match differences {
+            Differences::Identical => Self::Identical,
+            Differences::KeepLatest => Self::KeepLatest,
+        }
+    }
+}
+
+impl From<EscrowPolicy> for EscrowedArg {
+    fn from(escrowed: EscrowPolicy) -> Self {
+        match escrowed {
+            EscrowPolicy::Skip => Self::Skip,
+            EscrowPolicy::Allow => Self::Allow,
         }
     }
 }
@@ -241,6 +285,7 @@ async fn fix(config: &Config, args: &RunArgs) -> anyhow::Result<ExitCode> {
                 describe(
                     report,
                     &Done::Fix {
+                        run: ran.run.id,
                         fixed: &fixed,
                         written: &written,
                         open: summary.open_changes,
@@ -248,12 +293,10 @@ async fn fix(config: &Config, args: &RunArgs) -> anyhow::Result<ExitCode> {
                     }
                 )
             ),
-            None => println!(
-                "nothing was fixed: {}",
-                summary.problem.as_deref().unwrap_or("the scan did not end")
-            ),
+            None => println!("nothing was fixed"),
         }
     }
+    ended(ran.run.outcome, &summary)?;
     Ok(exit_code(summary.groups > summary.fixed))
 }
 
@@ -276,52 +319,87 @@ async fn undo(config: &Config, args: &UndoArgs) -> anyhow::Result<()> {
     for file in ran.files() {
         println!("{}: {}", file.path, observer_app::outcome_text(&file.outcome));
     }
-    let summary = ran.run.summary.unwrap_or_default();
-    if let Some(problem) = summary.problem {
-        println!("stopped: {problem}");
-    }
+    let summary = ran.run.summary.clone().unwrap_or_default();
     println!(
         "{} back; {} still open",
         files(u64::from(summary.files_restored)),
         files(u64::from(summary.open_changes))
     );
-    Ok(())
+    ended(ran.run.outcome, &summary)
 }
 
 /// `observer tools config`: the settings, changed when an option says so. Works while Observer
-/// runs: the settings carry a version.
+/// runs: the settings carry a version, and a running Observer reads them at every start.
 async fn configure(config: &Config, args: &ConfigArgs) -> anyhow::Result<()> {
+    if let Some(name) = args.exclude.iter().find(|name| args.include.contains(name)) {
+        bail!("{name} cannot be excluded and included at once");
+    }
     let paths = config.paths();
     let db = open(&paths).await?;
     let tools = service(config, &paths, db.clone());
-    let (mut settings, version) = tools.settings().await?;
-    let asked = args.at_start.is_some() || args.differences.is_some() || args.escrowed.is_some();
-    if asked {
-        if let Some(mode) = args.at_start {
-            settings.at_start = mode.into();
+    let settings: anyhow::Result<ToolSettings> = async {
+        let (saved, version) = tools.settings().await?;
+        let asked = configured(saved.clone(), args);
+        if asked == saved {
+            return Ok(saved);
         }
-        if let Some(differences) = args.differences {
-            settings.differences = differences.into();
-        }
-        if let Some(escrowed) = args.escrowed {
-            settings.escrowed = escrowed.into();
-        }
-        settings = tools
-            .configure_from_cli(settings, version)
-            .await
-            .map_err(refusal)?
-            .0;
+        let (settings, _) = tools.configure_from_cli(asked, version).await.map_err(refusal)?;
+        Ok(settings)
     }
+    .await;
     db.close().await?;
-    println!("at start: {}", settings.at_start.as_str());
-    println!("differences: {}", settings.differences.as_str());
-    println!("escrowed: {}", settings.escrowed.as_str());
+    let settings = settings?;
+    println!("at start: {}", spelled(&ModeArg::from(settings.at_start)));
+    println!(
+        "differences: {}",
+        spelled(&DifferencesArg::from(settings.differences))
+    );
+    println!("escrowed: {}", spelled(&EscrowedArg::from(settings.escrowed)));
     if settings.excluded.is_empty() {
         println!("excluded: none");
     } else {
         println!("excluded: {}", settings.excluded.join(", "));
     }
     Ok(())
+}
+
+/// The settings with what the options change: a name excluded is added once, after the others; a
+/// name included is taken off.
+fn configured(mut settings: ToolSettings, args: &ConfigArgs) -> ToolSettings {
+    if let Some(mode) = args.at_start {
+        settings.at_start = mode.into();
+    }
+    if let Some(differences) = args.differences {
+        settings.differences = differences.into();
+    }
+    if let Some(escrowed) = args.escrowed {
+        settings.escrowed = escrowed.into();
+    }
+    settings.excluded.retain(|name| !args.include.contains(name));
+    for name in &args.exclude {
+        if !settings.excluded.contains(name) {
+            settings.excluded.push(name.clone());
+        }
+    }
+    settings
+}
+
+/// A setting's value as the options spell it.
+fn spelled(value: &impl ValueEnum) -> String {
+    value
+        .to_possible_value()
+        .map(|value| value.get_name().to_owned())
+        .unwrap_or_default()
+}
+
+/// Why a run that may have written did not end as it should, as the error the command exits with
+/// once it said what the run did.
+fn ended(outcome: Option<ToolRunOutcome>, summary: &ToolRunSummary) -> anyhow::Result<()> {
+    if outcome == Some(ToolRunOutcome::Done) {
+        return Ok(());
+    }
+    let problem = summary.problem.as_deref().unwrap_or("it did not end");
+    bail!("the run stopped before the end: {problem}")
 }
 
 /// Observer's lock, or why the command must go through the panel instead.
@@ -426,7 +504,10 @@ fn refusal(error: observer_app::Error) -> anyhow::Error {
             anyhow!("no launch settings yet: save them in the panel first, or pass --data")
         }
         Some(ErrorCode::Conflict) => anyhow!("the settings changed meanwhile: run the command again"),
-        Some(ErrorCode::InvalidRequest) => anyhow!("these settings are refused"),
+        Some(ErrorCode::InvalidRequest) => anyhow!(
+            "these settings are refused: an excluded name is empty, longer than 255 bytes or holds / \
+             or \\, or more than 1000 are excluded"
+        ),
         _ => error.into(),
     }
 }
@@ -464,6 +545,8 @@ enum Done<'a> {
         open: Option<u32>,
     },
     Fix {
+        /// The run's number, which an undo takes.
+        run: i64,
         /// The files the plan was written to.
         fixed: &'a [String],
         /// Each file looked at, with what became of it.
@@ -539,12 +622,24 @@ fn describe(report: &ArchetypeReport, done: &Done<'_>) -> String {
         );
     }
     match done {
-        Done::Fix { written, backups, .. } if !written.is_empty() => {
+        Done::Fix {
+            run,
+            fixed,
+            written,
+            backups,
+            ..
+        } if !written.is_empty() => {
             text.push_str("\nwritten:\n");
             for line in *written {
                 let _ = writeln!(text, "  {line}");
             }
             let _ = writeln!(text, "the originals are kept in {}", backups.display());
+            if !fixed.is_empty() {
+                let _ = writeln!(
+                    text,
+                    "to put back what run {run} took out: observer tools undo duplicate-archetypes --run {run}"
+                );
+            }
         }
         Done::Report { .. } | Done::Fix { .. } => text.push_str("\nnothing was written\n"),
     }
@@ -707,8 +802,59 @@ mod tests {
                 "keepLatest"
             ])
             .is_ok(),
-            "the name the settings print is taken too"
+            "the name the panel's API uses is taken too"
         );
+    }
+
+    #[test]
+    fn config_adds_each_excluded_name_once_and_takes_the_included_ones_off() {
+        let cli = Cli::try_parse_from([
+            "tools",
+            "config",
+            "duplicate-archetypes",
+            "--exclude",
+            "maps",
+            "--exclude",
+            "cars",
+            "--include",
+            "props",
+            "--differences",
+            "keep-latest",
+        ])
+        .unwrap();
+        let ToolsCommand::Config(args) = cli.command else {
+            panic!("not a config");
+        };
+        let saved = ToolSettings {
+            excluded: vec!["props".to_owned(), "maps".to_owned()],
+            ..ToolSettings::default()
+        };
+
+        let settings = configured(saved, &args);
+
+        assert_eq!(settings.excluded, ["maps", "cars"]);
+        assert_eq!(settings.differences, Differences::KeepLatest);
+        assert_eq!(settings.at_start, ToolMode::Off);
+        assert_eq!(
+            spelled(&DifferencesArg::from(settings.differences)),
+            "keep-latest",
+            "config prints what it takes"
+        );
+    }
+
+    #[test]
+    fn a_run_that_did_not_end_is_an_error_that_says_why() {
+        let failed = ToolRunSummary {
+            problem: Some("a volume is full".to_owned()),
+            ..ToolRunSummary::default()
+        };
+        let done = ToolRunSummary::default();
+
+        assert!(ended(Some(ToolRunOutcome::Done), &done).is_ok());
+        let error = ended(Some(ToolRunOutcome::Failed), &failed).unwrap_err();
+        assert!(error.to_string().contains("a volume is full"), "{error}");
+        assert!(ended(Some(ToolRunOutcome::Cancelled), &done).is_err());
+        assert!(ended(None, &done).is_err());
     }
 
     #[test]

@@ -1,6 +1,7 @@
 //! `observer tools` as it ships: the built binary on a synthetic server folder. A report writes
 //! nothing and exits with 2 while duplicates are left; a fix takes Observer's lock, and an undo
-//! puts back what it took out.
+//! puts back what it took out; the settings, excluded resources included, change from the command
+//! line.
 // The helpers below are test code too, though not inside a `#[test]` function.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -177,6 +178,10 @@ fn a_fix_takes_observer_s_lock_and_an_undo_puts_back_what_it_took_out() {
         words.contains(&format!("{CAMP}: written without the entries at #0")),
         "{words}"
     );
+    assert!(
+        words.contains("observer tools undo duplicate-archetypes --run "),
+        "{words}"
+    );
     assert_eq!(after_fix, 2);
     assert_eq!(again.status.code(), Some(0), "{}", text(&again));
     assert!(
@@ -218,7 +223,48 @@ fn the_settings_are_shown_and_changed_from_the_command_line() {
     for output in [&changed, &shown] {
         let words = text(output);
         assert!(words.contains("at start: report"), "{words}");
-        assert!(words.contains("differences: keepLatest"), "{words}");
+        assert!(words.contains("differences: keep-latest"), "{words}");
         assert!(words.contains("escrowed: skip"), "{words}");
     }
+}
+
+#[test]
+fn an_excluded_resource_is_left_by_the_report_until_it_is_included_again() {
+    let host = Host::new();
+    host.database();
+
+    let excluded = host.observer(&[
+        "tools",
+        "config",
+        "duplicate-archetypes",
+        "--exclude",
+        "props",
+        "--exclude",
+        "maps",
+    ]);
+    let report = host.observer(&["tools", "run", "duplicate-archetypes"]);
+    let refused = host.observer(&["tools", "config", "duplicate-archetypes", "--exclude", "a/b"]);
+    let included = host.observer(&["tools", "config", "duplicate-archetypes", "--include", "props"]);
+
+    assert_eq!(excluded.status.code(), Some(0), "{}", text(&excluded));
+    assert!(
+        text(&excluded).contains("excluded: props, maps"),
+        "{}",
+        text(&excluded)
+    );
+    assert_eq!(report.status.code(), Some(2), "{}", text(&report));
+    let words = text(&report);
+    assert!(
+        words.contains("1 registered more than once: 0 fixable in 0 files, 1 left"),
+        "{words}"
+    );
+    assert!(words.contains("props is excluded"), "{words}");
+    assert_eq!(refused.status.code(), Some(1), "{}", text(&refused));
+    assert!(text(&refused).contains("refused"), "{}", text(&refused));
+    assert_eq!(included.status.code(), Some(0), "{}", text(&included));
+    assert!(
+        text(&included).lines().any(|line| line == "excluded: maps"),
+        "{}",
+        text(&included)
+    );
 }
