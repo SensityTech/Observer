@@ -33,8 +33,8 @@ pub const MINOR_FIELDS: [u32; 6] = [
     joaat(b"hdTextureDist"),
 ];
 
-/// How deep structures may nest below the one digested. An interior's entity and its extension sit
-/// at depth 2.
+/// How deep structures and arrays may nest below the one digested. An interior's entity and its
+/// extension sit at depth 2.
 const MAX_DEPTH: usize = 16;
 
 /// The two digests of one structure: SHA-256 over its canonical bytes.
@@ -47,7 +47,8 @@ pub struct Digests {
 
 /// Digests the structures of one file. They share a budget of canonical bytes, four times the size
 /// of the system segment and a mebibyte more, so a file whose pointers lead to one large structure
-/// many times costs a bounded time; a digest past the budget is `None`.
+/// many times costs a bounded time; a digest past the budget is `None`. Array elements are paid for
+/// when fetched as well, and a digest that fails keeps what it spent.
 #[derive(Debug)]
 pub struct Digester<'m, 'a> {
     meta: &'m Meta<'a>,
@@ -88,8 +89,14 @@ struct Sink {
 }
 
 impl Sink {
+    /// Takes `len` from the budget without writing anything.
+    fn charge(&mut self, len: usize) -> Option<()> {
+        self.budget = self.budget.checked_sub(len)?;
+        Some(())
+    }
+
     fn put(&mut self, bytes: &[u8]) -> Option<()> {
-        self.budget = self.budget.checked_sub(bytes.len())?;
+        self.charge(bytes.len())?;
         self.full.update(bytes);
         if self.in_major {
             self.major.update(bytes);
@@ -146,6 +153,12 @@ impl Walk<'_, '_> {
         at: usize,
         depth: usize,
     ) -> Option<()> {
+        // Arrays nest through here with no structure in between: an array whose elements the file
+        // describes as arrays of the same kind, leading back to itself, would otherwise go on until
+        // the stack runs out, which aborts the whole process.
+        if depth > MAX_DEPTH {
+            return None;
+        }
         let fixed = |len: usize| bytes.get(at..at.checked_add(len)?);
         if let Some(len) = primitive_len(entry.data_type) {
             return sink.put(fixed(len)?);
@@ -205,6 +218,10 @@ impl Walk<'_, '_> {
             STRUCTURE => Some(element.reference_key),
             _ => None,
         };
+        // Fetching the elements is paid for before it is done: an array whose first element cannot
+        // be digested would otherwise be fetched in full again at every level of nesting and for
+        // every archetype leading to it, with nothing taken from the budget.
+        sink.charge(usize::from(header.count))?;
         let items = self.meta.array_items(header, self.stride(element)?, block_type)?;
         for item in items {
             self.value(sink, info, element, item, 0, depth + 1)?;
@@ -280,6 +297,18 @@ mod tests {
 
     fn one(spec: ArchetypeSpec) -> Digests {
         digests(&YtypBuilder::new("file").archetype(spec).build())[0].unwrap()
+    }
+
+    /// Where the entries of the description of `name` start in the system segment.
+    fn entries_at(meta: &Meta<'_>, name: u32) -> usize {
+        let index = meta
+            .structures()
+            .iter()
+            .position(|info| info.name == name)
+            .unwrap();
+        let structures_at = usize::try_from(u64_at(meta.system(), 0x20).unwrap() & 0x0FFF_FFFF).unwrap();
+        usize::try_from(u64_at(meta.system(), structures_at + 32 * index + 0x10).unwrap() & 0x0FFF_FFFF)
+            .unwrap()
     }
 
     #[test]
@@ -397,18 +426,9 @@ mod tests {
         let mut resource = Resource::read(&bytes).unwrap();
         let meta = Meta::parse(resource.system()).unwrap();
         let audio = crate::testing::AUDIO_COLLISION;
-        let info_index = meta
-            .structures()
-            .iter()
-            .position(|info| info.name == audio)
-            .unwrap();
         let block = meta.first_block_of(audio).unwrap();
         let block_start = meta.block(block).unwrap().start;
-        let structures_at = usize::try_from(u64_at(meta.system(), 0x20).unwrap() & 0x0FFF_FFFF).unwrap();
-        let entries_at = usize::try_from(
-            u64_at(meta.system(), structures_at + 32 * info_index + 0x10).unwrap() & 0x0FFF_FFFF,
-        )
-        .unwrap();
+        let entries_at = entries_at(&meta, audio);
         drop(meta);
         let system = resource.system_mut();
         // The `settings` entry (the third) becomes a structure pointer at offset 32...
@@ -418,6 +438,87 @@ mod tests {
         system[block_start + 32..block_start + 40].copy_from_slice(&pointer.to_le_bytes());
 
         assert_eq!(digests(&resource.to_bytes().unwrap())[0], None);
+    }
+
+    #[test]
+    fn an_array_of_arrays_leading_back_to_itself_stops_at_the_depth_limit() {
+        // The element descriptor of `extensions` says its elements are arrays it describes itself,
+        // and the archetype's extension header leads back to that header: every level reads it again.
+        let bytes = YtypBuilder::new("file")
+            .archetype(ArchetypeSpec::base("looped"))
+            .build();
+        let mut resource = Resource::read(&bytes).unwrap();
+        let meta = Meta::parse(resource.system()).unwrap();
+        let base = ArchetypeKind::Base.structure();
+        let extensions = meta.structure(base).unwrap().field(joaat(b"extensions")).unwrap();
+        let (offset, element) = (extensions.offset, extensions.reference_index);
+        let element_at = entries_at(&meta, base) + 16 * usize::from(element);
+        let block = meta.first_block_of(base).unwrap();
+        let header_at = meta.block(block).unwrap().start + offset;
+        drop(meta);
+        let system = resource.system_mut();
+        system[element_at + 8] = ARRAY;
+        system[element_at + 10..element_at + 12].copy_from_slice(&element.to_le_bytes());
+        let pointer = Pointer {
+            block,
+            offset: u32::try_from(offset).unwrap(),
+        };
+        system[header_at..header_at + 8].copy_from_slice(&pointer.pack().to_le_bytes());
+        system[header_at + 8..header_at + 12].copy_from_slice(&[1, 0, 1, 0]);
+        let looped = resource.to_bytes().unwrap();
+
+        assert_eq!(digests(&looped)[0], None);
+        let map_types = crate::ytyp::read(&looped).unwrap();
+        assert_eq!(map_types.archetypes[0].name, crate::hash::name_hash("looped"));
+        assert_eq!(map_types.archetypes[0].digest, None);
+    }
+
+    /// A file of 64 props whose first one's extension list is the archetype list itself, cut to
+    /// `count` entries: the digest of that prop leads to itself until the depth limit.
+    fn looped_through_the_list(count: u16) -> Vec<u8> {
+        let builder = (0..64).fold(YtypBuilder::new("file"), |builder, index| {
+            builder.archetype(ArchetypeSpec::base(&format!("prop_{index}")))
+        });
+        let mut resource = Resource::read(&builder.build()).unwrap();
+        let meta = Meta::parse(resource.system()).unwrap();
+        let map_types = meta
+            .block(meta.first_block_of(crate::ytyp::MAP_TYPES).unwrap())
+            .unwrap();
+        let list = u64_at(meta.system(), map_types.start + 24).unwrap();
+        let first = meta.block(meta.first_block_of(ArchetypeKind::Base.structure()).unwrap());
+        let header_at = first.unwrap().start + 120;
+        drop(meta);
+        let system = resource.system_mut();
+        system[header_at..header_at + 8].copy_from_slice(&list.to_le_bytes());
+        system[header_at + 8..header_at + 10].copy_from_slice(&count.to_le_bytes());
+        system[header_at + 10..header_at + 12].copy_from_slice(&count.to_le_bytes());
+        resource.to_bytes().unwrap()
+    }
+
+    /// How much of the file's budget the failed digest of its first archetype takes.
+    fn spent_on_the_first(bytes: &[u8]) -> usize {
+        let resource = Resource::read(bytes).unwrap();
+        let meta = Meta::parse(resource.system()).unwrap();
+        let map_types = meta
+            .block_bytes(meta.first_block_of(crate::ytyp::MAP_TYPES).unwrap())
+            .unwrap();
+        let list = meta
+            .array_items(array_at(map_types, 24).unwrap(), 8, Some(POINTER_BLOCK))
+            .unwrap();
+        let first = Pointer::unpack(u64_at(list[0], 0).unwrap()).unwrap();
+        let mut digester = Digester::new(&meta);
+        let before = digester.budget;
+        assert_eq!(digester.structure(first), None);
+        before - digester.budget
+    }
+
+    #[test]
+    fn the_elements_of_an_array_are_paid_for_even_when_the_digest_fails() {
+        // Only the first element is ever walked before the digest fails at the depth limit; the
+        // other 63 are fetched at every level all the same, and the budget must say so.
+        let one = spent_on_the_first(&looped_through_the_list(1));
+        let all = spent_on_the_first(&looped_through_the_list(64));
+        assert!(all >= one + 63 * 8, "{one} then {all}");
     }
 
     #[test]

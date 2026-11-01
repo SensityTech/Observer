@@ -4,6 +4,13 @@
 //! file cannot make the reader allocate more than its header declares, and the declaration itself is
 //! capped.
 //!
+//! Only raw DEFLATE is read, as the game reads it: its streamer inflates resources with no header,
+//! like the pages of its archives, and so do FiveM's own readers (`inflateInit2` with -15 window
+//! bits). A payload behind a zlib header fails there, FiveM turning the failure into a fatal error
+//! naming the streamed file, so such a file never registers anything in game. It is refused here
+//! too: read as if loaded, it could be picked as the copy to keep, and rewritten as raw DEFLATE, it
+//! would start loading.
+//!
 //! Writing keeps the 16 bytes as they were and deflates the payload again. Only a payload of the
 //! same length is written, so the flags stay true without being recomputed.
 
@@ -127,8 +134,8 @@ pub struct Resource {
 
 impl Resource {
     /// Opens `bytes`. A file that does not start with `RSC7` is refused with what it looks like. The
-    /// payload must inflate to exactly the size the flags give; bytes after the end of the DEFLATE
-    /// stream are left unread (some tools leave one), and a zlib header before it is tolerated.
+    /// payload must inflate as raw DEFLATE to exactly the size the flags give; bytes after the end of
+    /// the stream are left unread (some tools leave one).
     pub fn read(bytes: &[u8]) -> Result<Self, Error> {
         let kind = sniff(bytes);
         if kind != FileKind::Rsc7 {
@@ -243,28 +250,8 @@ impl fmt::Debug for Resource {
     }
 }
 
-/// Inflates `compressed` to exactly `expected` bytes: raw DEFLATE, as the game writes it, or the same
-/// behind a zlib header when raw inflation fails and the first two bytes are one.
+/// Inflates `compressed`, raw DEFLATE as the game reads it, to exactly `expected` bytes.
 fn inflate(compressed: &[u8], expected: usize) -> Result<Vec<u8>, Error> {
-    let raw = inflate_raw(compressed, expected);
-    if raw.is_err()
-        && let Some(stream) = zlib_stream(compressed)
-        && let Ok(payload) = inflate_raw(stream, expected)
-    {
-        return Ok(payload);
-    }
-    raw
-}
-
-/// What follows a zlib header (`78 01`, `78 5E`, `78 9C` or `78 DA`), if `compressed` starts with one.
-fn zlib_stream(compressed: &[u8]) -> Option<&[u8]> {
-    match compressed {
-        [0x78, 0x01 | 0x5E | 0x9C | 0xDA, stream @ ..] => Some(stream),
-        _ => None,
-    }
-}
-
-fn inflate_raw(compressed: &[u8], expected: usize) -> Result<Vec<u8>, Error> {
     // One byte past the expected size tells a stream that goes on.
     let limit = u64::try_from(expected).unwrap_or(u64::MAX).saturating_add(1);
     let mut payload = Vec::with_capacity(expected.min(compressed.len().saturating_mul(MAX_RATIO)));
@@ -363,12 +350,24 @@ mod tests {
     }
 
     #[test]
-    fn a_zlib_header_before_the_stream_is_tolerated() {
-        let mut compressed = vec![0x78, 0x9C];
-        compressed.extend(deflate(&pattern(8192)));
-        compressed.extend([0, 0, 0, 0]);
-        let resource = Resource::read(&file(0x0002_0000, 0x2000_0000, &compressed)).unwrap();
-        assert_eq!(resource.system(), pattern(8192).as_slice());
+    fn a_payload_behind_a_zlib_header_is_refused_as_the_game_refuses_it() {
+        let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), Compression::fast());
+        encoder.write_all(&pattern(8192)).unwrap();
+        let wrapped = encoder.finish().unwrap();
+        assert_eq!(wrapped[0], 0x78);
+        assert!(matches!(
+            Resource::read(&file(0x0002_0000, 0x2000_0000, &wrapped)),
+            Err(Error::Inflate(_))
+        ));
+        for header in [[0x78, 0x01], [0x78, 0x5E], [0x78, 0x9C], [0x78, 0xDA]] {
+            let mut compressed = header.to_vec();
+            compressed.extend(deflate(&pattern(8192)));
+            compressed.extend([0, 0, 0, 0]);
+            assert!(
+                Resource::read(&file(0x0002_0000, 0x2000_0000, &compressed)).is_err(),
+                "{header:02X?}"
+            );
+        }
     }
 
     #[test]

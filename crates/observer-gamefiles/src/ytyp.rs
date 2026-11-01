@@ -1,11 +1,13 @@
 //! The archetypes a `.ytyp` defines, as the client registers them when the file loads, and the one
 //! change Observer makes to such a file: taking entries out of its archetype list.
 //!
-//! The list is `CMapTypes.archetypes`, an array of packed pointers kept in a pointer block. Each
-//! pointer leads to a `CBaseArchetypeDef`, `CTimeArchetypeDef` or `CMloArchetypeDef`, told apart by
-//! the block it lands in; a file may spread one kind over several blocks, so the list is the only
-//! order there is. The fields are found through the file's own structure description when it has
-//! one, else at the offsets every known writer uses.
+//! The list is `CMapTypes.archetypes`, an array of packed pointers kept in a pointer block. That
+//! `CMapTypes` is the root block the metadata header names, where the game starts reading, and a
+//! file holding another one is refused. Each pointer leads to a `CBaseArchetypeDef`,
+//! `CTimeArchetypeDef` or `CMloArchetypeDef`, told apart by the block it lands in; a file may spread
+//! one kind over several blocks, so the list is the only order there is. The fields are found
+//! through the file's own structure description when it has one, else at the offsets every known
+//! writer uses.
 //!
 //! Removing entries moves the later pointers down inside the list, zeroes the freed slots and lowers
 //! the count. No other byte moves and no size changes, so the RSC7 header stays true; the structures
@@ -332,9 +334,9 @@ struct List {
 }
 
 impl List {
-    /// The list of the first `CMapTypes` block. The list must lie wholly in one pointer block.
+    /// The list of the root `CMapTypes`. The list must lie wholly in one pointer block.
     fn locate(meta: &Meta<'_>) -> Result<Self, Error> {
-        let id = meta.first_block_of(MAP_TYPES).ok_or(Error::NoMapTypes)?;
+        let id = root_map_types(meta)?;
         let block = *meta.block(id).ok_or(Error::NoMapTypes)?;
         let bytes = meta
             .block_bytes(id)
@@ -386,6 +388,23 @@ impl List {
             ))?;
         Ok(list)
     }
+}
+
+/// The number of the block holding `CMapTypes`. The game loads the root block the header names, so
+/// that must be it, and it must be the only one: reading, patching and checking another list would
+/// report archetypes the game never registers, or change a list it never reads.
+fn root_map_types(meta: &Meta<'_>) -> Result<u16, Error> {
+    let mut found = meta.blocks().iter().filter(|block| block.structure == MAP_TYPES);
+    if found.next().is_none() {
+        return Err(Error::NoMapTypes);
+    }
+    if found.next().is_some() {
+        return Err(Error::Malformed("the file holds more than one CMapTypes"));
+    }
+    u16::try_from(meta.root_block())
+        .ok()
+        .filter(|&id| meta.block(id).is_some_and(|block| block.structure == MAP_TYPES))
+        .ok_or(Error::Malformed("the root block is not CMapTypes"))
 }
 
 /// Why the file's layout is not the one the patch was checked against, if it is not.
@@ -471,7 +490,12 @@ fn chosen(before: &MapTypes, count: usize, indices: &[usize]) -> Result<Vec<bool
         if *slot {
             return Err(Error::DuplicateIndex(index));
         }
-        if !before.archetypes.iter().any(|archetype| archetype.index == index) {
+        // The archetypes are in list order: a search, not a scan, for each of up to 65,535 indices.
+        if before
+            .archetypes
+            .binary_search_by_key(&index, |archetype| archetype.index)
+            .is_err()
+        {
             return Err(Error::NotAnArchetype(index));
         }
         *slot = true;
@@ -830,6 +854,43 @@ mod tests {
             );
         });
         assert!(matches!(read(&elsewhere), Err(Error::Malformed(_))));
+    }
+
+    /// Where the record of block `id` lies in the block table.
+    fn block_record(system: &[u8], id: usize) -> usize {
+        usize::try_from(u64_at(system, 0x30).unwrap() & 0x0FFF_FFFF).unwrap() + 16 * (id - 1)
+    }
+
+    #[test]
+    fn the_list_is_read_from_the_root_block_alone() {
+        let bytes = camp();
+        let refused = |bytes: &[u8]| {
+            matches!(read(bytes), Err(Error::Malformed(_)))
+                && matches!(remove_archetypes(bytes, &[0]), Err(Error::Malformed(_)))
+        };
+        // The root names an archetype block, no block, or a block past the table.
+        for root in [2u32, 0, 99] {
+            let elsewhere = altered(&bytes, |_, system| {
+                system[0x1C..0x20].copy_from_slice(&root.to_le_bytes());
+            });
+            assert!(refused(&elsewhere), "root {root}");
+        }
+        // A second CMapTypes block, the root left on the first, then moved to the second.
+        let base =
+            |meta: &Meta<'_>| usize::from(meta.first_block_of(ArchetypeKind::Base.structure()).unwrap());
+        let second = altered(&bytes, |meta, system| {
+            let record = block_record(system, base(meta));
+            system[record..record + 4].copy_from_slice(&MAP_TYPES.to_le_bytes());
+        });
+        assert!(refused(&second));
+        let moved = altered(&bytes, |meta, system| {
+            let record = block_record(system, base(meta));
+            system[record..record + 4].copy_from_slice(&MAP_TYPES.to_le_bytes());
+            let root = u32::try_from(base(meta)).unwrap();
+            system[0x1C..0x20].copy_from_slice(&root.to_le_bytes());
+        });
+        assert!(refused(&moved));
+        assert_eq!(names(&read(&bytes).unwrap()).len(), 5, "the untouched file reads");
     }
 
     #[test]

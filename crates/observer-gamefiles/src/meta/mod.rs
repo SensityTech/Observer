@@ -91,25 +91,52 @@ pub struct StructureInfo {
     pub key: u32,
     pub size: usize,
     pub entries: Vec<Entry>,
+    /// The positions in `entries` of the fields, by offset, and of every entry, by name. A
+    /// description may hold 65,535 entries and every archetype of a list may share it, so both
+    /// orders are found once here instead of at each lookup.
+    by_offset: Vec<usize>,
+    by_name: Vec<usize>,
 }
 
 impl StructureInfo {
-    /// The field named `name`; array element descriptors are no fields.
-    pub fn field(&self, name: u32) -> Option<&Entry> {
-        self.entries
+    /// A description of these entries.
+    fn new(name: u32, key: u32, size: usize, entries: Vec<Entry>) -> Self {
+        // Stable sorts keep the order of the file among equals, as a scan of the entries would.
+        let mut by_offset: Vec<usize> = entries
             .iter()
-            .find(|entry| entry.name == name && name != ARRAY_INFO)
+            .enumerate()
+            .filter(|(_, entry)| entry.name != ARRAY_INFO)
+            .map(|(index, _)| index)
+            .collect();
+        by_offset.sort_by_key(|&index| entries.get(index).map(|entry| entry.offset));
+        let mut by_name: Vec<usize> = (0..entries.len()).collect();
+        by_name.sort_by_key(|&index| entries.get(index).map(|entry| entry.name));
+        Self {
+            name,
+            key,
+            size,
+            entries,
+            by_offset,
+            by_name,
+        }
+    }
+
+    /// The field named `name`, the first if the description gives two; array element descriptors
+    /// are no fields.
+    pub fn field(&self, name: u32) -> Option<&Entry> {
+        if name == ARRAY_INFO {
+            return None;
+        }
+        let first = self
+            .by_name
+            .partition_point(|&index| self.entries.get(index).is_some_and(|entry| entry.name < name));
+        let entry = self.entries.get(*self.by_name.get(first)?)?;
+        (entry.name == name).then_some(entry)
     }
 
     /// The fields in the order they lie in the structure, array element descriptors left out.
-    pub fn fields_by_offset(&self) -> Vec<&Entry> {
-        let mut fields: Vec<&Entry> = self
-            .entries
-            .iter()
-            .filter(|entry| entry.name != ARRAY_INFO)
-            .collect();
-        fields.sort_by_key(|entry| entry.offset);
-        fields
+    pub fn fields_by_offset(&self) -> impl Iterator<Item = &Entry> {
+        self.by_offset.iter().filter_map(|&index| self.entries.get(index))
     }
 }
 
@@ -223,7 +250,12 @@ pub struct Meta<'a> {
 
 impl<'a> Meta<'a> {
     /// Parses the header and tables of `system`. Every table and every block must lie inside the
-    /// segment; values inside blocks are only read, and checked, when asked for.
+    /// segment; values inside blocks are only read, and checked, when asked for. The enum
+    /// descriptions are not read: nothing here needs them.
+    ///
+    /// Each structure description copies its entries, and nothing stops two descriptions from
+    /// naming the same table: the descriptions may hold no more entries in all than tables apart
+    /// would fit in the segment, so a small file cannot make the parse build billions of them.
     pub fn parse(system: &'a [u8]) -> Result<Self, Error> {
         if system.len() < HEADER_LEN || u32_at(system, 0x10) != Some(MARKER) {
             return Err(Error::NotMeta);
@@ -253,8 +285,9 @@ impl<'a> Meta<'a> {
             .collect::<Result<Vec<_>, _>>()?;
 
         let structures_at = table(system, header(0x20)?, count(0x48)?, STRUCTURE_LEN)?;
+        let mut entries_left = system.len() / ENTRY_LEN;
         let structures = structures_at
-            .map(|at| structure_info(system, at))
+            .map(|at| structure_info(system, at, &mut entries_left))
             .collect::<Result<Vec<_>, _>>()?;
         let mut by_name = HashMap::with_capacity(structures.len());
         for (index, structure) in structures.iter().enumerate() {
@@ -329,8 +362,11 @@ impl<'a> Meta<'a> {
 
     /// The elements of an array, `item_len` bytes each. An array that runs past its block goes on
     /// at the start of the next one if that block holds the same type, as writers split large
-    /// arrays; bytes left at a block's end too few for an element are skipped. `block_type`, when
-    /// given, is the type the first block must hold. `None` when the array leads nowhere.
+    /// arrays; bytes left at a block's end too few for an element are skipped. A following block
+    /// that holds no whole element ends the array, as no writer leaves one inside it: an array
+    /// spans at most one block more than its elements, however many empty blocks the file lines
+    /// up. `block_type`, when given, is the type the first block must hold. `None` when the array
+    /// leads nowhere.
     pub fn array_items(
         &self,
         header: ArrayHeader,
@@ -355,6 +391,9 @@ impl<'a> Meta<'a> {
         loop {
             let block = self.block(id).filter(|block| block.structure == structure)?;
             let mut rest = self.system.get(block.start..block.end())?.get(offset..)?;
+            if id != pointer.block && rest.len() < item_len {
+                return None;
+            }
             while items.len() < count && rest.len() >= item_len {
                 let (item, tail) = rest.split_at(item_len);
                 items.push(item);
@@ -393,7 +432,9 @@ fn table(
     Ok((0..count).map(move |index| start + index * len))
 }
 
-fn structure_info(system: &[u8], at: usize) -> Result<StructureInfo, Error> {
+/// The description at `at`, its entries taken from `entries_left`, the most the descriptions not yet
+/// read may still hold.
+fn structure_info(system: &[u8], at: usize, entries_left: &mut usize) -> Result<StructureInfo, Error> {
     let malformed = || Error::Malformed("a structure description runs past the system segment");
     let name = u32_at(system, at).ok_or_else(malformed)?;
     let key = u32_at(system, at + 4).ok_or_else(malformed)?;
@@ -401,6 +442,9 @@ fn structure_info(system: &[u8], at: usize) -> Result<StructureInfo, Error> {
     let size = u32_at(system, at + 0x18).ok_or_else(malformed)?;
     let size = usize::try_from(size).map_err(|_| malformed())?;
     let count = u16_at(system, at + 0x1E).map(usize::from).ok_or_else(malformed)?;
+    *entries_left = entries_left.checked_sub(count).ok_or(Error::Malformed(
+        "the structure descriptions hold more entries than the system segment",
+    ))?;
     let entries = table(system, entries_address, count, ENTRY_LEN)?
         .map(|at| {
             Some(Entry {
@@ -413,12 +457,7 @@ fn structure_info(system: &[u8], at: usize) -> Result<StructureInfo, Error> {
         })
         .collect::<Option<Vec<_>>>()
         .ok_or_else(malformed)?;
-    Ok(StructureInfo {
-        name,
-        key,
-        size,
-        entries,
-    })
+    Ok(StructureInfo::new(name, key, size, entries))
 }
 
 #[cfg(test)]
@@ -481,7 +520,7 @@ mod tests {
         assert_eq!(base.size, 144);
         let name = base.field(crate::hash::joaat(b"name")).unwrap();
         assert_eq!((name.offset, name.data_type), (88, data_type::HASH));
-        let offsets: Vec<usize> = base.fields_by_offset().iter().map(|entry| entry.offset).collect();
+        let offsets: Vec<usize> = base.fields_by_offset().map(|entry| entry.offset).collect();
         assert!(offsets.windows(2).all(|pair| pair[0] <= pair[1]));
     }
 
@@ -514,6 +553,66 @@ mod tests {
         let mut long_block = system.clone();
         long_block[blocks + 4..blocks + 8].copy_from_slice(&u32::MAX.to_le_bytes());
         assert!(matches!(Meta::parse(&long_block), Err(Error::Malformed(_))));
+    }
+
+    /// A segment of 8 KiB, room for 512 entries, whose `descriptions` structure descriptions all
+    /// name the same table of 64 entries.
+    fn sharing_one_table(descriptions: u16) -> Vec<u8> {
+        let mut system = vec![0; 8192];
+        system[0x10..0x14].copy_from_slice(&MARKER.to_le_bytes());
+        system[0x20..0x28].copy_from_slice(&0x5000_0100u64.to_le_bytes());
+        system[0x48..0x4A].copy_from_slice(&descriptions.to_le_bytes());
+        for index in 0..u32::from(descriptions) {
+            let at = 0x100 + 32 * usize::try_from(index).unwrap();
+            system[at..at + 4].copy_from_slice(&index.to_le_bytes());
+            system[at + 0x10..at + 0x18].copy_from_slice(&0x5000_1000u64.to_le_bytes());
+            system[at + 0x1E..at + 0x20].copy_from_slice(&64u16.to_le_bytes());
+        }
+        system
+    }
+
+    #[test]
+    fn descriptions_sharing_one_table_hold_no_more_entries_than_the_segment() {
+        let eight = sharing_one_table(8);
+        let meta = Meta::parse(&eight).unwrap();
+        let entries: usize = meta.structures().iter().map(|info| info.entries.len()).sum();
+        assert_eq!(entries, 512);
+        assert!(matches!(
+            Meta::parse(&sharing_one_table(9)),
+            Err(Error::Malformed(_))
+        ));
+    }
+
+    #[test]
+    fn fields_are_found_by_name_and_walked_by_offset_as_the_file_lists_them() {
+        let entry = |name: u32, offset: usize| Entry {
+            name,
+            offset,
+            data_type: data_type::INT,
+            reference_index: 0,
+            reference_key: 0,
+        };
+        let info = StructureInfo::new(
+            1,
+            0,
+            16,
+            vec![
+                entry(9, 8),
+                entry(ARRAY_INFO, 0),
+                entry(3, 4),
+                entry(9, 12),
+                entry(5, 4),
+            ],
+        );
+        assert_eq!(info.field(9), Some(&entry(9, 8)), "the first of two");
+        assert_eq!(info.field(5), Some(&entry(5, 4)));
+        assert_eq!(info.field(ARRAY_INFO), None);
+        assert_eq!(info.field(4), None);
+        let walked: Vec<(u32, usize)> = info
+            .fields_by_offset()
+            .map(|entry| (entry.name, entry.offset))
+            .collect();
+        assert_eq!(walked, [(3, 4), (5, 4), (9, 8), (9, 12)]);
     }
 
     #[test]
@@ -561,5 +660,42 @@ mod tests {
             None
         );
         assert_eq!(meta.array_items(header, 0, None), None);
+    }
+
+    #[test]
+    fn a_following_block_too_short_for_an_element_ends_the_array() {
+        let bytes = YtypBuilder::new("props")
+            .archetypes_per_block(1)
+            .archetype(ArchetypeSpec::base("a"))
+            .archetype(ArchetypeSpec::base("b"))
+            .archetype(ArchetypeSpec::base("c"))
+            .build();
+        let mut system = system_of(&bytes);
+        let base = ytyp::ArchetypeKind::Base.structure();
+        let first = Meta::parse(&system).unwrap().first_block_of(base).unwrap();
+        let header = ArrayHeader {
+            pointer: Some(Pointer {
+                block: first,
+                offset: 0,
+            }),
+            count: 2,
+            capacity: 2,
+        };
+        assert_eq!(
+            Meta::parse(&system)
+                .unwrap()
+                .array_items(header, 144, Some(base))
+                .map(|items| items.len()),
+            Some(2)
+        );
+        // The second block emptied: the third holds an element of the same type, but no array
+        // reaches it across an empty block.
+        let blocks = usize::try_from(u64_at(&system, 0x30).unwrap() & 0x0FFF_FFFF).unwrap();
+        let second = blocks + 16 * usize::from(first) + 4;
+        system[second..second + 4].copy_from_slice(&0u32.to_le_bytes());
+        assert_eq!(
+            Meta::parse(&system).unwrap().array_items(header, 144, Some(base)),
+            None
+        );
     }
 }
