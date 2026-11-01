@@ -398,6 +398,10 @@ async fn builds(
 ) -> anyhow::Result<(Artifacts, ArtifactsTask)> {
     let root = &paths.artifacts;
     let (catalog, http) = sources()?;
+    #[cfg(feature = "test-catalog")]
+    let probation = test_probation()?;
+    #[cfg(not(feature = "test-catalog"))]
+    let probation = None;
     let setup = ArtifactsSetup {
         db: db.clone(),
         clock: clock.clone(),
@@ -409,9 +413,36 @@ async fn builds(
         catalog,
         http,
     };
-    Artifacts::start(setup, |_| {})
-        .await
-        .with_context(|| format!("cannot use {} for FXServer builds", root.display()))
+    Artifacts::start(setup, |timings| {
+        if let Some(stable_for) = probation {
+            timings.stable_for = stable_for;
+        }
+    })
+    .await
+    .with_context(|| format!("cannot use {} for FXServer builds", root.display()))
+}
+
+/// How long a new build must stay up to pass its probation in the browser tests, so that they see
+/// one pass: the seconds `OBSERVER_TEST_PROBATION` names, Observer's ten minutes without it.
+#[cfg(feature = "test-catalog")]
+fn test_probation() -> anyhow::Result<Option<Duration>> {
+    let Some(seconds) = std::env::var_os("OBSERVER_TEST_PROBATION") else {
+        return Ok(None);
+    };
+    let seconds: u64 = seconds
+        .to_str()
+        .and_then(|seconds| seconds.parse().ok())
+        .with_context(|| {
+            format!(
+                "OBSERVER_TEST_PROBATION is not a number of seconds: {}",
+                seconds.display()
+            )
+        })?;
+    warn!(
+        seconds,
+        "a new build passes its probation after this many seconds up, not ten minutes"
+    );
+    Ok(Some(Duration::from_secs(seconds)))
 }
 
 /// Where builds are listed and downloaded from: Cfx.re, or, in a build with the `test-catalog`

@@ -30,6 +30,11 @@ const SETUP_LINK = /http:\/\/\S+\/setup#\S+/;
 const TEST_CATALOG = 'builds come from the test catalog';
 /** The build the fake stands for: the one it reports in `/info.json`. */
 const BUILD = 35245;
+/**
+ * How long a new build stays up to pass its probation, instead of ten minutes: the fake passes its
+ * own before the flows choose the next build, and the next build is still on it when it starts.
+ */
+const PROBATION_SECONDS = 30;
 
 export const panelUrl = `http://127.0.0.1:${port}`;
 
@@ -149,7 +154,11 @@ export default async function setup() {
         }
     };
 
-    const env: NodeJS.ProcessEnv = { ...process.env, OBSERVER_TEST_CATALOG: String(catalogPort) };
+    const env: NodeJS.ProcessEnv = {
+        ...process.env,
+        OBSERVER_TEST_CATALOG: String(catalogPort),
+        OBSERVER_TEST_PROBATION: String(PROBATION_SECONDS),
+    };
     // Under systemd Observer prints no setup link.
     delete env.INVOCATION_ID;
     delete env.NOTIFY_SOCKET;
@@ -195,6 +204,7 @@ export default async function setup() {
     process.env.E2E_URL = panelUrl;
     process.env.E2E_SETUP_LINK = link;
     process.env.E2E_BUILD = String(BUILD);
+    process.env.E2E_PROBATION = String(PROBATION_SECONDS);
     process.env.E2E_SERVER_DATA = serverData;
 
     // Windows holds the databases and the fake's copy a moment after the process ends.
