@@ -1,5 +1,5 @@
 //! The server setup: what Observer finds in the folder of an existing server and in its cfg before
-//! it saves launch settings for them. Observer only reads that folder; the reports name each
+//! it saves launch settings for them. The setup only reads that folder; the reports name each
 //! problem with its file and line, and the owner fixes the cfg.
 
 use serde::{Deserialize, Serialize};

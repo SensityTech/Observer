@@ -114,7 +114,9 @@ configured, and again from **Server → Run the setup**. It has four steps:
 
 1. **Server folder.** The full path on the host of the folder that holds `resources` and the cfg, such
    as `C:\FXServer\server-data` or `/srv/fxserver/server-data`. Network paths are not supported.
-   FXServer runs from this folder: Observer copies nothing and writes nothing into it.
+   FXServer runs from this folder. Observer copies nothing into it, and writes there only what people
+   upload over [SFTP](#file-access-over-sftp) and the fixes of the [server tools](#server-tools) the
+   owner runs or turns on: the **Tools** page lists each fix with its backup.
 2. **Config file.** The cfg FXServer executes, relative to the folder, such as `server.cfg`. Observer
    reads it and the cfgs it runs in turn, never changes them, and lists what it finds with file and line:
    blocking problems, warnings and notes, and what the cfg sets (game, endpoints, slots, OneSync,
@@ -230,6 +232,7 @@ data/
 │   ├── .staging/          downloads and extractions in progress
 │   └── .trash/            deleted builds on their way out
 ├── crashes/               FXServer's crash dumps and hang snapshots: the last 10, 20 GiB at most
+├── tools/backups/         the originals of the files the server tools changed, each with a .json
 └── fxserver.pid           Linux: the running FXServer, which the next start ends if Observer died
 ```
 
@@ -281,9 +284,12 @@ Cfx.re's [Platform License Agreement](https://fivem.net/terms) covers the server
 | `observer db backup` | A manual backup, while Observer is stopped. |
 | `observer fxserver run --build <folder> --data <folder>` | FXServer under the supervisor in the foreground, without the panel or the database, while Observer is stopped. `--cfg`, `--onesync`, `--port`, `--set NAME=VALUE`. |
 | `observer service print-unit` | Linux: the systemd unit, see [systemd](#systemd). |
+| `observer tools run duplicate-archetypes` | Find duplicate archetypes and print the report. `--fix`, `--json`, `--data <folder> --cfg <file>` or `--all-resources`. Exit code 2 when groups are left. See [Server tools](#server-tools). |
+| `observer tools undo duplicate-archetypes` | Put back what a run took out: `--run <id>` or `--all`. |
+| `observer tools config duplicate-archetypes` | The tool's settings: `--at-start`, `--differences`, `--escrowed`. |
 
-The `user`, `setup-link` and `artifacts` commands work while Observer runs. `--version` names the commit
-a release was built from.
+The `user`, `setup-link` and `artifacts` commands, and `tools run` without `--fix`, work while Observer
+runs. `--version` names the commit a release was built from.
 
 ## HTTPS
 
@@ -422,6 +428,146 @@ database string), `cache/`, Observer's own folders and `observer.toml`, `.git`, 
 files. Every change is in the audit log; uploads are written to a temporary file and swapped in only
 when complete, so FXServer never reads half a file. Observer never restarts a resource after an
 upload: restart it from the console, or let your own resource react.
+
+## Server tools
+
+Server tools look in the server's resources for problems FXServer does not report, and repair those
+they can without changing what players see. The first one finds duplicate archetypes. A tool runs when
+the owner asks, on the **Tools** page or from the [command line](#command-line), and before every
+start of FXServer once the owner turns that on. Nothing is written into the server folder until the
+owner runs a fix or turns fixes on.
+
+### Duplicate archetypes
+
+An archetype is the definition of a prop, a vehicle, a weapon or a ped model, which the FiveM client
+registers by the hash of its name. When a resource defines one that is already registered, the client
+logs, once per archetype and session:
+
+```text
+Duplicate Archetype 'prop_gift_box' (F032591F), seen in 'gift_props2.ytyp' and 'gift_props.ytyp'
+```
+
+The line goes to the client's log, on the player's machine: the server never sees it, and neither
+does Observer's console. `Extra` in place of a file stands for a weapon, vehicle or ped `.meta`; the
+same file named twice means two copies inside it.
+
+**What it reads.** The cfg and the manifests, to predict which resources start and in which order;
+the `.ytyp` files the started resources stream, one per name, as the client loads them; and the
+`.meta` files they load as `WEAPON_METADATA_FILE`, `VEHICLE_METADATA_FILE` or `PED_METADATA_FILE`.
+It needs no GTA V install and decrypts nothing: a file encrypted by the asset escrow is listed as
+unreadable, and archives loaded as `RPF_FILE` are not opened. The archetypes of the game itself and
+of Rockstar's updates are not read, so a resource that defines one of them again is not seen.
+
+**What it fixes.** The copies of one archetype form a group. By default, the tool fixes a group, by
+taking out every copy but one, only when all of these hold:
+
+- the copies are identical, so which one the game uses cannot matter;
+- they all lie in one resource, so the kept copy starts and stops with those taken out;
+- that resource is not protected by the asset escrow (a `.fxap` at its root): its author ships the
+  fix, and the report names the files and entries to pass on;
+- none defines an interior (an MLO), and `.ytyp` copies do not meet `.meta` ones;
+- no other file can take the place of a `.ytyp` involved: no other `.ytyp` of the same name in the
+  `stream/` of any resource, its own included, started or not, and no other resource requesting or
+  listing its name (`DLC_ITYP_REQUEST`, a `.ymf` manifest or `_cache_y.dat`); for copies in two
+  files, no manifest of their resource lists them;
+- every file can be changed: a layout the tool knows how to change, not read-only, not reached
+  through a link, not in an excluded resource;
+- the fix leaves exactly one copy: nothing is taken out of a group it cannot fully fix.
+
+The kept copy is the last one registered. Every group the tool leaves is reported with every reason,
+so the report says which setting would change the answer, or what to pass on to a resource's author.
+With the default settings no fix depends on the prediction: it only orders the report and picks which
+of identical copies stays.
+
+**How it writes.** A fix takes the extra entries out of a `.ytyp`'s archetype list, or the extra
+`Item`s out of a `.meta`, and leaves the rest of the file as it was. The new file is written under a
+temporary name beside the old one, then renamed over it, never written in place: FXServer hard-links
+every stream file into its `cache/`, and a write in place would change the cached copy too. A file
+changed since the scan is left alone. A change takes effect the next time FXServer starts the
+resource.
+
+Each write is recorded before it starts: whatever stops Observer midway, its next start tells from the
+file's contents whether the write landed, and removes a temporary file left behind. A run leaves
+64 MiB free on the server folder's volume and on the data folder's, and stops at the first file that
+would take more.
+
+**Backups, heal and undo.**
+
+- Before it first changes a file, Observer keeps it as it was in `data/tools/backups/<sha256>`, with
+  `<sha256>.json` naming the server folder, the file and the time, so that it can be copied back by
+  hand even without the database. A backup is verified before every restore, and kept while a fix
+  relies on it and for 30 days after the last one ends.
+- **Heal** runs before every start of FXServer, whatever the settings and the cause of the start, a
+  crash included. It puts back every entry whose kept copy no longer stands in for it: its file gone
+  or no longer defining the archetype, another file now able to take its place, its resource
+  excluded, or escrowed while escrowed resources are skipped. When unsure, it puts the entry back: a
+  duplicate warning is harmless, a missing prop is not. A file someone else has changed since is
+  left as it is, and no longer counted as fixed.
+- **Undo** puts back what one run took out, or everything, by rebuilding each file from its backup.
+  A file changed since Observer wrote it is left alone.
+
+**Settings**, per server:
+
+- **At start**: `off` (the default), the tool runs only when asked; `report`, it scans before every
+  start and writes to the console when the result has changed; `fix`, it scans and applies the fixes
+  before every start.
+- **Differences**: `identical` (the default) fixes identical copies only; `keepLatest` fixes copies
+  that differ too, keeping the last one registered. The client keeps every copy, and which one the
+  game uses when they differ is not known for sure: "the last one" is a prediction. If the game uses
+  another, `keepLatest` changes the model, the textures or the draw distance players see.
+- **Escrowed**: `skip` (the default) only reports escrowed resources; `allow` fixes their plain files
+  too.
+- **Excluded resources**: resources never changed, by name. Put there those a pipeline or a file group
+  keeps: otherwise each deploy brings their duplicates back, and the next fix changes the file again.
+
+Excluding a resource puts its entries back at the next heal, and so does setting **Escrowed** back to
+`skip` for escrowed resources.
+
+The **Tools** page is the owner's. It shows the last run and every group: its copies, how they differ
+(only in draw distances and bounds, or in more), what the tool does and why, and the files changed
+with their backups. **Scan now** makes a new report. **Fix** applies the plan on screen: if a fresh
+scan plans something else, the page shows the new plan instead. **Fix**, **Undo** and the settings
+ask for the owner's password again, and **Fix** and **Undo** run only while FXServer is stopped.
+Writes and settings changes are in the audit log; report runs are not.
+
+Before a start, FXServer waits for the tool. Past 60 seconds, the tool is told to stop between two
+files, and FXServer starts once it has; a stop in the meantime cancels the start. After a crash, the
+tool only heals. Its console lines appear under `tools`, a summary and at most 10 more, and the
+**Tools** page has the rest. Uploads over SFTP wait while a tool writes. `observer fxserver run` runs
+no tool, and says so.
+
+From the host:
+
+```sh
+observer tools run duplicate-archetypes [--fix] [--json] [--data DIR --cfg FILE | --all-resources]
+observer tools undo duplicate-archetypes [--run ID | --all]
+observer tools config duplicate-archetypes [--at-start M] [--differences D] [--escrowed E]
+```
+
+- `run` reads the server folder and the cfg of the launch settings, or those `--data` and `--cfg`
+  name; `--all-resources` reads no cfg and takes every resource FXServer accepts as started, in name
+  order. It prints the report, as JSON with `--json`, and writes nothing without `--fix`. It exits
+  with code 2 when groups are left, 1 on an error.
+- `undo --run ID` puts back what that run took out, `undo --all` everything.
+- `config` sets `--at-start` (`off`, `report` or `fix`), `--differences` (`identical` or
+  `keepLatest`) and `--escrowed` (`skip` or `allow`). Excluded resources are set on the **Tools** page.
+
+`run` without `--fix` takes no lock and works while Observer runs; `--fix` and `undo` take Observer's
+lock, so stop Observer first.
+
+**Limits.**
+
+- **Runtime starts.** Resources that scripts or the console start, stop or restart while the server
+  runs are not seen, nor constraints such as `/assetpacks` that only FXServer decides: the report may
+  list groups the clients never meet, or miss some. No fix depends on them, since the copies of a
+  fixed group share one resource.
+- **RedM** is not supported: when the cfg sets `gamename rdr3`, the tool does nothing.
+- **File metadata.** A replaced file is a new file: on Linux it keeps its mode, not its ACLs or
+  extended attributes; on Windows it takes the permissions its folder gives new files. A read-only
+  file is never changed.
+- **Folder order on Linux.** Windows lists folders in a set order, Linux in none: where a resource
+  holds two stream files of the same name, which one FXServer sends may differ from the prediction.
+  The report notes it, and such files are never changed.
 
 ## Integrations
 

@@ -1,5 +1,7 @@
 //! The server setup: checks of an existing server's folder and cfg, read where they are, and the
-//! save that follows them. Observer never writes into that folder; the owner fixes what blocks.
+//! save that follows them. The setup never writes into that folder; the owner fixes what blocks.
+//! Observer writes there only SFTP uploads and the fixes of the server tools the owner runs or
+//! turns on.
 
 use std::io;
 

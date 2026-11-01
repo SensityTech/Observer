@@ -1,5 +1,6 @@
 //! The server data folder as FXServer reads it: the resources it finds under `resources/`, and the
-//! setup's checks of a folder and of its cfg, which read and never write.
+//! setup's checks of a folder and of its cfg, which read and never write. Observer writes into the
+//! folder only SFTP uploads and the fixes of the server tools the owner runs or turns on.
 
 use std::collections::{HashSet, VecDeque};
 use std::ffi::OsStr;
