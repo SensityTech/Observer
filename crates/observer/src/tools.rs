@@ -6,7 +6,7 @@
 //! others.
 
 use std::fmt::Write as _;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::atomic::AtomicBool;
 
@@ -15,15 +15,16 @@ use clap::{ArgGroup, Args, Subcommand, ValueEnum};
 use observer_app::{Clock, CommitGate, OwnPaths, Servers, Target, Tools, ToolsSetup};
 use observer_domain::error::ErrorCode;
 use observer_domain::launch::StoredLaunch;
+use observer_domain::server_data::Game;
 use observer_domain::tools::{
     ArchetypeCopy, ArchetypeGroup, ArchetypeReport, Contest, CopySource, Difference, Differences,
     EscrowPolicy, GroupAction, LeaveReason, NotWritable, ToolMode, ToolNoteKind, ToolRunOutcome,
     ToolRunSummary, ToolSettings, ToolUndoScope,
 };
 use observer_fxserver::layout::{Flavour, Layout};
-use observer_store::{Database, artifacts, launch};
+use observer_store::{Database, StoreError, artifacts, launch};
 use observer_tools::fix::Outcome;
-use serde_json::json;
+use serde_json::{Value, json};
 
 use crate::config::{Config, DataPaths};
 use crate::lock;
@@ -38,7 +39,8 @@ pub enum ToolsCommand {
     /// Scan the server folder and report what the tool finds; with --fix, apply what it can fix.
     /// Exits with 2 while duplicates are left, 1 on an error.
     Run(RunArgs),
-    /// Put back what fixes took out, in the folder of the launch settings. Stop Observer first.
+    /// Put back what fixes took out: a run's in the folder it changed, everything in the folder of
+    /// the launch settings, or in the folder --data names. Stop Observer first.
     Undo(UndoArgs),
     /// Show what a tool does at every start, or change it. Works while Observer runs.
     Config(ConfigArgs),
@@ -74,7 +76,8 @@ pub struct RunArgs {
     #[arg(long, value_enum)]
     differences: Option<DifferencesArg>,
     /// Whether resources protected by the asset escrow may be changed, for this run only; the
-    /// saved setting by default.
+    /// saved setting by default. A fix takes allow only once it is saved: the next heal puts back
+    /// what a fix took out of escrowed resources while the saved setting skips them.
     #[arg(long, value_enum)]
     escrowed: Option<EscrowedArg>,
 }
@@ -89,6 +92,10 @@ pub struct UndoArgs {
     /// Put back everything: every changed file gets its original again.
     #[arg(long)]
     all: bool,
+    /// The server folder to put back in: by default, the folder a run changed for --run, the
+    /// launch settings' for --all.
+    #[arg(long, value_name = "DIR")]
+    data: Option<PathBuf>,
 }
 
 #[derive(Debug, Args)]
@@ -132,7 +139,7 @@ enum DifferencesArg {
     KeepLatest,
 }
 
-#[derive(Debug, Clone, Copy, ValueEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 enum EscrowedArg {
     /// Report them only: their author ships the fix.
     Skip,
@@ -209,7 +216,7 @@ pub async fn command(config: &Config, command: ToolsCommand) -> anyhow::Result<E
 async fn report(config: &Config, args: &RunArgs) -> anyhow::Result<ExitCode> {
     let paths = config.paths();
     let db = if paths.database.exists() {
-        Some(open(&paths).await?)
+        readable(&paths).await?
     } else {
         None
     };
@@ -257,8 +264,14 @@ async fn fix(config: &Config, args: &RunArgs) -> anyhow::Result<ExitCode> {
     let tools = service(config, &paths, db.clone());
     let stored = stored(&db).await?;
     let target = target(args, stored.as_ref(), &paths)?;
-    let settings = overridden(tools.settings().await?.0, args);
-    let ran = tools.fix_from_cli(target, settings).await;
+    let saved = tools.settings().await?.0;
+    if let Err(error) = lasting(&saved, args) {
+        db.close().await?;
+        return Err(error);
+    }
+    // The undo the output names must find the folder the fix wrote in.
+    let undo_data = args.data.is_some().then(|| target.folder().to_path_buf());
+    let ran = tools.fix_from_cli(target, overridden(saved, args)).await;
     db.close().await?;
     let ran = ran.map_err(refusal)?;
     let summary = ran.run.summary.clone().unwrap_or_default();
@@ -290,6 +303,7 @@ async fn fix(config: &Config, args: &RunArgs) -> anyhow::Result<ExitCode> {
                         written: &written,
                         open: summary.open_changes,
                         backups: paths.root.join("tools").join("backups"),
+                        data: undo_data.as_deref(),
                     }
                 )
             ),
@@ -303,14 +317,21 @@ async fn fix(config: &Config, args: &RunArgs) -> anyhow::Result<ExitCode> {
 /// `observer tools undo`: Observer's lock, then the removals put back.
 async fn undo(config: &Config, args: &UndoArgs) -> anyhow::Result<()> {
     let paths = config.paths();
-    let _lock = observer_lock(&paths)?;
-    let db = open(&paths).await?;
-    let tools = service(config, &paths, db.clone());
     let scope = match args.run {
         Some(run) if !args.all => ToolUndoScope::Run(run),
         _ => ToolUndoScope::All,
     };
-    let ran = tools.undo_from_cli(scope).await;
+    let target = match &args.data {
+        Some(data) => Some(Target::AllResources {
+            folder: std::path::absolute(data)
+                .with_context(|| format!("cannot resolve {}", data.display()))?,
+        }),
+        None => None,
+    };
+    let _lock = observer_lock(&paths)?;
+    let db = open(&paths).await?;
+    let tools = service(config, &paths, db.clone());
+    let ran = tools.undo_from_cli(target, scope).await;
     db.close().await?;
     let ran = ran.map_err(refusal)?;
     if ran.files().next().is_none() {
@@ -417,6 +438,25 @@ async fn open(paths: &DataPaths) -> anyhow::Result<Database> {
         .with_context(|| format!("cannot open {}", paths.database.display()))
 }
 
+/// The database for a report, which needs none: one this build cannot read, before its first
+/// start migrates it or after a newer Observer wrote it, leaves the report on the default settings,
+/// as stderr says.
+async fn readable(paths: &DataPaths) -> anyhow::Result<Option<Database>> {
+    match Database::open_existing(&paths.database, &paths.backups).await {
+        Ok(db) => Ok(Some(db)),
+        Err(error @ (StoreError::NotMigrated { .. } | StoreError::TooNew { .. })) => {
+            eprintln!(
+                "{} is not read: {error}. The report uses the default settings.",
+                paths.database.display()
+            );
+            Ok(None)
+        }
+        Err(error) => {
+            Err(anyhow::Error::new(error).context(format!("cannot open {}", paths.database.display())))
+        }
+    }
+}
+
 fn service(config: &Config, paths: &DataPaths, db: Database) -> Tools {
     Tools::new(ToolsSetup {
         db,
@@ -432,7 +472,7 @@ fn service(config: &Config, paths: &DataPaths, db: Database) -> Tools {
 /// The launch settings, and the selected build.
 async fn stored(db: &Database) -> anyhow::Result<Option<(StoredLaunch, Option<u32>)>> {
     Ok(db
-        .read(|conn| -> Result<_, observer_store::StoreError> {
+        .read(|conn| -> Result<_, StoreError> {
             let stored = launch::get(conn, Servers::DEFAULT)?;
             let selected = artifacts::state(conn, Servers::DEFAULT)?.selected;
             Ok(stored.map(|stored| (stored, selected)))
@@ -455,14 +495,15 @@ fn target(
             bail!("no server folder: pass --data, or save the launch settings in the panel first")
         }
     };
-    if args.all_resources {
-        return Ok(Target::AllResources { folder });
-    }
     let cfg_file = match (&args.cfg, &args.data, stored) {
         (Some(cfg), _, _) => cfg.clone(),
         (None, None, Some((launch, _))) => launch.settings.cfg_file.clone(),
         _ => "server.cfg".to_owned(),
     };
+    if args.all_resources {
+        require_gta(&folder, &cfg_file)?;
+        return Ok(Target::AllResources { folder });
+    }
     let system_resources = stored
         .and_then(|(_, selected)| *selected)
         .map(|build| Layout::new(paths.artifacts.join(build.to_string()), Flavour::HOST).system_resources());
@@ -471,6 +512,38 @@ fn target(
         cfg_file,
         system_resources,
     })
+}
+
+/// `--all-resources` reads no cfg to tell which resources start, but the game the cfg sets still
+/// decides whether the tool runs at all: RedM is refused, as it is with the cfg read. Without a
+/// cfg, the server is taken to run GTA V, as stderr says.
+fn require_gta(folder: &Path, cfg_file: &str) -> anyhow::Result<()> {
+    if !folder.join(cfg_file).is_file() {
+        eprintln!(
+            "no {cfg_file} in {}: the server is taken to run GTA V",
+            folder.display()
+        );
+        return Ok(());
+    }
+    let scan = observer_tools::resources::scan_cfg(folder, cfg_file, None)
+        .with_context(|| format!("cannot read {cfg_file} for the game it runs"))?;
+    if scan.facts.game == Some(Game::Rdr3) {
+        bail!("this tool works on GTA V servers only: the cfg runs RedM");
+    }
+    Ok(())
+}
+
+/// Refuses a one-run override a fix could not keep: what a fix takes out of an escrowed resource
+/// while the saved setting skips them, the next heal puts back.
+fn lasting(saved: &ToolSettings, args: &RunArgs) -> anyhow::Result<()> {
+    if args.escrowed == Some(EscrowedArg::Allow) && saved.escrowed == EscrowPolicy::Skip {
+        bail!(
+            "--fix takes --escrowed allow only once it is saved: the next heal would put back what this \
+             fix takes out of escrowed resources. Save it first with observer tools config \
+             duplicate-archetypes --escrowed allow"
+        );
+    }
+    Ok(())
 }
 
 fn overridden(mut settings: ToolSettings, args: &RunArgs) -> ToolSettings {
@@ -503,12 +576,33 @@ fn refusal(error: observer_app::Error) -> anyhow::Error {
         Some(ErrorCode::LaunchNotConfigured) => {
             anyhow!("no launch settings yet: save them in the panel first, or pass --data")
         }
+        Some(ErrorCode::NotFound) => {
+            let folder = match &error {
+                observer_app::Error::Refused(refused) => refused.params.get("folder").and_then(Value::as_str),
+                _ => None,
+            };
+            anyhow!(
+                "the folder these changes were made in, {}, is gone or is another folder now: pass --data \
+                 with where it is, or copy the backups back by hand",
+                folder.unwrap_or("unknown")
+            )
+        }
         Some(ErrorCode::Conflict) => anyhow!("the settings changed meanwhile: run the command again"),
         Some(ErrorCode::InvalidRequest) => anyhow!(
             "these settings are refused: an excluded name is empty, longer than 255 bytes or holds / \
              or \\, or more than 1000 are excluded"
         ),
         _ => error.into(),
+    }
+}
+
+/// A path as a shell reads it back: quoted when it holds a space.
+fn shell_path(path: &Path) -> String {
+    let text = path.display().to_string();
+    if text.contains(char::is_whitespace) {
+        format!("\"{text}\"")
+    } else {
+        text
     }
 }
 
@@ -553,6 +647,8 @@ enum Done<'a> {
         written: &'a [String],
         open: u32,
         backups: PathBuf,
+        /// The folder `--data` named, which the undo names too.
+        data: Option<&'a Path>,
     },
 }
 
@@ -627,6 +723,7 @@ fn describe(report: &ArchetypeReport, done: &Done<'_>) -> String {
             fixed,
             written,
             backups,
+            data,
             ..
         } if !written.is_empty() => {
             text.push_str("\nwritten:\n");
@@ -635,9 +732,13 @@ fn describe(report: &ArchetypeReport, done: &Done<'_>) -> String {
             }
             let _ = writeln!(text, "the originals are kept in {}", backups.display());
             if !fixed.is_empty() {
+                let data = data
+                    .map(|data| format!(" --data {}", shell_path(data)))
+                    .unwrap_or_default();
                 let _ = writeln!(
                     text,
-                    "to put back what run {run} took out: observer tools undo duplicate-archetypes --run {run}"
+                    "to put back what run {run} took out: observer tools undo duplicate-archetypes --run \
+                     {run}{data}"
                 );
             }
         }
@@ -743,6 +844,7 @@ fn describe_contest(contest: &Contest) -> String {
 #[cfg(test)]
 mod tests {
     use clap::Parser;
+    use observer_domain::tools::{ArchetypeCounts, ToolTimings};
 
     use super::*;
 
@@ -796,6 +898,19 @@ mod tests {
         assert!(
             Cli::try_parse_from([
                 "tools",
+                "undo",
+                "duplicate-archetypes",
+                "--run",
+                "4",
+                "--data",
+                "/srv/copy"
+            ])
+            .is_ok(),
+            "an undo names the folder a fix with --data wrote in"
+        );
+        assert!(
+            Cli::try_parse_from([
+                "tools",
                 "config",
                 "duplicate-archetypes",
                 "--differences",
@@ -839,6 +954,73 @@ mod tests {
             spelled(&DifferencesArg::from(settings.differences)),
             "keep-latest",
             "config prints what it takes"
+        );
+    }
+
+    #[test]
+    fn a_fix_takes_escrowed_resources_only_once_the_saved_setting_allows_them() {
+        let parse = |escrowed: &str| {
+            let cli = Cli::try_parse_from([
+                "tools",
+                "run",
+                "duplicate-archetypes",
+                "--fix",
+                "--escrowed",
+                escrowed,
+            ])
+            .unwrap();
+            let ToolsCommand::Run(args) = cli.command else {
+                panic!("not a run");
+            };
+            args
+        };
+        let skipped = ToolSettings::default();
+        let allowed = ToolSettings {
+            escrowed: EscrowPolicy::Allow,
+            ..ToolSettings::default()
+        };
+
+        assert!(lasting(&skipped, &parse("allow")).is_err());
+        assert!(lasting(&allowed, &parse("allow")).is_ok());
+        assert!(lasting(&allowed, &parse("skip")).is_ok());
+        assert!(lasting(&skipped, &parse("skip")).is_ok());
+    }
+
+    #[test]
+    fn the_undo_a_fix_prints_names_the_folder_it_wrote_in() {
+        let report = ArchetypeReport {
+            folder: "/srv/my copy".to_owned(),
+            counts: ArchetypeCounts::default(),
+            groups: Vec::new(),
+            groups_total: 0,
+            shadowed: Vec::new(),
+            shadowed_total: 0,
+            unreadable: Vec::new(),
+            unreadable_total: 0,
+            notes: Vec::new(),
+            notes_total: 0,
+            timings: ToolTimings::default(),
+        };
+        let fixed = ["resources/props/stream/camp.ytyp".to_owned()];
+        let done = |data| Done::Fix {
+            run: 12,
+            fixed: &fixed,
+            written: &fixed,
+            open: 1,
+            backups: PathBuf::from("data/tools/backups"),
+            data,
+        };
+
+        let named = describe(&report, &done(Some(Path::new("/srv/my copy"))));
+        let launched = describe(&report, &done(None));
+
+        assert!(
+            named.contains("observer tools undo duplicate-archetypes --run 12 --data \"/srv/my copy\"\n"),
+            "{named}"
+        );
+        assert!(
+            launched.contains("observer tools undo duplicate-archetypes --run 12\n"),
+            "{launched}"
         );
     }
 

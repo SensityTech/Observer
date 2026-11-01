@@ -26,6 +26,16 @@ lastReport: ToolRun | null,
  */
 open: Array<ToolChange>, 
 /**
+ * The open changes that lie in another server folder than the launch settings', by id: an
+ * undo of everything leaves them, an undo by file or by run puts them back in their own folder.
+ */
+elsewhere: Array<number>, 
+/**
+ * Those of them whose folder is gone, or is no longer the folder they were made in, by id: no
+ * undo reaches them, and their backups put them back by hand.
+ */
+unreachable: Array<number>, 
+/**
  * The changes closed recently, the latest first.
  */
 closed: Array<ToolChange>, 

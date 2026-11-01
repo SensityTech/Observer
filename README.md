@@ -286,7 +286,7 @@ Cfx.re's [Platform License Agreement](https://fivem.net/terms) covers the server
 | `observer fxserver run --build <folder> --data <folder>` | FXServer under the supervisor in the foreground, without the panel or the database, while Observer is stopped. `--cfg`, `--onesync`, `--port`, `--set NAME=VALUE`. |
 | `observer service print-unit` | Linux: the systemd unit, see [systemd](#systemd). |
 | `observer tools run duplicate-archetypes` | Find duplicate archetypes and print the report. `--fix` while Observer is stopped, `--json`, `--data <folder>`, `--cfg <file>` or `--all-resources`. Exits with 2 while duplicates are left, 1 on an error. See [Server tools](#server-tools). |
-| `observer tools undo duplicate-archetypes` | Put back what fixes took out, while Observer is stopped: `--run <id>` or `--all`. |
+| `observer tools undo duplicate-archetypes` | Put back what fixes took out, while Observer is stopped: `--run <id>` or `--all`, and `--data <folder>`. |
 | `observer tools config duplicate-archetypes` | Print the tool's settings, or change them: `--at-start`, `--differences`, `--escrowed`, `--exclude <name>`, `--include <name>`. |
 
 The `user`, `setup-link` and `artifacts` commands, `tools run` without `--fix` and `tools config` work
@@ -562,11 +562,15 @@ The **Tools** page is the owner's. **Last run** shows the latest run and what it
 **Groups** lists every group: its copies, how they differ (only in draw distances and bounds, or in
 more), what the tool does and why. **Files changed** lists the files the fixes changed, with their
 backups. **Scan now** makes a new report and writes nothing, even while FXServer runs. **Fix**
-applies the plan on screen: if a fresh scan plans something else, it writes nothing and the page
-shows the new plan instead. **Undo** puts back the entries taken out of one file, **Undo all** those
-of every file. **Fix**, **Undo**, **Undo all** and the settings ask for the owner's password again,
+applies the plan on screen: if a fresh scan plans something else, it applies nothing (the heal it
+runs first may have put entries back) and the page shows the new plan instead. Once an undo or a
+heal has put entries back, the page says the report on screen is out of date: scan again before
+fixing. **Undo** puts back the entries taken out of one file, or by one run, in the folder they were
+taken out of; **Undo all** those of every file in the folder of the launch settings. A change made
+in a folder that is gone, or is another folder now, is listed without **Undo**: its backup puts it
+back by hand. **Fix**, **Undo**, **Undo all** and the settings ask for the owner's password again,
 and the three buttons run only while FXServer is stopped. Writes and settings changes are in the
-audit log; report runs are not.
+audit log, those of a run that Observer's stop cut short at its next start; report runs are not.
 
 Before a start, FXServer waits for the tool. Past 60 seconds, the tool is told to stop between two
 files, and FXServer starts once it has; a stop in the meantime cancels the start. FXServer never
@@ -582,27 +586,33 @@ From the host:
 ```sh
 observer tools run duplicate-archetypes [--fix] [--json] [--data DIR] [--cfg FILE | --all-resources]
                                         [--differences D] [--escrowed E]
-observer tools undo duplicate-archetypes --run ID | --all
+observer tools undo duplicate-archetypes --run ID | --all [--data DIR]
 observer tools config duplicate-archetypes [--at-start M] [--differences D] [--escrowed E]
                                            [--exclude NAME]... [--include NAME]...
 ```
 
 - `run` reads the server folder and the cfg of the launch settings, or the folder `--data` names
   with the cfg `--cfg` names in it (`server.cfg` by default); `--all-resources` reads no cfg and
-  takes every resource FXServer accepts as started, in name order. `--differences` and `--escrowed`
-  change the saved settings for this run only. It prints the report, as JSON with `--json`.
+  takes every resource FXServer accepts as started, in name order, and still reads the cfg for the
+  game it runs (without one, the server is taken to run GTA V). `--differences` and `--escrowed`
+  change the saved settings for this run only, but `--fix` takes `--escrowed allow` only once it is
+  saved with `config`: the next heal would put back what the fix took out of escrowed resources while
+  the saved setting skips them. It prints the report, as JSON with `--json`.
 - Without `--fix`, `run` writes nothing, the database included: it heals nothing, and its report is
   not in the **Tools** page's **Last run**. It needs no database either: with `--data`, it works
-  before Observer's first start, with the default settings.
-- With `--fix`, `run` applies the plan and prints what became of each file, and the run's number,
-  which `undo --run` takes. The run is recorded and audited like a fix from the **Tools** page.
+  before Observer's first start, with the default settings, and so it does with a database this
+  build cannot read yet, before its first start after an upgrade, as it says.
+- With `--fix`, `run` applies the plan and prints what became of each file, and the undo that puts
+  it back, with the run's number and the `--data` it was given. The run is recorded and audited like
+  a fix from the **Tools** page.
 - `run` exits with 0 when no duplicate is left once it ends, and with 2 when some are: for a report,
   every group it finds, fixable or not, since it fixes none; with `--fix`, every group it did not
   fix. It exits with 1 when it cannot run, or when a fix stops before the end, such as on a full
   volume, once it has printed what it wrote. A mistyped command also exits with 2, and prints its
   usage.
-- `undo --run ID` puts back what that run took out, `undo --all` everything, in the folder of the
-  launch settings.
+- `undo --run ID` puts back what that run took out, in the folder it changed, as long as that still
+  is the same folder; `undo --all` puts back everything in the folder of the launch settings.
+  `--data DIR` undoes in that folder instead, for either.
 - `config` prints the settings and changes those its options name: `--at-start` (`off`, `report` or
   `fix`), `--differences` (`identical` or `keep-latest`), `--escrowed` (`skip` or `allow`),
   `--exclude NAME` to add a resource to the excluded ones and `--include NAME` to take one off, both
@@ -619,8 +629,9 @@ use the **Tools** page.
   runs are not seen, nor constraints such as `/assetpacks` that only FXServer decides: the report may
   list groups the clients never meet, or miss some. No fix depends on them, since the copies of a
   fixed group share one resource.
-- **RedM** is not supported: when the cfg sets `gamename rdr3`, a scan or a fix is refused, and the
-  next start puts back whatever an earlier fix took out. An undo still works.
+- **RedM** is not supported: when the cfg sets `gamename rdr3`, a scan or a fix is refused, with
+  `--all-resources` too, and the next start puts back whatever an earlier fix took out. An undo
+  still works.
 - **File metadata.** A replaced file is a new file: on Linux it keeps its mode, not its ACLs or
   extended attributes; on Windows it takes the permissions its folder gives new files. A read-only
   file is never changed.

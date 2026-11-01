@@ -1,12 +1,14 @@
 import { queryOptions } from '@tanstack/react-query';
 
 import { getJson, send } from './client';
+import type { ToolChange } from './generated/ToolChange';
 import type { ToolFixRequest } from './generated/ToolFixRequest';
 import type { ToolRun } from './generated/ToolRun';
 import type { ToolSettingsChange } from './generated/ToolSettingsChange';
 import type { ToolsView } from './generated/ToolsView';
 import type { ToolUndoRequest } from './generated/ToolUndoRequest';
 import type { ToolUndoScope } from './generated/ToolUndoScope';
+import type { ToolView } from './generated/ToolView';
 
 const PATH = '/tools/duplicate-archetypes';
 
@@ -62,8 +64,60 @@ export const withRun = (view: ToolsView, run: ToolRun): ToolsView => ({
     }),
 });
 
-/** A run whose fixes were written: its report says what it did, no longer what to do. */
-export const applied = (run: ToolRun) => run.mode === 'fix' && (run.summary?.filesChanged ?? 0) > 0;
+/**
+ * A fix run whose removals some file still holds: its report says what it did, no longer what to
+ * do. One that an undo or a heal put everything back from says what to do again.
+ */
+export const applied = (run: ToolRun, open: ToolChange[]) =>
+    run.mode === 'fix' && open.some((change) => change.removals.some((removal) => removal.run === run.id));
+
+/**
+ * The groups a fix run fixed whose copies are all still taken out, by hash: not those it never got
+ * to, nor those an undo, a heal or someone else's hand put back since.
+ */
+export const fixedGroups = (run: ToolRun | null, open: ToolChange[]): ReadonlySet<number> => {
+    if (run === null || run.mode !== 'fix' || run.report === null) {
+        return new Set();
+    }
+    const out = new Set<string>();
+    for (const change of open) {
+        for (const removal of change.removals) {
+            if (removal.run === run.id) {
+                out.add(`${removal.hash} ${change.path}`);
+            }
+        }
+    }
+    return new Set(
+        run.report.groups
+            .filter(
+                (group) =>
+                    group.action.kind === 'fix' &&
+                    group.action.remove.every((at) => {
+                        const copy = group.copies[at];
+                        return copy !== undefined && out.has(`${group.hash} ${copy.path}`);
+                    }),
+            )
+            .map((group) => group.hash),
+    );
+};
+
+/**
+ * Whether files were written since the report was made, which it does not know of. Every scan and
+ * fix makes a report of its own, so a write after the report's run is an undo or a heal that put
+ * entries back.
+ */
+export const outdated = (run: ToolRun, view: ToolView) => {
+    const made = Date.parse(run.finishedAt ?? run.startedAt);
+    const after = (at: string | null) => at !== null && Date.parse(at) > made;
+    return (
+        view.open.some((change) => after(change.changedAt)) ||
+        view.closed.some(
+            (change) =>
+                (change.closeReason === 'healed' || change.closeReason === 'undone') &&
+                after(change.closedAt),
+        )
+    );
+};
 
 /** The client's way of writing an archetype's hash: `F032591F`. */
 export const hashText = (hash: number) => hash.toString(16).toUpperCase().padStart(8, '0');

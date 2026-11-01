@@ -9,7 +9,9 @@ import type { ToolView } from '../api/generated/ToolView';
 import {
     applied,
     fixArchetypes,
+    fixedGroups,
     freshRun,
+    outdated,
     scanArchetypes,
     scopeKey,
     toolsQuery,
@@ -40,8 +42,12 @@ const OUTCOME_TONE = {
 
 type Count = keyof Messages['tools']['archetypes']['summary'];
 
-/** The counts a run always shows, then those shown once they are not zero. */
-const ALWAYS: Count[] = ['groups', 'fixable', 'left', 'openChanges'];
+/**
+ * The counts of a run that analysed the folder, those every run shows, then those shown once they
+ * are not zero. An undo, a heal or a scan that failed counts no duplicates: zeros would read as none.
+ */
+const ANALYSED: Count[] = ['groups', 'fixable', 'left'];
+const ALWAYS: Count[] = ['openChanges'];
 const WHEN_ANY: Count[] = ['fixed', 'filesChanged', 'removals', 'filesRestored'];
 
 /** The server tools, the owner's: for now the duplicate archetypes tool alone. */
@@ -92,20 +98,35 @@ function DuplicateArchetypes({ view }: { view: ToolView }) {
     const reportRun = view.lastRun?.report != null ? view.lastRun : view.lastReport;
     const report = reportRun?.report ?? null;
     const plan = reportRun?.plan ?? null;
-    const written = reportRun !== null && applied(reportRun);
+    const written = reportRun !== null && applied(reportRun, view.open);
+    const fixed = fixedGroups(reportRun, view.open);
+    const stale = reportRun !== null && outdated(reportRun, view);
     const fixable = report?.counts.groupsFixed ?? 0;
     const [notice, setNotice] = useState<Outcome | null>(null);
     const [undoNotice, setUndoNotice] = useState<Outcome | null>(null);
     const noticeRef = useRef<HTMLDivElement>(null);
     const undoNoticeRef = useRef<HTMLDivElement>(null);
 
+    const refresh = () => void queryClient.invalidateQueries({ queryKey: toolsQuery.queryKey });
     /** Shows the run at once, then reads the page again for the files it changed. */
     const took = (run: ToolRun) => {
         queryClient.setQueryData(toolsQuery.queryKey, (current) =>
             current === undefined ? current : withRun(current, run),
         );
-        void queryClient.invalidateQueries({ queryKey: toolsQuery.queryKey });
+        refresh();
     };
+
+    // Every start runs the tool before FXServer spawns, whoever asked for it: a heal, a report or a
+    // fix this page has not seen. Each change of FXServer's state reads the page again.
+    const state = status?.state ?? null;
+    const seen = useRef(state);
+    useEffect(() => {
+        if (seen.current !== null && state !== null && seen.current !== state) {
+            void queryClient.invalidateQueries({ queryKey: toolsQuery.queryKey });
+        }
+        seen.current = state;
+    }, [state, queryClient]);
+
     /** What a run that ended early says, or null when it ran to its end. */
     const ended = (run: ToolRun): Outcome | null =>
         run.outcome === null || run.outcome === 'done'
@@ -145,7 +166,9 @@ function DuplicateArchetypes({ view }: { view: ToolView }) {
             // The plan changed since the report on screen: the fresh one takes its place, to review.
             const fresh =
                 error instanceof ApiError && error.code === 'plan_changed' ? freshRun(error.params) : null;
-            if (fresh !== null) {
+            if (fresh === null) {
+                refresh();
+            } else {
                 took(fresh);
             }
             setNotice({ tone: fresh === null ? 'danger' : 'warning', message: errorMessage(t, error) });
@@ -156,6 +179,8 @@ function DuplicateArchetypes({ view }: { view: ToolView }) {
         onMutate: () => setUndoNotice(null),
         onSuccess: (run) => {
             took(run);
+            // What the last scan or fix said no longer holds once entries are back.
+            setNotice(null);
             setUndoNotice(
                 ended(run) ?? {
                     tone: 'success',
@@ -163,18 +188,23 @@ function DuplicateArchetypes({ view }: { view: ToolView }) {
                 },
             );
         },
-        onError: (error) => setUndoNotice({ tone: 'danger', message: errorMessage(t, error) }),
+        onError: (error) => {
+            refresh();
+            setUndoNotice({ tone: 'danger', message: errorMessage(t, error) });
+        },
     });
     const busy = scan.isPending || fix.isPending || undo.isPending;
 
     const fixReason =
         report === null || plan === null
             ? words.noReport
-            : written
-              ? words.applied
-              : fixable === 0
-                ? words.nothingToFix
-                : blocked;
+            : stale
+              ? words.outdated
+              : written
+                ? words.applied
+                : fixable === 0
+                  ? words.nothingToFix
+                  : blocked;
 
     // A button that goes away or turns disabled leaves the keyboard on the body: it moves to the
     // notice saying what happened.
@@ -246,7 +276,7 @@ function DuplicateArchetypes({ view }: { view: ToolView }) {
                     <LastRun run={view.lastRun} earlier={reportRun !== view.lastRun ? reportRun : null} />
                 </div>
             </Card>
-            <GroupsCard report={report} applied={written} />
+            <GroupsCard report={report} fixed={fixed} />
             <FilesCard
                 view={view}
                 blocked={blocked}
@@ -267,7 +297,14 @@ function LastRun({ run, earlier }: { run: ToolRun | null; earlier: ToolRun | nul
     const words = t.tools.archetypes;
     const id = useId();
     const summary = run?.summary ?? null;
-    const counts = summary === null ? [] : [...ALWAYS, ...WHEN_ANY.filter((key) => summary[key] !== 0)];
+    const counts =
+        summary === null
+            ? []
+            : [
+                  ...(run?.plan == null ? [] : ANALYSED),
+                  ...ALWAYS,
+                  ...WHEN_ANY.filter((key) => summary[key] !== 0),
+              ];
 
     return (
         <section aria-labelledby={id} className="flex flex-col gap-3">

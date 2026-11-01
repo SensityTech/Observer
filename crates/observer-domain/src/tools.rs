@@ -817,6 +817,12 @@ pub struct ToolView {
     pub last_report: Option<ToolRun>,
     /// The changes still open, in every server folder.
     pub open: Vec<ToolChange>,
+    /// The open changes that lie in another server folder than the launch settings', by id: an
+    /// undo of everything leaves them, an undo by file or by run puts them back in their own folder.
+    pub elsewhere: Vec<i64>,
+    /// Those of them whose folder is gone, or is no longer the folder they were made in, by id: no
+    /// undo reaches them, and their backups put them back by hand.
+    pub unreachable: Vec<i64>,
     /// The changes closed recently, the latest first.
     pub closed: Vec<ToolChange>,
     /// What the backups of these changes take on the disk.
@@ -863,11 +869,11 @@ pub struct ToolUndoRequest {
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
 pub enum ToolUndoScope {
-    /// Every open change in the server folder.
+    /// Every open change in the server folder of the launch settings.
     All,
-    /// The entries one run took out, in every file it changed.
+    /// The entries one run took out, in every file it changed, in the folder it changed them in.
     Run(i64),
-    /// These changes, whole.
+    /// These changes, whole, in the folder they were made in: all of them in one folder.
     Changes(Vec<i64>),
 }
 

@@ -38,7 +38,9 @@ const runsOf = (open: ToolChange[]) => {
 
 /**
  * The files the tool changed and still holds open, each with the copies taken out and the backup of
- * the file as it was, undone by file, by run or all at once; then those closed recently.
+ * the file as it was, undone by file, by run or all at once; then those closed recently. An undo by
+ * file or by run works in the folder the change was made in, all at once in the launch settings'
+ * folder; a change whose folder is gone or replaced is listed without an undo.
  */
 export function FilesCard({
     view,
@@ -63,9 +65,13 @@ export function FilesCard({
     const words = t.tools.changes;
     const id = useId();
     const { open, closed } = view;
-    const runs = runsOf(open);
-    // The server folder of each file only matters once changes span more than one.
-    const folders = new Set(open.map((change) => change.folder)).size > 1;
+    const elsewhere = new Set(view.elsewhere);
+    const unreachable = new Set(view.unreachable);
+    // Undo all puts back what the launch settings' folder holds, as the command line's does.
+    const here = open.filter((change) => !elsewhere.has(change.id));
+    const runs = runsOf(open.filter((change) => !unreachable.has(change.id)));
+    // The server folder of each file only matters once changes span more than one, or lie elsewhere.
+    const folders = elsewhere.size > 0 || new Set(open.map((change) => change.folder)).size > 1;
     const disabled = blocked !== null || busy;
 
     return (
@@ -75,7 +81,7 @@ export function FilesCard({
             title={words.title}
             meta={open.length + closed.length > 0 ? words.backups(format.bytes(view.backupBytes)) : undefined}
             aside={
-                open.length > 0 ? (
+                here.length > 0 ? (
                     <Button
                         size="sm"
                         icon={Undo2}
@@ -90,7 +96,7 @@ export function FilesCard({
             }
             flush
         >
-            {(notice !== null || (open.length > 0 && blocked !== null)) && (
+            {(notice !== null || (open.length > 0 && blocked !== null) || elsewhere.size > 0) && (
                 <div className="flex flex-col gap-2 border-b border-line px-5 py-3 max-md:px-4">
                     {notice !== null && (
                         <Notice ref={noticeRef} tabIndex={-1} tone={notice.tone}>
@@ -102,13 +108,14 @@ export function FilesCard({
                             {blocked}
                         </p>
                     )}
+                    {elsewhere.size > 0 && <p className="text-small text-ink-3">{words.elsewhere}</p>}
                 </div>
             )}
             {open.length === 0 ? (
                 <p className="px-6 py-6 text-center text-ui text-ink-3">{words.none}</p>
             ) : (
                 <>
-                    {runs.length > 1 && (
+                    {(runs.length > 1 || (runs.length > 0 && elsewhere.size > 0)) && (
                         <section
                             aria-label={words.runs}
                             className="flex flex-col gap-1.5 border-b border-line px-5 py-3 max-md:px-4"
@@ -182,6 +189,14 @@ export function FilesCard({
                                                     </span>
                                                 )}
                                             </div>
+                                            {unreachable.has(change.id) && (
+                                                <p
+                                                    id={`${id}-unreachable-${change.id}`}
+                                                    className="mt-1 text-small whitespace-normal text-ink-2"
+                                                >
+                                                    {words.unreachable}
+                                                </p>
+                                            )}
                                         </td>
                                         <td className={cn(table.td, 'min-w-64 align-top')}>
                                             <Removals change={change} />
@@ -205,9 +220,14 @@ export function FilesCard({
                                                 tone="ghost"
                                                 size="sm"
                                                 icon={Undo2}
-                                                disabled={disabled}
+                                                disabled={disabled || unreachable.has(change.id)}
                                                 pending={pending === scopeKey({ changes: [change.id] })}
                                                 aria-label={words.undoFile(change.path)}
+                                                aria-describedby={
+                                                    unreachable.has(change.id)
+                                                        ? `${id}-unreachable-${change.id}`
+                                                        : undefined
+                                                }
                                                 onClick={() => onUndo({ changes: [change.id] })}
                                             >
                                                 {words.undo}

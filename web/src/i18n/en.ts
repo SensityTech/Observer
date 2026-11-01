@@ -2369,6 +2369,8 @@ export const en = {
             noReport: 'Scan first: Fix applies the plan of the last report.',
             nothingToFix: 'The last report has nothing to fix.',
             applied: "The last report's fixes are written. Scan now to see what is left.",
+            outdated:
+                'Files were put back since the last report, which does not know of them. Scan now to see what is fixable again.',
             scanned: (groups: number, fixable: number) =>
                 groups === 0
                     ? 'Scan done: no archetype is registered more than once.'
@@ -2551,6 +2553,10 @@ export const en = {
             run: (id: number, files: number, removals: number) =>
                 `Run ${id}: ${count(files, { one: 'file', other: 'files' })}, ${count(removals, { one: 'copy', other: 'copies' })} taken out`,
             undoRun: (id: number) => `Undo run ${id}`,
+            elsewhere:
+                "Some files lie in another server folder than the launch settings'. Undo all leaves them: undo them by file or by run, in their own folder.",
+            unreachable:
+                'Its folder is gone, or is another folder now: no undo reaches it. Copy its backup back by hand.',
             undone: (files: number) =>
                 files === 0
                     ? 'Nothing was put back.'

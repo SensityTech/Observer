@@ -17,8 +17,12 @@
 //!   changed since the last report, `fix` applies the fresh plan.
 //!
 //! Every run is recorded with its summary, and its report when it made one. Runs that change files
-//! are audited; reports are not. The originals of changed files are kept under
+//! are audited; reports are not. A run that Observer's stop cut short is audited at the next
+//! start, from what the journal says it wrote. The originals of changed files are kept under
 //! `data/tools/backups` while a change is open and for 30 days after it closed.
+//!
+//! An undo by file or by run works in the folder the changes were made in, opened only while it is
+//! still that folder; an undo of everything works in the launch settings' folder.
 
 mod journal;
 mod lines;
@@ -29,7 +33,7 @@ mod work;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt;
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 
@@ -39,16 +43,16 @@ use observer_domain::error::{ApiError, ErrorCode};
 use observer_domain::server::{ServerState, ServerStatus};
 use observer_domain::server_data::Game;
 use observer_domain::tools::{
-    ToolKind, ToolMode, ToolRun, ToolRunMode, ToolRunOutcome, ToolSettings, ToolSettingsChange, ToolTrigger,
-    ToolUndoRequest, ToolUndoScope, ToolView, ToolsView,
+    ToolChangeState, ToolCloseReason, ToolKind, ToolMode, ToolRun, ToolRunMode, ToolRunOutcome, ToolSettings,
+    ToolSettingsChange, ToolTrigger, ToolUndoRequest, ToolUndoScope, ToolView, ToolsView,
 };
 use observer_fxserver::layout::{Flavour, Layout};
 use observer_fxserver::pre_launch::{PreLaunch, PreLaunchFuture, PreLaunchRequest, PreLaunchResult};
 use observer_fxserver::supervisor::Cause;
 use observer_store::artifacts as stored_artifacts;
-use observer_store::tools::{self as stored, FinishedRun, NewRun};
+use observer_store::tools::{self as stored, ChangeList, FinishedRun, NewRun, ToolChangeRow};
 use observer_store::{Database, StoreError, launch};
-use observer_tools::fix::{Backups, FileResult, FolderId, Selection};
+use observer_tools::fix::{Backups, FileResult, FolderId, Selection, ServerFolder};
 use serde_json::{Value, json};
 use tokio::sync::{Mutex, watch};
 use tracing::warn;
@@ -73,6 +77,9 @@ const AUDITED_FILES: usize = 50;
 /// The most resources the owner excludes, and the longest name.
 const MAX_EXCLUDED: usize = 1000;
 const MAX_RESOURCE_NAME: usize = 255;
+/// The latest runs looked at for those an earlier Observer left unfinished: only the runs under way
+/// when it stopped can be, a writer and the scans beside it.
+const UNFINISHED_LOOKED: u32 = 100;
 
 /// What [`Tools::new`] works with.
 pub struct ToolsSetup {
@@ -229,6 +236,7 @@ impl Tools {
                 .sum()
         })
         .await?;
+        let (elsewhere, unreachable) = self.reach(&changes.open).await?;
         Ok(ToolsView {
             tools: vec![ToolView {
                 tool: TOOL,
@@ -236,11 +244,45 @@ impl Tools {
                 version,
                 last_run,
                 last_report,
-                open: changes.open.iter().map(stored::ToolChangeRow::view).collect(),
-                closed: changes.closed.iter().map(stored::ToolChangeRow::view).collect(),
+                open: changes.open.iter().map(ToolChangeRow::view).collect(),
+                elsewhere,
+                unreachable,
+                closed: changes.closed.iter().map(ToolChangeRow::view).collect(),
                 backup_bytes,
             }],
         })
+    }
+
+    /// Which open changes lie outside the launch settings' folder, and which of those no undo
+    /// reaches: their folder cannot be opened at its path, or is another folder now.
+    async fn reach(&self, open: &[ToolChangeRow]) -> Result<(Vec<i64>, Vec<i64>), Error> {
+        let launch = match self.launch_target().await {
+            Ok(target) => identity(target.folder()).await?,
+            Err(Error::Refused(_)) => None,
+            Err(error) => return Err(error),
+        };
+        let mut reached: HashMap<(&str, &str), bool> = HashMap::new();
+        let mut elsewhere = Vec::new();
+        let mut unreachable = Vec::new();
+        for row in open {
+            if launch.as_deref() == Some(row.folder_id.as_str()) {
+                continue;
+            }
+            elsewhere.push(row.id);
+            let key = (row.folder_id.as_str(), row.folder_path.as_str());
+            let reachable = if let Some(&known) = reached.get(&key) {
+                known
+            } else {
+                let found = identity(Path::new(&row.folder_path)).await?;
+                let opened = found.as_deref() == Some(row.folder_id.as_str());
+                reached.insert(key, opened);
+                opened
+            };
+            if !reachable {
+                unreachable.push(row.id);
+            }
+        }
+        Ok((elsewhere, unreachable))
     }
 
     /// The tool's settings and their version, `None` until first saved.
@@ -375,10 +417,14 @@ impl Tools {
             .await
     }
 
-    /// An undo from the command line, in the folder the launch settings give. The caller holds
-    /// Observer's lock.
-    pub async fn undo_from_cli(&self, scope: ToolUndoScope) -> Result<RunResult, Error> {
-        self.write(Asker::Cli, None, None, Writing::Undo(scope)).await
+    /// An undo from the command line: in the folder of `target` when the command names one, else
+    /// where the panel's would. The caller holds Observer's lock.
+    pub async fn undo_from_cli(
+        &self,
+        target: Option<Target>,
+        scope: ToolUndoScope,
+    ) -> Result<RunResult, Error> {
+        self.write(Asker::Cli, target, None, Writing::Undo(scope)).await
     }
 
     /// A run that may write: under the writer lock, with FXServer stopped, the SFTP gate held
@@ -394,10 +440,7 @@ impl Tools {
         self.require_stopped()?;
         let target = match (target, &writing) {
             (Some(target), _) => target,
-            // An undo reads no cfg: it puts entries back whatever starts.
-            (None, Writing::Undo(_)) => Target::AllResources {
-                folder: self.launch_target().await?.folder().to_path_buf(),
-            },
+            (None, Writing::Undo(scope)) => self.undo_target(scope).await?,
             (None, Writing::Fix(_)) => self.launch_target().await?,
         };
         let settings = match settings {
@@ -488,14 +531,39 @@ impl Tools {
         Ok(lines)
     }
 
-    /// At Observer's start, before FXServer's: ends the runs an earlier Observer left unfinished,
-    /// and settles the writes it was interrupted in, in the folder the launch settings give.
+    /// At Observer's start, before FXServer's: settles the writes an earlier Observer was
+    /// interrupted in, in the folder the launch settings give, then ends the runs it left
+    /// unfinished, audited with the files the journal says they changed or put back.
     pub async fn recover(&self, observer_started: Timestamp) -> Result<(), Error> {
+        // First, so that a write an interrupted run had under way counts as that run's once it
+        // is known to have landed.
+        let settled = self.settle().await;
+        let ended = self.end_unfinished(observer_started).await;
+        settled.and(ended)
+    }
+
+    /// Ends the runs started before `observer_started` that never ended, and audits in the same
+    /// transaction what each one wrote: an interrupted run never reached the end where its own
+    /// entries are written. The journal names the run behind every write that landed.
+    async fn end_unfinished(&self, observer_started: Timestamp) -> Result<(), Error> {
         let now = self.inner.clock.now();
         let ended = self
             .inner
             .db
-            .write(move |tx| stored::end_unfinished_runs(tx, observer_started, now))
+            .write(move |tx| -> Result<usize, StoreError> {
+                let unfinished: Vec<ToolRun> = stored::runs(tx, Servers::DEFAULT, TOOL, UNFINISHED_LOOKED)?
+                    .into_iter()
+                    .filter(|run| run.finished_at.is_none() && run.started_at < observer_started)
+                    .collect();
+                let ended = stored::end_unfinished_runs(tx, observer_started, now)?;
+                if let Some(since) = unfinished.iter().map(|run| run.started_at).min() {
+                    let changes = stored::changes(tx, Servers::DEFAULT, TOOL, since, u32::MAX)?;
+                    for record in interrupted_records(&unfinished, &changes) {
+                        record.write(tx, now)?;
+                    }
+                }
+                Ok(ended)
+            })
             .await?;
         if ended > 0 {
             warn!(
@@ -503,16 +571,19 @@ impl Tools {
                 "tool runs an earlier Observer left unfinished were ended as failed"
             );
         }
+        Ok(())
+    }
+
+    /// Settles the pending writes of the launch settings' folder, in a heal run of its own.
+    async fn settle(&self) -> Result<(), Error> {
         let target = match self.launch_target().await {
             Ok(target) => target,
             Err(Error::Refused(_)) => return Ok(()),
             Err(error) => return Err(error),
         };
         let folder = target.folder().to_path_buf();
-        let identity = blocking(move || {
-            observer_tools::fix::ServerFolder::open(&folder).map(|folder| folder.id().clone())
-        })
-        .await?;
+        let identity =
+            blocking(move || ServerFolder::open(&folder).map(|folder| folder.id().clone())).await?;
         let Ok(identity) = identity else {
             // A folder that cannot be opened has nothing to settle now; the next run says why.
             return Ok(());
@@ -539,7 +610,7 @@ impl Tools {
         let refused = self.inner.own_paths.inside(target.folder());
         let folder = target.folder().to_path_buf();
         let reconciled = blocking(move || {
-            let folder = observer_tools::fix::ServerFolder::open(&folder)?.with_refused(refused);
+            let folder = ServerFolder::open(&folder)?.with_refused(refused);
             observer_tools::fix::reconcile(&mut journal, &folder, run)
         })
         .await?;
@@ -555,20 +626,25 @@ impl Tools {
         Ok(())
     }
 
+    /// Tells a run under way to end between two files, without waiting: as soon as Observer begins
+    /// to stop. A start queued behind a fix or an undo from the panel waits for it, and FXServer's
+    /// stop waits for that start, so the run must hear it before.
+    pub fn stopping(&self) {
+        self.inner.stopping.store(true, Ordering::Relaxed);
+    }
+
     /// Tells a run under way to end between two files, and waits until it has: as Observer stops,
     /// before its database closes.
     pub async fn close(&self) {
-        self.inner.stopping.store(true, Ordering::Relaxed);
+        self.stopping();
         drop(self.inner.writer.lock().await);
     }
 
     /// How many changes are open in `folder`, for the command line's report.
     pub async fn open_changes(&self, folder: PathBuf) -> Result<u32, Error> {
-        let identity = blocking(move || {
-            observer_tools::fix::ServerFolder::open(&folder).map(|folder| folder.id().clone())
-        })
-        .await?
-        .map_err(io::Error::other)?;
+        let identity = blocking(move || ServerFolder::open(&folder).map(|folder| folder.id().clone()))
+            .await?
+            .map_err(io::Error::other)?;
         self.open_count(&identity).await
     }
 
@@ -608,6 +684,54 @@ impl Tools {
             cfg_file: stored.settings.cfg_file,
             system_resources,
         })
+    }
+
+    /// Where an undo the command line names no folder for works. An undo reads no cfg: it puts
+    /// entries back whatever starts. Everything, and a run with nothing open, are undone in the
+    /// launch settings' folder; a run's entries and named changes in the folder they were made in,
+    /// which the launch settings may no longer give, opened only while it still is that folder.
+    async fn undo_target(&self, scope: &ToolUndoScope) -> Result<Target, Error> {
+        let now = self.inner.clock.now();
+        let open = self
+            .inner
+            .db
+            .read(move |conn| stored::changes(conn, Servers::DEFAULT, TOOL, now, 0))
+            .await?
+            .open;
+        let rows: Vec<&ToolChangeRow> = match scope {
+            ToolUndoScope::All => Vec::new(),
+            ToolUndoScope::Run(run) => open
+                .iter()
+                .filter(|row| row.removals.iter().any(|removal| removal.run == *run))
+                .collect(),
+            ToolUndoScope::Changes(ids) => ids
+                .iter()
+                .map(|id| open.iter().find(|row| row.id == *id).ok_or(ErrorCode::NotFound))
+                .collect::<Result<_, _>>()?,
+        };
+        let Some(first) = rows.first() else {
+            return Ok(Target::AllResources {
+                folder: self.launch_target().await?.folder().to_path_buf(),
+            });
+        };
+        if rows.iter().any(|row| row.folder_id != first.folder_id) {
+            // Each folder is undone on its own, as the Tools page offers it.
+            return Err(ErrorCode::InvalidRequest.into());
+        }
+        let launch = match self.launch_target().await {
+            Ok(target) => Some(target.folder().to_path_buf()),
+            Err(Error::Refused(_)) => None,
+            Err(error) => return Err(error),
+        };
+        let paths: BTreeSet<PathBuf> = rows.iter().map(|row| PathBuf::from(&row.folder_path)).collect();
+        for folder in launch.into_iter().chain(paths) {
+            if identity(&folder).await?.as_deref() == Some(first.folder_id.as_str()) {
+                return Ok(Target::AllResources { folder });
+            }
+        }
+        Err(ApiError::new(ErrorCode::NotFound)
+            .with("folder", first.folder_path.clone())
+            .into())
     }
 
     async fn prepare(&self, target: Target) -> Result<Prepared, Error> {
@@ -846,6 +970,78 @@ async fn blocking<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) 
     Ok(tokio::task::spawn_blocking(work)
         .await
         .map_err(io::Error::other)?)
+}
+
+/// The identity of the server folder at `path`, which the records go by, or `None` when it cannot
+/// be opened.
+async fn identity(path: &Path) -> Result<Option<String>, Error> {
+    let path = path.to_path_buf();
+    blocking(move || {
+        ServerFolder::open(&path)
+            .ok()
+            .map(|folder| folder.id().id.clone())
+    })
+    .await
+}
+
+/// The audit entries of runs an earlier Observer left unfinished, from the journal: per run, the
+/// files whose latest write it made, as changed when it took entries out of them and as put back
+/// otherwise, and the files it wrote the original back to. Written by Observer at its next start,
+/// naming who asked for the run.
+fn interrupted_records(runs: &[ToolRun], changes: &ChangeList) -> Vec<Record> {
+    let mut records = Vec::new();
+    for run in runs {
+        let mut edited = Vec::new();
+        let mut restored = Vec::new();
+        for row in changes.open.iter().chain(&changes.closed) {
+            let by_run = row.changed_run == Some(run.id);
+            let took_out = row.removals.iter().any(|removal| removal.run == run.id);
+            let wrote_original = match row.close_reason {
+                Some(ToolCloseReason::Healed | ToolCloseReason::Undone) => row.closed_run == Some(run.id),
+                // The original the run wrote back, which a later run found and closed.
+                Some(ToolCloseReason::Restored) => by_run && row.removals.is_empty(),
+                _ => false,
+            };
+            if row.state == ToolChangeState::Applied && by_run && took_out {
+                edited.push(row.path.clone());
+            } else if (row.state == ToolChangeState::Applied && by_run) || wrote_original {
+                restored.push(row.path.clone());
+            }
+        }
+        let reason = if run.mode == ToolRunMode::Undo {
+            "undo"
+        } else {
+            "heal"
+        };
+        let entries = [
+            (AuditAction::ToolFilesChanged, None, edited),
+            (AuditAction::ToolFilesRestored, Some(reason), restored),
+        ];
+        for (action, reason, files) in entries {
+            if files.is_empty() {
+                continue;
+            }
+            let mut details = json!({
+                "run": run.id,
+                "trigger": run.trigger.as_str(),
+                "interrupted": true,
+                "files": capped(&files),
+                "count": files.len(),
+            });
+            if let Some(reason) = reason {
+                details["reason"] = json!(reason);
+            }
+            if let Some(actor) = &run.actor {
+                details["actor"] = json!(actor);
+            }
+            records.push(
+                Record::operator(ActorKind::System, action)
+                    .target(TOOL.as_str())
+                    .details(details),
+            );
+        }
+    }
+    records
 }
 
 fn not_available() -> Error {

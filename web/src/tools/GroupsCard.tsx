@@ -48,9 +48,15 @@ const matches = (group: ArchetypeGroup, needle: string) =>
 
 /**
  * Every archetype the report found registered more than once, filtered by what the tool does and why
- * it leaves a group, and searched; `applied` once the run wrote its fixes.
+ * it leaves a group, and searched; `fixed` names, by hash, the groups whose fix is in the files.
  */
-export function GroupsCard({ report, applied }: { report: ArchetypeReport | null; applied: boolean }) {
+export function GroupsCard({
+    report,
+    fixed,
+}: {
+    report: ArchetypeReport | null;
+    fixed: ReadonlySet<number>;
+}) {
     const { t } = useI18n();
     const words = t.tools.groups;
     const id = useId();
@@ -76,8 +82,16 @@ export function GroupsCard({ report, applied }: { report: ArchetypeReport | null
             matches(group, needle),
     );
     const shown = visible.slice(0, limit);
+    const fixGroups = groups.filter((group) => group.action.kind === 'fix');
+    const allFixed = fixGroups.length > 0 && fixGroups.every((group) => fixed.has(group.hash));
     const actionWord = (kind: ActionKind) =>
-        kind === 'leave' ? words.actions.left : applied ? words.actions.fixed : words.actions.toFix;
+        kind === 'leave' ? words.actions.left : allFixed ? words.actions.fixed : words.actions.toFix;
+    const groupWord = (group: ArchetypeGroup) =>
+        group.action.kind === 'leave'
+            ? words.actions.left
+            : fixed.has(group.hash)
+              ? words.actions.fixed
+              : words.actions.toFix;
     const toggle = <T,>(picked: T[], set: (next: ReadonlySet<T>) => void, kind: T, pressed: boolean) => {
         const next = new Set(picked);
         if (pressed) {
@@ -170,8 +184,8 @@ export function GroupsCard({ report, applied }: { report: ArchetypeReport | null
                                     <GroupRow
                                         key={group.hash}
                                         group={group}
-                                        action={actionWord(group.action.kind)}
-                                        applied={applied}
+                                        action={groupWord(group)}
+                                        applied={fixed.has(group.hash)}
                                     />
                                 ))}
                             </tbody>

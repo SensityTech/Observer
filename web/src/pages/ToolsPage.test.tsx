@@ -198,6 +198,21 @@ const changeOf = (id: number, path: string, run: number): ToolChange => ({
     closedAt: null,
 });
 
+/** The change a fix run made to CAMP: the first copy of TENT taken out. */
+const tentOut = (id: number, run: number): ToolChange => ({
+    ...changeOf(id, CAMP, run),
+    removals: [
+        {
+            index: 0,
+            hash: TENT.hash,
+            name: TENT.name,
+            keeper: { path: CAMP, format: 'ytyp', index: 3, sha256: 'c3'.repeat(32) },
+            run,
+        },
+    ],
+    changedAt: '2026-11-01T09:00:01Z',
+});
+
 const toolOf = (tool: Partial<ToolView> = {}): ToolView => ({
     tool: 'duplicateArchetypes',
     settings: { atStart: 'off', differences: 'identical', escrowed: 'skip', excluded: [] },
@@ -208,6 +223,8 @@ const toolOf = (tool: Partial<ToolView> = {}): ToolView => ({
         changeOf(11, 'resources/props_a/stream/a.ytyp', 3),
         changeOf(12, 'resources/props_b/stream/b.ytyp', 5),
     ],
+    elsewhere: [],
+    unreachable: [],
     closed: [
         {
             ...changeOf(9, 'resources/props_c/stream/c.ytyp', 2),
@@ -400,7 +417,7 @@ describe('ToolsPage', () => {
         const asked = serve({
             'GET /tools': () => current,
             'POST /tools/duplicate-archetypes/fix': () => {
-                current = viewOf({ lastRun: fixed });
+                current = viewOf({ lastRun: fixed, open: [...viewOf().tools[0]!.open, tentOut(13, 8)] });
                 return fixed;
             },
         });
@@ -544,6 +561,176 @@ describe('ToolsPage', () => {
         expect(
             getByText(words.archetypes.reportFrom(formatTimestamp(new Date(report.startedAt)))),
         ).not.toBeNull();
+    });
+
+    it('should say the report is out of date once an undo put entries back, and drop what the scan said', async () => {
+        const scanned = runOf({
+            id: 8,
+            summary: { ...runOf({ id: 8 }).summary!, groups: 2, fixable: 0, left: 2 },
+            report: reportOf([GIFT, ITEM]),
+        });
+        const undone = runOf({
+            id: 9,
+            mode: 'undo',
+            startedAt: '2026-11-01T09:05:00Z',
+            finishedAt: '2026-11-01T09:05:01Z',
+            plan: null,
+            report: null,
+            summary: { ...runOf({ id: 9 }).summary!, filesRestored: 1, openChanges: 0 },
+        });
+        let current = viewOf({ lastRun: runOf({ id: 7 }), open: [tentOut(13, 6)] });
+        serve({
+            'GET /tools': () => current,
+            'POST /tools/duplicate-archetypes/scan': () => {
+                current = viewOf({ lastRun: scanned, open: [tentOut(13, 6)] });
+                return scanned;
+            },
+            'POST /tools/duplicate-archetypes/undo': () => {
+                current = viewOf({
+                    lastRun: undone,
+                    lastReport: scanned,
+                    open: [],
+                    closed: [
+                        {
+                            ...tentOut(13, 6),
+                            state: 'closed',
+                            closeReason: 'undone',
+                            closedAt: '2026-11-01T09:05:01Z',
+                        },
+                    ],
+                });
+                return undone;
+            },
+        });
+        const { getByRole, findByText, getByText, queryByText } = await page('stopped');
+        const card = getByRole('region', { name: words.archetypes.title });
+
+        fireEvent.click(button(words.archetypes.scan)(within(card)));
+        expect(await findByText(words.archetypes.scanned(2, 0))).not.toBeNull();
+        expect(getByText(words.archetypes.nothingToFix)).not.toBeNull();
+
+        fireEvent.click(
+            button(words.changes.undoAll)(within(getByRole('region', { name: words.changes.title }))),
+        );
+
+        expect(await findByText(words.changes.undone(1))).not.toBeNull();
+        await waitFor(() => expect(getByText(words.archetypes.outdated)).not.toBeNull());
+        expect(queryByText(words.archetypes.scanned(2, 0))).toBeNull();
+        expect(queryByText(words.archetypes.nothingToFix)).toBeNull();
+        expect(button(words.archetypes.fix)(within(card)).disabled).toBe(true);
+    });
+
+    it('should show groups as fixed only while the files still hold their fix', async () => {
+        const fixed = runOf({
+            id: 8,
+            mode: 'fix',
+            report: reportOf([TENT, GIFT, ITEM]),
+            summary: { ...runOf({ id: 8 }).summary!, fixed: 1, filesChanged: 1, removals: 1 },
+        });
+        // Its file was put back by hand: the change closed without an undo of Observer's.
+        serve({ 'GET /tools': viewOf({ lastRun: fixed }) });
+        const { getByRole, getByText, queryByText } = await page('stopped');
+        const card = getByRole('region', { name: words.archetypes.title });
+        const tent = within(getByRole('table', { name: words.groups.caption })).getAllByRole('row')[1]!;
+
+        expect(within(tent).getByText(words.groups.actions.toFix)).not.toBeNull();
+        expect(within(tent).queryByText(words.groups.actions.fixed)).toBeNull();
+        expect(queryByText(words.archetypes.applied)).toBeNull();
+        expect(getByText(words.archetypes.fixPlan(1, 1, 1))).not.toBeNull();
+        expect(button(words.archetypes.fix)(within(card)).disabled).toBe(false);
+    });
+
+    it('should count no duplicates for a run that analysed nothing', async () => {
+        const undone = runOf({
+            id: 10,
+            mode: 'undo',
+            plan: null,
+            report: null,
+            summary: { ...runOf({ id: 10 }).summary!, groups: 0, fixable: 0, left: 0, filesRestored: 4 },
+        });
+        serve({ 'GET /tools': viewOf({ lastRun: undone, lastReport: runOf({ id: 7 }) }) });
+        const { getByRole } = await page('stopped');
+
+        const lastRun = getByRole('region', { name: words.archetypes.lastRun });
+        expect(within(lastRun).queryByText(words.archetypes.summary.groups)).toBeNull();
+        expect(within(lastRun).queryByText(words.archetypes.summary.fixable)).toBeNull();
+        expect(within(lastRun).queryByText(words.archetypes.summary.left)).toBeNull();
+        expect(
+            within(lastRun).getByText(words.archetypes.summary.filesRestored).nextSibling?.textContent,
+        ).toBe('4');
+        expect(within(lastRun).getByText(words.archetypes.summary.openChanges)).not.toBeNull();
+    });
+
+    it('should read the page again as FXServer starts and stops, the tool having run before the start', async () => {
+        const asked = serve({ 'GET /tools': viewOf() });
+        const { becomes } = await page('stopped');
+        const reads = () => asked.filter((request) => request.route === 'GET /tools').length;
+        const before = reads();
+
+        becomes('starting');
+        await waitFor(() => expect(reads()).toBe(before + 1));
+        becomes('online');
+        await waitFor(() => expect(reads()).toBe(before + 2));
+        becomes('online');
+        await settle();
+        expect(reads()).toBe(before + 2);
+    });
+
+    it('should read the page again when an undo is refused, its change gone', async () => {
+        const asked = serve({ 'GET /tools': viewOf() });
+        const { getByRole, findByText } = await page('stopped');
+        const reads = () => asked.filter((request) => request.route === 'GET /tools').length;
+        const before = reads();
+
+        fireEvent.click(
+            button(words.changes.undoFile('resources/props_a/stream/a.ytyp'))(
+                within(getByRole('region', { name: words.changes.title })),
+            ),
+        );
+
+        expect(await findByText(en.errors.not_found)).not.toBeNull();
+        await waitFor(() => expect(reads()).toBe(before + 1));
+    });
+
+    it('should undo the changes of another folder by file or by run, and none whose folder is gone', async () => {
+        const asked = serve({
+            'GET /tools': viewOf({
+                open: [
+                    changeOf(11, 'resources/props_a/stream/a.ytyp', 3),
+                    { ...changeOf(12, 'resources/props_b/stream/b.ytyp', 5), folder: 'E:\\copy' },
+                    { ...changeOf(14, 'resources/props_d/stream/d.ytyp', 6), folder: 'F:\\gone' },
+                ],
+                elsewhere: [12, 14],
+                unreachable: [14],
+            }),
+            'POST /tools/duplicate-archetypes/undo': runOf({
+                id: 20,
+                mode: 'undo',
+                plan: null,
+                report: null,
+            }),
+        });
+        const { getByRole, getByText } = await page('stopped');
+        const card = within(getByRole('region', { name: words.changes.title }));
+
+        expect(getByText(words.changes.elsewhere)).not.toBeNull();
+        expect(card.getByText('E:\\copy')).not.toBeNull();
+        const gone = button(words.changes.undoFile('resources/props_d/stream/d.ytyp'))(card);
+        expect(gone.disabled).toBe(true);
+        expect(document.getElementById(gone.getAttribute('aria-describedby') ?? '')?.textContent).toBe(
+            words.changes.unreachable,
+        );
+        expect(card.queryByRole('button', { name: words.changes.undoRun(6) })).toBeNull();
+        expect(button(words.changes.undoAll)(card).disabled).toBe(false);
+
+        fireEvent.click(button(words.changes.undoRun(5))(card));
+        await waitFor(() =>
+            expect(
+                asked
+                    .filter((request) => request.route === 'POST /tools/duplicate-archetypes/undo')
+                    .map((request) => request.body),
+            ).toEqual([{ scope: { run: 5 } }]),
+        );
     });
 
     it('should save the settings over their version, and say when another session changed them', async () => {

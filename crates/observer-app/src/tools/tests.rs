@@ -12,8 +12,9 @@ use observer_domain::launch::{LaunchSettings, OneSync, StoredLaunch};
 use observer_domain::permissions::Permissions;
 use observer_domain::server::{LaunchReadiness, ServerState, ServerStatus};
 use observer_domain::tools::{
-    Differences, ToolChangeState, ToolCloseReason, ToolFileFormat, ToolMode, ToolRunMode, ToolRunOutcome,
-    ToolSettings, ToolSettingsChange, ToolTrigger, ToolUndoRequest, ToolUndoScope,
+    Differences, ToolChangeState, ToolCloseReason, ToolFileFormat, ToolKeeper, ToolMode, ToolRemoval,
+    ToolRunMode, ToolRunOutcome, ToolSettings, ToolSettingsChange, ToolTrigger, ToolUndoRequest,
+    ToolUndoScope,
 };
 use observer_fxserver::launch::ServerLaunch;
 use observer_fxserver::layout::{Flavour, Layout};
@@ -57,17 +58,7 @@ impl Lab {
             .unwrap();
         let clock = Clock::manual("2026-11-01T09:00:00Z".parse().unwrap());
         let folder = dir.path().join("server-data");
-        write(
-            &folder,
-            "resources/props/fxmanifest.lua",
-            "fx_version 'cerulean'\ngame 'gta5'\n",
-        );
-        ytyp(&folder, CAMP, &["marshmallow", "stick", "marshmallow"]);
-        ytyp(&folder, GIFT, &["gift"]);
-        ytyp(&folder, KEEPER, &["gift", "bow"]);
-        // A model streamed under its name spells it in the report.
-        write(&folder, "resources/props/stream/marshmallow.ydr", b"RSC7");
-        write(&folder, "server.cfg", cfg);
+        props(&folder, cfg);
         let stored = StoredLaunch {
             settings: LaunchSettings {
                 data_path: folder.to_string_lossy().into_owned(),
@@ -209,6 +200,21 @@ impl Lab {
             .await
             .unwrap()
     }
+}
+
+/// The `props` resource in `folder`, and the cfg `cfg`.
+fn props(folder: &Path, cfg: &str) {
+    write(
+        folder,
+        "resources/props/fxmanifest.lua",
+        "fx_version 'cerulean'\ngame 'gta5'\n",
+    );
+    ytyp(folder, CAMP, &["marshmallow", "stick", "marshmallow"]);
+    ytyp(folder, GIFT, &["gift"]);
+    ytyp(folder, KEEPER, &["gift", "bow"]);
+    // A model streamed under its name spells it in the report.
+    write(folder, "resources/props/stream/marshmallow.ydr", b"RSC7");
+    write(folder, "server.cfg", cfg);
 }
 
 fn write(folder: &Path, path: &str, bytes: impl AsRef<[u8]>) {
@@ -457,6 +463,138 @@ async fn an_undo_by_change_takes_only_changes_open_in_the_folder() {
     assert_eq!(lab.archetypes(GIFT), Vec::<u32>::new());
 }
 
+/// A copy of the server folder beside it, fixed from the command line, as `--fix --data` does.
+async fn fixed_copy(lab: &Lab) -> (PathBuf, ToolRun) {
+    let copy = lab.dir.path().join("copy");
+    props(&copy, "ensure props\n");
+    let target = Target::Cfg {
+        folder: copy.clone(),
+        cfg_file: "server.cfg".to_owned(),
+        system_resources: None,
+    };
+    let fixed = lab
+        .tools
+        .fix_from_cli(target, ToolSettings::default())
+        .await
+        .unwrap()
+        .run;
+    (copy, fixed)
+}
+
+#[tokio::test]
+async fn a_change_of_another_folder_is_undone_there_by_file_or_by_run_and_left_by_an_undo_of_everything() {
+    let lab = Lab::new().await;
+    let (copy, fixed) = fixed_copy(&lab).await;
+    let camp = lab.read(CAMP);
+    let gift = lab.read(GIFT);
+    lab.fix().await;
+    let view = lab.tools.view().await.unwrap();
+    let tool = &view.tools[0];
+    let theirs = |path: &str| {
+        tool.open
+            .iter()
+            .find(|change| change.path == path && change.folder == copy.to_string_lossy())
+            .unwrap()
+            .id
+    };
+    let ours = tool
+        .open
+        .iter()
+        .find(|change| change.folder != copy.to_string_lossy())
+        .unwrap()
+        .id;
+    let mut elsewhere = vec![theirs(CAMP), theirs(GIFT)];
+    elsewhere.sort_unstable();
+
+    let mixed = lab
+        .tools
+        .undo(
+            &owner(),
+            ToolUndoRequest {
+                scope: ToolUndoScope::Changes(vec![theirs(CAMP), ours]),
+            },
+        )
+        .await
+        .unwrap_err();
+    let all = lab
+        .tools
+        .undo(
+            &owner(),
+            ToolUndoRequest {
+                scope: ToolUndoScope::All,
+            },
+        )
+        .await
+        .unwrap();
+    let by_file = lab
+        .tools
+        .undo(
+            &owner(),
+            ToolUndoRequest {
+                scope: ToolUndoScope::Changes(vec![theirs(CAMP)]),
+            },
+        )
+        .await
+        .unwrap();
+    let by_run = lab
+        .tools
+        .undo(
+            &owner(),
+            ToolUndoRequest {
+                scope: ToolUndoScope::Run(fixed.id),
+            },
+        )
+        .await
+        .unwrap();
+
+    let mut listed = tool.elsewhere.clone();
+    listed.sort_unstable();
+    assert_eq!(listed, elsewhere);
+    assert_eq!(tool.unreachable, Vec::<i64>::new());
+    assert_eq!(all.summary.unwrap().files_restored, 2);
+    assert_eq!((lab.read(CAMP), lab.read(GIFT)), (camp.clone(), gift.clone()));
+    assert_eq!(
+        code(&mixed),
+        Some(ErrorCode::InvalidRequest),
+        "the changes of two folders are undone apart"
+    );
+    assert_eq!(by_file.summary.unwrap().files_restored, 1);
+    assert_eq!(fs::read(copy.join(CAMP)).unwrap(), camp);
+    assert_eq!(by_run.summary.unwrap().files_restored, 1);
+    assert_eq!(fs::read(copy.join(GIFT)).unwrap(), gift);
+    assert_eq!(lab.tools.view().await.unwrap().tools[0].open, Vec::new());
+}
+
+#[tokio::test]
+async fn a_change_whose_folder_is_no_longer_there_is_listed_out_of_reach_and_no_undo_writes_elsewhere() {
+    let lab = Lab::new().await;
+    let (copy, fixed) = fixed_copy(&lab).await;
+    let camp = lab.read(CAMP);
+    fs::rename(&copy, lab.dir.path().join("moved")).unwrap();
+    // Another folder at the same path is not the one the change was made in.
+    props(&copy, "ensure props\n");
+
+    let view = lab.tools.view().await.unwrap();
+    let by_run = lab
+        .tools
+        .undo(
+            &owner(),
+            ToolUndoRequest {
+                scope: ToolUndoScope::Run(fixed.id),
+            },
+        )
+        .await
+        .unwrap_err();
+
+    let tool = &view.tools[0];
+    assert_eq!(tool.open.len(), 2);
+    assert_eq!(tool.elsewhere.len(), 2);
+    assert_eq!(tool.unreachable.len(), 2);
+    assert_eq!(code(&by_run), Some(ErrorCode::NotFound));
+    assert_eq!(fs::read(copy.join(CAMP)).unwrap(), camp);
+    assert_eq!(lab.read(CAMP), camp);
+}
+
 #[tokio::test]
 async fn settings_are_saved_over_the_version_read_and_audited_with_each_change() {
     let lab = Lab::new().await;
@@ -679,6 +817,24 @@ async fn a_fix_asked_as_observer_stops_ends_before_writing_and_is_recorded_as_ca
 }
 
 #[tokio::test]
+async fn a_run_under_way_hears_that_observer_stops_without_anyone_waiting_for_it() {
+    let lab = Lab::new().await;
+    let camp = lab.read(CAMP);
+    let plan = lab.tools.scan(&owner()).await.unwrap().plan.unwrap();
+    // As a fix from the panel holds the writer, and a start queued behind it waits.
+    let writing = Arc::clone(&lab.tools.inner.writer).lock_owned().await;
+
+    lab.tools.stopping();
+
+    let closing = tokio::time::timeout(std::time::Duration::from_millis(50), lab.tools.close()).await;
+    assert!(closing.is_err(), "the close waits for the run to end");
+    drop(writing);
+    let run = lab.tools.fix(&owner(), &plan).await.unwrap();
+    assert_eq!(run.outcome, Some(ToolRunOutcome::Cancelled));
+    assert_eq!(lab.read(CAMP), camp);
+}
+
+#[tokio::test]
 async fn the_tool_is_not_available_on_a_redm_server() {
     let lab = Lab::with_cfg("set gamename rdr3\nensure props\n").await;
     lab.configure(ToolMode::Fix).await;
@@ -702,7 +858,7 @@ async fn the_tool_is_not_available_on_a_redm_server() {
 async fn observer_s_start_settles_an_interrupted_write_and_ends_unfinished_runs() {
     let lab = Lab::new().await;
     let camp = lab.read(CAMP);
-    let folder = observer_tools::fix::ServerFolder::open(&lab.folder()).unwrap();
+    let folder = ServerFolder::open(&lab.folder()).unwrap();
     let identity = folder.id().clone();
     let temporary = observer_tools::fix::temporary_name().unwrap();
     write(
@@ -774,6 +930,113 @@ async fn observer_s_start_settles_an_interrupted_write_and_ends_unfinished_runs(
     assert_eq!(
         view.tools[0].closed[0].close_reason,
         Some(ToolCloseReason::Abandoned)
+    );
+}
+
+#[tokio::test]
+async fn the_files_runs_an_earlier_observer_left_unfinished_wrote_are_audited_at_the_next_start() {
+    let lab = Lab::new().await;
+    let identity = ServerFolder::open(&lab.folder()).unwrap().id().clone();
+    let root = lab.folder().to_string_lossy().into_owned();
+    let started: Timestamp = "2026-11-01T08:00:00Z".parse().unwrap();
+    let camp = sha256(&lab.read(CAMP));
+    let gift = sha256(&lab.read(GIFT));
+    let (first, second) = (
+        observer_tools::fix::temporary_name().unwrap(),
+        observer_tools::fix::temporary_name().unwrap(),
+    );
+    let (fixing, undoing) = lab
+        .db
+        .write(move |tx| -> Result<(i64, i64), StoreError> {
+            let run = |mode, trigger, actor| {
+                stored::insert_run(
+                    tx,
+                    &NewRun {
+                        server_id: Servers::DEFAULT,
+                        tool: TOOL,
+                        trigger,
+                        actor,
+                        mode,
+                        started_at: started,
+                    },
+                )
+            };
+            let fixing = run(ToolRunMode::Fix, ToolTrigger::Panel, Some("ada"))?;
+            let undoing = run(ToolRunMode::Undo, ToolTrigger::Cli, None)?;
+            let removal = ToolRemoval {
+                index: 0,
+                hash: name_hash("marshmallow"),
+                name: None,
+                keeper: ToolKeeper {
+                    path: CAMP.to_owned(),
+                    format: ToolFileFormat::Ytyp,
+                    index: 2,
+                    sha256: "ab".repeat(32),
+                },
+                run: fixing,
+            };
+            let begin = |run, path, temporary: &str, sha256, removals: &[ToolRemoval], existing| {
+                stored::begin(
+                    tx,
+                    &BeginWrite {
+                        server_id: Servers::DEFAULT,
+                        tool: TOOL,
+                        run,
+                        folder_path: &root,
+                        folder_id: &identity.id,
+                        path,
+                        resource: "props",
+                        format: ToolFileFormat::Ytyp,
+                        original_sha256: [7; 32],
+                        temporary,
+                        sha256,
+                        removals,
+                        existing,
+                        at: started,
+                    },
+                )
+                .map(Option::unwrap)
+            };
+            // The fix's first write landed and was recorded, its second landed before it could be.
+            let landed = begin(fixing, CAMP, &first, camp, std::slice::from_ref(&removal), None)?;
+            stored::applied(tx, landed, started)?;
+            begin(fixing, GIFT, &second, gift, std::slice::from_ref(&removal), None)?;
+            // The undo wrote an original back and closed its change.
+            let earlier = begin(fixing, TENT, "a", [8; 32], &[removal], None)?;
+            stored::applied(tx, earlier, started)?;
+            begin(undoing, TENT, "b", [7; 32], &[], Some(earlier))?;
+            stored::applied(tx, earlier, started)?;
+            stored::close(tx, earlier, undoing, ToolCloseReason::Undone, started)?;
+            Ok((fixing, undoing))
+        })
+        .await
+        .unwrap();
+
+    lab.tools
+        .recover("2026-11-01T09:00:00Z".parse().unwrap())
+        .await
+        .unwrap();
+
+    let changed = lab.audited(AuditAction::ToolFilesChanged).await;
+    assert_eq!(changed.len(), 1, "{changed:?}");
+    assert_eq!(changed[0].0, "system");
+    let details = &changed[0].1;
+    assert_eq!(details["run"], fixing);
+    assert_eq!(details["trigger"], "panel");
+    assert_eq!(details["actor"], "ada");
+    assert_eq!(details["interrupted"], true);
+    assert_eq!(details["count"], 2);
+    assert_eq!(details["files"], serde_json::json!([CAMP, GIFT]));
+    let restored = lab.audited(AuditAction::ToolFilesRestored).await;
+    assert_eq!(restored.len(), 1, "{restored:?}");
+    assert_eq!(restored[0].1["run"], undoing);
+    assert_eq!(restored[0].1["reason"], "undo");
+    assert_eq!(restored[0].1["files"], serde_json::json!([TENT]));
+    let runs = lab.runs().await;
+    assert!(
+        runs.iter()
+            .filter(|run| run.id == fixing || run.id == undoing)
+            .all(|run| run.outcome == Some(ToolRunOutcome::Failed))
     );
 }
 

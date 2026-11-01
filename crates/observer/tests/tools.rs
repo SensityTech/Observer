@@ -1,7 +1,8 @@
 //! `observer tools` as it ships: the built binary on a synthetic server folder. A report writes
-//! nothing and exits with 2 while duplicates are left; a fix takes Observer's lock, and an undo
-//! puts back what it took out; the settings, excluded resources included, change from the command
-//! line.
+//! nothing, needs no database it can read, and exits with 2 while duplicates are left; a fix takes
+//! Observer's lock, and an undo puts back what it took out, in the folder it was taken out of; the
+//! settings, excluded resources included, change from the command line; RedM is refused even with
+//! every resource taken as started.
 // The helpers below are test code too, though not inside a `#[test]` function.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -105,6 +106,26 @@ impl Host {
         file.try_lock().unwrap();
         file
     }
+
+    /// A second server folder beside the first, with the same `props` resource.
+    fn copy(&self) -> PathBuf {
+        let copy = self.dir.path().join("copy");
+        for path in ["resources/props/fxmanifest.lua", CAMP, "server.cfg"] {
+            let to = copy.join(path);
+            fs::create_dir_all(to.parent().unwrap()).unwrap();
+            fs::copy(self.folder().join(path), to).unwrap();
+        }
+        copy
+    }
+
+    /// Sets the schema the database says it has, as an Observer of another version left it.
+    fn schema(&self, version: u32) {
+        let path = self.dir.path().join("data/observer.sqlite3");
+        let mut bytes = fs::read(&path).unwrap();
+        // SQLite keeps the user version, which the migrations count in, at byte 60 of its header.
+        bytes[60..64].copy_from_slice(&version.to_be_bytes());
+        fs::write(&path, bytes).unwrap();
+    }
 }
 
 fn text(output: &Output) -> String {
@@ -113,6 +134,20 @@ fn text(output: &Output) -> String {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     )
+}
+
+/// The run an output's undo line names.
+fn undo_run(output: &Output) -> String {
+    let words = text(output);
+    let line = words
+        .lines()
+        .find(|line| line.starts_with("to put back what run "))
+        .unwrap_or_else(|| panic!("{words}"));
+    line["to put back what run ".len()..]
+        .split(' ')
+        .next()
+        .unwrap()
+        .to_owned()
 }
 
 fn archetypes(path: &Path) -> usize {
@@ -266,5 +301,120 @@ fn an_excluded_resource_is_left_by_the_report_until_it_is_included_again() {
         text(&included).lines().any(|line| line == "excluded: maps"),
         "{}",
         text(&included)
+    );
+}
+
+#[test]
+fn a_fix_of_another_folder_is_undone_there_with_the_command_it_prints() {
+    let host = Host::new();
+    host.database();
+    let camp = host.read(CAMP);
+    let copy = host.copy();
+    let data = copy.to_str().unwrap();
+
+    let fixed = host.observer(&["tools", "run", "duplicate-archetypes", "--fix", "--data", data]);
+    let run = undo_run(&fixed);
+    let by_run = host.observer(&["tools", "undo", "duplicate-archetypes", "--run", &run]);
+    let after_run = fs::read(copy.join(CAMP)).unwrap();
+    let again = host.observer(&["tools", "run", "duplicate-archetypes", "--fix", "--data", data]);
+    let all = host.observer(&["tools", "undo", "duplicate-archetypes", "--all", "--data", data]);
+
+    assert_eq!(fixed.status.code(), Some(0), "{}", text(&fixed));
+    assert!(
+        text(&fixed).contains(&format!(
+            "observer tools undo duplicate-archetypes --run {run} --data {data}"
+        )),
+        "{}",
+        text(&fixed)
+    );
+    assert_eq!(by_run.status.code(), Some(0), "{}", text(&by_run));
+    assert!(text(&by_run).contains("1 file back"), "{}", text(&by_run));
+    assert_eq!(after_run, camp);
+    assert_eq!(again.status.code(), Some(0), "{}", text(&again));
+    assert_eq!(all.status.code(), Some(0), "{}", text(&all));
+    assert!(text(&all).contains("1 file back"), "{}", text(&all));
+    assert_eq!(fs::read(copy.join(CAMP)).unwrap(), camp);
+    assert_eq!(host.read(CAMP), camp, "the launch settings' folder is left alone");
+}
+
+#[test]
+fn a_fix_refuses_escrowed_resources_for_one_run_while_the_saved_setting_skips_them() {
+    let host = Host::new();
+    host.database();
+    let camp = host.read(CAMP);
+
+    let refused = host.observer(&[
+        "tools",
+        "run",
+        "duplicate-archetypes",
+        "--fix",
+        "--escrowed",
+        "allow",
+    ]);
+
+    assert_eq!(refused.status.code(), Some(1), "{}", text(&refused));
+    assert!(
+        text(&refused).contains("observer tools config duplicate-archetypes --escrowed allow"),
+        "{}",
+        text(&refused)
+    );
+    assert_eq!(host.read(CAMP), camp);
+}
+
+#[test]
+fn a_report_reads_past_a_database_this_build_cannot_read() {
+    let host = Host::new();
+    host.database();
+    host.schema(1);
+    let folder = host.folder();
+
+    let report = host.observer(&[
+        "tools",
+        "run",
+        "duplicate-archetypes",
+        "--data",
+        folder.to_str().unwrap(),
+    ]);
+
+    assert_eq!(report.status.code(), Some(2), "{}", text(&report));
+    let words = text(&report);
+    assert!(words.contains("1 registered more than once"), "{words}");
+    assert!(words.contains("the default settings"), "{words}");
+}
+
+#[test]
+fn every_resource_taken_as_started_is_still_refused_on_redm() {
+    let host = Host::new();
+    host.write("server.cfg", b"set gamename rdr3\nensure props\n");
+    let folder = host.folder();
+    let folder = folder.to_str().unwrap();
+    let bare = Host::new();
+    fs::remove_file(bare.folder().join("server.cfg")).unwrap();
+    let bare_folder = bare.folder();
+
+    let refused = host.observer(&[
+        "tools",
+        "run",
+        "duplicate-archetypes",
+        "--data",
+        folder,
+        "--all-resources",
+    ]);
+    let assumed = bare.observer(&[
+        "tools",
+        "run",
+        "duplicate-archetypes",
+        "--data",
+        bare_folder.to_str().unwrap(),
+        "--all-resources",
+    ]);
+
+    assert_eq!(refused.status.code(), Some(1), "{}", text(&refused));
+    assert!(text(&refused).contains("RedM"), "{}", text(&refused));
+    assert_eq!(assumed.status.code(), Some(2), "{}", text(&assumed));
+    assert!(
+        text(&assumed).contains("taken to run GTA V"),
+        "{}",
+        text(&assumed)
     );
 }

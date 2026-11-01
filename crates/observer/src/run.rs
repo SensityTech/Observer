@@ -253,6 +253,9 @@ pub async fn run(config: Config, args: RunArgs) -> anyhow::Result<()> {
     let first = signals.next().await;
     info!(shortened = first.shortened, from = ?first.from, "stopping Observer");
     host.stopping();
+    // Before FXServer's stop: a start queued behind a fix or an undo from the panel waits for it,
+    // and the stop waits for that start, so the run ends between two files rather than at its last.
+    tools.stopping();
     // Before FXServer stops, so that the log names who stopped it even if the stop goes wrong.
     if let Err(error) = audit.record_stop(first.from).await {
         warn!(%error, "cannot audit the stop of Observer");
@@ -266,7 +269,7 @@ pub async fn run(config: Config, args: RunArgs) -> anyhow::Result<()> {
         first,
     )
     .await;
-    // Once FXServer is down: a fix or an undo from the panel ends between two files.
+    // Once FXServer is down: waits for a fix or an undo from the panel to end between two files.
     tools.close().await;
     supervised.close().await;
     diagnosing.close().await;
