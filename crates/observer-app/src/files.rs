@@ -1,6 +1,6 @@
 //! File access: the groups of rules a server's files are reached by, and who holds them. The
 //! SFTP server asks this service who may log in and what each session may do; the panel's routes
-//! ask it to change both.
+//! ask it to change both. Its commits share a gate with the server tools' writes.
 
 use std::net::IpAddr;
 use std::sync::Arc;
@@ -16,7 +16,7 @@ use observer_store::files::{self as store, FileAccessRow, FileGroupRow, FileKeyR
 use observer_store::login_failures::FILES;
 use observer_store::{Connection, Database, StoreError, launch, users};
 use serde_json::{Value, json};
-use tokio::sync::watch;
+use tokio::sync::{OwnedRwLockReadGuard, OwnedRwLockWriteGuard, RwLock, watch};
 
 use crate::audit::Record;
 use crate::throttle;
@@ -83,6 +83,26 @@ pub struct Files {
     accounts: Accounts,
     /// Bumped on every change to groups and accesses, so that live sessions check theirs again.
     changes: Arc<watch::Sender<()>>,
+    gate: CommitGate,
+}
+
+/// What every SFTP commit under the server folder takes shared, and the server tools' writes take
+/// exclusively: an upload, a rename or a removal never lands between a tool's check of a file and
+/// its rename over it, and the tools never write over a commit under way. Commits wait while a tool
+/// writes, which takes seconds at most.
+#[derive(Debug, Clone, Default)]
+pub struct CommitGate(Arc<RwLock<()>>);
+
+impl CommitGate {
+    /// For one SFTP commit: other commits pass beside it.
+    pub async fn shared(&self) -> OwnedRwLockReadGuard<()> {
+        Arc::clone(&self.0).read_owned().await
+    }
+
+    /// For a tool's writes: once every commit under way has landed, none starts until it is dropped.
+    pub async fn exclusive(&self) -> OwnedRwLockWriteGuard<()> {
+        Arc::clone(&self.0).write_owned().await
+    }
 }
 
 /// A group with what it reaches.
@@ -99,7 +119,13 @@ impl Files {
             clock,
             accounts,
             changes: Arc::new(watch::Sender::new(())),
+            gate: CommitGate::default(),
         }
+    }
+
+    /// The gate SFTP commits take shared and the server tools' writes exclusively.
+    pub fn commit_gate(&self) -> CommitGate {
+        self.gate.clone()
     }
 
     /// Changes to groups and accesses, for the sessions they may end.

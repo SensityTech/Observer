@@ -609,6 +609,9 @@ pub struct ToolRunSummary {
     pub files_restored: u32,
     /// Entries this run took out.
     pub removals: u32,
+    /// Files of the server folder the tool's changes were still open in when the run ended: the
+    /// next start heals those whose copy kept is gone.
+    pub open_changes: u32,
     pub elapsed_ms: u64,
     /// Why the run failed, or what ended it early.
     pub problem: Option<String>,
@@ -961,7 +964,7 @@ mod tests {
             serde_json::to_value(&summary).unwrap(),
             json!({
                 "groups": 4, "fixable": 0, "fixed": 2, "left": 0, "filesChanged": 0, "filesRestored": 0,
-                "removals": 0, "elapsedMs": 0, "problem": null
+                "removals": 0, "openChanges": 0, "elapsedMs": 0, "problem": null
             })
         );
     }

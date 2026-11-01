@@ -217,7 +217,8 @@ impl russh::server::Handler for Connection {
         let root = grant.root.clone();
         let refused = Arc::clone(&self.refused);
         let opened = tokio::task::spawn_blocking(move || {
-            ConfinedTree::open(Path::new(&root)).map(|tree| (tree, inside(Path::new(&root), &refused)))
+            ConfinedTree::open(Path::new(&root))
+                .map(|tree| (tree, observer_app::paths_inside(Path::new(&root), &refused)))
         })
         .await
         .map_err(std::io::Error::other)?;
@@ -343,47 +344,6 @@ async fn revoke_on_change(
             Err(error) => tracing::warn!(%error, "an SFTP session's access could not be checked again"),
         }
     }
-}
-
-/// The paths of `refused` that lie inside `root`, as components below it. Both sides are
-/// resolved first, so a link or another spelling of the same folder is caught; on Windows the
-/// comparison ignores case, as the file system does.
-fn inside(root: &Path, refused: &[PathBuf]) -> Vec<Vec<String>> {
-    let Ok(root) = std::fs::canonicalize(root) else {
-        return Vec::new();
-    };
-    let key = |path: &Path| {
-        let text = path.to_string_lossy().into_owned();
-        if cfg!(windows) { text.to_lowercase() } else { text }
-    };
-    let root_key = key(&root);
-    refused
-        .iter()
-        .filter_map(|path| std::fs::canonicalize(path).ok())
-        .filter_map(|path| {
-            let path_key = key(&path);
-            let rest = path_key.strip_prefix(&root_key)?;
-            if !rest.starts_with(std::path::MAIN_SEPARATOR) {
-                return None;
-            }
-            let components = path.strip_prefix(&root).ok().map_or_else(
-                // Another case of the same root: split the lowercased rest instead.
-                || {
-                    rest.split(std::path::MAIN_SEPARATOR)
-                        .filter(|part| !part.is_empty())
-                        .map(str::to_owned)
-                        .collect()
-                },
-                |relative| {
-                    relative
-                        .components()
-                        .map(|part| part.as_os_str().to_string_lossy().into_owned())
-                        .collect()
-                },
-            );
-            Some(components)
-        })
-        .collect()
 }
 
 /// Removes the temporary upload files a crash left, each under the root it was made in, and

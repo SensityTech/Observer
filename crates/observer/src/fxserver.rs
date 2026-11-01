@@ -1,5 +1,6 @@
 //! `observer fxserver run`: the supervisor in the foreground, for driving a real server by hand.
-//! It reads no database; the launch comes from the command line.
+//! It reads no database; the launch comes from the command line. The server tools do not run
+//! before its start: neither their heal nor their fix, which only Observer itself runs.
 
 use std::io::{self, BufRead, IsTerminal, Write};
 use std::net::{Ipv4Addr, SocketAddr};
@@ -31,6 +32,9 @@ const LOCAL: &str = "local";
 const TERMINAL_LINES: usize = 4096;
 /// How long the last lines get to reach the terminal once everything has stopped.
 const TERMINAL_DRAIN: Duration = Duration::from_secs(2);
+/// Said before the start: the server tools' work is Observer's own.
+const NO_TOOLS: &str = "[observer] the server tools do not run here: no fix is applied or healed before \
+    this start; `observer run` runs them, and `observer tools` runs them by hand";
 
 #[derive(Debug, Args)]
 pub struct RunArgs {
@@ -110,6 +114,7 @@ pub async fn run(config: Config, args: RunArgs) -> anyhow::Result<()> {
 
     let (terminal, terminal_drained) =
         Terminal::start(io::stdout()).context("cannot print to the terminal")?;
+    terminal.print(NO_TOOLS.to_owned());
     let stop = CancellationToken::new();
     let printer = tokio::spawn(print_console(
         Arc::clone(&console),

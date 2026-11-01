@@ -14,6 +14,7 @@ mod players;
 mod schedule;
 mod servers;
 mod setup;
+mod tools;
 mod users;
 
 use axum::extract::State;
@@ -41,6 +42,7 @@ pub(crate) struct Route {
 }
 
 #[rustfmt::skip]
+#[expect(clippy::too_many_lines, reason = "the whole table, one route a line, read in one place")]
 pub(crate) fn routes() -> Vec<Route> {
     use Gate::{Account, Owner, Permission, Public, Reauthenticated, ReauthenticatedOwner, Session, Ticket};
     use Method as M;
@@ -81,6 +83,10 @@ pub(crate) fn routes() -> Vec<Route> {
     // too, which the service checks on what is asked. Retentions and erasures are the owner's.
     let players = Permission(P::PLAYERS_VIEW);
     let erase = ReauthenticatedOwner;
+    // The server tools read the whole server folder, which is the owner's; a fix, an undo or the
+    // settings write into it, now or at every start, so they take the password again.
+    let read_tools = Owner;
+    let change_tools = ReauthenticatedOwner;
     vec![
         route(M::GET,    "/health",                     Public,       health),
         route(M::GET,    "/setup",                      Public,       setup::status),
@@ -158,6 +164,11 @@ pub(crate) fn routes() -> Vec<Route> {
         route(M::POST,   "/servers/default/players/import",    erase,   players::import),
         route(M::GET,    "/servers/default/players/{id}",      players, players::profile),
         route(M::DELETE, "/servers/default/players/{id}",      erase,   players::forget),
+        route(M::GET,    "/tools",                                   read_tools,   tools::view),
+        route(M::POST,   "/tools/duplicate-archetypes/scan",         read_tools,   tools::scan),
+        route(M::POST,   "/tools/duplicate-archetypes/fix",          change_tools, tools::fix),
+        route(M::POST,   "/tools/duplicate-archetypes/undo",         change_tools, tools::undo),
+        route(M::PUT,    "/tools/duplicate-archetypes/settings",     change_tools, tools::change_settings),
     ]
 }
 

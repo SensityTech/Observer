@@ -23,6 +23,7 @@ observer-fxserver.workspace = true
 observer-platform.workspace = true
 observer-sftp.workspace = true
 observer-store.workspace = true
+observer-tools.workspace = true
 observer-web.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -47,6 +48,7 @@ winit.workspace = true
 winresource.workspace = true
 
 [dev-dependencies]
+observer-gamefiles = { workspace = true, features = ["test-support"] }
 tempfile.workspace = true
 
 [lints]

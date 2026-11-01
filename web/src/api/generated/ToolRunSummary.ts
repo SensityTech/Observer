@@ -32,7 +32,12 @@ filesRestored: number,
 /**
  * Entries this run took out.
  */
-removals: number, elapsedMs: number, 
+removals: number, 
+/**
+ * Files of the server folder the tool's changes were still open in when the run ended: the
+ * next start heals those whose copy kept is gone.
+ */
+openChanges: number, elapsedMs: number, 
 /**
  * Why the run failed, or what ended it early.
  */

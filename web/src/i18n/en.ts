@@ -2678,6 +2678,10 @@ export const en = {
                 ? playersFileProblems[problem]
                 : "This file cannot be imported as txAdmin's players database.";
         },
+        plan_changed:
+            'The duplicates changed since this report, so nothing was applied. Check the new report, then fix again.',
+        server_not_stopped: 'Stop FXServer first: the tools change files only while it is stopped.',
+        tool_not_available: 'This tool works on GTA V servers only: this server runs RedM.',
     } satisfies Record<ErrorCode, ErrorMessage>,
     failure: {
         unknown: 'Something went wrong. Try again.',

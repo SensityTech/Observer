@@ -381,3 +381,69 @@ fn a_ctrl_c_while_observer_starts_stops_it_gracefully_rather_than_kill_it() {
 
     observer.stopped_gracefully();
 }
+
+/// The owner turned the duplicate archetypes fix on: before FXServer starts, the work under the
+/// supervisor takes the duplicate out of the server folder, says so in the console, and the Tools
+/// page lists the change.
+#[test]
+fn observer_run_fixes_duplicate_archetypes_before_fxserver_starts_once_the_owner_turned_it_on() {
+    let (observer, owner) = Observer::start();
+    let (_, data) = observer.lay_out_fake();
+    let camp = data.join("resources/props/stream/camp.ytyp");
+    fs::create_dir_all(camp.parent().unwrap()).unwrap();
+    fs::write(
+        data.join("resources/props/fxmanifest.lua"),
+        "fx_version 'cerulean'\ngame 'gta5'\n",
+    )
+    .unwrap();
+    fs::write(
+        &camp,
+        observer_gamefiles::testing::ytyp("camp", &["marshmallow", "stick", "marshmallow"]),
+    )
+    .unwrap();
+    fs::write(
+        data.join("c.cfg"),
+        "exec server.cfg\nensure props\nfake_print running c.cfg\n",
+    )
+    .unwrap();
+    observer.select(35245);
+    observer.save(&owner, &data, "c.cfg");
+    let settings = json!({
+        "settings": { "atStart": "fix", "differences": "identical", "escrowed": "skip", "excluded": [] },
+        "version": null,
+    });
+    let saved = call(
+        observer.port,
+        "PUT",
+        "/tools/duplicate-archetypes/settings",
+        Some(&owner),
+        Some(settings),
+    );
+    assert_eq!(saved.status, 200, "{}", saved.body);
+
+    let started = call(
+        observer.port,
+        "POST",
+        "/servers/default/start",
+        Some(&owner),
+        None,
+    );
+    assert_eq!(started.status, 204, "{}", started.body);
+    wait_for("c.cfg running", || {
+        observer.console_log().contains("] running c.cfg")
+    });
+
+    let log = observer.console_log();
+    let fixed = log
+        .find("tools | duplicate archetypes: fixed 1 duplicate archetype")
+        .unwrap_or_else(|| panic!("{log}"));
+    assert!(fixed < log.find("] running c.cfg").unwrap(), "{log}");
+    let archetypes = observer_gamefiles::ytyp::read(&fs::read(&camp).unwrap())
+        .unwrap()
+        .archetypes
+        .len();
+    assert_eq!(archetypes, 2);
+    let page = call(observer.port, "GET", "/tools", Some(&owner), None);
+    assert_eq!(page.body["tools"][0]["open"].as_array().unwrap().len(), 1);
+    assert_eq!(page.body["tools"][0]["lastRun"]["trigger"], "start");
+}
