@@ -5,6 +5,7 @@ import type { ReactNode } from 'react';
 
 import type { ActorKind } from '../api/generated/ActorKind';
 import type { ApplyMode } from '../api/generated/ApplyMode';
+import type { ArchetypeType } from '../api/generated/ArchetypeType';
 import type { ArgumentChangeKind } from '../api/generated/ArgumentChangeKind';
 import type { ArtifactSettingsProblem } from '../api/generated/ArtifactSettingsProblem';
 import type { AuditAction } from '../api/generated/AuditAction';
@@ -13,16 +14,22 @@ import type { CfgFileProblem } from '../api/generated/CfgFileProblem';
 import type { CfgFileState } from '../api/generated/CfgFileState';
 import type { ChartCategory } from '../api/generated/ChartCategory';
 import type { CommandRefusal } from '../api/generated/CommandRefusal';
+import type { Contest } from '../api/generated/Contest';
 import type { CrashForm } from '../api/generated/CrashForm';
+import type { Difference } from '../api/generated/Difference';
+import type { Differences } from '../api/generated/Differences';
 import type { DropCategory } from '../api/generated/DropCategory';
 import type { DropKind } from '../api/generated/DropKind';
 import type { DropsRange } from '../api/generated/DropsRange';
 import type { EndpointProtocol } from '../api/generated/EndpointProtocol';
 import type { EnvironmentFact } from '../api/generated/EnvironmentFact';
 import type { ErrorCode } from '../api/generated/ErrorCode';
+import type { EscrowPolicy } from '../api/generated/EscrowPolicy';
 import type { FileChangeKind } from '../api/generated/FileChangeKind';
 import type { FileFlag } from '../api/generated/FileFlag';
+import type { FileFormat } from '../api/generated/FileFormat';
 import type { FileKind } from '../api/generated/FileKind';
+import type { FileProblem } from '../api/generated/FileProblem';
 import type { FindingKind } from '../api/generated/FindingKind';
 import type { FindingParams } from '../api/generated/FindingParams';
 import type { FolderProblem } from '../api/generated/FolderProblem';
@@ -33,10 +40,13 @@ import type { InstallFailure } from '../api/generated/InstallFailure';
 import type { JobKind } from '../api/generated/JobKind';
 import type { JobStep } from '../api/generated/JobStep';
 import type { LaunchProblem } from '../api/generated/LaunchProblem';
+import type { LeaveReason } from '../api/generated/LeaveReason';
 import type { LicenceState } from '../api/generated/LicenceState';
 import type { LineKind } from '../api/generated/LineKind';
 import type { LiveChangeKind } from '../api/generated/LiveChangeKind';
+import type { ModelInfoKind } from '../api/generated/ModelInfoKind';
 import type { NoticeReason } from '../api/generated/NoticeReason';
+import type { NotWritable } from '../api/generated/NotWritable';
 import type { OneSync } from '../api/generated/OneSync';
 import type { Outcome } from '../api/generated/Outcome';
 import type { PartialReason } from '../api/generated/PartialReason';
@@ -56,6 +66,13 @@ import type { StartCause } from '../api/generated/StartCause';
 import type { StopSource } from '../api/generated/StopSource';
 import type { SupportLevel } from '../api/generated/SupportLevel';
 import type { TileKind } from '../api/generated/TileKind';
+import type { ToolCloseReason } from '../api/generated/ToolCloseReason';
+import type { ToolFileFormat } from '../api/generated/ToolFileFormat';
+import type { ToolMode } from '../api/generated/ToolMode';
+import type { ToolNoteKind } from '../api/generated/ToolNoteKind';
+import type { ToolRunMode } from '../api/generated/ToolRunMode';
+import type { ToolRunOutcome } from '../api/generated/ToolRunOutcome';
+import type { ToolTrigger } from '../api/generated/ToolTrigger';
 import type { TrendVerdict } from '../api/generated/TrendVerdict';
 import { parsePermissions, permissionKeys, type PermissionKey } from '../auth/permissions';
 import type { InvisibleKind } from '../changes/invisible';
@@ -260,6 +277,83 @@ const cfgFindings = {
         `Holds ${count(params.count ?? 0, { one: 'line', other: 'lines' })} txAdmin commented out: Observer leaves them as they are.`,
 } satisfies Record<FindingKind, (params: FindingParams) => string>;
 
+/** What else could put another file in a `.ytyp`'s place. */
+const contestText = (by: Contest) => {
+    switch (by.kind) {
+        case 'sameName':
+            return `${by.path} in ${by.resource} has the same name and may be loaded in its place`;
+        case 'sibling':
+            return `${by.path}, of the same name in the same resource, may be sent in its place`;
+        case 'requested':
+            return `${by.resource} requests it with DLC_ITYP_REQUEST`;
+        case 'manifest':
+            return `${by.path} in ${by.resource} lists it`;
+    }
+};
+
+const notWritableText = (why: NotWritable) => {
+    switch (why.kind) {
+        case 'layout':
+            return `its layout is not one the fix is proven on (${why.detail})`;
+        case 'readOnly':
+            return 'it is read-only';
+        case 'linked':
+            return 'it is reached through a link';
+        case 'refused':
+            return 'Observer never changes it';
+    }
+};
+
+/** Why the duplicate archetypes tool leaves a group, naming the file or resource in question. */
+const leaveReasonText = (reason: LeaveReason) => {
+    switch (reason.kind) {
+        case 'definitionsDiffer':
+            return 'The copies differ, and only identical copies are fixed.';
+        case 'severalResources':
+            return 'The copies are in several resources, which can start and stop apart.';
+        case 'escrowed':
+            return 'A copy is in a resource protected by the asset escrow: pass its files and entries on to its author.';
+        case 'interior':
+            return 'A copy defines an interior (an MLO), whose removal could take the whole interior away.';
+        case 'mixedSources':
+            return 'A .ytyp copy meets a .meta one.';
+        case 'contested':
+            return `${reason.file}: ${contestText(reason.by)}.`;
+        case 'manifestDependent':
+            return `${reason.file} is listed by ${reason.manifest}, which may load it only with the maps that need it.`;
+        case 'notWritable':
+            return `${reason.file} cannot be changed: ${notWritableText(reason.why)}.`;
+        case 'excluded':
+            return `${reason.resource} is excluded in the settings.`;
+    }
+};
+
+const fileFormats = {
+    rsc7: 'RSC7',
+    escrowed: 'escrowed',
+    pso: 'PSO',
+    rbf: 'RBF',
+    xml: 'XML',
+    empty: 'empty',
+    unknown: 'unknown',
+} satisfies Record<FileFormat, string>;
+
+const fileProblemText = (problem: FileProblem) => {
+    switch (problem.kind) {
+        case 'format':
+            if (problem.found === 'escrowed') {
+                return 'Encrypted by the asset escrow.';
+            }
+            return problem.found === 'empty'
+                ? 'The file is empty.'
+                : `Its format is not one the tool reads: ${fileFormats[problem.found]}.`;
+        case 'invalid':
+            return `Not valid: ${problem.error}`;
+        case 'io':
+            return `Could not be read: ${problem.error}`;
+    }
+};
+
 export const en = {
     app: {
         name: 'Observer',
@@ -301,6 +395,7 @@ export const en = {
         players: 'Players',
         drops: 'Drops',
         changes: 'Changes',
+        tools: 'Tools',
         alertCount: (value: number) => count(value, { one: 'alert', other: 'alerts' }),
     },
     theme: {
@@ -2257,6 +2352,259 @@ export const en = {
             notCompared: 'No earlier start to compare the latest with',
         },
     },
+    tools: {
+        title: 'Tools',
+        gloss: 'Problems in the server folder that FXServer does not report.',
+        loadFailed: 'The tools could not be loaded.',
+        stopFirst: 'Stop FXServer to fix or undo: the tools change files only while it is stopped.',
+        stateUnknown:
+            "Fix and Undo wait for FXServer's state, which is not known while the live link is down.",
+        archetypes: {
+            title: 'Duplicate archetypes',
+            about: 'The FiveM client logs a Duplicate Archetype warning when two files it loads define the same prop, vehicle, weapon or ped model. By default the tool fixes only identical copies within one resource. It keeps the original of every file it changes, so each fix can be undone.',
+            scan: 'Scan now',
+            fix: 'Fix',
+            fixPlan: (groups: number, removals: number, files: number) =>
+                `Fix takes ${count(removals, { one: 'copy', other: 'copies' })} out of ${count(files, { one: 'file', other: 'files' })}, for ${count(groups, { one: 'duplicate', other: 'duplicates' })}.`,
+            noReport: 'Scan first: Fix applies the plan of the last report.',
+            nothingToFix: 'The last report has nothing to fix.',
+            applied: "The last report's fixes are written. Scan now to see what is left.",
+            outdated:
+                'Files were put back since the last report, which does not know of them. Scan now to see what is fixable again.',
+            scanned: (groups: number, fixable: number) =>
+                groups === 0
+                    ? 'Scan done: no archetype is registered more than once.'
+                    : `Scan done: ${count(groups, { one: 'duplicate', other: 'duplicates' })}, ${formatNumber('en', fixable)} of them fixable.`,
+            fixed: (groups: number, files: number) =>
+                `Fixed ${count(groups, { one: 'duplicate', other: 'duplicates' })} in ${count(files, { one: 'file', other: 'files' })}. FXServer loads them the next time it starts their resources.`,
+            ended: (outcome: string, problem: string | null) =>
+                problem === null ? `${outcome}.` : `${outcome}: ${problem}`,
+            lastRun: 'Last run',
+            noRun: 'No run yet. Scan now reads the server folder and writes nothing.',
+            when: 'When',
+            by: 'Run by',
+            mode: 'Run',
+            outcome: 'Outcome',
+            took: (time: string, took: string) => `${time}, took ${took}`,
+            triggers: {
+                start: 'Observer, before a start of FXServer',
+                panel: 'The Tools page',
+                cli: 'The command line',
+            } satisfies Record<ToolTrigger, string>,
+            byActor: (actor: string) => `${actor}, on the Tools page`,
+            modes: { report: 'Report', fix: 'Fix', heal: 'Heal', undo: 'Undo' } satisfies Record<
+                ToolRunMode,
+                string
+            >,
+            outcomes: {
+                done: 'Done',
+                cancelled: 'Cancelled',
+                timedOut: 'Timed out',
+                failed: 'Failed',
+            } satisfies Record<ToolRunOutcome, string>,
+            running: 'Running',
+            summary: {
+                groups: 'Duplicates',
+                fixable: 'Fixable',
+                fixed: 'Fixed',
+                left: 'Left',
+                filesChanged: 'Files written',
+                removals: 'Copies taken out',
+                filesRestored: 'Files put back',
+                openChanges: 'Open changes',
+            },
+            reportFrom: (time: string) =>
+                `The groups below are from the report of ${time}: the last run made none.`,
+        },
+        groups: {
+            title: 'Groups',
+            meta: (total: number) => count(total, { one: 'duplicate', other: 'duplicates' }),
+            noReport: 'No report yet: Scan now lists every archetype registered more than once.',
+            none: 'No archetype is registered more than once.',
+            search: 'Search names, hashes, resources and files',
+            actionFilters: 'Filter by action',
+            reasonFilters: 'Filter by reason',
+            noMatch: 'No group matches the search and filters.',
+            caption: 'Archetypes registered more than once, with their copies and what the tool does',
+            archetype: 'Archetype',
+            copies: 'Copies',
+            difference: 'Difference',
+            action: 'Action',
+            sameFile: 'one file',
+            escrowed: 'escrowed',
+            kept: 'kept',
+            removed: 'taken out',
+            entry: (index: number) => `entry #${index}`,
+            archetypeTypes: { base: null, time: 'time archetype', mlo: 'interior' } satisfies Record<
+                ArchetypeType,
+                string | null
+            >,
+            item: (kind: string, position: number, line: number) =>
+                `${kind} item #${position}, line ${formatNumber('en', line)}`,
+            modelInfoKinds: { weapon: 'weapon', vehicle: 'vehicle', ped: 'ped' } satisfies Record<
+                ModelInfoKind,
+                string
+            >,
+            differences: {
+                identical: 'Identical',
+                minor: 'Draw distances and bounds',
+                major: 'Differs',
+            } satisfies Record<Difference['kind'], string>,
+            actions: { fixed: 'Fixed', toFix: 'To fix', left: 'Left' },
+            keeps: (kept: number, removed: number[]) =>
+                `Keeps copy ${kept}, takes out ${removed.length === 1 ? 'copy' : 'copies'} ${list(removed.map(String))}.`,
+            reasons: {
+                definitionsDiffer: 'Copies differ',
+                severalResources: 'Several resources',
+                escrowed: 'Escrowed',
+                interior: 'Interior',
+                mixedSources: '.ytyp and .meta',
+                contested: 'Name contested',
+                manifestDependent: 'Listed by a manifest',
+                notWritable: 'Cannot be changed',
+                excluded: 'Excluded',
+            } satisfies Record<LeaveReason['kind'], string>,
+            reason: (reason: LeaveReason) => leaveReasonText(reason),
+            shown: (shown: number, total: number) =>
+                shown === total
+                    ? `${count(total, { one: 'group', other: 'groups' })} shown`
+                    : `${formatNumber('en', shown)} of ${count(total, { one: 'group', other: 'groups' })} shown`,
+            showMore: 'Show more',
+            truncated: (listed: number, total: number) =>
+                `The report lists the first ${formatNumber('en', listed)} of ${count(total, { one: 'group', other: 'groups' })}.`,
+        },
+        report: {
+            label: 'What the scan read',
+            resources: (found: number, started: number, client: number, escrowed: number) =>
+                `${count(found, { one: 'resource', other: 'resources' })}: ${formatNumber('en', started)} predicted to start, ${formatNumber('en', client)} sent to clients, ${formatNumber('en', escrowed)} of those escrowed`,
+            ytyp: (loaded: number, shadowed: number, unreadable: number) =>
+                `.ytyp files: ${formatNumber('en', loaded)} loaded, ${formatNumber('en', shadowed)} shadowed, ${formatNumber('en', unreadable)} unreadable`,
+            modelInfo: (loaded: number, unreadable: number) =>
+                `Model-info .meta files: ${formatNumber('en', loaded)} loaded, ${formatNumber('en', unreadable)} unreadable`,
+            registrations: (value: number) =>
+                count(value, { one: 'archetype registered', other: 'archetypes registered' }),
+            took: (time: string) => `read in ${time}`,
+            shadowed: (value: number) => `Shadowed files (${formatNumber('en', value)})`,
+            shadowedHint: 'Clients load another file of the same name in their place.',
+            shadowedBy: (path: string, resource: string) => `loaded instead: ${path} in ${resource}`,
+            unreadable: (value: number) => `Unreadable files (${formatNumber('en', value)})`,
+            unreadableHint: 'The archetypes these files define are unknown.',
+            problem: (problem: FileProblem) => fileProblemText(problem),
+            notes: (value: number) => `Notes (${formatNumber('en', value)})`,
+            notesHint:
+                'What limits the prediction of which resources start and which files the clients load.',
+            noteKinds: {
+                orderNotGuaranteed:
+                    'This system lists folders in no set order: which of two stream files of the same name FXServer sends may differ from the prediction.',
+                cfgIncomplete:
+                    'A file the cfg runs was not read: the resources it starts or stops are missing.',
+                allResources:
+                    'No cfg was read: every resource FXServer accepts is taken as started, in name order.',
+                unsupportedGame: 'The cfg runs another game than GTA V: the tool does nothing there.',
+                missingResource: 'The cfg names a resource FXServer does not find.',
+                missingDependency: 'A resource depends on one FXServer does not find, and does not start.',
+                dependencyNotStarted: "A resource's dependency does not start, so neither does it.",
+                constraintNotChecked:
+                    'A dependency on the server itself, which only FXServer decides, is taken as met.',
+                duplicateResourceName:
+                    'Two resource folders have the same name: FXServer uses the first one found.',
+                noManifest: 'A resource folder has no fxmanifest.lua or __resource.lua, and never starts.',
+                manifestRefused: 'FXServer refuses this manifest, so the resource never starts.',
+                manifestEncrypted:
+                    'The manifest is encrypted by the asset escrow: its dependencies and data files are unknown.',
+                manifestUnreadable: 'The manifest could not be read.',
+                manifestNote: 'The manifest uses something the tool does not follow.',
+                rpfInStream: 'An .rpf in stream/, which the client refuses.',
+                rpfDataFile:
+                    'An RPF_FILE data file, whose archive may define archetypes the tool does not see.',
+                dataFileMissing: 'A model-info data file names no file the resource ships.',
+                dataFileMismatch: "A model-info data file's type differs from the file's own.",
+                folderTooLarge:
+                    'A folder holds more entries than the tool lists: what lies past them is unknown.',
+                referenceUnreadable:
+                    'A .ymf manifest or _cache_y.dat could not be read: the files it names are unknown.',
+                baseGameUnseen:
+                    "The archetypes of GTA V itself and of Rockstar's updates are not read: a resource that defines one of them again is not seen.",
+            } satisfies Record<ToolNoteKind, string>,
+            found: (times: number) => `found ${count(times, { one: 'time', other: 'times' })}`,
+            more: (value: number) => `and ${formatNumber('en', value)} more`,
+        },
+        changes: {
+            title: 'Files changed',
+            backups: (bytes: string) => `Backups take ${bytes}`,
+            none: 'No file is changed. Each fix shows here, with the backup of the file as it was.',
+            caption: 'Files the tool changed, with the copies taken out and their backups',
+            file: 'File',
+            entries: 'Copies taken out',
+            backup: 'Backup',
+            changed: 'Changed',
+            actions: 'Undo',
+            copyBackup: (path: string) => `Copy the backup's name of ${path}, under data/tools/backups`,
+            pending: 'Being written',
+            notYet: 'not yet',
+            keptHere: (index: number) => `kept: #${index} in this file`,
+            keptIn: (path: string, index: number) => `kept: ${path} #${index}`,
+            showAll: (value: number) => `Show all ${formatNumber('en', value)}`,
+            showFewer: 'Show fewer',
+            undo: 'Undo',
+            undoAll: 'Undo all',
+            undoFile: (path: string) => `Undo the change of ${path}`,
+            runs: 'Open changes by run',
+            run: (id: number, files: number, removals: number) =>
+                `Run ${id}: ${count(files, { one: 'file', other: 'files' })}, ${count(removals, { one: 'copy', other: 'copies' })} taken out`,
+            undoRun: (id: number) => `Undo run ${id}`,
+            elsewhere:
+                "Some files lie in another server folder than the launch settings'. Undo all leaves them: undo them by file or by run, in their own folder.",
+            unreachable:
+                'Its folder is gone, or is another folder now: no undo reaches it. Copy its backup back by hand.',
+            undone: (files: number) =>
+                files === 0
+                    ? 'Nothing was put back.'
+                    : `Put back ${count(files, { one: 'file', other: 'files' })}. FXServer loads them the next time it starts their resources.`,
+            closed: 'Recently closed',
+            closedCaption: 'Changes closed in the last 30 days, the latest first',
+            closeReasons: {
+                undone: 'Undone',
+                healed: 'Healed',
+                stale: 'Changed by someone else',
+                restored: 'Put back outside Observer',
+                abandoned: 'Never written',
+            } satisfies Record<ToolCloseReason, string>,
+            formats: { ytyp: '.ytyp', modelInfo: 'model-info .meta' } satisfies Record<
+                ToolFileFormat,
+                string
+            >,
+        },
+        settings: {
+            title: 'Settings',
+            meta: 'Saving asks for your password',
+            atStart: 'At start',
+            atStartModes: { off: 'Off', report: 'Report', fix: 'Fix' } satisfies Record<ToolMode, string>,
+            atStartHint:
+                'Off runs the tool only when you ask. Report scans before every start of FXServer and writes to the console when the result changed. Fix applies the fixes before every start. Whatever this says, every start first puts back the copies whose kept copy is gone.',
+            differences: 'Differences',
+            differencesModes: {
+                identical: 'Identical only',
+                keepLatest: 'Keep the latest copy',
+            } satisfies Record<Differences, string>,
+            differencesHint:
+                'Keep the latest copy also fixes copies that differ, keeping the last one registered. Which copy the game uses when they differ is not known for sure: this can change the model, the textures or the draw distance players see.',
+            escrowed: 'Escrowed resources',
+            escrowedModes: { skip: 'Skip', allow: 'Allow' } satisfies Record<EscrowPolicy, string>,
+            escrowedHint:
+                'Skip only reports resources protected by the asset escrow. Allow fixes their plain files too.',
+            excluded: 'Excluded resources',
+            excludedHint:
+                'One resource name a line, as FXServer knows it, case included. The tool never changes them: put there those a pipeline or a file group keeps.',
+            excludedInvalid: 'Each name is 1 to 255 characters without / or \\, and 1,000 names at most.',
+            changes: (value: number) => count(value, { one: 'unsaved change', other: 'unsaved changes' }),
+            discard: 'Discard',
+            save: 'Save',
+            saved: 'Settings saved. The next scan, fix and start use them.',
+            changedElsewhere:
+                'These settings were changed in another session since you opened them. Discard your changes to see theirs, then make yours again.',
+        },
+    },
     server_state: {
         states: {
             stopped: 'Stopped',
@@ -2606,7 +2954,7 @@ export const en = {
             'The launch settings were changed in another session since the setup opened. Start again from them, then make your changes again.',
         startAgain: 'Start again from the saved settings',
         folder: {
-            lead: 'The folder of your existing server, with its resources folder and its cfg. FXServer runs from it in place: Observer copies nothing and writes nothing into it.',
+            lead: 'The folder of your existing server, with its resources folder and its cfg. FXServer runs from it in place: Observer copies nothing into it, and writes there only what people upload over SFTP and the fixes of the server tools you run or turn on.',
             label: 'Server folder',
             hint: 'A full path on this host, such as C:\\FXServer\\server-data or /srv/fxserver/server-data.',
             check: 'Check folder',
@@ -3059,6 +3407,9 @@ export const en = {
             change_contents_purged: 'Kept contents of a file purged',
             change_verify_requested: 'Full verification of the files asked for',
             change_check_requested: 'Check of the disk asked for',
+            tool_settings_changed: 'Tool settings changed',
+            tool_files_changed: 'Files changed by a tool',
+            tool_files_restored: 'Files restored by a tool',
         } satisfies Record<AuditAction, string>,
         outcomes: {
             success: 'Success',
@@ -3522,6 +3873,10 @@ export const en = {
             typeof params.index === 'number'
                 ? `Pattern ${params.index + 1} cannot be used: use * and ? as wildcards, / between folders, and no .. or drive letter.`
                 : 'A pattern cannot be used.',
+        plan_changed:
+            'The duplicates changed since this report, so nothing was applied. Check the new report, then fix again.',
+        server_not_stopped: 'Stop FXServer first: the tools change files only while it is stopped.',
+        tool_not_available: 'This tool works on GTA V servers only: this server runs RedM.',
     } satisfies Record<ErrorCode, ErrorMessage>,
     failure: {
         unknown: 'Something went wrong. Try again.',

@@ -16,6 +16,7 @@ mod players;
 mod schedule;
 mod servers;
 mod setup;
+mod tools;
 mod users;
 
 use axum::extract::State;
@@ -91,6 +92,10 @@ pub(crate) fn routes() -> Vec<Route> {
     // owner's, with the password again to change anything.
     let changes = Permission(P::CHANGES_VIEW);
     let contents = PermissionReadsAudited(P::CHANGES_CONTENT);
+    // The server tools read the whole server folder, which is the owner's; a fix, an undo or the
+    // settings write into it, now or at every start, so they take the password again.
+    let read_tools = Owner;
+    let change_tools = ReauthenticatedOwner;
     vec![
         route(M::GET,    "/health",                     Public,       health),
         route(M::GET,    "/setup",                      Public,       setup::status),
@@ -191,6 +196,11 @@ pub(crate) fn routes() -> Vec<Route> {
         route(M::PUT,    "/servers/default/changes/settings", ReauthenticatedOwner, changes::change_settings),
         route(M::POST,   "/servers/default/changes/verify",   ReauthenticatedOwner, changes::verify),
         route(M::DELETE, "/servers/default/changes/contents", ReauthenticatedOwner, changes::purge),
+        route(M::GET,    "/tools",                                   read_tools,   tools::view),
+        route(M::POST,   "/tools/duplicate-archetypes/scan",         read_tools,   tools::scan),
+        route(M::POST,   "/tools/duplicate-archetypes/fix",          change_tools, tools::fix),
+        route(M::POST,   "/tools/duplicate-archetypes/undo",         change_tools, tools::undo),
+        route(M::PUT,    "/tools/duplicate-archetypes/settings",     change_tools, tools::change_settings),
     ]
 }
 

@@ -26,8 +26,8 @@ import { AppShell } from './shell/AppShell';
 
 // Pages beyond the Overview load when someone opens them: the console's virtual list and colour
 // parser, the restart schedule, the diagnostics, the players and their drops, the changes and their
-// diffs, the owner's launch settings and server setup, the accounts and the audit log are no one's
-// landing page.
+// diffs, the owner's launch settings, server setup and server tools, the accounts and the audit log
+// are no one's landing page.
 const ConsolePage = lazyCode(() =>
     import('./pages/ConsolePage').then((page) => ({ default: page.ConsolePage })),
 );
@@ -43,6 +43,7 @@ const ServerPage = lazyCode(() =>
 const ServerSetupPage = lazyCode(() =>
     import('./pages/ServerSetupPage').then((page) => ({ default: page.ServerSetupPage })),
 );
+const ToolsPage = lazyCode(() => import('./pages/ToolsPage').then((page) => ({ default: page.ToolsPage })));
 const UsersPage = lazyCode(() => import('./pages/UsersPage').then((page) => ({ default: page.UsersPage })));
 const FilesPage = lazyCode(() => import('./pages/FilesPage').then((page) => ({ default: page.FilesPage })));
 const AuditPage = lazyCode(() => import('./pages/AuditPage').then((page) => ({ default: page.AuditPage })));
@@ -270,6 +271,17 @@ const serverSetupRoute = createRoute({
     ),
 });
 
+// The tools read the whole server folder and write into it: the owner's, as the server setup is.
+const toolsRoute = createRoute({
+    getParentRoute: () => panelRoute,
+    path: '/tools',
+    component: () => (
+        <RequireOwner>
+            <ToolsPage />
+        </RequireOwner>
+    ),
+});
+
 const usersRoute = createRoute({
     getParentRoute: () => panelRoute,
     path: '/users',
@@ -330,6 +342,7 @@ const routeTree = rootRoute.addChildren([
         dropsRoute,
         serverRoute,
         serverSetupRoute,
+        toolsRoute,
         usersRoute,
         filesRoute,
         auditRoute,

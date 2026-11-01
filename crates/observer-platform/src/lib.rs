@@ -25,7 +25,7 @@ use std::time::{Duration, Instant};
 
 use tokio::sync::watch;
 
-pub use confined::{Entry, EntryKind, InvalidName, RelativePath, TreeError};
+pub use confined::{Entry, EntryKind, FileId, InvalidName, RelativePath, TreeError};
 pub use sockets::{Protocol, Socket, SocketState, sockets};
 pub use stream::{Output, Stdin};
 pub use tree::{ProcessInfo, TreeChange, TreeChanges};

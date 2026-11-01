@@ -42,6 +42,12 @@ const MAX_HOSTNAME_CHARS: usize = 128;
 const MAX_WORD_CHARS: usize = 64;
 /// Entries of the build's `system_resources` read.
 const MAX_SYSTEM_RESOURCES: usize = 200;
+/// The most memory the resource commands of one scan take, names and files included: a few
+/// hundred kilobytes hold the cfg of the largest server, and the 32 files read could hold more.
+const MAX_RESOURCE_COMMAND_BYTES: usize = 4 * 1024 * 1024;
+/// No file system FXServer runs on names a folder with more characters: a longer resource name
+/// starts nothing, nor does a longer category.
+const MAX_RESOURCE_NAME_CHARS: usize = 255;
 const MAX_PLAYERS: RangeInclusive<u32> = 1..=2048;
 /// Above this, FXServer needs OneSync.
 const PLAYERS_WITHOUT_ONESYNC: u32 = 32;
@@ -88,6 +94,43 @@ pub struct Scan {
     pub endpoint: Option<SocketAddr>,
     /// The resources the chain starts, in lower case, each once, in the order first started.
     pub started: Vec<String>,
+    /// Every command that starts or stops resources, in the order FXServer runs them: those of a
+    /// file `exec` reaches come where it is run. Which resources end up started is left to the
+    /// reader, who knows the folder's resources and their dependencies.
+    pub resource_commands: Vec<ResourceCommand>,
+    /// Whether `resource_commands` holds every one the chain runs: false when a file FXServer may
+    /// run was left unread, or once the list took all the memory it may.
+    pub resource_commands_complete: bool,
+}
+
+/// A command that starts or stops resources, written the way FXServer runs one: with exactly one
+/// argument, which is not empty. FXServer refuses any other number of arguments. A name longer
+/// than any folder's is left out: it names nothing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResourceCommand {
+    pub verb: ResourceVerb,
+    /// The argument as written, since FXServer's resource names are case-sensitive. A name in
+    /// brackets, `[maps]`, is a category: every resource with that folder on its path.
+    pub name: String,
+    /// The file of the chain the command is written in, named as the scan's files are.
+    pub file: String,
+    pub line: u32,
+}
+
+/// What a [`ResourceCommand`] does, from `ServerResources.cpp`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResourceVerb {
+    /// Starts the resource, or each one of a category, after the dependencies it names.
+    Start,
+    /// Starts as `Start` does. Once the cfg has run it restarts a resource already started; while
+    /// the cfg runs, as in this scan, it leaves one alone.
+    Ensure,
+    /// Stops then starts a resource that was started, which puts it last among those started; the
+    /// resources that depend on it stop and stay stopped. A category is not expanded: no resource
+    /// is named that way, so nothing happens.
+    Restart,
+    /// Stops the resource, or each one of a category, and the resources that depend on it.
+    Stop,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -150,6 +193,9 @@ pub fn scan(data: &Path, cfg_file: &str, text: &str, resources: &Resources, cont
         game_build: None,
         started: Vec::new(),
         started_names: HashSet::new(),
+        resource_commands: Vec::new(),
+        resource_command_bytes: 0,
+        resource_commands_cut: false,
     };
     if let Ok(resolved) = fs::canonicalize(data.join(cfg_file)) {
         scanner.read.insert(resolved);
@@ -217,6 +263,11 @@ struct Scanner<'a> {
     game_build: Option<u32>,
     started: Vec<String>,
     started_names: HashSet<String>,
+    resource_commands: Vec<ResourceCommand>,
+    /// What the resource commands take, counted against `MAX_RESOURCE_COMMAND_BYTES`.
+    resource_command_bytes: usize,
+    /// A resource command was left out, past the memory the list may take.
+    resource_commands_cut: bool,
 }
 
 impl Scanner<'_> {
@@ -250,6 +301,7 @@ impl Scanner<'_> {
         };
         let command = name.to_ascii_lowercase();
         let first = args.first().map(String::as_str);
+        self.resource_command(place, &command, args);
         match (command.as_str(), first) {
             ("start" | "ensure" | "restart", Some(resource)) => self.start(place, resource),
             ("endpoint_add_tcp", _) => self.endpoint(place, EndpointProtocol::Tcp, args),
@@ -347,6 +399,37 @@ impl Scanner<'_> {
             };
             self.report_at(FindingKind::ResourceMissing, place, params);
         }
+    }
+
+    /// Keeps a command that starts or stops resources, when FXServer would run it as one: its
+    /// console checks the number of arguments before the command sees them, and the command
+    /// returns on an empty name.
+    fn resource_command(&mut self, place: &Place, command: &str, args: &[String]) {
+        let verb = match command {
+            "start" => ResourceVerb::Start,
+            "ensure" => ResourceVerb::Ensure,
+            "restart" => ResourceVerb::Restart,
+            "stop" => ResourceVerb::Stop,
+            _ => return,
+        };
+        let [name] = args else {
+            return;
+        };
+        if name.is_empty() || name.chars().nth(MAX_RESOURCE_NAME_CHARS).is_some() {
+            return;
+        }
+        let bytes = size_of::<ResourceCommand>() + name.len() + place.file.len();
+        if self.resource_commands_cut || self.resource_command_bytes + bytes > MAX_RESOURCE_COMMAND_BYTES {
+            self.resource_commands_cut = true;
+            return;
+        }
+        self.resource_command_bytes += bytes;
+        self.resource_commands.push(ResourceCommand {
+            verb,
+            name: name.clone(),
+            file: place.file.clone(),
+            line: place.line,
+        });
     }
 
     fn endpoint(&mut self, place: &Place, protocol: EndpointProtocol, args: &[String]) {
@@ -569,6 +652,8 @@ impl Scanner<'_> {
             findings: self.findings,
             endpoint: self.health,
             started: self.started,
+            resource_commands: self.resource_commands,
+            resource_commands_complete: !self.unchecked && !self.resource_commands_cut,
         }
     }
 
@@ -1742,6 +1827,135 @@ restart spawnmanager
             more.params.count,
             u32::try_from(MAX_MISSING_NAMES - MAX_PER_KIND).ok()
         );
+    }
+
+    /// Each resource command as `(verb, name, file:line)`.
+    fn commands(scan: &Scan) -> Vec<(ResourceVerb, &str, String)> {
+        scan.resource_commands
+            .iter()
+            .map(|command| {
+                (
+                    command.verb,
+                    command.name.as_str(),
+                    format!("{}:{}", command.file, command.line),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn resource_commands_are_listed_in_the_order_fxserver_runs_them_through_exec() {
+        use ResourceVerb::{Ensure, Restart, Start, Stop};
+
+        let folder = Folder::new();
+        folder.file(
+            "configs/resources.cfg",
+            "start Chat\nSTOP chat\nexec configs/maps.cfg\nensure garage\n",
+        );
+        folder.file("configs/maps.cfg", "ensure [Maps]; restart Chat\n");
+
+        let scan = folder.scan(&format!(
+            "{QUIET}ensure mapmanager\nexec configs/resources.cfg\nEnsure \"lb-phone\" // ensure bank\n\
+             /* stop lb-phone */ stop [maps]\n"
+        ));
+
+        assert_eq!(
+            commands(&scan),
+            [
+                (Ensure, "mapmanager", "server.cfg:4".to_owned()),
+                (Start, "Chat", "configs/resources.cfg:1".to_owned()),
+                (Stop, "chat", "configs/resources.cfg:2".to_owned()),
+                (Ensure, "[Maps]", "configs/maps.cfg:1".to_owned()),
+                (Restart, "Chat", "configs/maps.cfg:1".to_owned()),
+                (Ensure, "garage", "configs/resources.cfg:4".to_owned()),
+                (Ensure, "lb-phone", "server.cfg:6".to_owned()),
+                (Stop, "[maps]", "server.cfg:7".to_owned()),
+            ],
+            "names as written, the files exec reaches where they run"
+        );
+        assert!(scan.resource_commands_complete);
+    }
+
+    #[test]
+    fn only_a_command_with_one_name_starts_or_stops_resources() {
+        let folder = Folder::new();
+        folder.resource("chat").resource("garage");
+
+        let scan = folder.scan(&format!(
+            "{QUIET}ensure\nensure chat garage\nstop \"\"\nrestart chat \"\"\nstarts chat\n\
+             set ensure chat\n# ensure chat\nensure {}\nstart garage\n",
+            "a".repeat(MAX_RESOURCE_NAME_CHARS + 1)
+        ));
+
+        assert_eq!(
+            commands(&scan),
+            [(ResourceVerb::Start, "garage", "server.cfg:12".to_owned())]
+        );
+        assert!(
+            scan.resource_commands_complete,
+            "nothing FXServer runs was left out"
+        );
+        assert_eq!(
+            places(&scan, FindingKind::ResourceMissing),
+            ["server.cfg:11"],
+            "the findings read the first word as before"
+        );
+    }
+
+    #[test]
+    fn a_name_of_255_characters_is_kept() {
+        let folder = Folder::new();
+        let name = "a".repeat(MAX_RESOURCE_NAME_CHARS);
+
+        let scan = folder.scan(&format!("{QUIET}stop {name}\n"));
+
+        assert_eq!(
+            commands(&scan),
+            [(ResourceVerb::Stop, name.as_str(), "server.cfg:4".to_owned())]
+        );
+    }
+
+    #[test]
+    fn resource_commands_stop_at_their_memory_and_say_so() {
+        let folder = Folder::new();
+        let cfg_file = "c".repeat(2000);
+        let mut cfg = String::new();
+        for index in 0..3000 {
+            writeln!(cfg, "ensure r{index:04}").unwrap();
+        }
+        let resources = server_data::walk(&folder.data());
+
+        let scan = scan(&folder.data(), &cfg_file, &cfg, &resources, &context());
+
+        let each = size_of::<ResourceCommand>() + "r0000".len() + cfg_file.len();
+        let kept = MAX_RESOURCE_COMMAND_BYTES / each;
+        assert!(kept < 3000);
+        assert_eq!(scan.resource_commands.len(), kept);
+        let last = &scan.resource_commands[kept - 1];
+        assert_eq!(
+            (last.name.as_str(), last.line),
+            (format!("r{:04}", kept - 1).as_str(), u32::try_from(kept).unwrap())
+        );
+        assert!(!scan.resource_commands_complete);
+    }
+
+    #[test]
+    fn a_file_left_unread_leaves_the_resource_commands_incomplete() {
+        let folder = Folder::new();
+        for depth in 1..=6 {
+            folder.file(&format!("c{depth}.cfg"), &format!("exec c{}.cfg\n", depth + 1));
+        }
+
+        let read = folder.scan(&format!(
+            "{QUIET}ensure chat\nexec server.cfg\nexec missing.cfg\n"
+        ));
+        let resource = folder.scan(&format!("{QUIET}ensure chat\nexec @chat/extra.cfg\n"));
+        let deep = folder.scan(&format!("{QUIET}exec c1.cfg\n"));
+
+        assert!(read.resource_commands_complete, "a missing file runs nothing");
+        assert!(!resource.resource_commands_complete);
+        assert!(!deep.resource_commands_complete);
+        assert_eq!(commands(&resource).len(), 1);
     }
 
     #[test]

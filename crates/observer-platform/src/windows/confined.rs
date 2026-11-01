@@ -25,22 +25,23 @@ use windows_sys::Win32::Foundation::{
     STATUS_OBJECT_PATH_NOT_FOUND, STATUS_SHARING_VIOLATION, UNICODE_STRING,
 };
 use windows_sys::Win32::Storage::FileSystem::{
-    DELETE, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_READONLY,
-    FILE_ATTRIBUTE_REPARSE_POINT, FILE_ATTRIBUTE_TAG_INFO, FILE_DISPOSITION_FLAG_DELETE,
-    FILE_DISPOSITION_FLAG_POSIX_SEMANTICS, FILE_DISPOSITION_INFO, FILE_DISPOSITION_INFO_EX,
-    FILE_FLAG_BACKUP_SEMANTICS, FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_ID_EXTD_DIR_INFO,
-    FILE_INFO_BY_HANDLE_CLASS, FILE_LIST_DIRECTORY, FILE_NAME_NORMALIZED, FILE_READ_ATTRIBUTES,
-    FILE_RENAME_INFO, FILE_SHARE_DELETE, FILE_SHARE_MODE, FILE_SHARE_READ, FILE_SHARE_WRITE,
-    FILE_STANDARD_INFO, FILE_TRAVERSE, FileAttributeTagInfo, FileIdExtdDirectoryInfo,
-    FileIdExtdDirectoryRestartInfo, FileStandardInfo, GetFileInformationByHandleEx,
-    GetFinalPathNameByHandleW, SYNCHRONIZE, VOLUME_NAME_NT,
+    BY_HANDLE_FILE_INFORMATION, DELETE, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_NORMAL,
+    FILE_ATTRIBUTE_READONLY, FILE_ATTRIBUTE_REPARSE_POINT, FILE_ATTRIBUTE_TAG_INFO,
+    FILE_DISPOSITION_FLAG_DELETE, FILE_DISPOSITION_FLAG_POSIX_SEMANTICS, FILE_DISPOSITION_INFO,
+    FILE_DISPOSITION_INFO_EX, FILE_FLAG_BACKUP_SEMANTICS, FILE_GENERIC_READ, FILE_GENERIC_WRITE,
+    FILE_ID_EXTD_DIR_INFO, FILE_ID_INFO, FILE_INFO_BY_HANDLE_CLASS, FILE_LIST_DIRECTORY,
+    FILE_NAME_NORMALIZED, FILE_READ_ATTRIBUTES, FILE_RENAME_INFO, FILE_SHARE_DELETE, FILE_SHARE_MODE,
+    FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_STANDARD_INFO, FILE_TRAVERSE, FileAttributeTagInfo,
+    FileIdExtdDirectoryInfo, FileIdExtdDirectoryRestartInfo, FileIdInfo, FileStandardInfo,
+    GetFileInformationByHandle, GetFileInformationByHandleEx, GetFinalPathNameByHandleW, SYNCHRONIZE,
+    VOLUME_NAME_NT,
 };
 use windows_sys::Win32::System::IO::IO_STATUS_BLOCK;
 use windows_sys::Win32::System::WindowsProgramming::{
     FILE_RENAME_FLAG_POSIX_SEMANTICS, FILE_RENAME_FLAG_REPLACE_IF_EXISTS,
 };
 
-use crate::confined::{Entry, EntryKind, RelativePath, TreeError, same_name_ignoring_case};
+use crate::confined::{Entry, EntryKind, FileId, RelativePath, Replace, TreeError, same_name_ignoring_case};
 
 const FOLDER_ACCESS: u32 = FILE_LIST_DIRECTORY | FILE_TRAVERSE | FILE_READ_ATTRIBUTES | SYNCHRONIZE;
 /// Folders are held without sharing deletion, so that nobody renames one under an operation.
@@ -152,6 +153,28 @@ impl ConfinedTree {
 
     /// Opens a regular file to read, sharing everything.
     pub fn open_file(&self, path: &RelativePath) -> Result<File, TreeError> {
+        self.open_regular(path, false)
+    }
+
+    /// Opens a regular file to read as [`open_file`](Self::open_file) does, even when other hard
+    /// links share it: FXServer links every stream file into its cache. Links, junctions, mount
+    /// points and reparse points stay refused, on the way and in the file's place. For Observer's
+    /// own reads only, never to serve a file to someone: another link may lead to it from outside
+    /// the tree. The file's identity comes with it, which
+    /// [`commit_over_shared`](Self::commit_over_shared) checks before it replaces the name.
+    pub fn open_file_shared(&self, path: &RelativePath) -> Result<(File, FileId), TreeError> {
+        let file = self.open_regular(path, true)?;
+        let id = file_id(&file)?;
+        Ok((file, id))
+    }
+
+    /// The root folder's identity, which tells the same folder apart from another reached under the
+    /// same path, and finds it again under another.
+    pub fn root_id(&self) -> Result<FileId, TreeError> {
+        file_id(&self.root.handle)
+    }
+
+    fn open_regular(&self, path: &RelativePath, shared: bool) -> Result<File, TreeError> {
         let Some((parent, name)) = path.split_last() else {
             return Err(TreeError::IsAFolder);
         };
@@ -167,7 +190,7 @@ impl ConfinedTree {
         )?;
         let attributes = attributes(&file).map_err(TreeError::Io)?;
         attributes.refuse_reparse()?;
-        if links(&file)? > 1 {
+        if !shared && links(&file)? > 1 {
             return Err(TreeError::HardLink);
         }
         self.check_final(&file, path)?;
@@ -286,6 +309,42 @@ impl ConfinedTree {
         target: &str,
         replace: bool,
     ) -> Result<(), TreeError> {
+        let replace = if replace { Replace::Alone } else { Replace::Never };
+        self.commit_as(folder, temporary, target, replace)
+    }
+
+    /// Makes the temporary file the folder's `target` as a replacing [`commit`](Self::commit)
+    /// does, even when other hard links share the file in its place: FXServer links every stream
+    /// file into its cache. The rename takes the name alone, so the other links keep the old
+    /// content.
+    ///
+    /// `expected` is the file the caller read there, from
+    /// [`open_file_shared`](Self::open_file_shared), or `None` when the name was free: any other
+    /// entry in its place, or none where a file was expected, refuses the commit (`Changed`), so
+    /// that a file another writer committed since is never overwritten. The check comes just
+    /// before the rename, which a writer racing within that instant can still beat. Every other
+    /// refusal stays, and any refusal removes the temporary file.
+    pub fn commit_over_shared(
+        &self,
+        folder: &Folder,
+        temporary: TemporaryFile,
+        target: &str,
+        expected: Option<FileId>,
+    ) -> Result<(), TreeError> {
+        let replace = expected.map_or(Replace::Never, Replace::Shared);
+        match self.commit_as(folder, temporary, target, replace) {
+            Err(TreeError::Exists) => Err(TreeError::Changed),
+            committed => committed,
+        }
+    }
+
+    fn commit_as(
+        &self,
+        folder: &Folder,
+        temporary: TemporaryFile,
+        target: &str,
+        replace: Replace,
+    ) -> Result<(), TreeError> {
         let committed = self.commit_inner(folder, &temporary, target, replace);
         if committed.is_err() {
             let _ = self.delete_handle(&temporary.file);
@@ -299,17 +358,17 @@ impl ConfinedTree {
         folder: &Folder,
         temporary: &TemporaryFile,
         target: &str,
-        replace: bool,
+        replace: Replace,
     ) -> Result<(), TreeError> {
         if temporary.folder != folder.path {
             return Err(TreeError::Escaped);
         }
         let path = child(folder, target)?;
         temporary.file.sync_all().map_err(TreeError::Io)?;
-        if replace {
-            self.check_replaced(folder, target, &path)?;
+        if replace != Replace::Never {
+            self.check_replaced(folder, target, &path, replace)?;
         }
-        retried(|| self.rename_handle(&temporary.file, &folder.handle, target, replace))
+        retried(|| self.rename_handle(&temporary.file, &folder.handle, target, replace != Replace::Never))
     }
 
     /// Removes a temporary file that will not be committed.
@@ -346,7 +405,7 @@ impl ConfinedTree {
         }
         self.check_final(&source, &source_path)?;
         if replace {
-            self.check_replaced(to, new_name, &target_path)?;
+            self.check_replaced(to, new_name, &target_path, Replace::Alone)?;
         }
         retried(|| self.rename_handle(&source, &to.handle, new_name, replace))
     }
@@ -480,9 +539,16 @@ impl ConfinedTree {
         self.delete_handle(&handle)
     }
 
-    /// Checks the file a replacing rename would take the place of, when one is there: reached
-    /// under its own name, a regular file with one link, and not read-only.
-    fn check_replaced(&self, folder: &Folder, name: &str, path: &RelativePath) -> Result<(), TreeError> {
+    /// Checks the file a replacing rename would take the place of: reached under its own name, a
+    /// regular file, not read-only, and either alone with its one link or, shared, the very file
+    /// expected. No file is needed there to replace a file alone; a shared one must be there.
+    fn check_replaced(
+        &self,
+        folder: &Folder,
+        name: &str,
+        path: &RelativePath,
+        replace: Replace,
+    ) -> Result<(), TreeError> {
         let existing = match nt_open(
             &folder.handle,
             name,
@@ -493,15 +559,23 @@ impl ConfinedTree {
             0,
         ) {
             Ok(existing) => existing,
+            Err(TreeError::NotFound) if matches!(replace, Replace::Shared(_)) => {
+                return Err(TreeError::Changed);
+            }
             Err(TreeError::NotFound) => return Ok(()),
             Err(error) => return Err(error),
         };
         let attributes = attributes(&existing).map_err(TreeError::Io)?;
         attributes.refuse_reparse()?;
-        if links(&existing)? > 1 {
+        if replace == Replace::Alone && links(&existing)? > 1 {
             return Err(TreeError::HardLink);
         }
         self.check_final(&existing, path)?;
+        if let Replace::Shared(expected) = replace
+            && file_id(&existing)? != expected
+        {
+            return Err(TreeError::Changed);
+        }
         if attributes.file_attributes & FILE_ATTRIBUTE_READONLY != 0 {
             return Err(TreeError::ReadOnly);
         }
@@ -628,6 +702,29 @@ fn links(handle: &File) -> Result<u32, TreeError> {
     let mut info = FILE_STANDARD_INFO::default();
     get_information(handle, FileStandardInfo, &mut info).map_err(TreeError::Io)?;
     Ok(info.NumberOfLinks)
+}
+
+/// The volume's serial number and the file's 128-bit index. FAT and exFAT, which have no such
+/// index, answer with the 32-bit serial and the 64-bit index every file system gives.
+fn file_id(handle: &File) -> Result<FileId, TreeError> {
+    let mut info = FILE_ID_INFO::default();
+    if get_information(handle, FileIdInfo, &mut info).is_ok() {
+        return Ok(FileId::new(
+            info.VolumeSerialNumber,
+            u128::from_le_bytes(info.FileId.Identifier),
+        ));
+    }
+    let mut info = BY_HANDLE_FILE_INFORMATION::default();
+    // SAFETY: the handle is open for as long as `handle` lives, and `info` is the structure the
+    // call fills.
+    if unsafe { GetFileInformationByHandle(handle.as_raw_handle(), &raw mut info) } == 0 {
+        return Err(TreeError::Io(io::Error::last_os_error()));
+    }
+    let index = (u64::from(info.nFileIndexHigh) << 32) | u64::from(info.nFileIndexLow);
+    Ok(FileId::new(
+        u64::from(info.dwVolumeSerialNumber),
+        u128::from(index),
+    ))
 }
 
 fn entry_of(handle: &File, name: &str) -> Result<Entry, TreeError> {

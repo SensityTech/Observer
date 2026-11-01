@@ -1,5 +1,6 @@
 use std::io;
 use std::net::SocketAddr;
+use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::Context;
@@ -7,9 +8,9 @@ use axum::Router;
 use jiff::tz::TimeZone;
 use observer_app::{
     Accounts, Artifacts, ArtifactsSetup, ArtifactsTask, AuditLog, Changes, ChangesSetup, Clock,
-    DatabaseFiles, Diagnostics, DiagnosticsSetup, Drops, DropsSetup, Metrics, MetricsSetup, PasswordCost,
-    Players, PlayersSetup, Running, Schedule, ScheduleSetup, ScheduleTask, Servers, Setup, Sources,
-    Supervision,
+    DatabaseFiles, Diagnostics, DiagnosticsSetup, Drops, DropsSetup, Metrics, MetricsSetup, OwnPaths,
+    PasswordCost, Players, PlayersSetup, Running, Schedule, ScheduleSetup, ScheduleTask, Servers, Setup,
+    Sources, Supervision, Tools, ToolsHook, ToolsSetup,
 };
 use observer_artifacts::Http;
 use observer_artifacts::catalog::Catalog;
@@ -53,6 +54,7 @@ pub async fn run(config: Config, args: RunArgs) -> anyhow::Result<()> {
         .await
         .with_context(|| format!("cannot open {}", paths.database.display()))?;
     let clock = Clock::system();
+    let observer_started = clock.now();
     let accounts = Accounts::new(db.clone(), clock.clone(), PasswordCost::STANDARD).await?;
     let audit = AuditLog::new(db.clone(), clock.clone());
     let servers = Servers::new(db.clone(), clock.clone());
@@ -60,6 +62,9 @@ pub async fn run(config: Config, args: RunArgs) -> anyhow::Result<()> {
     let console_logs = paths.logs.join("console");
     let console_log = ConsoleLog::start(&console_logs, LogLimits::default(), TimeZone::system())
         .context("cannot open the console log")?;
+    // The server tools run before every spawn; they need the supervision's status, so they are
+    // bound to the hook once both exist, well before FXServer first starts.
+    let tools_hook = ToolsHook::default();
     let (supervision, mut supervised) = Supervision::start(
         Setup {
             db: db.clone(),
@@ -72,7 +77,7 @@ pub async fn run(config: Config, args: RunArgs) -> anyhow::Result<()> {
             console_logs,
             log: Some(&console_log),
         },
-        |_| {},
+        |settings| settings.pre_launch = Some(Arc::new(tools_hook.clone())),
     )
     .await?;
     // Before FXServer boots, so that the first run's tree is seen.
@@ -138,6 +143,23 @@ pub async fn run(config: Config, args: RunArgs) -> anyhow::Result<()> {
         .with_context(|| format!("cannot listen on {}", config.http.listen))?;
     announce(&config.http);
     let files = observer_app::Files::new(db.clone(), clock.clone(), accounts.clone());
+    // Observer's own folders and files, which neither SFTP nor the tools reach.
+    let own_paths = OwnPaths::new(&paths.root, &config.path);
+    let tools = Tools::new(ToolsSetup {
+        db: db.clone(),
+        clock: clock.clone(),
+        data_dir: paths.root.clone(),
+        artifacts: paths.artifacts.clone(),
+        status: Some(supervision.status()),
+        gate: files.commit_gate(),
+        own_paths: own_paths.clone(),
+    });
+    tools_hook.bind(tools.clone());
+    // Before the uploads' sweep, which would remove a tool's temporary file all the same: the
+    // journal then tells from the file itself whether the write landed.
+    if let Err(error) = tools.recover(observer_started).await {
+        warn!(%error, "the server tools' interrupted writes could not be settled");
+    }
     // Whether or not SFTP is on now, a crash may have left uploads from when it was.
     if let Err(error) = observer_sftp::sweep_uploads(&files).await {
         warn!(%error, "the temporary SFTP uploads could not all be removed");
@@ -176,6 +198,7 @@ pub async fn run(config: Config, args: RunArgs) -> anyhow::Result<()> {
         players,
         drops,
         changes,
+        tools: tools.clone(),
     };
     let state = observer_web::AppState::new(
         BUILD,
@@ -204,22 +227,11 @@ pub async fn run(config: Config, args: RunArgs) -> anyhow::Result<()> {
         stop.clone(),
     ));
     let sftp = sftp_listener.map(|(listener, host_key)| {
-        // Observer's own folders and files, should the server folder hold them.
-        let refused = [
-            Some(paths.root.clone()),
-            std::env::current_exe()
-                .ok()
-                .and_then(|exe| exe.parent().map(std::path::Path::to_path_buf)),
-            Some(config.path.clone()),
-        ]
-        .into_iter()
-        .flatten()
-        .collect();
         tokio::spawn(observer_sftp::serve(
             listener,
             files.clone(),
             host_key,
-            refused,
+            own_paths.paths().to_vec(),
             stop.clone(),
         ))
     });
@@ -241,6 +253,9 @@ pub async fn run(config: Config, args: RunArgs) -> anyhow::Result<()> {
     let first = signals.next().await;
     info!(shortened = first.shortened, from = ?first.from, "stopping Observer");
     host.stopping();
+    // Before FXServer's stop: a start queued behind a fix or an undo from the panel waits for it,
+    // and the stop waits for that start, so the run ends between two files rather than at its last.
+    tools.stopping();
     // Before FXServer stops, so that the log names who stopped it even if the stop goes wrong.
     if let Err(error) = audit.record_stop(first.from).await {
         warn!(%error, "cannot audit the stop of Observer");
@@ -254,6 +269,8 @@ pub async fn run(config: Config, args: RunArgs) -> anyhow::Result<()> {
         first,
     )
     .await;
+    // Once FXServer is down: waits for a fix or an undo from the panel to end between two files.
+    tools.close().await;
     supervised.close().await;
     diagnosing.close().await;
     // After the supervision, so that FXServer's stop closes the sessions.

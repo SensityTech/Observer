@@ -91,7 +91,10 @@ fn status(code: ErrorCode) -> StatusCode {
         | ErrorCode::BuildProtected
         | ErrorCode::BuildInUse
         | ErrorCode::KeyInUse
-        | ErrorCode::CheckRunning => StatusCode::CONFLICT,
+        | ErrorCode::CheckRunning
+        | ErrorCode::PlanChanged
+        | ErrorCode::ServerNotStopped
+        | ErrorCode::ToolNotAvailable => StatusCode::CONFLICT,
         ErrorCode::LaunchFailed
         | ErrorCode::DelayTooLong
         | ErrorCode::NotDownloadable

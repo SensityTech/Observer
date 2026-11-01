@@ -18,6 +18,7 @@ const MIGRATIONS: &[M<'static>] = &[
     M::up(include_str!("../migrations/0007_diagnostics.sql")),
     M::up(include_str!("../migrations/0008_file_access.sql")),
     M::up(include_str!("../migrations/0009_players.sql")),
+    M::up(include_str!("../migrations/0010_tools.sql")),
 ];
 
 /// The schema version this build migrates to.
@@ -172,5 +173,37 @@ mod tests {
             )
             .unwrap();
         assert_eq!(indexes, 3);
+    }
+
+    #[test]
+    fn a_0009_database_gains_empty_tool_tables_and_keeps_the_uploads_they_share() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        conn.pragma_update(None, "foreign_keys", true).unwrap();
+        let migrations = Migrations::from_slice(MIGRATIONS);
+        migrations.to_version(&mut conn, 9).unwrap();
+        let now = "2026-10-31T09:00:00Z".parse().unwrap();
+        crate::files::record_upload(
+            &conn,
+            "default",
+            r"C:\FXServer\server-data",
+            "resources/maps",
+            ".observer-upload-0000",
+            now,
+        )
+        .unwrap();
+
+        migrations.to_latest(&mut conn).unwrap();
+
+        assert_eq!(crate::files::uploads(&conn).unwrap().len(), 1);
+        for table in ["tool_settings", "tool_runs", "tool_changes"] {
+            let rows: i64 = conn
+                .query_row(&format!("SELECT count(*) FROM {table}"), [], |row| row.get(0))
+                .unwrap();
+            assert_eq!(rows, 0, "{table}");
+        }
+        let tool = observer_domain::tools::ToolKind::DuplicateArchetypes;
+        let (settings, version) = crate::tools::settings(&conn, "default", tool).unwrap();
+        assert_eq!(settings, observer_domain::tools::ToolSettings::default());
+        assert_eq!(version, None);
     }
 }

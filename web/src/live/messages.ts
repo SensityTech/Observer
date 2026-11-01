@@ -233,6 +233,9 @@ const AUDIT_ACTIONS = {
     change_contents_purged: true,
     change_verify_requested: true,
     change_check_requested: true,
+    tool_settings_changed: true,
+    tool_files_changed: true,
+    tool_files_restored: true,
 } satisfies Record<AuditAction, true>;
 
 const OUTCOMES = { success: true, failure: true, denied: true } satisfies Record<Outcome, true>;

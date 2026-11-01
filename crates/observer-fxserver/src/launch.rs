@@ -34,6 +34,9 @@ pub struct Prepared {
     pub warnings: Vec<CfgFinding>,
     /// The first `endpoint_add_tcp` of the cfg, made reachable from this host.
     pub endpoint: Option<SocketAddr>,
+    /// The whole scan of the cfg, which the warnings and the endpoint come from: the pre-launch
+    /// hook reads the commands that start resources in it, rather than scan the cfg again.
+    pub scan: cfg::Scan,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -171,8 +174,9 @@ pub fn prepare(launch: &ServerLaunch, flavour: Flavour) -> Result<Prepared, Laun
     let scan = cfg::scan(&data, &settings.cfg_file, &text, &resources, &context);
     let warnings = scan
         .findings
-        .into_iter()
+        .iter()
         .filter(|finding| finding.severity != Severity::Note)
+        .cloned()
         .collect();
     let endpoint = scan.endpoint;
 
@@ -185,6 +189,7 @@ pub fn prepare(launch: &ServerLaunch, flavour: Flavour) -> Result<Prepared, Laun
         layout,
         warnings,
         endpoint,
+        scan,
     })
 }
 

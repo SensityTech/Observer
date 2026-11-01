@@ -3,7 +3,7 @@
 
 use observer_fxserver::supervisor::{Cause, Event, EventKind, State};
 use observer_store::metrics::runs::{self, EndCause, RunKey, StartCause};
-use observer_store::{MetricsDatabase, StoreError};
+use observer_store::{MetricsDatabase, StoreError, Transaction};
 use tracing::warn;
 
 /// What one event changes in a run.
@@ -76,6 +76,8 @@ pub(super) struct Runs {
     observer_started: i64,
     /// The generation whose build is recorded.
     built: Option<u32>,
+    /// The start taken on last, with its generation, until its spawn.
+    starting: Option<(u32, Change)>,
     failing: bool,
 }
 
@@ -85,6 +87,7 @@ impl Runs {
             db,
             observer_started,
             built: None,
+            starting: None,
             failing: false,
         }
     }
@@ -98,6 +101,20 @@ impl Runs {
     }
 
     pub(super) async fn apply(&mut self, generation: u32, change: Change) {
+        let started = match change {
+            // A run is written with its spawn. The server shows as starting from before the
+            // work that precedes it, and a start stopped, restarted or failed meanwhile never
+            // ran: written at once, it would stay open with nothing to end it.
+            Change::Started { .. } => {
+                self.starting = Some((generation, change));
+                return;
+            }
+            Change::Spawned { .. } => self
+                .starting
+                .take()
+                .and_then(|(of, started)| (of == generation).then_some(started)),
+            _ => None,
+        };
         let run = RunKey {
             observer_started: self.observer_started,
             generation,
@@ -105,14 +122,10 @@ impl Runs {
         let written = self
             .db
             .write(move |tx| -> Result<(), StoreError> {
-                match change {
-                    Change::Started { at_ms, cause } => runs::start(tx, run, at_ms, cause),
-                    Change::Ready { at_ms } => runs::ready(tx, run, at_ms),
-                    Change::Spawned { at_ms } => runs::spawned(tx, run, at_ms),
-                    Change::Ended { at_ms, cause } => runs::end(tx, run, at_ms, cause),
-                    Change::Hung => runs::hung(tx, run),
-                    Change::Build(build) => runs::build(tx, run, build),
+                if let Some(started) = started {
+                    record(tx, run, started)?;
                 }
+                record(tx, run, change)
             })
             .await;
         match written {
@@ -123,6 +136,17 @@ impl Runs {
             }
             Err(_) => {}
         }
+    }
+}
+
+fn record(tx: &Transaction<'_>, run: RunKey, change: Change) -> Result<(), StoreError> {
+    match change {
+        Change::Started { at_ms, cause } => runs::start(tx, run, at_ms, cause),
+        Change::Ready { at_ms } => runs::ready(tx, run, at_ms),
+        Change::Spawned { at_ms } => runs::spawned(tx, run, at_ms),
+        Change::Ended { at_ms, cause } => runs::end(tx, run, at_ms, cause),
+        Change::Hung => runs::hung(tx, run),
+        Change::Build(build) => runs::build(tx, run, build),
     }
 }
 
@@ -225,6 +249,111 @@ mod tests {
                 }
             )),
             Some(Change::Hung)
+        );
+    }
+
+    #[tokio::test]
+    async fn a_start_stopped_or_restarted_before_its_spawn_leaves_no_run_open() {
+        const AT: i64 = 1_761_642_000_000;
+        let dir = tempfile::tempdir().unwrap();
+        let db = MetricsDatabase::open(dir.path().join("metrics.sqlite3"))
+            .await
+            .unwrap();
+        let mut runs = Runs::new(db.clone(), 1_761_600_000_000);
+        let at = |generation, ms, kind| Event {
+            at_ms: AT + ms,
+            generation,
+            kind,
+        };
+        let state = |generation, ms, to, cause| {
+            at(
+                generation,
+                ms,
+                EventKind::State {
+                    from: State::Stopped,
+                    to,
+                    cause,
+                },
+            )
+        };
+        let ada = || Cause::Requested { by: "ada".to_owned() };
+        let restart = || Cause::Restart {
+            by: "grace".to_owned(),
+        };
+        let spawned = EventKind::Spawned {
+            pid: 1,
+            probe: "127.0.0.1:30120".parse().unwrap(),
+            build: "builds/1".into(),
+            launch: Box::new(observer_domain::launch::LaunchSettings {
+                data_path: "/srv/fivem".to_owned(),
+                cfg_file: "server.cfg".to_owned(),
+                onesync: observer_domain::launch::OneSync::On,
+                auto_start: false,
+                txadmin_events: false,
+                extra_arguments: Vec::new(),
+            }),
+        };
+        let events = [
+            // Stopped during the work that comes before the spawn.
+            state(1, 0, State::Starting, ada()),
+            state(1, 1_000, State::Stopping, ada()),
+            state(1, 2_000, State::Stopped, ada()),
+            // Restarted during it, the restart's start then spawns.
+            state(2, 10_000, State::Starting, ada()),
+            state(2, 11_000, State::Stopping, restart()),
+            state(3, 12_000, State::Starting, restart()),
+            at(3, 20_000, spawned),
+            state(3, 30_000, State::Online, Cause::Ready),
+            at(
+                3,
+                40_000,
+                EventKind::Exited {
+                    code: Some(0),
+                    signal: None,
+                    description: "exit code 0".to_owned(),
+                    expected: true,
+                },
+            ),
+        ];
+
+        for event in &events {
+            if let Some(change) = Change::of(event) {
+                runs.apply(event.generation, change).await;
+            }
+        }
+
+        let rows = db
+            .read(|conn| {
+                let mut statement = conn.prepare(
+                    "SELECT generation, started_ms, spawned_ms, ready_ms, ended_ms, start_cause, end_cause \
+                     FROM server_run ORDER BY generation",
+                )?;
+                let rows = statement.query_map([], |row| {
+                    Ok((
+                        row.get::<_, u32>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, Option<i64>>(2)?,
+                        row.get::<_, Option<i64>>(3)?,
+                        row.get::<_, Option<i64>>(4)?,
+                        row.get::<_, String>(5)?,
+                        row.get::<_, Option<String>>(6)?,
+                    ))
+                })?;
+                rows.collect::<Result<Vec<_>, _>>().map_err(StoreError::from)
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            rows,
+            [(
+                3,
+                AT + 12_000,
+                Some(AT + 20_000),
+                Some(AT + 30_000),
+                Some(AT + 40_000),
+                "restart".to_owned(),
+                Some("stopped".to_owned())
+            )]
         );
     }
 

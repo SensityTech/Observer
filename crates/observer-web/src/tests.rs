@@ -13,6 +13,7 @@ mod proxy;
 mod schedule;
 mod servers;
 mod setup;
+mod tools;
 
 use std::net::SocketAddr;
 
@@ -25,8 +26,8 @@ use jiff::SignedDuration;
 use observer_app::{
     Accounts, Artifacts, ArtifactsSetup, ArtifactsTask, AuditLog, Changes, ChangesSetup, ChangesTask, Clock,
     Diagnostics, DiagnosticsSetup, DiagnosticsTask, Drops, DropsSetup, DropsTask, Metrics, MetricsSetup,
-    PasswordCost, Players, PlayersSetup, PlayersTask, Running, Schedule, ScheduleSetup, ScheduleTask,
-    Servers, Setup, Supervision,
+    OwnPaths, PasswordCost, Players, PlayersSetup, PlayersTask, Running, Schedule, ScheduleSetup,
+    ScheduleTask, Servers, Setup, Supervision, Tools, ToolsSetup,
 };
 use observer_artifacts::Http;
 use observer_artifacts::catalog::{Catalog, Listing};
@@ -227,6 +228,16 @@ impl Server {
             players: players.clone(),
         });
         let instance_id = db.instance_id().await.unwrap();
+        let files = observer_app::Files::new(db.clone(), clock.clone(), accounts.clone());
+        let tools = Tools::new(ToolsSetup {
+            db: db.clone(),
+            clock: clock.clone(),
+            data_dir: dir.path().join("data"),
+            artifacts: dir.path().join("data/artifacts"),
+            status: Some(supervision.status()),
+            gate: files.commit_gate(),
+            own_paths: OwnPaths::of(vec![dir.path().join("data")]),
+        });
         let services = Services {
             accounts: accounts.clone(),
             audit: audit.clone(),
@@ -236,10 +247,11 @@ impl Server {
             schedule,
             artifacts,
             diagnostics,
-            files: observer_app::Files::new(db.clone(), clock.clone(), accounts.clone()),
+            files,
             players,
             drops,
             changes,
+            tools,
         };
         let state = AppState::new(
             BUILD,

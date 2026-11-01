@@ -20,6 +20,7 @@ pub mod settings;
 pub mod setup_tokens;
 mod side;
 mod time;
+pub mod tools;
 pub mod users;
 
 pub use backup::BackupKind;

@@ -12,6 +12,7 @@ pub mod launch;
 pub mod layout;
 pub mod perf;
 pub mod players;
+pub mod pre_launch;
 pub mod recovery;
 pub mod server_data;
 pub mod stdin;

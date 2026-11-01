@@ -13,9 +13,11 @@ observer-app = { path = "crates/observer-app" }
 observer-artifacts = { path = "crates/observer-artifacts" }
 observer-domain = { path = "crates/observer-domain" }
 observer-fxserver = { path = "crates/observer-fxserver" }
+observer-gamefiles = { path = "crates/observer-gamefiles" }
 observer-platform = { path = "crates/observer-platform" }
 observer-sftp = { path = "crates/observer-sftp" }
 observer-store = { path = "crates/observer-store" }
+observer-tools = { path = "crates/observer-tools" }
 observer-web = { path = "crates/observer-web" }
 
 anyhow = "1.0.104"
@@ -23,6 +25,7 @@ argon2 = "0.6.0"
 axum = "0.8.9"
 clap = { version = "4.6.7", features = ["derive"] }
 eframe = { version = "0.37.0", default-features = false, features = ["accesskit", "clipboard", "default_fonts", "wgpu_no_default_features"] }
+# GTA V resources are raw DEFLATE, inflated and deflated by the backend zip already brings.
 flate2 = { version = "1.1.10", default-features = false, features = ["zlib-rs"] }
 futures-util = { version = "0.3.34", default-features = false }
 getrandom = "0.4.3"

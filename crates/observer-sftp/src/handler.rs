@@ -306,9 +306,12 @@ impl Sftp {
             record,
             ..
         } = upload;
+        // Shared with other commits, exclusive of the server tools' writes.
+        let gate = self.files.commit_gate().shared().await;
         let committed = self
             .blocking(move |tree| tree.commit(&folder, temporary, &target, replace))
             .await;
+        drop(gate);
         let _ = self.files.forget_upload(record).await;
         match committed {
             Ok(()) => {
@@ -365,12 +368,14 @@ impl Sftp {
         }
         let (from_folder, name) = parent(&source)?;
         let (to_folder, new_name) = parent(&target)?;
+        let gate = self.files.commit_gate().shared().await;
         self.blocking(move |tree| {
             let from = tree.open_folder(&from_folder)?;
             let to = tree.open_folder(&to_folder)?;
             tree.rename(&from, &name, &to, &new_name, replace)
         })
         .await?;
+        drop(gate);
         self.audit(
             AuditAction::FileRenamed,
             Outcome::Success,
@@ -683,8 +688,10 @@ impl russh_sftp::server::Handler for Sftp {
         let path = files::normalise(&filename).map_err(|_| StatusCode::NoSuchFile)?;
         self.allow(&path, Right::Delete)?;
         let (folder, name) = parent(&path)?;
+        let gate = self.files.commit_gate().shared().await;
         self.blocking(move |tree| tree.remove_file(&tree.open_folder(&folder)?, &name))
             .await?;
+        drop(gate);
         self.audit(AuditAction::FileDeleted, Outcome::Success, &path, json!({}))
             .await;
         Ok(ok(id))

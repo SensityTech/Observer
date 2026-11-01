@@ -171,6 +171,13 @@ pub enum ErrorCode {
     CheckTooSoon,
     /// A glob of the settings is unusable. Params: `field`, `excluded` or `hidden`; `index`.
     InvalidGlob,
+    /// A fresh scan plans another fix than the one the owner confirmed, so nothing was applied.
+    /// Params: `run`, the fresh run (a `ToolRun`) whose report and plan to review.
+    PlanChanged,
+    /// The server tools change files only while FXServer is stopped.
+    ServerNotStopped,
+    /// The tool does not run on this server. Params: `game`, the game the cfg sets (`rdr3`).
+    ToolNotAvailable,
 }
 
 /// The body of every error response.

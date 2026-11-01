@@ -1,5 +1,9 @@
 //! The supervisor: one task that starts FXServer, watches its health, stops it gracefully, and
 //! brings it back after a crash or a hang. Every change of state goes out on an event bus.
+//!
+//! When the settings give pre-launch work, each spawn waits for it: the server shows as starting at
+//! once, the work runs as a task while requests are still answered, and FXServer is spawned only
+//! once it has ended. A stop or a shutdown meanwhile tells it to end, waits, and spawns nothing.
 
 use std::collections::{HashMap, HashSet};
 use std::net::{Ipv4Addr, SocketAddr};
@@ -12,14 +16,15 @@ use observer_domain::diagnostics::ProcessKind;
 use observer_domain::launch::LaunchSettings;
 use observer_domain::server::SpawnFailure;
 use observer_domain::server_data::CfgFinding;
-use observer_platform::{Exit, ExitWatch, Output, ProcessInfo, ProcessTree, TreeChange, TreeChanges};
+use observer_platform::{Exit, ExitWatch, Launch, Output, ProcessInfo, ProcessTree, TreeChange, TreeChanges};
 use serde::Serialize;
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
-use tokio::task::JoinHandle;
+use tokio::task::{JoinError, JoinHandle};
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
 use crate::bridge::{self, BridgeEvent, Report, StopReason};
+use crate::cfg;
 use crate::console::{ConsoleHub, LineAssembler, LineFlags, LineKind, plain, sanitize};
 use crate::crashes::{self, Collected, DumpLimits, HangSnapshotLimits, SnapshotFailure};
 use crate::exit;
@@ -28,6 +33,7 @@ use crate::launch::{self, ServerLaunch};
 use crate::layout::{Flavour, Layout};
 use crate::perf::TickReport;
 use crate::players::{PlayerReport, PlayerReportKind};
+use crate::pre_launch::{self, PreLaunch, PreLaunchRequest, PreLaunchResult, TOOLS};
 use crate::recovery::{Next, Recovery, RecoveryPolicy};
 use crate::stdin::{CommandRefusal, Credentials, StdinError, StdinWriter, SystemLine, UserCommand, Write};
 use crate::trace::{self, Trace, TraceDecoder, TraceKind};
@@ -102,6 +108,11 @@ pub struct Settings {
     /// Drops the first notification of each run's tree, as the system may: for tests of the
     /// reconciliation.
     pub drop_first_tree_change: bool,
+    /// Work run before each spawn, whatever its cause, while FXServer is down; `None` spawns at
+    /// once.
+    pub pre_launch: Option<Arc<dyn PreLaunch>>,
+    /// How long that work gets before it is told to end. The spawn still waits until it has.
+    pub pre_launch_limit: Duration,
 }
 
 impl Settings {
@@ -117,6 +128,8 @@ impl Settings {
             dumps: DumpLimits::default(),
             hang_snapshot: Some(HangSnapshotLimits::default()),
             drop_first_tree_change: false,
+            pre_launch: None,
+            pre_launch_limit: pre_launch::DEFAULT_LIMIT,
         }
     }
 }
@@ -148,7 +161,8 @@ impl Default for StopTimings {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Event {
     pub at_ms: i64,
-    /// The spawn the event is about; 0 before the first.
+    /// The spawn the event is about, from the start that leads to it; 0 before the first. A start
+    /// stopped or failed before its spawn leaves its generation without one.
     pub generation: u32,
     pub kind: EventKind,
 }
@@ -480,6 +494,7 @@ impl Supervisor {
             since_ms: now_ms(),
             problems: Vec::new(),
             run: None,
+            pre_launch: None,
             phase: Phase::Idle,
             last_tick: Instant::now(),
             shutdown: None,
@@ -637,6 +652,11 @@ impl Ending {
 enum Phase {
     /// No server: stopped, or in a crash loop.
     Idle,
+    /// The pre-launch work of a spawn runs, FXServer down. It is told to end at `deadline`, `None`
+    /// once it was told.
+    PreLaunch {
+        deadline: Option<Instant>,
+    },
     Running,
     /// `observer:shuttingDown` is out; `quit` follows at `quit_at`.
     Notice {
@@ -740,12 +760,73 @@ impl Run {
     }
 }
 
+/// A launch prepared for its spawn, its cfg scan already handed on.
+struct Ready {
+    launch: Launch,
+    layout: Layout,
+    warnings: Vec<CfgFinding>,
+    endpoint: Option<SocketAddr>,
+    /// The launch settings the spawn goes by, which the spawn's event reports.
+    settings: LaunchSettings,
+}
+
+impl Ready {
+    fn split(prepared: launch::Prepared, settings: LaunchSettings) -> (Self, cfg::Scan) {
+        let launch::Prepared {
+            launch,
+            layout,
+            warnings,
+            endpoint,
+            scan,
+        } = prepared;
+        let ready = Self {
+            launch,
+            layout,
+            warnings,
+            endpoint,
+            settings,
+        };
+        (ready, scan)
+    }
+}
+
+/// The pre-launch work of one spawn, from the start of its phase until its task ends.
+struct PreLaunching {
+    task: JoinHandle<PreLaunchResult>,
+    cancel: Arc<AtomicBool>,
+    /// The generation the start took as the phase began, which the work's lines are written with
+    /// and the spawn carries.
+    generation: u32,
+    cause: Cause,
+    ready: Ready,
+    /// What comes once the work ended, when it was told to end for something else than the spawn.
+    instead: Option<Instead>,
+}
+
+impl PreLaunching {
+    fn tell_to_end(&mut self, instead: Instead) {
+        self.cancel.store(true, Ordering::Relaxed);
+        self.instead = Some(instead);
+    }
+}
+
+/// What follows pre-launch work told to end before its spawn.
+enum Instead {
+    /// The server stays stopped.
+    Stop { by: String },
+    /// A start anew, with fresh work and the launch configured by then.
+    Restart { cause: Cause },
+    /// Observer itself is stopping.
+    Exit,
+}
+
 enum Wake {
     Request(Option<Request>),
     Exit(Exit),
     Trace(Trace),
     Signal(u32, Signal),
     Probe(u32, Probe),
+    PreLaunched(Result<PreLaunchResult, JoinError>),
     Tick,
 }
 
@@ -772,6 +853,8 @@ struct Actor {
     problems: Vec<Problem>,
     recovery: Recovery,
     run: Option<Run>,
+    /// The pre-launch work under way, in [`Phase::PreLaunch`] only.
+    pre_launch: Option<PreLaunching>,
     phase: Phase,
     last_tick: Instant,
     /// Set once Observer asked to stop; `true` for the shortened stop.
@@ -795,6 +878,7 @@ impl Actor {
                 Some(trace) = self.traces.recv() => Wake::Trace(trace),
                 Some((generation, signal)) = self.signals.recv() => Wake::Signal(generation, signal),
                 Some((generation, probe)) = self.probes.recv() => Wake::Probe(generation, probe),
+                ended = pre_launch_of(&mut self.pre_launch) => Wake::PreLaunched(ended),
                 () = tokio::time::sleep_until(deadline.into()) => Wake::Tick,
             };
             match wake {
@@ -807,6 +891,7 @@ impl Actor {
                 Wake::Trace(trace) => self.trace(trace),
                 Wake::Signal(generation, signal) => self.signal(generation, signal),
                 Wake::Probe(generation, probe) => self.probed(generation, probe),
+                Wake::PreLaunched(ended) => self.pre_launched(ended).await,
                 Wake::Tick => self.tick().await,
             }
         }
@@ -815,6 +900,7 @@ impl Actor {
 
     fn deadline(&self) -> Instant {
         let phase = match self.phase {
+            Phase::PreLaunch { deadline } => deadline,
             Phase::Notice { quit_at, .. } => Some(quit_at),
             Phase::Quitting { kill_at } | Phase::Ending { kill_at } => Some(kill_at),
             Phase::Backoff { respawn_at } => Some(respawn_at),
@@ -905,9 +991,19 @@ impl Actor {
                     .await
                     .map_err(ControlError::Launch)
             }
+            Phase::PreLaunch { .. } if self.pre_launch_ending() => Err(ControlError::Stopping),
             Phase::Notice { .. } | Phase::Quitting { .. } => Err(ControlError::Stopping),
-            Phase::Running | Phase::Ending { .. } => Err(ControlError::AlreadyRunning),
+            Phase::PreLaunch { .. } | Phase::Running | Phase::Ending { .. } => {
+                Err(ControlError::AlreadyRunning)
+            }
         }
+    }
+
+    /// Whether the pre-launch work under way was told to end for something else than its spawn.
+    fn pre_launch_ending(&self) -> bool {
+        self.pre_launch
+            .as_ref()
+            .is_some_and(|work| work.instead.is_some())
     }
 
     /// Stops the server, unless a stop is already under way: then nothing changes and it says so,
@@ -925,6 +1021,19 @@ impl Actor {
             Phase::Backoff { .. } => {
                 self.phase = Phase::Idle;
                 self.set_state(State::Stopped, Cause::Requested { by });
+                Ok(())
+            }
+            // The work is told to end; the server stays stopped once it has.
+            Phase::PreLaunch { .. } => {
+                let Some(work) = &mut self.pre_launch else {
+                    return Err(ControlError::NotRunning);
+                };
+                if matches!(work.instead, Some(Instead::Stop { .. } | Instead::Exit)) {
+                    return Err(ControlError::Stopping);
+                }
+                work.tell_to_end(Instead::Stop { by: by.clone() });
+                self.phase = Phase::PreLaunch { deadline: None };
+                self.set_state(State::Stopping, Cause::Requested { by });
                 Ok(())
             }
             Phase::Notice { .. } | Phase::Quitting { .. } | Phase::Ending { .. } => {
@@ -972,6 +1081,7 @@ impl Actor {
         }
         match self.phase {
             Phase::Idle | Phase::Backoff { .. } => self.start(by).await,
+            Phase::PreLaunch { .. } => self.restart_pre_launch(Cause::Restart { by }),
             Phase::Notice { .. } | Phase::Quitting { .. } => Err(ControlError::Stopping),
             Phase::Ending { .. } => {
                 if let Some(run) = &mut self.run {
@@ -1009,9 +1119,29 @@ impl Actor {
                 );
                 Ok(())
             }
+            // The spawn would go by the launch prepared when the phase began, before the schedule
+            // handed over the build this restart applies.
+            Phase::PreLaunch { .. } => self.restart_pre_launch(Cause::Scheduled { by }),
             Phase::Notice { .. } | Phase::Quitting { .. } => Err(ControlError::Stopping),
+            // A server stopped, or between a failure and its recovery, starts with the launch of
+            // now anyway, and the schedule never starts one.
             Phase::Idle | Phase::Backoff { .. } | Phase::Ending { .. } => Err(ControlError::NotRunning),
         }
+    }
+
+    /// A restart during the pre-launch phase, as for a server that runs: the work is told to end,
+    /// then the start begins anew, with fresh work and the launch configured by then.
+    fn restart_pre_launch(&mut self, cause: Cause) -> Result<(), ControlError> {
+        let Some(work) = &mut self.pre_launch else {
+            return Err(ControlError::NotRunning);
+        };
+        if work.instead.is_some() {
+            return Err(ControlError::Stopping);
+        }
+        work.tell_to_end(Instead::Restart { cause: cause.clone() });
+        self.phase = Phase::PreLaunch { deadline: None };
+        self.set_state(State::Stopping, cause);
+        Ok(())
     }
 
     fn announce(&self, event: BridgeEvent) -> Result<(), ControlError> {
@@ -1060,6 +1190,19 @@ impl Actor {
                 self.phase = Phase::Idle;
                 self.set_state(State::Stopped, Cause::Shutdown);
                 self.done = true;
+            }
+            // The supervisor ends once the work has: whatever it writes is never cut short by it.
+            Phase::PreLaunch { .. } => {
+                let Some(work) = &mut self.pre_launch else {
+                    return;
+                };
+                // A stop under way already says the server stays down.
+                let announced = matches!(work.instead, Some(Instead::Stop { .. } | Instead::Exit));
+                work.tell_to_end(Instead::Exit);
+                self.phase = Phase::PreLaunch { deadline: None };
+                if !announced {
+                    self.set_state(State::Stopping, Cause::Shutdown);
+                }
             }
             Phase::Running => self.begin_stop(StopReason::Shutdown, Cause::Shutdown, After::Exit, shortened),
             Phase::Notice { quit_at, reason } => {
@@ -1240,6 +1383,9 @@ impl Actor {
         let now = Instant::now();
         self.last_tick = now;
         match self.phase {
+            Phase::PreLaunch {
+                deadline: Some(deadline),
+            } if now >= deadline => self.pre_launch_overdue(),
             Phase::Notice { quit_at, reason } if now >= quit_at => {
                 self.quit(reason, self.settings.stop.quit);
             }
@@ -1434,8 +1580,31 @@ impl Actor {
         }
     }
 
+    /// Starts FXServer for `cause`. With pre-launch work, its phase begins here and the spawn
+    /// follows once the work ended: the start is taken on, and a later failure goes to the status.
+    /// A launch that cannot be prepared fails at once either way.
     async fn spawn(&mut self, cause: Cause) -> Result<(), SpawnError> {
-        match self.launch().await {
+        let (server, prepared) = match self.prepare_launch().await {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                self.spawn_failed(&cause, &error);
+                return Err(error);
+            }
+        };
+        let (ready, scan) = Ready::split(prepared, server.settings.clone());
+        match self.settings.pre_launch.clone() {
+            Some(work) => {
+                self.begin_pre_launch(work, cause, server, ready, scan);
+                Ok(())
+            }
+            None => self.spawn_ready(cause, ready, false).await,
+        }
+    }
+
+    /// Spawns a prepared launch. `announced` when the pre-launch phase already took the generation
+    /// and set the state to starting with the cause.
+    async fn spawn_ready(&mut self, cause: Cause, ready: Ready, announced: bool) -> Result<(), SpawnError> {
+        match self.launch(ready, announced).await {
             Ok((run, probe, warnings, launch)) => {
                 let pid = run.pid;
                 let build = run.layout.build().to_path_buf();
@@ -1453,7 +1622,11 @@ impl Actor {
                 self.run = Some(run);
                 self.phase = Phase::Running;
                 self.last_tick = Instant::now();
-                self.set_state(State::Starting, cause);
+                if announced {
+                    self.publish_status();
+                } else {
+                    self.set_state(State::Starting, cause);
+                }
                 self.note(&format!("FXServer started (pid {pid})"));
                 self.emit(EventKind::Spawned {
                     pid,
@@ -1473,33 +1646,157 @@ impl Actor {
                 Ok(())
             }
             Err(error) => {
-                error!(%error, "cannot start FXServer");
-                self.note(&format!("cannot start FXServer: {error}"));
-                let failed = Cause::SpawnFailed {
-                    reason: error.failure,
-                };
-                if cause == Cause::Recovery {
-                    // What stops a respawn is often brief (a cfg being saved, a scan holding the
-                    // executable), so it is one more failure for the breaker to count.
-                    self.failed(failed);
-                } else {
-                    self.phase = Phase::Idle;
-                    self.set_state(State::Stopped, failed);
-                }
+                self.spawn_failed(&cause, &error);
                 Err(error)
             }
         }
     }
 
-    async fn launch(&mut self) -> Result<(Run, SocketAddr, Vec<CfgFinding>, LaunchSettings), SpawnError> {
+    fn spawn_failed(&mut self, cause: &Cause, error: &SpawnError) {
+        error!(%error, "cannot start FXServer");
+        self.note(&format!("cannot start FXServer: {error}"));
+        let failed = Cause::SpawnFailed {
+            reason: error.failure,
+        };
+        if *cause == Cause::Recovery {
+            // What stops a respawn is often brief (a cfg being saved, a scan holding the
+            // executable), so it is one more failure for the breaker to count.
+            self.failed(failed);
+        } else {
+            self.phase = Phase::Idle;
+            self.set_state(State::Stopped, failed);
+        }
+    }
+
+    /// Starts the pre-launch work as a task and shows the server as starting, with the cause the
+    /// spawn will go by. The start takes its generation here, so that its state, the work's lines
+    /// and the run that follows all carry the one the statistics know the run by; a start that
+    /// never spawns leaves it unused.
+    fn begin_pre_launch(
+        &mut self,
+        work: Arc<dyn PreLaunch>,
+        cause: Cause,
+        server: ServerLaunch,
+        ready: Ready,
+        scan: cfg::Scan,
+    ) {
+        let generation = self.take_generation();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let request = PreLaunchRequest {
+            launch: server,
+            layout: ready.layout.clone(),
+            scan,
+            cause: cause.clone(),
+            generation,
+            cancel: Arc::clone(&cancel),
+        };
+        // Called inside the task, so that a panic in the call itself ends there too.
+        let task = tokio::spawn(async move { work.run(request).await });
+        self.pre_launch = Some(PreLaunching {
+            task,
+            cancel,
+            generation,
+            cause: cause.clone(),
+            ready,
+            instead: None,
+        });
+        self.phase = Phase::PreLaunch {
+            deadline: Instant::now().checked_add(self.settings.pre_launch_limit),
+        };
+        self.set_state(State::Starting, cause);
+    }
+
+    /// The work ran out of time: it is told to end, and the spawn waits until it has.
+    fn pre_launch_overdue(&mut self) {
+        let Some(work) = &self.pre_launch else {
+            return;
+        };
+        work.cancel.store(true, Ordering::Relaxed);
+        let generation = work.generation;
+        self.phase = Phase::PreLaunch { deadline: None };
+        let limit = self.settings.pre_launch_limit;
+        warn!(?limit, "the pre-launch work ran out of time; it was told to end");
+        self.note_as(
+            SUPERVISOR,
+            generation,
+            &format!(
+                "the work before the start took more than {:.1} s; FXServer starts once it has ended",
+                limit.as_secs_f64()
+            ),
+        );
+    }
+
+    /// The pre-launch work ended: its lines go to the console, then the spawn, or what came
+    /// instead of it.
+    async fn pre_launched(&mut self, ended: Result<PreLaunchResult, JoinError>) {
+        let Some(work) = self.pre_launch.take() else {
+            return;
+        };
+        let PreLaunching {
+            generation,
+            cause,
+            ready,
+            instead,
+            ..
+        } = work;
+        match ended {
+            Ok(Ok(lines)) => {
+                for line in lines {
+                    self.note_as(TOOLS, generation, &line);
+                }
+            }
+            Ok(Err(error)) => {
+                warn!(%error, "the pre-launch work failed");
+                self.note_as(TOOLS, generation, &format!("failed before the start: {error}"));
+            }
+            Err(error) => {
+                error!(%error, "the pre-launch work failed");
+                self.note_as(TOOLS, generation, "failed before the start, unexpectedly");
+            }
+        }
+        self.phase = Phase::Idle;
+        match instead {
+            None => {
+                // A failure goes to the status and the console, which is all a start taken on has.
+                let _ = self.spawn_ready(cause, ready, true).await;
+            }
+            Some(Instead::Stop { by }) => self.set_state(State::Stopped, Cause::Requested { by }),
+            Some(Instead::Restart { cause }) => {
+                let _ = self.spawn(cause).await;
+            }
+            Some(Instead::Exit) => {
+                self.set_state(State::Stopped, Cause::Shutdown);
+                self.done = true;
+            }
+        }
+    }
+
+    /// Prepares the configured launch, with the launch itself for the pre-launch work.
+    async fn prepare_launch(&self) -> Result<(ServerLaunch, launch::Prepared), SpawnError> {
         let Some(server) = self.settings.launch.clone() else {
             return Err(SpawnError::new(
                 SpawnFailure::NotConfigured,
                 "no launch settings are configured",
             ));
         };
-        let settings = server.settings.clone();
-        let prepared = prepare(server, self.settings.flavour).await?;
+        let prepared = prepare(server.clone(), self.settings.flavour).await?;
+        Ok((server, prepared))
+    }
+
+    /// Takes the generation of a coming spawn: the events and lines that follow carry it, and the
+    /// trace decoders of an earlier one fall silent.
+    fn take_generation(&mut self) -> u32 {
+        self.generation += 1;
+        self.current.send_replace(self.generation);
+        self.generation
+    }
+
+    /// Spawns FXServer. `taken` when the pre-launch phase took the generation as it began.
+    async fn launch(
+        &mut self,
+        prepared: Ready,
+        taken: bool,
+    ) -> Result<(Run, SocketAddr, Vec<CfgFinding>, LaunchSettings), SpawnError> {
         let layout = prepared.layout.clone();
         self.install(&layout).await?;
         let credentials = Credentials::generate().map_err(|error| {
@@ -1507,9 +1804,11 @@ impl Actor {
             SpawnError::new(SpawnFailure::Spawn, message)
         })?;
 
-        self.generation += 1;
-        let generation = self.generation;
-        self.current.send_replace(generation);
+        let generation = if taken {
+            self.generation
+        } else {
+            self.take_generation()
+        };
         let spawned = observer_platform::spawn(&prepared.launch)
             .map_err(|error| SpawnError::new(SpawnFailure::Spawn, error.to_string()))?;
         let tree = Arc::new(spawned.tree);
@@ -1592,7 +1891,7 @@ impl Actor {
             ending: None,
             killed: false,
         };
-        Ok((run, probe, prepared.warnings, settings))
+        Ok((run, probe, prepared.warnings, prepared.settings))
     }
 
     /// Writes the bridge into the build, and moves away the dumps of a run Observer did not see
@@ -1834,10 +2133,16 @@ impl Actor {
     }
 
     fn note(&self, text: &str) {
+        self.note_as(SUPERVISOR, self.generation, text);
+    }
+
+    /// A line of Observer's own, by `actor`, for `generation`: the pre-launch work's lines are the
+    /// coming spawn's.
+    fn note_as(&self, actor: &str, generation: u32, text: &str) {
         self.console.push(
-            self.generation,
+            generation,
             LineKind::Observer,
-            Some(SUPERVISOR.to_owned()),
+            Some(actor.to_owned()),
             text.to_owned(),
             LineFlags::default(),
         );
@@ -1847,6 +2152,15 @@ impl Actor {
 async fn exit_of(run: &mut Option<Run>) -> Exit {
     match run {
         Some(run) => run.exit.wait().await,
+        None => std::future::pending().await,
+    }
+}
+
+/// Resolves when the pre-launch work under way ends. Its handler takes the work out at once, so a
+/// task that ended is never waited on again.
+async fn pre_launch_of(work: &mut Option<PreLaunching>) -> Result<PreLaunchResult, JoinError> {
+    match work {
+        Some(work) => (&mut work.task).await,
         None => std::future::pending().await,
     }
 }

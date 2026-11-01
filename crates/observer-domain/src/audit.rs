@@ -149,10 +149,20 @@ pub enum AuditAction {
     ChangeVerifyRequested,
     /// A check of the disk, which reads the server folder at the capped rate.
     ChangeCheckRequested,
+    /// The owner changed a tool's settings. The target is the tool; `details` holds each changed
+    /// setting with its value before and after.
+    ToolSettingsChanged,
+    /// A tool's run changed files in the server folder. The target is the tool; `details` holds
+    /// the `run`, its `trigger`, the `files` changed (a capped list) and their `count`.
+    ToolFilesChanged,
+    /// A tool gave files back entries it had taken out, or their original. The target is the
+    /// tool; `details` holds the `run`, the `reason` (`heal` or `undo`), the `files` (a capped
+    /// list) and their `count`.
+    ToolFilesRestored,
 }
 
 impl AuditAction {
-    pub const ALL: [Self; 81] = [
+    pub const ALL: [Self; 84] = [
         Self::SetupCompleted,
         Self::SetupLinkCreated,
         Self::LoginSucceeded,
@@ -234,6 +244,9 @@ impl AuditAction {
         Self::ChangeContentsPurged,
         Self::ChangeVerifyRequested,
         Self::ChangeCheckRequested,
+        Self::ToolSettingsChanged,
+        Self::ToolFilesChanged,
+        Self::ToolFilesRestored,
     ];
 
     pub const fn as_str(self) -> &'static str {
@@ -319,6 +332,9 @@ impl AuditAction {
             Self::ChangeContentsPurged => "change_contents_purged",
             Self::ChangeVerifyRequested => "change_verify_requested",
             Self::ChangeCheckRequested => "change_check_requested",
+            Self::ToolSettingsChanged => "tool_settings_changed",
+            Self::ToolFilesChanged => "tool_files_changed",
+            Self::ToolFilesRestored => "tool_files_restored",
         }
     }
 

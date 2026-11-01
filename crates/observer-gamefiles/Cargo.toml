@@ -1,0 +1,20 @@
+[package]
+name = "observer-gamefiles"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[features]
+# Builders of valid synthetic game files, for the tests of the crates above this one.
+test-support = []
+
+[dependencies]
+flate2.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+
+[lints]
+workspace = true

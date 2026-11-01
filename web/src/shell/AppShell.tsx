@@ -15,6 +15,7 @@ import {
     TriangleAlert,
     Unplug,
     Users,
+    Wrench,
     X,
     type LucideIcon,
 } from 'lucide-react';
@@ -51,6 +52,7 @@ type NavEntry = {
         | '/changes'
         | '/drops'
         | '/server'
+        | '/tools'
         | '/users'
         | '/files'
         | '/audit';
@@ -135,6 +137,7 @@ export function AppShell() {
     ];
     const administration: NavEntry[] = [
         { to: '/server', label: t.nav.server, icon: Server, access: 'owner' },
+        { to: '/tools', label: t.nav.tools, icon: Wrench, access: 'owner' },
         { to: '/users', label: t.nav.users, icon: Users, access: Permission.UsersManage },
         { to: '/files', label: t.nav.files, icon: FolderLock, access: Permission.FilesManage },
         { to: '/audit', label: t.nav.audit, icon: ScrollText, access: Permission.AuditView },

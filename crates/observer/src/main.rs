@@ -11,6 +11,7 @@ mod setup;
 mod shutdown;
 #[cfg(target_os = "linux")]
 mod systemd;
+mod tools;
 mod user;
 
 use std::path::PathBuf;
@@ -70,6 +71,10 @@ enum Command {
     /// Drive FXServer by hand, without the panel.
     #[command(subcommand)]
     Fxserver(FxserverCommand),
+    /// Run the server tools by hand: a report at any time, a fix or an undo while Observer is
+    /// stopped. Exits with 2 when duplicates are left.
+    #[command(subcommand)]
+    Tools(tools::ToolsCommand),
     /// Run Observer as a systemd service.
     #[cfg(target_os = "linux")]
     #[command(subcommand)]
@@ -148,38 +153,55 @@ async fn main() -> ExitCode {
     let cli = Cli::from_arg_matches(&matches).unwrap_or_else(|error| error.exit());
 
     let result = match Config::load(&cli.config) {
-        Ok(config) => match cli.command.unwrap_or(Command::Run(run::RunArgs::default())) {
-            Command::Run(args) => run::run(config, args).await,
-            Command::Db(DbCommand::Check) => db::check(&config).await,
-            Command::Db(DbCommand::Backup) => db::backup(&config).await,
-            Command::User(UserCommand::List) => user::list(&config).await,
-            Command::User(UserCommand::ResetPassword { name }) => user::reset_password(&config, &name).await,
-            Command::User(UserCommand::Unlock { name }) => user::unlock(&config, &name).await,
-            Command::SetupLink => setup::link(&config).await,
-            Command::Artifacts(ArtifactsCommand::List {
-                platform,
-                branches,
-                all,
-            }) => artifacts::list(platform, &branches, all).await,
-            Command::Artifacts(ArtifactsCommand::Install {
-                build,
-                branches,
-                allow_end_of_life,
-            }) => artifacts::install(&config, build, &branches, allow_end_of_life).await,
-            Command::Fxserver(FxserverCommand::Run(args)) => fxserver::run(config, args).await,
-            #[cfg(target_os = "linux")]
-            Command::Service(ServiceCommand::PrintUnit) => systemd::print_unit(&cli.config),
-        },
+        Ok(config) => {
+            let command = cli.command.unwrap_or(Command::Run(run::RunArgs::default()));
+            perform(config, command, &cli.config).await
+        }
         Err(error) => Err(error),
     };
 
     match result {
-        Ok(()) => ExitCode::SUCCESS,
+        Ok(code) => code,
         Err(error) => {
             eprintln!("error: {error:#}");
             ExitCode::FAILURE
         }
     }
+}
+
+/// Runs a command: every one exits with success unless it fails, but the tools', which tell
+/// scripts whether duplicates are left.
+async fn perform(
+    config: Config,
+    command: Command,
+    config_path: &std::path::Path,
+) -> anyhow::Result<ExitCode> {
+    #[cfg(not(target_os = "linux"))]
+    let _ = config_path;
+    let done = match command {
+        Command::Tools(command) => return tools::command(&config, command).await,
+        Command::Run(args) => run::run(config, args).await,
+        Command::Db(DbCommand::Check) => db::check(&config).await,
+        Command::Db(DbCommand::Backup) => db::backup(&config).await,
+        Command::User(UserCommand::List) => user::list(&config).await,
+        Command::User(UserCommand::ResetPassword { name }) => user::reset_password(&config, &name).await,
+        Command::User(UserCommand::Unlock { name }) => user::unlock(&config, &name).await,
+        Command::SetupLink => setup::link(&config).await,
+        Command::Artifacts(ArtifactsCommand::List {
+            platform,
+            branches,
+            all,
+        }) => artifacts::list(platform, &branches, all).await,
+        Command::Artifacts(ArtifactsCommand::Install {
+            build,
+            branches,
+            allow_end_of_life,
+        }) => artifacts::install(&config, build, &branches, allow_end_of_life).await,
+        Command::Fxserver(FxserverCommand::Run(args)) => fxserver::run(config, args).await,
+        #[cfg(target_os = "linux")]
+        Command::Service(ServiceCommand::PrintUnit) => systemd::print_unit(config_path),
+    };
+    done.map(|()| ExitCode::SUCCESS)
 }
 
 #[cfg(test)]
