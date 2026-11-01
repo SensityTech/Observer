@@ -11,9 +11,11 @@
 //!   (FXServer links every stream file into its cache), check that it is the file the plan was made
 //!   on, build the new bytes from the original and read them back; save the backup; record the write
 //!   as pending, with the name of its temporary file, *before* creating that file; write and flush
-//!   it, and rename it over the target only while the target is still the file read. The record is
-//!   applied once the rename landed. Whatever stops Observer in between, [`reconcile`] tells from the
-//!   file's SHA-256 whether the rename landed, and removes the temporary file.
+//!   it, and rename it over the target only while the target is still the file read, holding the
+//!   bytes read. The record is applied once the rename landed. A write that fails is settled from
+//!   what the file holds, since a rename can land before the error; whatever stops Observer in
+//!   between, [`reconcile`] tells from the file's SHA-256 whether the rename landed, and removes the
+//!   temporary file.
 //! - **Heal** puts back every removal whose copy kept no longer stands in for it, and closes the
 //!   records of files someone else changed since. When unsure, it restores: a duplicate warning that
 //!   comes back is harmless, a missing archetype is not.
@@ -55,7 +57,23 @@ pub struct FolderId {
     /// The root's final path, as [`ConfinedTree::final_path`] gives it (the NT form on Windows).
     pub path: String,
     /// The root folder's [`FileId`](observer_platform::FileId), as text: what finds the records.
+    /// Only its inode on Unix: Linux numbers a device each time it mounts it, and a btrfs, ZFS or
+    /// LVM volume may come back under another number after a reboot, which would leave every
+    /// record behind. The inode still tells the folder from another made under the same path; only
+    /// the root of another file system, whose inode is the same on every file system of its kind,
+    /// could be taken for it, and every write checks first that the file holds what the record says.
     pub id: String,
+}
+
+/// The text of a root folder's identity that finds its records: the volume's serial number and the
+/// folder's index where the volume keeps its number (`volume_stays`, Windows), the index alone
+/// where it may be numbered anew at the next mount.
+fn folder_key(volume: u64, index: u128, volume_stays: bool) -> String {
+    if volume_stays {
+        format!("{volume:016x}-{index:032x}")
+    } else {
+        format!("inode-{index:032x}")
+    }
 }
 
 /// One entry taken out of a file, and the run that took it out.
@@ -218,9 +236,10 @@ impl ServerFolder {
             path: path.to_path_buf(),
             source,
         })?;
+        let root = tree.root_id().map_err(Error::Identity)?;
         let id = FolderId {
             path: tree.final_path().to_owned(),
-            id: tree.root_id().map_err(Error::Identity)?.to_string(),
+            id: folder_key(root.volume(), root.index(), cfg!(windows)),
         };
         Ok(Self {
             path: path.to_path_buf(),
@@ -358,7 +377,7 @@ pub enum Outcome {
 #[serde(rename_all = "camelCase")]
 pub enum Skip {
     /// The file is not the one the plan was made on, no longer holds what Observer wrote, or was
-    /// replaced between its read and the rename.
+    /// replaced or rewritten between its read and the rename.
     Changed,
     /// The file is gone.
     Missing,
@@ -416,6 +435,31 @@ mod tests {
         );
         assert!(!name.contains('.') || name.rfind('.') == Some(0));
         assert_ne!(temporary_name().unwrap(), name);
+    }
+
+    #[test]
+    fn a_folder_numbered_anew_at_its_next_mount_on_unix_still_finds_its_records() {
+        // A device number that changed after a reboot: the inode alone finds the records.
+        assert_eq!(folder_key(0x803, 42, false), folder_key(0x2f, 42, false));
+        assert_ne!(folder_key(0x803, 42, false), folder_key(0x803, 43, false));
+        // A Windows volume keeps its serial number, which still tells it apart.
+        assert_ne!(folder_key(0x803, 42, true), folder_key(0x2f, 42, true));
+    }
+
+    #[test]
+    fn a_server_folder_is_known_by_its_roots_identity_on_windows_and_by_its_inode_elsewhere() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = ConfinedTree::open(dir.path()).unwrap().root_id().unwrap();
+
+        let folder = ServerFolder::open(dir.path()).unwrap();
+
+        let expected = if cfg!(windows) {
+            root.to_string()
+        } else {
+            format!("inode-{:032x}", root.index())
+        };
+        assert_eq!(folder.id().id, expected);
+        assert_eq!(ServerFolder::open(dir.path()).unwrap().id(), folder.id());
     }
 
     #[test]

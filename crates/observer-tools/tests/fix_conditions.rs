@@ -367,6 +367,146 @@ fn copies_in_two_files_its_own_manifest_lists_are_left_and_a_copy_inside_one_fil
 }
 
 #[test]
+fn copies_in_two_files_are_left_while_another_resources_manifest_cannot_be_read() {
+    let server = props();
+    server.ytyp("[props]/props/stream/a.ytyp", &["lamp", "rug", "rug"]);
+    server.ytyp("[props]/props/stream/b.ytyp", &["lamp"]);
+    server.resource("[props]/map", "");
+    // Escrowed: whatever it lists, `a` and `b` among them perhaps, is unknown.
+    server.write(
+        "resources/[props]/map/stream/_manifest.ymf",
+        b"FXAP\x01\0\0\0\0\0",
+    );
+
+    let analysis = server.analyse(&ToolSettings::default());
+
+    let unknown = |file: &str| LeaveReason::Contested {
+        file: format!("resources/[props]/props/stream/{file}"),
+        by: Contest::Manifest {
+            resource: "map".to_owned(),
+            path: "resources/[props]/map/stream/_manifest.ymf".to_owned(),
+        },
+    };
+    assert_eq!(
+        reasons(group(&analysis, "lamp")),
+        [unknown("a.ytyp"), unknown("b.ytyp")]
+    );
+    assert!(
+        fixed(group(&analysis, "rug")),
+        "one file's own copies stay together whatever loads it"
+    );
+    assert!(
+        analysis
+            .report
+            .notes
+            .iter()
+            .any(|note| note.kind == ToolNoteKind::ReferenceUnreadable)
+    );
+}
+
+#[test]
+fn a_removal_into_another_file_is_undone_once_another_resources_manifest_cannot_be_read() {
+    let server = props();
+    server.ytyp("[props]/props/stream/camp.ytyp", &["rug", "rug"]);
+    server.ytyp("[props]/props/stream/gift.ytyp", &["gift"]);
+    server.ytyp("[props]/props/stream/gift2.ytyp", &["gift"]);
+    let settings = ToolSettings::default();
+    let analysis = server.analyse(&settings);
+    let check = |path: &str| {
+        let edit = analysis
+            .edits
+            .iter()
+            .find(|edit| edit.path.ends_with(path))
+            .unwrap();
+        archetypes::check_keeper(&server.index(), &settings, &edit.path, &edit.removals[0])
+    };
+    assert_eq!(check("/gift.ytyp"), KeeperCheck::Holds);
+
+    server.resource("[props]/map", "");
+    server.write("resources/[props]/map/map_cache_y.dat", b"FXAP\x01");
+
+    assert_eq!(
+        check("/gift.ytyp"),
+        KeeperCheck::Gone(KeeperGone::Contested(Contest::Manifest {
+            resource: "map".to_owned(),
+            path: "resources/[props]/map/map_cache_y.dat".to_owned(),
+        }))
+    );
+    assert_eq!(check("/camp.ytyp"), KeeperCheck::Holds, "kept in the same file");
+}
+
+#[test]
+fn a_removal_into_another_file_is_undone_once_a_manifest_of_its_resource_lists_either_file() {
+    let server = props();
+    server.ytyp("[props]/props/stream/gift.ytyp", &["gift"]);
+    server.ytyp("[props]/props/stream/gift2.ytyp", &["gift"]);
+    let settings = ToolSettings::default();
+    let analysis = server.analyse(&settings);
+    let edit = &analysis.edits[0];
+    let check = || archetypes::check_keeper(&server.index(), &settings, &edit.path, &edit.removals[0]);
+    assert_eq!(check(), KeeperCheck::Holds);
+
+    // The file taken out of, listed by a map update of the resource.
+    server.write("resources/[props]/props/props_cache_y.dat", ymf(&["gift"]));
+    assert_eq!(
+        check(),
+        KeeperCheck::Gone(KeeperGone::ManifestDependent(
+            "resources/[props]/props/props_cache_y.dat".to_owned()
+        ))
+    );
+    fs::remove_file(server.root().join("resources/[props]/props/props_cache_y.dat")).unwrap();
+
+    // The copy kept, listed by a manifest added to its stream.
+    server.write("resources/[props]/props/stream/_manifest.ymf", ymf(&["gift2"]));
+    assert_eq!(
+        check(),
+        KeeperCheck::Gone(KeeperGone::ManifestDependent(
+            "resources/[props]/props/stream/_manifest.ymf".to_owned()
+        ))
+    );
+}
+
+#[test]
+fn a_data_file_whose_folder_files_spells_in_another_case_loads_only_where_folders_ignore_case() {
+    let server = Server::new();
+    server.resource(
+        "[weapons]/arms",
+        "files { 'data/weapons.meta', 'extra/weapons.meta' }\n\
+         data_file 'WEAPON_METADATA_FILE' 'data/weapons.meta'\n\
+         data_file 'WEAPON_METADATA_FILE' 'extra/weapons.meta'\n",
+    );
+    server.write(
+        "resources/[weapons]/arms/data/weapons.meta",
+        weapons(&[("w_grip", "")]),
+    );
+    server.write(
+        "resources/[weapons]/arms/Extra/weapons.meta",
+        weapons(&[("w_grip", "")]),
+    );
+    server.cfg("ensure arms\n");
+
+    let analysis = server.analyse(&ToolSettings::default());
+
+    if cfg!(windows) {
+        // FXServer opens `extra` as `Extra`: both files load, and the later one is kept.
+        let [edit] = analysis.edits.as_slice() else {
+            panic!("one edit: {:#?}", analysis.edits)
+        };
+        assert_eq!(edit.path, "resources/[weapons]/arms/data/weapons.meta");
+        assert_eq!(
+            edit.removals[0].keeper.path,
+            "resources/[weapons]/arms/Extra/weapons.meta"
+        );
+    } else {
+        // `opendir` keeps case on Linux: `Extra/weapons.meta` is never shipped, and the item must
+        // stay in `data/weapons.meta`, the only copy the client loads.
+        assert_eq!(analysis.report.counts.model_info_loaded, 1);
+        assert_eq!(analysis.report.counts.groups, 0);
+        assert_eq!(analysis.edits, Vec::new());
+    }
+}
+
+#[test]
 fn a_root_cache_file_counts_as_a_manifest_of_the_resource() {
     let server = props();
     server.ytyp("[props]/props/stream/a.ytyp", &["lamp"]);

@@ -6,10 +6,10 @@ use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use observer_domain::tools::ToolSettings;
-use observer_platform::{FileId, RelativePath, TreeError};
+use observer_platform::{RelativePath, TreeError};
 
 use super::write::{
-    Planned, failed_backup, failed_patch, original_position, read, rebuild, remove_temporary, sha256,
+    Planned, Seen, failed_backup, failed_patch, original_position, read, rebuild, remove_temporary, sha256,
     tree_outcome, writable, write_ahead,
 };
 use super::{
@@ -37,7 +37,7 @@ pub fn reconcile<J: Journal + ?Sized>(
             continue;
         };
         let held = match RelativePath::new(record.path.split('/')).map(|at| read(folder, &at)) {
-            Ok(Ok((bytes, _))) => Some(sha256(&bytes)),
+            Ok(Ok((_, seen))) => Some(seen.sha256),
             Ok(Err(TreeError::NotFound)) | Err(_) => None,
             Ok(Err(error)) => {
                 results.push(result(&record, tree_outcome(error)));
@@ -122,7 +122,7 @@ fn heal_one<J: Journal + ?Sized>(
     run: RunId,
     record: &Record,
 ) -> Result<Option<FileResult>, Error> {
-    let (at, bytes, read_id) = match read_record(folder, index.refused(), record) {
+    let (at, bytes, seen) = match read_record(folder, index.refused(), record) {
         Ok(read) => read,
         Err(Outcome::Skipped { why: Skip::Missing }) => {
             journal.close(record.id, run, CloseReason::Stale)?;
@@ -154,7 +154,7 @@ fn heal_one<J: Journal + ?Sized>(
         run,
         record,
         &at,
-        read_id,
+        seen,
         kept,
         CloseReason::Healed,
     )?;
@@ -223,11 +223,11 @@ fn apply_one<J: Journal + ?Sized>(
             why: Skip::Unresolved,
         });
     }
-    let (bytes, read_id) = match read(folder, &at) {
+    let (bytes, seen) = match read(folder, &at) {
         Ok(read) => read,
         Err(error) => return Ok(tree_outcome(error)),
     };
-    if sha256(&bytes) != edit.sha256 {
+    if seen.sha256 != edit.sha256 {
         return Ok(Outcome::Skipped { why: Skip::Changed });
     }
     let existing = match existing {
@@ -262,7 +262,7 @@ fn apply_one<J: Journal + ?Sized>(
         at: &at,
         resource: &edit.resource,
         format: edit.format,
-        read: read_id,
+        read: seen,
         original_sha256: existing
             .as_ref()
             .map_or(edit.sha256, |record| record.original_sha256),
@@ -346,11 +346,11 @@ fn undo_one<J: Journal + ?Sized>(
     run: RunId,
     record: &Record,
 ) -> Result<FileResult, Error> {
-    let (at, bytes, read_id) = match read_record(folder, &[], record) {
+    let (at, _, seen) = match read_record(folder, &[], record) {
         Ok(read) => read,
         Err(outcome) => return Ok(result(record, outcome)),
     };
-    if Some(sha256(&bytes)) != record.patched_sha256 {
+    if Some(seen.sha256) != record.patched_sha256 {
         return Ok(result(record, Outcome::Skipped { why: Skip::Changed }));
     }
     let (undone, kept): (Vec<&Recorded>, Vec<&Recorded>) = record
@@ -366,7 +366,7 @@ fn undo_one<J: Journal + ?Sized>(
         run,
         record,
         &at,
-        read_id,
+        seen,
         kept,
         CloseReason::Undone,
     )?;
@@ -382,20 +382,20 @@ fn undo_one<J: Journal + ?Sized>(
 }
 
 /// Reads a record's file, when it has no write pending and lies where Observer may write: its path,
-/// its bytes and its identity, or why it is left.
+/// its bytes and what tells it apart, or why it is left.
 fn read_record(
     folder: &ServerFolder,
     also: &[Vec<String>],
     record: &Record,
-) -> Result<(RelativePath, Vec<u8>, FileId), Outcome> {
+) -> Result<(RelativePath, Vec<u8>, Seen), Outcome> {
     if record.pending.is_some() {
         return Err(Outcome::Skipped {
             why: Skip::Unresolved,
         });
     }
     let at = writable(&record.path, folder, also).ok_or_else(refused)?;
-    let (bytes, id) = read(folder, &at).map_err(tree_outcome)?;
-    Ok((at, bytes, id))
+    let (bytes, seen) = read(folder, &at).map_err(tree_outcome)?;
+    Ok((at, bytes, seen))
 }
 
 /// Closes `record` when the file `bytes` no longer holds what Observer wrote: as restored when it
@@ -432,7 +432,7 @@ fn rewrite<J: Journal + ?Sized>(
     run: RunId,
     record: &Record,
     at: &RelativePath,
-    read_id: FileId,
+    seen: Seen,
     kept: Vec<Recorded>,
     reason: CloseReason,
 ) -> Result<Outcome, Error> {
@@ -451,7 +451,7 @@ fn rewrite<J: Journal + ?Sized>(
         at,
         resource: &record.resource,
         format: record.format,
-        read: read_id,
+        read: seen,
         original_sha256: record.original_sha256,
         backup: None,
         existing: Some(record.id),

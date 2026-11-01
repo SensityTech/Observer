@@ -9,8 +9,8 @@ mod common;
 
 use std::fs;
 
-use common::Server;
 use common::fixes::{Fixes, archetypes, hashes, outcomes};
+use common::{Server, ymf};
 use observer_domain::tools::ToolSettings;
 use observer_tools::fix::{CloseReason, Outcome, Report, Selection, Skip};
 
@@ -117,6 +117,25 @@ fn a_removal_whose_copy_kept_another_file_may_replace_is_put_back() {
     assert_eq!(
         why(&report),
         "another file may be loaded in place of the copy kept"
+    );
+    assert_eq!(fs::read(server.root().join(GIFT)).unwrap(), original);
+}
+
+#[test]
+fn a_removal_into_another_file_is_put_back_once_its_resource_gains_a_manifest_listing_the_copy_kept() {
+    let server = gifts(&["stick"]);
+    let original = fs::read(server.root().join(GIFT)).unwrap();
+    let mut fixes = fixed(&server);
+    // A map update added since: the client may now load gift2.ytyp only with the maps that need it.
+    server.write("resources/[props]/props/stream/_manifest.ymf", ymf(&["gift2"]));
+
+    let report = fixes.heal(&server, &ToolSettings::default(), 2);
+
+    assert_eq!(outcomes(&report), [(GIFT, &closed(CloseReason::Healed))]);
+    assert_eq!(
+        why(&report),
+        "the manifest resources/[props]/props/stream/_manifest.ymf may load the copies only with the maps \
+         that need them"
     );
     assert_eq!(fs::read(server.root().join(GIFT)).unwrap(), original);
 }

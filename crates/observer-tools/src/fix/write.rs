@@ -47,9 +47,18 @@ pub(super) fn writable(path: &str, folder: &ServerFolder, also: &[Vec<String>]) 
     RelativePath::new(components).ok()
 }
 
-/// Reads the file at `at`, hard links accepted, with the file's identity. The handle is closed
+/// A file as it was read: its identity and the SHA-256 of its bytes. A write renames over it only
+/// while its name still leads to that file and the file still holds those bytes: a file rewritten
+/// in place keeps its identity, and only its bytes tell.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct Seen {
+    pub id: FileId,
+    pub sha256: [u8; 32],
+}
+
+/// Reads the file at `at`, hard links accepted, with what tells it apart. The handle is closed
 /// before this returns: on Windows an open handle would block the rename over it.
-pub(super) fn read(folder: &ServerFolder, at: &RelativePath) -> Result<(Vec<u8>, FileId), TreeError> {
+pub(super) fn read(folder: &ServerFolder, at: &RelativePath) -> Result<(Vec<u8>, Seen), TreeError> {
     let (file, id) = folder.tree().open_file_shared(at)?;
     let mut bytes = Vec::new();
     file.take(MAX_BYTES + 1)
@@ -61,7 +70,11 @@ pub(super) fn read(folder: &ServerFolder, at: &RelativePath) -> Result<(Vec<u8>,
             MAX_BYTES >> 20
         ))));
     }
-    Ok((bytes, id))
+    let seen = Seen {
+        id,
+        sha256: sha256(&bytes),
+    };
+    Ok((bytes, seen))
 }
 
 /// The position in the original of the entry at `current` in a file that holds the original's
@@ -153,8 +166,8 @@ pub(super) struct Planned<'a> {
     pub at: &'a RelativePath,
     pub resource: &'a str,
     pub format: Format,
-    /// The file read: the rename happens only while the name still leads to it.
-    pub read: FileId,
+    /// The file read: the rename happens only while the name still leads to it, unchanged.
+    pub read: Seen,
     pub original_sha256: [u8; 32],
     /// The original, to back up first: for a file without a record yet.
     pub backup: Option<&'a [u8]>,
@@ -170,6 +183,12 @@ pub(super) struct Planned<'a> {
 /// pending, the temporary file written, flushed and renamed over the file read, the record applied
 /// (or closed). Answers the record, or the outcome of a write that did not land, in which case the
 /// record is as it was. Only a journal failure is an error: the run must stop there.
+///
+/// A failed write is settled from what the file holds, not from the error: a commit may fail after
+/// its rename landed (the folder's flush, on Unix). A file that holds the new bytes is recorded as
+/// written, whatever the error said; one that holds what was read, or met a refusal before the
+/// rename, has its record put back; a file that cannot tell after such an error keeps its record
+/// pending, for [`reconcile`](super::reconcile) to settle at the next run.
 pub(super) fn write_ahead<J: Journal + ?Sized>(
     journal: &mut J,
     folder: &ServerFolder,
@@ -217,7 +236,7 @@ pub(super) fn write_ahead<J: Journal + ?Sized>(
         &pending,
         planned.existing,
     )?;
-    match replace(
+    let (error, unsure) = match replace(
         folder,
         planned.at,
         &pending.temporary,
@@ -225,38 +244,117 @@ pub(super) fn write_ahead<J: Journal + ?Sized>(
         planned.read,
     ) {
         Ok(()) => {
-            match planned.close {
-                Some(reason) => journal.close(id, run, reason)?,
-                None => journal.applied(id)?,
-            }
+            settle_landed(journal, run, id, planned.close)?;
+            return Ok(Ok(id));
+        }
+        Err(Unlanded::Refused(error)) => (error, false),
+        Err(Unlanded::Unsure(error)) => (error, true),
+    };
+    let held = read(folder, planned.at).ok().map(|(_, now)| now.sha256);
+    match left(held, pending.expected_sha256, planned.read.sha256, unsure) {
+        Left::Landed => {
+            tracing::warn!(%error, path = planned.path, "a fix's write failed, yet its file holds the new bytes");
+            settle_landed(journal, run, id, planned.close)?;
             Ok(Ok(id))
         }
-        Err(error) => {
+        Left::Untouched => {
             journal.abandon(id)?;
+            Ok(Err(tree_outcome(error)))
+        }
+        Left::Unknown => {
+            tracing::warn!(
+                %error,
+                path = planned.path,
+                "whether a fix's write landed is unknown: its record stays pending until the next run"
+            );
             Ok(Err(tree_outcome(error)))
         }
     }
 }
 
+/// Records a write that landed: applied, or closed for `close`.
+fn settle_landed<J: Journal + ?Sized>(
+    journal: &mut J,
+    run: RunId,
+    id: RecordId,
+    close: Option<CloseReason>,
+) -> Result<(), Error> {
+    match close {
+        Some(reason) => journal.close(id, run, reason)?,
+        None => journal.applied(id)?,
+    }
+    Ok(())
+}
+
+/// What a failed write left in its file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Left {
+    /// The new bytes: the rename landed.
+    Landed,
+    /// The file as it was read, or anything after a refusal that came before the rename.
+    Untouched,
+    /// Neither, after an error that may have come after the rename, or nothing readable.
+    Unknown,
+}
+
+/// What a failed write left, from the SHA-256 its file holds now (`None` when it cannot be read),
+/// the one it was to hold (`expected`) and the one it held when read (`read`). `unsure` when the
+/// error may have come after the rename.
+fn left(held: Option<[u8; 32]>, expected: [u8; 32], read: [u8; 32], unsure: bool) -> Left {
+    match held {
+        Some(held) if held == expected => Left::Landed,
+        Some(held) if held == read => Left::Untouched,
+        _ if unsure => Left::Unknown,
+        _ => Left::Untouched,
+    }
+}
+
+/// Why a write did not land, or may not have.
+enum Unlanded {
+    /// Refused or failed before the rename: whatever the file holds, the write did not put it
+    /// there.
+    Refused(TreeError),
+    /// The commit failed with an error of the system, which may come after its rename landed: only
+    /// the file can tell. The checks before the rename refuse with errors of their own.
+    Unsure(TreeError),
+}
+
 /// Writes `bytes` to the temporary file `temporary` beside the file at `at`, flushes it and renames
-/// it over that file while it is still the file `read`. Any refusal removes the temporary file.
+/// it over that file while it is still the file `seen`, holding the same bytes. The file is read
+/// again once the temporary file is flushed, so that only a writer racing the rename itself can
+/// slip in. Any refusal removes the temporary file.
 fn replace(
     folder: &ServerFolder,
     at: &RelativePath,
     temporary: &str,
     bytes: &[u8],
-    read: FileId,
-) -> Result<(), TreeError> {
+    seen: Seen,
+) -> Result<(), Unlanded> {
     let tree = folder.tree();
-    let (parent, name) = at.split_last().ok_or(TreeError::IsAFolder)?;
-    let parent = tree.open_folder(&parent)?;
-    let mut file = tree.create_temporary(&parent, temporary)?;
+    let (parent, name) = at.split_last().ok_or(Unlanded::Refused(TreeError::IsAFolder))?;
+    let parent = tree.open_folder(&parent).map_err(Unlanded::Refused)?;
+    let mut file = tree
+        .create_temporary(&parent, temporary)
+        .map_err(Unlanded::Refused)?;
     let written = file.file().write_all(bytes).and_then(|()| file.file().sync_all());
     if let Err(error) = written {
         let _ = tree.discard(&parent, file);
-        return Err(TreeError::Io(error));
+        return Err(Unlanded::Refused(TreeError::Io(error)));
     }
-    tree.commit_over_shared(&parent, file, name, Some(read))
+    let unchanged = match read(folder, at) {
+        Ok((_, now)) if now == seen => Ok(()),
+        Ok(_) => Err(TreeError::Changed),
+        Err(error) => Err(error),
+    };
+    if let Err(error) = unchanged {
+        let _ = tree.discard(&parent, file);
+        return Err(Unlanded::Refused(error));
+    }
+    tree.commit_over_shared(&parent, file, name, Some(seen.id))
+        .map_err(|error| match error {
+            TreeError::Io(_) => Unlanded::Unsure(error),
+            error => Unlanded::Refused(error),
+        })
 }
 
 /// Removes the temporary file `temporary` a write to `path` may have left. A file already gone is
@@ -357,6 +455,23 @@ mod tests {
         assert_eq!(found, [0, 2, 4, 5]);
         assert_eq!(original_position(2, &BTreeSet::new()), 2);
         assert_eq!(original_position(0, &BTreeSet::from([0, 1, 2])), 3);
+    }
+
+    #[test]
+    fn a_failed_write_is_settled_from_what_its_file_holds_not_from_the_error() {
+        let (expected, read) = ([1; 32], [2; 32]);
+
+        // The rename landed, whatever the error that followed it, or whoever else wrote it.
+        assert_eq!(left(Some(expected), expected, read, true), Left::Landed);
+        assert_eq!(left(Some(expected), expected, read, false), Left::Landed);
+        // The file as it was read: the write never happened.
+        assert_eq!(left(Some(read), expected, read, true), Left::Untouched);
+        // A refusal before the rename leaves the file to whoever changed it.
+        assert_eq!(left(Some([3; 32]), expected, read, false), Left::Untouched);
+        assert_eq!(left(None, expected, read, false), Left::Untouched);
+        // After an error that may follow the rename, a file that tells nothing keeps it pending.
+        assert_eq!(left(Some([3; 32]), expected, read, true), Left::Unknown);
+        assert_eq!(left(None, expected, read, true), Left::Unknown);
     }
 
     fn removal(index: usize, name: &str) -> Recorded {

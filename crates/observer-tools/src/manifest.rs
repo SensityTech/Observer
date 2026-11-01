@@ -1970,7 +1970,9 @@ mod tests {
             let files = files_below(folder, false);
             let shipped: Vec<String> = manifest
                 .shipped_patterns()
-                .flat_map(|entry| crate::glob::expand(&entry.value, &files))
+                .flat_map(|entry| {
+                    crate::glob::expand_with(&entry.value, &files, crate::glob::Folders::SERVER)
+                })
                 .filter(|file| {
                     // The extension starts at the path's first dot, as FXServer cuts it.
                     let extension = file.find('.').map_or("", |dot| &file[dot..]);

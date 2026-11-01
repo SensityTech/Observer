@@ -495,6 +495,28 @@ impl ServerIndex {
         contests
     }
 
+    /// A `.ymf` manifest or `_cache_y.dat` that could not be read, in another resource than the
+    /// `.ytyp` at `at`, as a [`Contest::Manifest`]: what it names is unknown, so it may name the
+    /// file's stem, which [`contests`](Self::contests) would then list. Every resource folder counts,
+    /// as there. Its [`ToolNoteKind::ReferenceUnreadable`] note says why it could not be read.
+    pub fn unknown_reference(&self, at: StreamRef) -> Option<Contest> {
+        ytyp_stem(&self.file(at).name)?;
+        self.resources
+            .iter()
+            .enumerate()
+            .filter(|&(index, _)| index != at.resource)
+            .find_map(|(_, resource)| {
+                let reference = resource
+                    .references
+                    .iter()
+                    .find(|reference| reference.problem.is_some())?;
+                Some(Contest::Manifest {
+                    resource: resource.name.clone(),
+                    path: reference.path.clone(),
+                })
+            })
+    }
+
     /// A `.ymf` manifest or `_cache_y.dat` of the file's own resource that names its stem, or that
     /// could not be read and so may: the client may then load the file only with the maps that need
     /// it.
@@ -889,7 +911,11 @@ impl DataFiles<'_, '_> {
     }
 
     /// The files the resource ships among those under the literal folder of `pattern`, sorted, with
-    /// those reached through a link: what a data file of that pattern can match on the client.
+    /// those reached through a link: what a data file of that pattern can match on the client. The
+    /// folder is found ignoring case, as the client looks in the packfile; the shipped patterns are
+    /// expanded the way FXServer opens their folders on this system ([`glob::Folders::SERVER`]), so
+    /// that on Linux a file whose folder `files` spells in another case is not shipped, and cannot
+    /// be the copy kept.
     fn shipped(&mut self, pattern: &str) -> Result<(HashSet<String>, Vec<String>), Error> {
         let Some(normalized) = glob::normalize(pattern) else {
             return Ok((HashSet::new(), Vec::new()));
@@ -915,7 +941,7 @@ impl DataFiles<'_, '_> {
                 continue;
             }
             shipped.extend(
-                glob::expand(&entry.value, &walked.files)
+                glob::expand_with(&entry.value, &walked.files, glob::Folders::SERVER)
                     .into_iter()
                     .filter(|path| !stripped_from_packfile(path)),
             );

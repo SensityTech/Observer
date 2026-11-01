@@ -238,6 +238,81 @@ fn a_file_replaced_between_its_read_and_the_rename_is_never_overwritten() {
     );
 }
 
+#[test]
+fn a_file_rewritten_in_place_between_its_read_and_the_rename_is_never_overwritten() {
+    let server = props();
+    let mut fixes = Fixes::new();
+    let analysis = server.analyse(&ToolSettings::default());
+    let root = server.root().to_path_buf();
+    // Another writer rewrites the file through its name while the write is under way: the file
+    // keeps its identity, and only its bytes changed.
+    fixes.journal.on_begin = Some(Box::new(move |path, _| {
+        fs::write(root.join(path), b"theirs").unwrap();
+    }));
+
+    let report = fixes.apply(&server, &analysis.edits, 1);
+
+    assert_eq!(
+        outcomes(&report),
+        [(CAMP, &skipped(Skip::Changed)), (GIFT, &skipped(Skip::Changed))]
+    );
+    assert_eq!(fs::read(server.root().join(CAMP)).unwrap(), b"theirs");
+    assert_eq!(fs::read(server.root().join(GIFT)).unwrap(), b"theirs");
+    assert_eq!(fixes.journal.closed(CAMP), [CloseReason::Abandoned]);
+    assert_eq!(fixes.journal.open_paths(), Vec::<String>::new());
+    assert_eq!(fixes.journal.uploads, Vec::<(String, String)>::new());
+    assert_eq!(
+        names_in(&server.root().join(STREAM)),
+        ["camp.ytyp", "gift.ytyp", "gift2.ytyp"]
+    );
+}
+
+#[test]
+fn a_failed_write_whose_file_holds_the_new_bytes_is_recorded_as_written_not_abandoned() {
+    let server = props();
+    let mut fixes = Fixes::new();
+    let analysis = server.analyse(&ToolSettings::default());
+    let original = fs::read(server.root().join(CAMP)).unwrap();
+    let patched = observer_gamefiles::ytyp::remove_archetypes(&original, &[0]).unwrap();
+    let root = server.root().to_path_buf();
+    let landed = patched.clone();
+    // The new bytes are in place while the commit fails, as when the rename lands and the folder's
+    // flush after it fails: here a new file under the name refuses the commit.
+    fixes.journal.on_begin = Some(Box::new(move |path, pending| {
+        if path == CAMP {
+            assert_eq!(sha256(&landed), pending.expected_sha256);
+            let file = root.join("landed.partial");
+            fs::write(&file, &landed).unwrap();
+            fs::rename(&file, root.join(path)).unwrap();
+        }
+    }));
+
+    let report = fixes.apply(&server, &analysis.edits, 1);
+
+    assert_eq!(
+        outcomes(&report),
+        [(CAMP, &written(&[0])), (GIFT, &written(&[0]))]
+    );
+    assert_eq!(fs::read(server.root().join(CAMP)).unwrap(), patched);
+    let record = fixes.journal.record(CAMP).unwrap();
+    assert_eq!(record.original_sha256, sha256(&original));
+    assert_eq!(record.patched_sha256, Some(sha256(&patched)));
+    assert!(record.pending.is_none());
+    assert_eq!(fixes.journal.closed(CAMP), Vec::<CloseReason>::new());
+    assert_eq!(fixes.journal.uploads, Vec::<(String, String)>::new());
+
+    // The record knows the removal: an undo puts it back.
+    fixes.journal.on_begin = None;
+    let undone = fixes.undo(&server, &Selection::Paths(vec![CAMP.to_owned()]), 2);
+    assert_eq!(
+        undone.files[0].outcome,
+        Outcome::Closed {
+            reason: CloseReason::Undone
+        }
+    );
+    assert_eq!(fs::read(server.root().join(CAMP)).unwrap(), original);
+}
+
 /// Records the first write of the plan's first edit, which would write `bytes`, as the journal does
 /// before the temporary file exists, with its backup kept.
 fn pending_write(fixes: &mut Fixes, server: &Server, bytes: &[u8]) -> Pending {

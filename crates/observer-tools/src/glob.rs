@@ -7,12 +7,13 @@
 //! - the pattern is put under the resource's folder and normalised by FiveM's `path_normalize`:
 //!   `\` becomes `/`, `./` and repeated separators go, `..` climbs, and each run of characters
 //!   between blanks is normalised on its own, so a blank after a `/` drops that `/`;
-//! - the folders written before the first `*` are looked up the way the packfile looks a path up,
-//!   the exact name first, then the first name equal to it in ASCII case; every name compared
-//!   against a pattern goes through a regular expression, byte for byte and case included, in which
-//!   `*` takes any bytes and `?` one, both within one name, and `{n}`, `{n,}` or `{n,m}` repeat the
-//!   byte before them, since FiveM leaves braces unescaped (any other brace makes its regex throw,
-//!   and matches nothing here);
+//! - the client looks the folders written before the first `*` up the way the packfile looks a path
+//!   up, the exact name first, then the first name equal to it in ASCII case; FXServer opens them
+//!   through its system, which ignores case on Windows and keeps it on Linux ([`Folders::SERVER`]);
+//!   every name compared against a pattern goes through a regular expression, byte for byte and
+//!   case included, in which `*` takes any bytes and `?` one, both within one name, and `{n}`,
+//!   `{n,}` or `{n,m}` repeat the byte before them, since FiveM leaves braces unescaped (any other
+//!   brace makes its regex throw, and matches nothing here);
 //! - a `**` that starts a name (`a/**`, `**.ytyp`, `a/**/b`) also tries the rest of the pattern in
 //!   every folder below, at every depth; elsewhere (`a**`) it is two `*`;
 //! - a `*` in a folder name loses the byte before the next `/`: FiveM lists those folders with that
@@ -32,6 +33,29 @@ const MAX_NAME_BYTES: usize = 1024;
 /// The work one expansion may do, in bytes of patterns queued and names compared: a `**` over the
 /// largest resource takes a few megabytes, and this bounds what a hostile pattern costs.
 const MAX_WORK: usize = 16 * 1024 * 1024;
+
+/// How the folders a pattern names are found among the files: those written before its first `*`,
+/// and those written after a wildcard, below the folders it matched.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Folders {
+    /// The exact name first, then the first one equal to it in ASCII case: the packfile's lookup,
+    /// which the client's `data_file` entries go through, and near enough NTFS's.
+    IgnoringCase,
+    /// The exact name only: a folder FXServer opens with `opendir` on Linux, whose file systems
+    /// keep case. `files { 'extra/a.meta' }` ships nothing there from a folder named `Extra`.
+    Exact,
+}
+
+impl Folders {
+    /// How FXServer finds the folders of its `file`, `client_script`, `shared_script` and `map`
+    /// patterns on this system. A case-insensitive mount on Linux is taken as keeping case: it can
+    /// only make a file look unshipped, so a copy is missed, never a copy kept that is not loaded.
+    pub const SERVER: Self = if cfg!(windows) {
+        Self::IgnoringCase
+    } else {
+        Self::Exact
+    };
+}
 
 /// Whether `pattern` holds one of FiveM's wildcards, `*` or `?`.
 pub fn is_glob(pattern: &str) -> bool {
@@ -53,19 +77,27 @@ pub fn matches(pattern: &str, path: &str) -> bool {
 
 /// The entries of `files` that `pattern` matches, in the order FiveM gives them: byte order of the
 /// path as FiveM writes it, which keeps the pattern's spelling of the folders it names before any
-/// wildcard (looked up ignoring case). `files` are the files the resource holds or ships, relative
-/// to its folder with `/` between names; an entry with a `.` or `..` name is never matched.
+/// wildcard (looked up ignoring case, as the packfile does). `files` are the files the resource
+/// holds or ships, relative to its folder with `/` between names; an entry with a `.` or `..` name
+/// is never matched.
 ///
 /// A pattern starting with `@` names another resource's file: FiveM returns it as it is, and so
 /// does this. An empty pattern matches nothing.
 pub fn expand(pattern: &str, files: &[String]) -> Vec<String> {
+    expand_with(pattern, files, Folders::IgnoringCase)
+}
+
+/// The entries of `files` that `pattern` matches as [`expand`] gives them, the folders it names
+/// found as `folders` says: [`Folders::SERVER`] for the patterns FXServer resolves against the
+/// resource's folder.
+pub fn expand_with(pattern: &str, files: &[String], folders: Folders) -> Vec<String> {
     if pattern.is_empty() {
         return Vec::new();
     }
     if pattern.starts_with('@') {
         return vec![pattern.to_owned()];
     }
-    let tree = Tree::new(files);
+    let tree = Tree::new(files, folders);
     let mut full = ROOT.to_vec();
     full.push(b'/');
     full.extend_from_slice(pattern.as_bytes());
@@ -91,7 +123,7 @@ pub fn data_file_paths(pattern: &str, shipped: &[String]) -> Vec<String> {
 /// (`VFSRagePackfile.cpp`): name by name, the exact name first, then the first one equal to it in
 /// ASCII case. Only `/` separates names; empty names are skipped.
 pub fn lookup<'a>(path: &str, shipped: &'a [String]) -> Option<&'a str> {
-    let tree = Tree::new(shipped);
+    let tree = Tree::new(shipped, Folders::IgnoringCase);
     let mut node = 0;
     for name in path
         .as_bytes()
@@ -117,6 +149,7 @@ pub fn lookup<'a>(path: &str, shipped: &'a [String]) -> Option<&'a str> {
 /// The resource's files as folders and files, each folder's names in byte order like the packfile's.
 struct Tree<'a> {
     nodes: Vec<Node<'a>>,
+    folders: Folders,
 }
 
 #[derive(Default)]
@@ -138,9 +171,10 @@ impl Node<'_> {
 }
 
 impl<'a> Tree<'a> {
-    fn new(files: &'a [String]) -> Self {
+    fn new(files: &'a [String], folders: Folders) -> Self {
         let mut tree = Tree {
             nodes: vec![Node::default()],
+            folders,
         };
         'files: for (index, file) in files.iter().enumerate() {
             let names: Vec<&[u8]> = file
@@ -170,10 +204,14 @@ impl<'a> Tree<'a> {
         tree
     }
 
-    /// The child of `node` named `name`, exactly or else ignoring ASCII case.
+    /// The child of `node` named `name`: exactly, or else ignoring ASCII case unless the tree finds
+    /// its folders exactly.
     fn child(&self, node: usize, name: &[u8]) -> Option<usize> {
         let children = &self.nodes.get(node)?.children;
         children.get(name).copied().or_else(|| {
+            if self.folders == Folders::Exact {
+                return None;
+            }
             children
                 .iter()
                 .find(|(child, _)| child.eq_ignore_ascii_case(name))
@@ -741,6 +779,30 @@ mod tests {
         assert_eq!(expand("data/Vehicles.meta", &files), ["Data/Vehicles.meta"]);
         assert_eq!(expand("DATA/*.meta", &files), ["Data/Vehicles.meta"]);
         assert_eq!(expand("data/*.META", &files), NONE);
+    }
+
+    #[test]
+    fn folders_found_exactly_keep_their_case_before_and_after_a_wildcard() {
+        let files = files(&["Extra/a.meta", "meta/Pack/b.meta"]);
+
+        assert_eq!(expand_with("extra/a.meta", &files, Folders::Exact), NONE);
+        assert_eq!(expand_with("extra/*.meta", &files, Folders::Exact), NONE);
+        assert_eq!(expand_with("meta/**/pack/b.meta", &files, Folders::Exact), NONE);
+        assert_eq!(
+            expand_with("Extra/a.meta", &files, Folders::Exact),
+            ["Extra/a.meta"]
+        );
+        assert_eq!(
+            expand_with("meta/**/Pack/b.meta", &files, Folders::Exact),
+            ["meta/Pack/b.meta"]
+        );
+        assert_eq!(
+            expand_with("extra/a.meta", &files, Folders::IgnoringCase),
+            ["Extra/a.meta"]
+        );
+        assert_eq!(expand("meta/**/pack/b.meta", &files), ["meta/Pack/b.meta"]);
+        // The client's lookup in the packfile ignores case whatever the system.
+        assert_eq!(lookup("EXTRA/a.meta", &files), Some("Extra/a.meta"));
     }
 
     #[test]

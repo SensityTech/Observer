@@ -13,7 +13,10 @@
 //!    copy kept starts and stops with the copies taken out;
 //! 3. none is an interior, and `.ytyp` copies do not meet model-info ones;
 //! 4. no `.ytyp` involved can be replaced by another file: no other `.ytyp` of its stem anywhere in
-//!    the folder, no other resource requesting or listing its stem;
+//!    the folder, no other resource requesting or listing its stem; for copies in two files, no
+//!    other resource's `.ymf` or `_cache_y.dat` that cannot be read either, since it may list any
+//!    stem (one file's own copies stay together whatever loads the file, and a single unreadable
+//!    manifest must not stop every fix of the server);
 //! 5. copies in two files of the resource are not listed by one of its `.ymf` manifests, which may
 //!    load them only with the maps that need them;
 //! 6. every copy's file can be changed;
@@ -158,6 +161,10 @@ pub enum KeeperGone {
     NotDefined,
     /// Another file may be loaded in its place.
     Contested(Contest),
+    /// It lies in another file than the entry taken out, and this `.ymf` manifest or
+    /// `_cache_y.dat` of their resource lists one of the two files, or cannot be read: the client
+    /// may load them only with the maps that need them.
+    ManifestDependent(String),
     /// It is no longer in the resource of the file changed, or no resource holds either.
     OtherResource,
     /// Its resource is now protected by the asset escrow.
@@ -175,6 +182,10 @@ impl fmt::Display for KeeperGone {
             Self::Unreadable(error) => write!(f, "the copy kept cannot be read: {error}"),
             Self::NotDefined => f.write_str("the copy kept no longer defines the archetype"),
             Self::Contested(_) => f.write_str("another file may be loaded in place of the copy kept"),
+            Self::ManifestDependent(manifest) => write!(
+                f,
+                "the manifest {manifest} may load the copies only with the maps that need them"
+            ),
             Self::OtherResource => f.write_str("the copy kept is no longer in the same resource"),
             Self::Escrowed => f.write_str("the resource of the copy kept is now escrowed"),
             Self::Excluded => f.write_str("the resource of the copy kept is excluded"),
@@ -186,7 +197,9 @@ impl fmt::Display for KeeperGone {
 /// Checks, on a fresh index, that the copy `removal` relies on still stands in for the entry taken
 /// out of `edited_path`: its file is there, in the same resource, still loaded and uncontested, its
 /// resource neither escrowed (unless allowed) nor excluded, and, when its SHA-256 changed since the
-/// plan, it still registers the hash. When in doubt, the answer is [`KeeperCheck::Gone`]: a duplicate
+/// plan, it still registers the hash. A copy kept in another file is held to conditions 4 and 5 of
+/// copies in two files again: no other resource's manifest that cannot be read, and no manifest of
+/// its resource listing either file. When in doubt, the answer is [`KeeperCheck::Gone`]: a duplicate
 /// warning that comes back is harmless, a missing archetype is not.
 pub fn check_keeper(
     index: &ServerIndex,
@@ -235,6 +248,20 @@ fn keeper_gone(
             };
             if let Some(contest) = index.contests(at).into_iter().next() {
                 return Some(KeeperGone::Contested(contest));
+            }
+            if keeper.path != edited_path {
+                if let Some(contest) = index.unknown_reference(at) {
+                    return Some(KeeperGone::Contested(contest));
+                }
+                // The resource may have gained a manifest since the fix, which the files it lists
+                // follow on the client.
+                let listed = [Some(at), index.stream_file(edited_path)]
+                    .into_iter()
+                    .flatten()
+                    .find_map(|file| index.manifest_dependency(file));
+                if let Some(manifest) = listed {
+                    return Some(KeeperGone::ManifestDependent(manifest.to_owned()));
+                }
             }
             Want::Ytyp
         }
@@ -618,7 +645,7 @@ impl Decider<'_> {
             reasons.push(LeaveReason::MixedSources);
         }
         for &file in &files {
-            self.contests(file, &mut reasons);
+            self.contests(file, files.len() > 1, &mut reasons);
         }
         if files.len() > 1 {
             for &file in &files {
@@ -651,12 +678,18 @@ impl Decider<'_> {
         reasons
     }
 
-    /// What contests the `.ytyp` `file`: the first contest of each kind.
-    fn contests(&self, file: usize, reasons: &mut Vec<LeaveReason>) {
+    /// What contests the `.ytyp` `file`: the first contest of each kind. For copies in several files
+    /// (`cross_file`), another resource's manifest that cannot be read counts as one listing it.
+    fn contests(&self, file: usize, cross_file: bool, reasons: &mut Vec<LeaveReason>) {
         let source = &self.sources[file];
         let Some(at) = source.stream else { return };
+        let unknown = if cross_file {
+            self.index.unknown_reference(at)
+        } else {
+            None
+        };
         let mut kinds = HashSet::new();
-        for contest in self.index.contests(at) {
+        for contest in self.index.contests(at).into_iter().chain(unknown) {
             if kinds.insert(std::mem::discriminant(&contest)) {
                 reasons.push(LeaveReason::Contested {
                     file: source.path.clone(),
