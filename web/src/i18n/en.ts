@@ -2957,8 +2957,14 @@ export const en = {
         stepNames: {
             folder: 'Server folder',
             cfg: 'Config file',
-            build: 'Build',
-            start: 'Start',
+            build: 'FXServer build',
+            start: 'Review and start',
+        } satisfies Record<SetupStep, string>,
+        stepHints: {
+            folder: 'Pick one Observer found, or another',
+            cfg: 'Read from the folder',
+            build: 'Install one, or import yours',
+            start: 'Nothing runs before this',
         } satisfies Record<SetupStep, string>,
         stepOf: (step: number, total: number, name: string) =>
             `Step ${formatNumber('en', step)} of ${formatNumber('en', total)} · ${name}`,
@@ -2969,11 +2975,97 @@ export const en = {
             'The launch settings were changed in another session since the setup opened. Start again from them, then make your changes again.',
         startAgain: 'Start again from the saved settings',
         folder: {
-            lead: 'The folder of your existing server, with its resources folder and its cfg. FXServer runs from it in place: Observer copies nothing into it, and writes there only what people upload over SFTP and the fixes of the server tools you run or turn on.',
-            label: 'Server folder',
-            hint: 'A full path on this host, such as C:\\FXServer\\server-data or /srv/fxserver/server-data.',
-            check: 'Check folder',
-            notChecked: 'Check the folder to go on.',
+            question: 'Which server should Observer run?',
+            searching:
+                'Observer is looking in the usual places on this machine: your home folder and the root of each drive.',
+            found: (servers: number) =>
+                servers === 0
+                    ? 'Observer looked in the usual places on this machine and found no server. Point it at yours below.'
+                    : `Observer looked in the usual places on this machine and found ${count(servers, { one: 'server', other: 'servers' })}. Pick one, or point it somewhere else.`,
+            searchStopped:
+                'The search stopped before it looked everywhere: if yours is missing, browse to it or type its path.',
+            searchFailed: (reason: string) => `Observer could not search this machine. ${reason}`,
+            lead: 'FXServer runs from the folder in place: Observer copies nothing into it, and writes there only what people upload over SFTP and the fixes of the server tools you run or turn on.',
+            servers: 'Servers found',
+            selected: 'Selected',
+            resourceCount: (resources: number, truncated: boolean) =>
+                `${truncated ? 'At least ' : ''}${count(resources, { one: 'resource', other: 'resources' })}`,
+            onesync: {
+                off: 'OneSync off',
+                on: 'OneSync on',
+                legacy: 'OneSync legacy',
+            } satisfies Record<OneSync, string>,
+            usedByTxAdmin: 'used by txAdmin',
+            portInUse: (port: number) => `port ${formatNumber('en', port, { useGrouping: false })} in use`,
+            portTaken: (
+                port: number,
+                holder: { program: string | null; fxServer: boolean },
+                txAdmin: boolean,
+            ) =>
+                holder.fxServer
+                    ? txAdmin
+                        ? `FXServer already listens on port ${formatNumber('en', port, { useGrouping: false })}, and txAdmin is set up for this server. Stop it in txAdmin before the first start here, or both will fight for the port.`
+                        : `Another FXServer already listens on port ${formatNumber('en', port, { useGrouping: false })}. Stop it before the first start here, or both will fight for the port.`
+                    : `${holder.program ?? 'Another program'} already listens on port ${formatNumber('en', port, { useGrouping: false })}: FXServer cannot start on it until that program lets it go.`,
+            elsewhere: 'Somewhere else',
+            label: 'Server data folder',
+            placeholder: 'Start typing a path',
+            hint: 'The folder that holds your resources folder and your server.cfg. Observer lists the folders on this machine as you type.',
+            browse: 'Browse…',
+            rescan: 'Rescan',
+            continueWith: (name: string) => `Continue with ${name}`,
+            keys: { tab: 'Tab', enter: 'Enter', up: '↑', down: '↓' },
+            complete: 'complete',
+            move: 'move',
+            chooseAndCheck: 'choose and check',
+            suggestions: 'Folders',
+            shown: (folders: number, truncated: boolean) =>
+                truncated
+                    ? `The first ${count(folders, { one: 'folder', other: 'folders' })}: keep typing to narrow them.`
+                    : count(folders, { one: 'folder', other: 'folders' }),
+            noMatch: 'No folder here starts with this.',
+            kinds: {
+                server: 'Server folder',
+                txAdminData: 'txAdmin data',
+                unreadable: 'Observer may not read it',
+            },
+            serverDetail: (resources: number | null, cfg: string | null) =>
+                [resources === null ? null : count(resources, { one: 'resource', other: 'resources' }), cfg]
+                    .filter((part) => part !== null)
+                    .join(' · '),
+            txAdminDetail: 'not a server folder',
+            folderDetail: (folders: number, serverInside: boolean) =>
+                `${count(folders, { one: 'folder', other: 'folders' })}${serverInside ? ' · holds a server below' : ''}`,
+            link: 'link',
+            browser: {
+                label: 'Folders of this machine',
+                typeInstead: 'Type a path instead',
+                up: 'Up one folder',
+                current: 'Current folder',
+                filter: 'Filter folders',
+                filterPlaceholder: 'Filter',
+                places: 'Places',
+                home: 'Home',
+                found: 'Servers found',
+                folders: (name: string) => `Folders in ${name}`,
+                open: (name: string) => `Open ${name}`,
+                holdsServer: 'holds a server',
+                showSuggestion: 'Show it',
+                reading: 'Reading the folder',
+                empty: 'No folder here.',
+                noMatch: 'No folder here matches the filter.',
+                truncated: 'Only the first 200 folders are listed: type the path to reach the others.',
+                selection: 'Selected folder',
+                selected: 'Selected',
+                checking: 'Checking the folder',
+                isServer: 'This is a server folder',
+                resources: 'Resources',
+                inCategories: (categories: number) =>
+                    `in ${count(categories, { one: 'category', other: 'categories' })}`,
+                cfgCount: 'Config files',
+                cfgFirst: (name: string) => `${name} first`,
+                use: 'Use this folder',
+            },
             problems: {
                 invalidPath: 'This path cannot be used.',
                 missing: 'Nothing is at this path.',
