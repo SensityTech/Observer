@@ -39,6 +39,12 @@ const legacy = () => screen.getByRole('radio', { name: en.settings.launch.onesyn
 const advanced = () =>
     fireEvent.click(screen.getByRole('button', { name: new RegExp(en.settings.launch.advanced) }));
 
+/** What a save sent: the body of the launch settings' PUT, the page reading other things too. */
+const saved = (fetch: { mock: { calls: unknown[][] } }) => {
+    const call = fetch.mock.calls.find(([, init]) => (init as RequestInit | undefined)?.method === 'PUT');
+    return call === undefined ? undefined : JSON.parse(String((call[1] as RequestInit).body));
+};
+
 /** The Launch category over settings already read, which only the test changes. */
 const page = async (initial: StoredLaunch | null, path = '/settings/launch') => {
     const client = new QueryClient({
@@ -123,8 +129,7 @@ describe('Launch settings', () => {
         fireEvent.click(getByText(bar.save));
 
         await waitFor(() => getByText(en.server.saved));
-        const [, init] = fetch.mock.calls[0] as unknown as [string, RequestInit];
-        expect(JSON.parse(String(init.body))).toEqual({
+        expect(saved(fetch)).toEqual({
             settings: stored('configs/live.cfg', 1).settings,
             version: 1,
         });
@@ -213,8 +218,7 @@ describe('Launch settings', () => {
         fireEvent.click(getByText(bar.save));
 
         await waitFor(() => getByText(en.server.savedHang));
-        const [, init] = fetch.mock.calls[0] as unknown as [string, RequestInit];
-        expect(JSON.parse(String(init.body))).toEqual({
+        expect(saved(fetch)).toEqual({
             settings: { ...stored('server.cfg', 1).settings, hangDetection: false, hangTimeoutSeconds: 900 },
             version: 1,
         });
@@ -276,13 +280,12 @@ describe('Launch settings', () => {
         fireEvent.click(getByText(bar.save));
         getByText(en.server.problems.outOfRange);
         expect(document.activeElement).toBe(delay);
-        expect(fetch).not.toHaveBeenCalled();
+        expect(saved(fetch)).toBeUndefined();
 
         fireEvent.change(delay, { target: { value: '2' } });
         fireEvent.click(getByText(bar.save));
         await waitFor(() => getByText(en.server.savedBoth));
-        const [, init] = fetch.mock.calls[0] as unknown as [string, RequestInit];
-        expect(JSON.parse(String(init.body))).toEqual({
+        expect(saved(fetch)).toEqual({
             settings: { ...delayed(90).settings, onesync: 'legacy', hangTimeoutSeconds: 120 },
             version: 1,
         });
@@ -304,7 +307,7 @@ describe('Launch settings', () => {
             expect(delay.getAttribute('aria-invalid')).toBe('true');
             expect(document.activeElement).toBe(delay);
         }
-        expect(fetch).not.toHaveBeenCalled();
+        expect(saved(fetch)).toBeUndefined();
         fireEvent.change(delay, { target: { value: '60' } });
         expect(queryByText(en.server.problems.outOfRange)).toBeNull();
     });

@@ -4,6 +4,7 @@
 import type { ReactNode } from 'react';
 
 import type { ActorKind } from '../api/generated/ActorKind';
+import type { Applies } from '../api/generated/Applies';
 import type { ApplyMode } from '../api/generated/ApplyMode';
 import type { ArchetypeType } from '../api/generated/ArchetypeType';
 import type { ArgumentChangeKind } from '../api/generated/ArgumentChangeKind';
@@ -26,6 +27,7 @@ import type { EnvironmentFact } from '../api/generated/EnvironmentFact';
 import type { ErrorCode } from '../api/generated/ErrorCode';
 import type { EscrowPolicy } from '../api/generated/EscrowPolicy';
 import type { Feature } from '../api/generated/Feature';
+import type { FeatureTask } from '../api/generated/FeatureTask';
 import type { FileChangeKind } from '../api/generated/FileChangeKind';
 import type { FileFlag } from '../api/generated/FileFlag';
 import type { FileFormat } from '../api/generated/FileFormat';
@@ -59,6 +61,7 @@ import type { Range } from '../api/generated/Range';
 import type { ResourceChangeKind } from '../api/generated/ResourceChangeKind';
 import type { ScheduleMode } from '../api/generated/ScheduleMode';
 import type { ScheduleProblem } from '../api/generated/ScheduleProblem';
+import type { ServerFolder } from '../api/generated/ServerFolder';
 import type { ServerState } from '../api/generated/ServerState';
 import type { Severity } from '../api/generated/Severity';
 import type { SnapshotState } from '../api/generated/SnapshotState';
@@ -78,7 +81,7 @@ import type { TrendVerdict } from '../api/generated/TrendVerdict';
 import { parsePermissions, permissionKeys, type PermissionKey } from '../auth/permissions';
 import type { InvisibleKind } from '../changes/invisible';
 import type { LinkState } from '../live/realtime';
-import type { Applies, CategoryGroup, CategoryId, SettingId } from '../settings/catalog';
+import type { Applies as SettingApplies, CategoryGroup, CategoryId, SettingId } from '../settings/catalog';
 import type { LaunchStep, SetupStep } from '../setup/state';
 import { formatBytes, formatDuration, formatNumber, plural } from './format';
 import { numberParam, stringParam } from './params';
@@ -3240,6 +3243,10 @@ export const en = {
                 name: 'FXServer builds',
                 about: 'Which builds Observer lists, keeps and falls back to. Installing and choosing a build is on the Artifacts page.',
             },
+            features: {
+                name: 'Features',
+                about: 'Turn off what you do not use. A feature that is off runs nothing: no task in the background, no open port, no page, and its routes answer that it is off. What it kept stays until you delete it.',
+            },
             data: {
                 name: 'Data kept',
                 about: 'What Observer records, and for how long: file changes, players and their sessions, statistics.',
@@ -3341,6 +3348,34 @@ export const en = {
             branches: {
                 label: 'Test branches',
                 about: "Builds of these runtime.fivem.net branches are listed next to master's on the Artifacts page, to try one before it is released. 10 at most.",
+            },
+            switchSftp: {
+                label: 'File access over SFTP',
+                about: 'Lets people and pipelines read or upload server files over SFTP, within the folders their groups open.',
+            },
+            switchChanges: {
+                label: 'File changes',
+                about: 'Reads the server files at each start of FXServer and shows what changed since the start before.',
+            },
+            switchTools: {
+                label: 'Server tools',
+                about: 'Finds and fixes duplicate archetypes, when you ask or before each start of FXServer.',
+            },
+            switchDiagnostics: {
+                label: 'Diagnostics',
+                about: "Watches FXServer's processes and connections, keeps its crash dumps, and takes a snapshot before restarting a hung server.",
+            },
+            switchMetrics: {
+                label: 'Statistics',
+                about: 'Samples CPU, memory, tick and players every 5 seconds, for the charts.',
+            },
+            switchPlayers: {
+                label: 'Players',
+                about: 'Keeps a profile of everyone who joins: names, identifiers and play time.',
+            },
+            switchDrops: {
+                label: 'Player drops',
+                about: "Why players leave: crashes, timeouts and kicks, and the signatures behind them, read from the players' sessions.",
             },
             changesEnabled: {
                 label: 'Take a snapshot at each start',
@@ -3475,7 +3510,7 @@ export const en = {
             nextRun: 'At the next scan, fix or start',
             cleanup: 'At the next cleanup',
             file: 'In observer.toml, then a restart of Observer',
-        } satisfies Record<Applies, string>,
+        } satisfies Record<SettingApplies, string>,
         /** How the save bar says when the changes apply, joined: `applies at once and at the next start`. */
         appliesWhen: {
             now: 'at once',
@@ -3485,7 +3520,7 @@ export const en = {
             nextRun: 'at the next scan, fix or start',
             cleanup: 'at the next cleanup',
             file: 'once Observer restarts',
-        } satisfies Record<Applies, string>,
+        } satisfies Record<SettingApplies, string>,
         changed: 'Changed',
         bar: {
             changes: (value: number) => count(value, { one: 'unsaved change', other: 'unsaved changes' }),
@@ -3548,6 +3583,72 @@ export const en = {
         },
         tools: {
             openTools: 'Open the Tools page',
+        },
+        features: {
+            count: (on: number, all: number) => `${formatNumber('en', on)} of ${formatNumber('en', all)} on`,
+            locked: 'A feature locked in observer.toml cannot be turned on from here, even by the owner: only someone with access to the machine can.',
+            readOnly:
+                'Your account can see these switches; only the owner turns a feature on or off, with the password asked again.',
+            alwaysOn: 'Always on',
+            alwaysOnBody:
+                "supervision of FXServer, the live console and its logs, accounts and sign-in, the audit log, the restart schedule and FXServer's builds. Observer cannot run without them.",
+            loadFailed: 'The features could not be read.',
+            states: {
+                on: 'On',
+                off: 'Off',
+                locked: 'Locked off in observer.toml',
+                notConfigured: 'On, but not set up: observer.toml gives no [sftp] address',
+                requires: (names: string[]) => `On, but waits for ${list(names)}`,
+                nextServerStart: 'On from the next start of FXServer',
+                observerRestart: 'On from the next start of Observer',
+            },
+            turnOn: {
+                now: 'Turning it on applies at once',
+                nextServerStart: 'Turning it on applies at the next start of FXServer',
+                observerRestart: 'Turning it on takes a restart of Observer',
+            } satisfies Record<Applies, string>,
+            turnOff: {
+                now: 'Turning it off applies at once',
+                nextServerStart: 'Turning it off applies at the next start of FXServer',
+                observerRestart: 'Turning it off takes a restart of Observer',
+            } satisfies Record<Applies, string>,
+            cadences: {
+                every: (every: string) => `every ${every}`,
+                continuous: 'always running',
+                observerStart: 'at each start of Observer',
+                serverStart: 'at each start of FXServer',
+                crash: 'after a crash',
+                hang: 'when FXServer hangs',
+            },
+            listens: (address: string) => `listens on ${address}`,
+            serverFolder: {
+                untouched: null,
+                reads: 'reads the server folder',
+                writes: 'writes into the server folder',
+            } satisfies Record<ServerFolder, string | null>,
+            file: (path: string, size: string | null) => (size === null ? path : `${path} · ${size}`),
+            whileOff: (tasks: string[]) => `While off, it still finishes ${list(tasks)}.`,
+            tasks: {
+                sftpServer: 'the SFTP server',
+                sftpUpkeep: 'the count of failed SFTP logins',
+                uploadsSweep: 'the cleanup of unfinished uploads',
+                snapshots: 'the snapshot of the server folder',
+                changesUpkeep: 'the retention of file changes',
+                toolsAtStart: 'the tool before each start',
+                toolsHeal: 'putting back the entries a fix took out',
+                processRecords: 'the records of processes',
+                connections: 'the list of connections',
+                crashAnalysis: 'the analysis of crashes',
+                hangSnapshot: 'the snapshot of a hung server',
+                diagnosticsUpkeep: 'the retention of crash dumps',
+                sampler: 'the sampler',
+                metricsUpkeep: 'the aggregates and retention of statistics',
+                playersFollower: 'following players as they come and go',
+                dropsWorker: 'the analysis of drops',
+            } satisfies Record<FeatureTask, string>,
+            turnedOn: (name: string) => `${name} is on.`,
+            turnedOnLater: (name: string, state: string) => `${name}: ${state}.`,
+            turnedOff: (name: string) => `${name} is off: its tasks have stopped.`,
         },
         panel: {
             file: (path: string) => `Read from ${path} when Observer starts.`,
