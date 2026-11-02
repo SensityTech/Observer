@@ -3,6 +3,7 @@ import { Link, Outlet } from '@tanstack/react-router';
 import {
     CalendarClock,
     Contact,
+    DatabaseBackup,
     FolderLock,
     GitCompare,
     LayoutDashboard,
@@ -53,6 +54,7 @@ type NavEntry = {
         | '/drops'
         | '/settings'
         | '/tools'
+        | '/backups'
         | '/users'
         | '/files'
         | '/audit';
@@ -138,6 +140,7 @@ export function AppShell() {
     const administration: NavEntry[] = [
         { to: '/settings', label: t.nav.settings, icon: Settings, access: 'owner', nested: true },
         { to: '/tools', label: t.nav.tools, icon: Wrench, access: 'owner' },
+        { to: '/backups', label: t.nav.backups, icon: DatabaseBackup, access: Permission.BackupsView },
         { to: '/users', label: t.nav.users, icon: Users, access: Permission.UsersManage },
         { to: '/files', label: t.nav.files, icon: FolderLock, access: Permission.FilesManage },
         { to: '/audit', label: t.nav.audit, icon: ScrollText, access: Permission.AuditView },

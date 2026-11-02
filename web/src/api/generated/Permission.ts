@@ -20,4 +20,7 @@ export const Permission = {
     DropsView: 1n << 16n,
     ChangesView: 1n << 17n,
     ChangesContent: 1n << 18n,
+    BackupsView: 1n << 19n,
+    BackupsRun: 1n << 20n,
+    BackupsDownload: 1n << 21n,
 } as const;

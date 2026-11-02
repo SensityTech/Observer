@@ -10,6 +10,9 @@ import type { ArchetypeType } from '../api/generated/ArchetypeType';
 import type { ArgumentChangeKind } from '../api/generated/ArgumentChangeKind';
 import type { ArtifactSettingsProblem } from '../api/generated/ArtifactSettingsProblem';
 import type { AuditAction } from '../api/generated/AuditAction';
+import type { BackupError } from '../api/generated/BackupError';
+import type { BackupPhase } from '../api/generated/BackupPhase';
+import type { BeforeRestarts } from '../api/generated/BeforeRestarts';
 import type { BuildPlatform } from '../api/generated/BuildPlatform';
 import type { CfgFileProblem } from '../api/generated/CfgFileProblem';
 import type { CfgFileState } from '../api/generated/CfgFileState';
@@ -17,6 +20,7 @@ import type { ChartCategory } from '../api/generated/ChartCategory';
 import type { CommandRefusal } from '../api/generated/CommandRefusal';
 import type { Contest } from '../api/generated/Contest';
 import type { CrashForm } from '../api/generated/CrashForm';
+import type { DatabaseEngine } from '../api/generated/DatabaseEngine';
 import type { Difference } from '../api/generated/Difference';
 import type { Differences } from '../api/generated/Differences';
 import type { DropCategory } from '../api/generated/DropCategory';
@@ -32,6 +36,7 @@ import type { FileChangeKind } from '../api/generated/FileChangeKind';
 import type { FileFlag } from '../api/generated/FileFlag';
 import type { FileFormat } from '../api/generated/FileFormat';
 import type { FileKind } from '../api/generated/FileKind';
+import type { FieldProblem } from '../api/generated/FieldProblem';
 import type { FileProblem } from '../api/generated/FileProblem';
 import type { FindingKind } from '../api/generated/FindingKind';
 import type { FindingParams } from '../api/generated/FindingParams';
@@ -64,7 +69,9 @@ import type { ScheduleProblem } from '../api/generated/ScheduleProblem';
 import type { ServerFolder } from '../api/generated/ServerFolder';
 import type { ServerState } from '../api/generated/ServerState';
 import type { Severity } from '../api/generated/Severity';
+import type { SftpAuth } from '../api/generated/SftpAuth';
 import type { SnapshotState } from '../api/generated/SnapshotState';
+import type { SourceKind } from '../api/generated/SourceKind';
 import type { SpawnFailure } from '../api/generated/SpawnFailure';
 import type { StartCause } from '../api/generated/StartCause';
 import type { StopSource } from '../api/generated/StopSource';
@@ -78,6 +85,7 @@ import type { ToolRunMode } from '../api/generated/ToolRunMode';
 import type { ToolRunOutcome } from '../api/generated/ToolRunOutcome';
 import type { ToolTrigger } from '../api/generated/ToolTrigger';
 import type { TrendVerdict } from '../api/generated/TrendVerdict';
+import type { DestinationKind } from '../api/backups';
 import { parsePermissions, permissionKeys, type PermissionKey } from '../auth/permissions';
 import type { InvisibleKind } from '../changes/invisible';
 import type { LinkState } from '../live/realtime';
@@ -166,6 +174,20 @@ const permissions = {
         name: 'Read changed files',
         description:
             "Line diffs and whole files of the server's resources, secrets hidden. The server's code is its most valuable asset.",
+    },
+    backupsView: {
+        name: 'View backups',
+        description:
+            "The game database's backups: when they run, where their copies go and what they weigh, without any password or key.",
+    },
+    backupsRun: {
+        name: 'Run backups',
+        description: 'Back up the game database now, or cancel the backup under way.',
+    },
+    backupsDownload: {
+        name: 'Download backups',
+        description:
+            'A backup is the whole game database: every player, and whatever secrets resources keep in it.',
     },
 } satisfies Record<PermissionKey, { name: string; description: string }>;
 
@@ -413,6 +435,7 @@ export const en = {
         drops: 'Drops',
         changes: 'Changes',
         tools: 'Tools',
+        backups: 'Backups',
         alertCount: (value: number) => count(value, { one: 'alert', other: 'alerts' }),
     },
     theme: {
@@ -2295,6 +2318,291 @@ export const en = {
             notCompared: 'No earlier start to compare the latest with',
         },
     },
+    backups: {
+        title: 'Backups',
+        gloss: '· game database',
+        loadFailed: 'The backups could not be loaded.',
+        backUpNow: 'Back up now',
+        noDestination: 'Add a destination first: a backup needs somewhere to go.',
+        cancel: 'Cancel the backup',
+        summary: {
+            none: 'No backup yet.',
+            last: (time: string, size: string, stored: number, total: number) =>
+                `Last backup ${time}, ${size}, copied to ${formatNumber('en', stored)} of ${count(total, { one: 'destination', other: 'destinations' })}.`,
+            lastFailed: (time: string) => `The last backup, ${time}, failed.`,
+            nextRestart: (time: string) => `Next one before the ${time} restart.`,
+            nextTime: (time: string) => `Next one at ${time}.`,
+            nothingPlanned: 'Nothing is planned: set restarts or times under When.',
+        },
+        progress: (phase: string, dumped: string, destination: string | null, copied: string) =>
+            destination === null
+                ? `Backing up. ${phase}: ${dumped} dumped.`
+                : `Backing up. ${phase} to ${destination}: ${copied} sent.`,
+        phases: {
+            preparing: 'Preparing',
+            dumping: 'Dumping',
+            verifying: 'Checking the file',
+            copying: 'Copying',
+            pruning: 'Letting old copies go',
+        } satisfies Record<BackupPhase, string>,
+        when: {
+            title: 'When',
+            edit: 'Edit',
+            off: 'Not before restarts',
+            scheduled: 'Before each scheduled restart',
+            all: 'Before every restart',
+            waits: (duration: string) =>
+                `The restart waits for the dump, ${duration} at most, then goes ahead.`,
+            noWait: 'The restart does not wait: the dump goes on while FXServer starts.',
+            every: 'Every day at',
+            noTimes: 'No fixed time',
+            notManual: 'Not before a restart asked for by hand',
+            dialog: {
+                title: 'When backups run',
+                beforeRestarts: 'Before restarts',
+                choices: {
+                    off: 'Never',
+                    scheduled: 'Scheduled',
+                    allRestarts: 'Every restart',
+                } satisfies Record<BeforeRestarts, string>,
+                choiceHints: {
+                    off: 'Restarts never wait for a backup.',
+                    scheduled:
+                        "The schedule's restarts and the single restarts someone planned. The dump runs once FXServer has stopped, when resources have saved what they held.",
+                    allRestarts: 'Those, and the restarts asked for in the panel or on the host.',
+                } satisfies Record<BeforeRestarts, string>,
+                wait: 'Longest wait, in seconds',
+                waitHint:
+                    'Past it, FXServer starts and the dump goes on: tables with transactions stay as they were.',
+                waitRange: 'Enter a whole number of seconds from 0 to 600.',
+                times: 'Every day at',
+                noTimes: 'No fixed time.',
+                removeTime: (time: string) => `Remove ${time}`,
+                zone: (zone: string) => `In the restart schedule's zone, ${zone}.`,
+                addTime: 'Add a time',
+                add: 'Add',
+                timeIncomplete: 'Enter a time as hours and minutes.',
+                listedAlready: 'This time is in the list already.',
+                save: 'Save',
+            },
+        },
+        what: {
+            title: 'What',
+            edit: 'Edit',
+            database: 'Database',
+            server: 'Server',
+            engine: 'Engine',
+            connection: 'Connection',
+            file: 'File',
+            engines: { mariaDb: 'MariaDB', mySql: 'MySQL' } satisfies Record<DatabaseEngine, string>,
+            tool: (name: string, version: string) => `with ${name} ${version}`,
+            fromCfg: 'From the cfg',
+            typedIn: 'Typed in',
+            fileValue: 'Compressed with gzip, not encrypted: each destination keeps it as it keeps any file.',
+            dialog: {
+                title: 'What is backed up',
+                engine: 'Engine',
+                source: 'Connection',
+                sources: { cfg: 'From the cfg', manual: 'Typed in' } satisfies Record<SourceKind, string>,
+                cfgHint:
+                    "Read again at each backup from the cfg's mysql_connection_string, as oxmysql reads it.",
+                manualHint:
+                    'An account that only reads is enough: SELECT, SHOW VIEW, TRIGGER, EVENT and LOCK TABLES, and the routines.',
+                host: 'Host',
+                port: 'Port',
+                user: 'User',
+                database: 'Database',
+                password: 'Password',
+                passwordStored: 'Stored. Leave empty to keep it.',
+                clientFolder: 'Folder of the client tools',
+                clientFolderHint: 'Leave empty to look on the PATH and in the usual install folders.',
+                test: 'Test the connection',
+                testAgain: 'Test again',
+                tested: (version: string, tables: number, size: string) =>
+                    `Connected to ${version}: ${count(tables, { one: 'table', other: 'tables' })}, about ${size}.`,
+                loose: (tables: number) =>
+                    `${count(tables, { one: 'table has', other: 'tables have' })} no transactions (MyISAM, Aria…): the dump copies them as it reaches them.`,
+                save: 'Save',
+            },
+        },
+        problems: {
+            launchNotConfigured: 'Set the server up first: the connection comes from its cfg.',
+            sourceMissing: 'The cfg sets no mysql_connection_string.',
+            sourceUnreadable: 'The connection cannot be used as it is written.',
+            clientMissing: 'No dump tool was found. Install the MariaDB or MySQL client on this host.',
+            dumpFailed: 'The dump tool failed.',
+            dumpIncomplete: 'The dump ended before its last line.',
+            verifyFailed: 'The file read back is not the one written.',
+            diskFull: 'The disk is full.',
+            io: 'A file could not be written or read.',
+            unreachable: 'The host does not answer.',
+            authentication: 'The login was refused.',
+            hostKeyUnknown:
+                "The server's host key is not trusted yet. Test the connection, then trust its key.",
+            hostKeyMismatch: 'The server showed another host key than the trusted one.',
+            hostKeyAlgorithm: 'The server offers only RSA host keys: give it an Ed25519 one.',
+            permissionDenied: 'Permission denied.',
+            remote: 'The remote end refused the request.',
+            tooLarge: 'The file is larger than one upload takes.',
+            timedOut: 'It took too long.',
+            insideServerFolder: "The folder is inside the server's, which its resources read.",
+            cancelled: 'Cancelled.',
+            interrupted: 'Observer stopped during the backup.',
+        } satisfies Record<BackupError, string>,
+        short: {
+            launchNotConfigured: 'no server',
+            sourceMissing: 'no connection',
+            sourceUnreadable: 'bad connection',
+            clientMissing: 'no dump tool',
+            dumpFailed: 'dump failed',
+            dumpIncomplete: 'dump cut short',
+            verifyFailed: 'file differs',
+            diskFull: 'disk full',
+            io: 'file error',
+            unreachable: 'no answer',
+            authentication: 'login refused',
+            hostKeyUnknown: 'key not trusted',
+            hostKeyMismatch: 'key changed',
+            hostKeyAlgorithm: 'RSA host key',
+            permissionDenied: 'permission denied',
+            remote: 'refused',
+            tooLarge: 'too large',
+            timedOut: 'timed out',
+            insideServerFolder: 'inside server folder',
+            cancelled: 'cancelled',
+            interrupted: 'interrupted',
+        } satisfies Record<BackupError, string>,
+        fieldProblems: {
+            required: 'Required.',
+            tooMany: 'Too many.',
+            tooLong: 'Too long.',
+            invalidTime: 'Not a time on a 24-hour clock.',
+            duplicate: 'In the list twice.',
+            tooClose: 'Less than 30 minutes from the time before it.',
+            outOfRange: 'Out of range.',
+            notAbsolute: 'Give the full path, from a drive or the root.',
+            invalid: 'This cannot be used here.',
+            notEncrypted: 'Use https: only this host may be reached over http.',
+            notAccepted: 'Not taken here.',
+            insideServerFolder: "Inside the server's folder, which its resources read.",
+        } satisfies Record<FieldProblem, string>,
+        destinations: {
+            title: 'Destinations',
+            add: 'Add a destination',
+            none: 'No destination yet: add one, a backup needs somewhere to go.',
+            kinds: {
+                local: 'This machine',
+                share: 'Network share',
+                s3: 'S3 storage',
+                sftp: 'SFTP server',
+            } satisfies Record<DestinationKind, string>,
+            chips: { s3: 'S3', sftp: 'SFTP' },
+            keepsLast: (copies: number) => `Keeps the last ${formatNumber('en', copies)}`,
+            keepsDays: (days: number) => `Keeps ${count(days, { one: 'day', other: 'days' })}`,
+            keepsBoth: (copies: number, days: number) =>
+                `Keeps the last ${formatNumber('en', copies)} and ${count(days, { one: 'day', other: 'days' })}`,
+            ok: 'OK',
+            failed: 'Failed',
+            copying: 'Copying',
+            noCopy: 'No copy yet',
+            off: 'Off',
+            notTrusted: 'Host key not trusted yet',
+            fix: 'Fix',
+            options: (name: string) => `Options for ${name}`,
+            edit: 'Edit',
+            delete: 'Delete',
+            deleteTitle: (name: string) => `Delete ${name}?`,
+            deleteBody: (stored: number) =>
+                stored === 0
+                    ? 'Observer forgets this destination.'
+                    : `Observer forgets this destination and its ${count(stored, { one: 'copy', other: 'copies' })}: the files stay where they are.`,
+            deleteConfirm: 'Delete destination',
+        },
+        dialog: {
+            addTitle: 'Add a destination',
+            editTitle: (name: string) => `Edit ${name}`,
+            reauth: 'Your password is asked when you save.',
+            add: 'Add destination',
+            save: 'Save',
+            added: "Added. Put Observer's key on the server, then test the connection and trust its host key.",
+            lastFailed: (problem: string) => `The last copy failed. ${problem}`,
+            where: 'Where should copies go?',
+            kindHints: {
+                local: 'A folder on a local disk',
+                share: 'A mounted drive or UNC path',
+                s3: 'AWS, Backblaze, Wasabi, MinIO…',
+                sftp: 'A storage box or any SSH host',
+            } satisfies Record<DestinationKind, string>,
+            name: 'Name',
+            folder: 'Folder',
+            localHint: "A folder of this host, outside the server's folder.",
+            shareHint: 'A mounted drive, or a UNC path the account running Observer can write to.',
+            endpoint: 'Endpoint',
+            endpointHint: 'Leave empty for Amazon S3.',
+            bucket: 'Bucket',
+            prefix: 'Folder in the bucket',
+            region: 'Region',
+            regionHint: 'Read from the endpoint when left empty; auto for Cloudflare R2.',
+            accessKey: 'Access key ID',
+            secretKey: 'Secret key',
+            secretKept: 'Stored. Leave empty to keep it.',
+            secretHint: 'Kept by Observer, never shown again.',
+            host: 'Host',
+            port: 'Port',
+            user: 'User',
+            remoteFolder: 'Folder',
+            remoteFolderHint: "Made if it is missing. Empty for the account's home.",
+            auth: 'Sign in with',
+            auths: { key: "Observer's key", password: 'Password' } satisfies Record<SftpAuth, string>,
+            password: 'Password',
+            publicKey: "Observer's public key",
+            publicKeyHint: "Add this line to the remote account's ~/.ssh/authorized_keys.",
+            keyAfterAdd: 'Observer makes a key of its own when you add the destination.',
+            keep: 'Keep',
+            keepCount: 'How many',
+            keepUnit: 'Kept by',
+            units: { last: 'backups', days: 'days' },
+            keepHint: 'Older copies go once a new one arrived. The newest always stays.',
+            enabled: 'Copy backups here',
+            enabledHint: 'Off: the destination keeps its copies and gets no new one.',
+            trust: (fingerprint: string) => `Trust the host key ${fingerprint}`,
+            trustHint: 'Only if it is the one the server should show. Copies go to this key alone.',
+            test: 'Test the connection',
+            testAgain: 'Test again',
+            testAfterAdd: 'Add the destination first: its key is made then.',
+            testedOk: (took: string) => `Connected. Wrote and deleted a test file in ${took}.`,
+            testedFailed: (problem: string) => `The test failed. ${problem}`,
+            shownKey: (fingerprint: string) => `It shows ${fingerprint}.`,
+        },
+        history: {
+            title: 'History',
+            meta: (runs: number) => `last 30 days · ${count(runs, { one: 'backup', other: 'backups' })}`,
+            caption: 'Backups, newest first',
+            when: 'When',
+            whyHead: 'Why',
+            size: 'Size',
+            took: 'Took',
+            copiesHead: 'Copies',
+            actions: 'Actions',
+            why: {
+                schedule: 'At a set time',
+                restart: 'Before restart',
+                restartBy: (by: string) => `Before a restart by ${by}`,
+                manual: (by: string) => `By ${by}`,
+            },
+            running: 'Under way',
+            outcomes: { failed: 'Failed', cancelled: 'Cancelled', interrupted: 'Interrupted' },
+            copies: (stored: number, total: number) =>
+                `${formatNumber('en', stored)} of ${formatNumber('en', total)}`,
+            none: 'No backup yet.',
+            serverStarted: 'FXServer started before the dump ended',
+            loose: (tables: number) =>
+                `${count(tables, { one: 'table', other: 'tables' })} without transactions`,
+            download: 'Download',
+            downloadOf: (when: string) => `Download the backup of ${when}`,
+            more: 'Show older',
+        },
+    },
     tools: {
         title: 'Tools',
         gloss: 'Problems in the server folder that FXServer does not report.',
@@ -3769,6 +4077,15 @@ export const en = {
             tool_files_changed: 'Files changed by a tool',
             tool_files_restored: 'Files restored by a tool',
             feature_changed: 'Feature turned on or off',
+            backup_settings_changed: 'Backup settings changed',
+            backup_destination_created: 'Backup destination added',
+            backup_destination_changed: 'Backup destination changed',
+            backup_destination_deleted: 'Backup destination deleted',
+            backup_finished: 'Backup of the game database',
+            backup_cancelled: 'Backup cancelled',
+            backup_downloaded: 'Backup downloaded',
+            backup_deleted: 'Backup deleted',
+            backups_expired: 'Old backups deleted by their retention',
         } satisfies Record<AuditAction, string>,
         outcomes: {
             success: 'Success',
@@ -4051,6 +4368,7 @@ export const en = {
         players: 'Players',
         drops: 'Player drops',
         changes: 'Changes',
+        backups: 'Backups',
     } satisfies Record<PermissionArea, string>,
     danger: {
         sensitive: 'Sensitive',
@@ -4257,6 +4575,11 @@ export const en = {
             const name = isFeature(key) ? features[key] : 'This part of Observer';
             return `${name} is turned off in observer.toml on the host: only a change there turns it back on.`;
         },
+        backup_running: 'A backup is already under way. Wait for it to end, or cancel it.',
+        invalid_backup_settings: 'Some settings need fixing. Each one says why next to its field.',
+        invalid_backup_destination: 'This destination needs fixing. Each field says why.',
+        backup_not_configured: 'Add a destination first: a backup needs somewhere to go.',
+        backup_copy_unavailable: 'This copy is no longer stored there.',
     } satisfies Record<ErrorCode, ErrorMessage>,
     failure: {
         unknown: 'Something went wrong. Try again.',

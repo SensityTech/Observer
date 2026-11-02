@@ -21,6 +21,7 @@ const MIGRATIONS: &[M<'static>] = &[
     M::up(include_str!("../migrations/0010_tools.sql")),
     M::up(include_str!("../migrations/0011_hang_detection.sql")),
     M::up(include_str!("../migrations/0012_features.sql")),
+    M::up(include_str!("../migrations/0013_backups.sql")),
 ];
 
 /// The schema version this build migrates to.
