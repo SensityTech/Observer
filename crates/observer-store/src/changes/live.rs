@@ -50,6 +50,32 @@ pub fn list(conn: &Connection, snapshot: i64, limit: u32) -> Result<Vec<LiveChan
     Ok(rows.collect::<Result<_, _>>()?)
 }
 
+/// The live changes of every run from `from` to `to`, oldest first, at most `limit`, each with
+/// its id.
+pub fn between(
+    conn: &Connection,
+    from: Timestamp,
+    to: Timestamp,
+    limit: u32,
+) -> Result<Vec<(i64, LiveChange)>, StoreError> {
+    let mut statement = conn.prepare(
+        "SELECT id, at, name, change, by, command FROM live_change WHERE at >= ?1 AND at < ?2 ORDER BY at, id LIMIT ?3",
+    )?;
+    let rows = statement.query_map(params![Utc(from), Utc(to), limit], |row| {
+        Ok((
+            row.get(0)?,
+            LiveChange {
+                at: row.get::<_, Utc>(1)?.0,
+                name: row.get(2)?,
+                change: parse(3, &row.get::<_, String>(3)?)?,
+                by: row.get(4)?,
+                command: row.get(5)?,
+            },
+        ))
+    })?;
+    Ok(rows.collect::<Result<_, _>>()?)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

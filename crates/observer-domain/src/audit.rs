@@ -159,10 +159,15 @@ pub enum AuditAction {
     /// tool; `details` holds the `run`, the `reason` (`heal` or `undo`), the `files` (a capped
     /// list) and their `count`.
     ToolFilesRestored,
+    /// Someone said a crash wave the statistics linked to a change is not related to it. The
+    /// target is the link's key.
+    StatisticsLinkDismissed,
+    /// The link was taken back.
+    StatisticsLinkRestored,
 }
 
 impl AuditAction {
-    pub const ALL: [Self; 84] = [
+    pub const ALL: [Self; 86] = [
         Self::SetupCompleted,
         Self::SetupLinkCreated,
         Self::LoginSucceeded,
@@ -247,6 +252,8 @@ impl AuditAction {
         Self::ToolSettingsChanged,
         Self::ToolFilesChanged,
         Self::ToolFilesRestored,
+        Self::StatisticsLinkDismissed,
+        Self::StatisticsLinkRestored,
     ];
 
     pub const fn as_str(self) -> &'static str {
@@ -335,6 +342,8 @@ impl AuditAction {
             Self::ToolSettingsChanged => "tool_settings_changed",
             Self::ToolFilesChanged => "tool_files_changed",
             Self::ToolFilesRestored => "tool_files_restored",
+            Self::StatisticsLinkDismissed => "statistics_link_dismissed",
+            Self::StatisticsLinkRestored => "statistics_link_restored",
         }
     }
 

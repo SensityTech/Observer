@@ -3427,6 +3427,8 @@ export const en = {
             tool_settings_changed: 'Tool settings changed',
             tool_files_changed: 'Files changed by a tool',
             tool_files_restored: 'Files restored by a tool',
+            statistics_link_dismissed: 'Crash wave marked not related to a change',
+            statistics_link_restored: 'Crash wave link restored',
         } satisfies Record<AuditAction, string>,
         outcomes: {
             success: 'Success',

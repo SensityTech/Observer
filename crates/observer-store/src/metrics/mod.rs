@@ -5,6 +5,7 @@
 mod columns;
 pub mod drops;
 pub mod growth;
+pub mod links;
 pub mod rollups;
 pub mod runs;
 pub mod samples;

@@ -236,6 +236,8 @@ const AUDIT_ACTIONS = {
     tool_settings_changed: true,
     tool_files_changed: true,
     tool_files_restored: true,
+    statistics_link_dismissed: true,
+    statistics_link_restored: true,
 } satisfies Record<AuditAction, true>;
 
 const OUTCOMES = { success: true, failure: true, denied: true } satisfies Record<Outcome, true>;
