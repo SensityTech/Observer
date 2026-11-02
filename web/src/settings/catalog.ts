@@ -28,6 +28,10 @@ export type SettingId =
     | 'keepBuilds'
     | 'autoRollback'
     | 'branches'
+    | 'backupsBeforeRestarts'
+    | 'backupsTimes'
+    | 'backupsDestinations'
+    | 'backupsLast'
     | 'switchSftp'
     | 'switchChanges'
     | 'switchTools'
@@ -71,6 +75,7 @@ export type CategoryId =
     | 'launch'
     | 'restarts'
     | 'builds'
+    | 'backups'
     | 'features'
     | 'data'
     | 'tools'
@@ -131,6 +136,17 @@ export const CATEGORIES: readonly Category[] = [
             { id: 'keepBuilds', applies: 'cleanup' },
             { id: 'autoRollback', applies: 'now' },
             { id: 'branches', applies: 'now' },
+        ],
+    },
+    {
+        id: 'backups',
+        group: 'server',
+        access: ['BackupsView'],
+        settings: [
+            { id: 'backupsBeforeRestarts' },
+            { id: 'backupsTimes' },
+            { id: 'backupsDestinations' },
+            { id: 'backupsLast' },
         ],
     },
     {

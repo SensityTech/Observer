@@ -7,6 +7,7 @@ import { CardHeading } from '../components/Card';
 import { Notice } from '../components/Notice';
 import { useI18n } from '../i18n/I18nProvider';
 import { AccountSettings } from './Account';
+import { BackupsSettings } from './Backups';
 import { BuildSettings } from './Builds';
 import { CATEGORIES, opens, type Category, type CategoryId } from './catalog';
 import { DataSettings } from './Data';
@@ -23,6 +24,7 @@ const CONTENT = {
     launch: LaunchSettings,
     restarts: RestartSettings,
     builds: BuildSettings,
+    backups: BackupsSettings,
     features: FeatureSettings,
     data: DataSettings,
     tools: ToolSettings,

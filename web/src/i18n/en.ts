@@ -3551,6 +3551,10 @@ export const en = {
                 name: 'FXServer builds',
                 about: 'Which builds Observer lists, keeps and falls back to. Installing and choosing a build is on the Artifacts page.',
             },
+            backups: {
+                name: 'Backups',
+                about: 'Copies of the game database: when they run, where they go, and how the last one went. They are set and run on the Backups page.',
+            },
             features: {
                 name: 'Features',
                 about: 'Turn off what you do not use. A feature that is off runs nothing: no task in the background, no open port, no page, and its routes answer that it is off. What it kept stays until you delete it.',
@@ -3656,6 +3660,22 @@ export const en = {
             branches: {
                 label: 'Test branches',
                 about: "Builds of these runtime.fivem.net branches are listed next to master's on the Artifacts page, to try one before it is released. 10 at most.",
+            },
+            backupsBeforeRestarts: {
+                label: 'Before restarts',
+                about: 'Whether a restart waits for a copy of the game database, taken once FXServer has stopped and resources saved what they held.',
+            },
+            backupsTimes: {
+                label: 'At fixed times',
+                about: 'Times of day a backup runs, whatever the restarts.',
+            },
+            backupsDestinations: {
+                label: 'Destinations',
+                about: 'Where each copy goes, a folder, an SFTP server or S3 storage, each keeping as many copies as its retention says.',
+            },
+            backupsLast: {
+                label: 'Latest backup',
+                about: 'How the last backup went, and when the next one runs.',
             },
             switchSftp: {
                 label: 'File access over SFTP',
@@ -3891,6 +3911,12 @@ export const en = {
         },
         tools: {
             openTools: 'Open the Tools page',
+        },
+        backups: {
+            openBackups: 'Open the Backups page',
+            noTimes: 'No fixed time',
+            noDestination: 'None yet: a backup needs somewhere to go.',
+            destination: (name: string, enabled: boolean) => (enabled ? name : `${name} (turned off)`),
         },
         features: {
             count: (on: number, all: number) => `${formatNumber('en', on)} of ${formatNumber('en', all)} on`,
