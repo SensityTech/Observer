@@ -1,0 +1,355 @@
+//! Observer's optional features: what each one runs and reaches while it is on, and the view of
+//! their switches. Supervision, the console and its logs, accounts, the audit log, the restart
+//! schedule and FXServer's builds are always there; any of these can be turned off, and then none
+//! of its code runs: no port, no task, no route.
+
+use jiff::Timestamp;
+use serde::{Deserialize, Serialize};
+use ts_rs::TS;
+
+use crate::live::Topic;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum Feature {
+    /// File access over SFTP, on the port `[sftp] listen` of `observer.toml` names.
+    Sftp,
+    /// What changed in the server folder from one start of FXServer to the next.
+    Changes,
+    /// The server tools, such as the duplicate archetypes fix, run by hand or at every start.
+    Tools,
+    /// The processes, connections, crashes and hangs of FXServer's tree.
+    Diagnostics,
+    /// The statistics: a sample every five seconds, and the charts drawn from them.
+    Metrics,
+    /// Players' sessions, play time and identifiers.
+    Players,
+    /// The statistics of player drops, drawn from the players' sessions.
+    Drops,
+}
+
+/// When a change of a switch takes effect.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum Applies {
+    Now,
+    /// At the next start of Observer, which also restarts FXServer.
+    NextStart,
+}
+
+/// Why a feature does not run although the owner left it on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum FeatureHold {
+    /// `observer.toml` turns it off, which the panel cannot undo.
+    Host,
+    /// It needs a setting `observer.toml` does not give: SFTP's `listen`.
+    NotConfigured,
+    /// It works on what the feature in `requires` collects, which does not run.
+    Requires,
+}
+
+/// What a feature does in the background, for the panel to name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum FeatureTask {
+    /// Accepts SFTP connections on its port.
+    SftpServer,
+    /// Every minute: audits closed windows of failed SFTP logins.
+    SftpUpkeep,
+    /// At Observer's start: removes the temporary uploads a crash left in the server folder.
+    UploadsSweep,
+    /// At every start of FXServer: lists and hashes the server folder; checks on request.
+    Snapshots,
+    /// Every hour: the retention and the budget of the stored texts.
+    ChangesUpkeep,
+    /// Before every start of FXServer: what the tools' settings ask for, a report or a fix.
+    ToolsAtStart,
+    /// Before every start of FXServer, while a fix of the tools is still applied: puts back what
+    /// the fix took out once the copy it kept is gone.
+    ToolsHeal,
+    /// The processes FXServer's tree starts and ends.
+    ProcessRecords,
+    /// Every two seconds: where the tree's processes connect and listen.
+    Connections,
+    /// Reads the dumps of each crash.
+    CrashAnalysis,
+    /// Writes a dump of a hung server before it is killed.
+    HangSnapshot,
+    /// Every hour: the retention of the records.
+    DiagnosticsUpkeep,
+    /// Every five seconds: the process, host and FXServer measures.
+    Sampler,
+    /// Every minute: rolls the samples up and applies their retention.
+    MetricsUpkeep,
+    /// Players' sessions from the bridge and `/players.json`, and their retention.
+    PlayersFollower,
+    /// The drop statistics, computed again as sessions end.
+    DropsWorker,
+}
+
+/// What a feature does with the server folder.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum ServerFolder {
+    Untouched,
+    Reads,
+    Writes,
+}
+
+impl Feature {
+    pub const ALL: [Self; 7] = [
+        Self::Sftp,
+        Self::Changes,
+        Self::Tools,
+        Self::Diagnostics,
+        Self::Metrics,
+        Self::Players,
+        Self::Drops,
+    ];
+
+    /// The name on the wire, in the store and in `observer.toml`.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Sftp => "sftp",
+            Self::Changes => "changes",
+            Self::Tools => "tools",
+            Self::Diagnostics => "diagnostics",
+            Self::Metrics => "metrics",
+            Self::Players => "players",
+            Self::Drops => "drops",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|feature| feature.as_str() == name)
+    }
+
+    /// The feature whose records this one works on, which must run for this one to.
+    pub const fn requires(self) -> Option<Self> {
+        match self {
+            Self::Drops => Some(Self::Players),
+            _ => None,
+        }
+    }
+
+    /// When turning it on takes effect. The tools' hook reads the switch before every start;
+    /// the others follow FXServer from Observer's start, and a port opens only when the host
+    /// restarts Observer.
+    pub const fn turn_on(self) -> Applies {
+        match self {
+            Self::Tools => Applies::Now,
+            _ => Applies::NextStart,
+        }
+    }
+
+    pub const fn tasks(self) -> &'static [FeatureTask] {
+        use FeatureTask as T;
+        match self {
+            Self::Sftp => &[T::SftpServer, T::SftpUpkeep, T::UploadsSweep],
+            Self::Changes => &[T::Snapshots, T::ChangesUpkeep],
+            Self::Tools => &[T::ToolsAtStart, T::ToolsHeal],
+            Self::Diagnostics => &[
+                T::ProcessRecords,
+                T::Connections,
+                T::CrashAnalysis,
+                T::HangSnapshot,
+                T::DiagnosticsUpkeep,
+            ],
+            Self::Metrics => &[T::Sampler, T::MetricsUpkeep],
+            Self::Players => &[T::PlayersFollower],
+            Self::Drops => &[T::DropsWorker],
+        }
+    }
+
+    /// What goes on while the feature is off, and only while it has something to finish.
+    pub const fn while_off(self) -> &'static [FeatureTask] {
+        match self {
+            // A fix took entries out of a file because another copy kept them; once that copy
+            // is gone, the entries must come back or the game misses them.
+            Self::Tools => &[FeatureTask::ToolsHeal],
+            _ => &[],
+        }
+    }
+
+    /// The files and folders it keeps, under Observer's data folder.
+    pub const fn files(self) -> &'static [&'static str] {
+        match self {
+            Self::Sftp => &[],
+            Self::Changes => &["changes.sqlite3"],
+            Self::Tools => &["tools/backups"],
+            Self::Diagnostics => &["crashes"],
+            Self::Metrics | Self::Players | Self::Drops => &["metrics.sqlite3"],
+        }
+    }
+
+    pub const fn server_folder(self) -> ServerFolder {
+        match self {
+            Self::Sftp | Self::Tools => ServerFolder::Writes,
+            Self::Changes => ServerFolder::Reads,
+            Self::Diagnostics | Self::Metrics | Self::Players | Self::Drops => ServerFolder::Untouched,
+        }
+    }
+
+    /// The API paths it answers, relative to `/api`: each route under one of them is its.
+    pub const fn routes(self) -> &'static [&'static str] {
+        match self {
+            Self::Sftp => &["/files", "/account/files", "/servers/default/files"],
+            Self::Changes => &["/servers/default/changes"],
+            Self::Tools => &["/tools"],
+            Self::Diagnostics => &["/servers/default/crashes"],
+            Self::Metrics => &["/metrics"],
+            Self::Players => &["/servers/default/players"],
+            Self::Drops => &["/servers/default/drops"],
+        }
+    }
+
+    pub const fn topics(self) -> &'static [Topic] {
+        match self {
+            Self::Changes => &[Topic::ServerChanges],
+            Self::Diagnostics => &[Topic::ServerDiagnostics, Topic::ServerAlerts],
+            Self::Metrics => &[Topic::MetricsLive],
+            Self::Sftp | Self::Tools | Self::Players | Self::Drops => &[],
+        }
+    }
+
+    /// The feature an API route belongs to, from its path relative to `/api`.
+    pub fn of_route(path: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|feature| {
+            feature.routes().iter().any(|prefix| {
+                path.strip_prefix(prefix)
+                    .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
+            })
+        })
+    }
+
+    pub fn of_topic(topic: Topic) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|feature| feature.topics().contains(&topic))
+    }
+}
+
+/// `GET /api/features`, and the answer to a change: every feature, in a fixed order.
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
+#[ts(export)]
+pub struct FeatureList {
+    pub features: Vec<FeatureView>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct FeatureView {
+    pub feature: Feature,
+    /// The owner's choice, or the default when they never made one: on.
+    pub enabled: bool,
+    /// Whether it runs in this Observer now: turning it off stops it at once.
+    pub running: bool,
+    pub held: Option<FeatureHold>,
+    pub requires: Option<Feature>,
+    /// When turning it on takes effect.
+    pub turn_on: Applies,
+    /// When the owner last turned it on or off.
+    pub changed_at: Option<Timestamp>,
+    pub reach: FeatureReach,
+}
+
+/// What a feature opens and runs while it is on.
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct FeatureReach {
+    /// The addresses it listens on, as `observer.toml` gives them.
+    pub listens: Vec<String>,
+    pub tasks: Vec<FeatureTask>,
+    pub while_off: Vec<FeatureTask>,
+    /// Under Observer's data folder.
+    pub files: Vec<String>,
+    pub server_folder: ServerFolder,
+    /// API path prefixes, relative to `/api`.
+    pub routes: Vec<String>,
+    pub topics: Vec<Topic>,
+}
+
+impl FeatureReach {
+    pub fn of(feature: Feature, listens: Vec<String>) -> Self {
+        Self {
+            listens,
+            tasks: feature.tasks().to_vec(),
+            while_off: feature.while_off().to_vec(),
+            files: feature.files().iter().map(|&file| file.to_owned()).collect(),
+            server_folder: feature.server_folder(),
+            routes: feature.routes().iter().map(|&route| route.to_owned()).collect(),
+            topics: feature.topics().to_vec(),
+        }
+    }
+}
+
+/// `PUT /api/features/{feature}`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+#[ts(export)]
+pub struct FeatureSwitch {
+    pub enabled: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stored_names_match_the_wire_names() {
+        for feature in Feature::ALL {
+            let wire = serde_json::to_value(feature).unwrap();
+            assert_eq!(wire, feature.as_str());
+            assert_eq!(Feature::from_name(feature.as_str()), Some(feature));
+        }
+    }
+
+    #[test]
+    fn a_route_belongs_to_the_feature_whose_prefix_it_extends_by_whole_segments() {
+        assert_eq!(Feature::of_route("/tools"), Some(Feature::Tools));
+        assert_eq!(
+            Feature::of_route("/tools/duplicate-archetypes/fix"),
+            Some(Feature::Tools)
+        );
+        assert_eq!(Feature::of_route("/account/files/keys/{id}"), Some(Feature::Sftp));
+        assert_eq!(
+            Feature::of_route("/servers/default/drops/log.csv"),
+            Some(Feature::Drops)
+        );
+        assert_eq!(Feature::of_route("/toolsets"), None);
+        assert_eq!(Feature::of_route("/account/sessions"), None);
+        assert_eq!(Feature::of_route("/servers/default/launch"), None);
+    }
+
+    #[test]
+    fn every_topic_belongs_to_one_feature_at_most_and_core_topics_to_none() {
+        for topic in Topic::ALL {
+            let owners = Feature::ALL
+                .into_iter()
+                .filter(|feature| feature.topics().contains(&topic))
+                .count();
+            assert!(owners <= 1, "{topic:?}");
+        }
+        for core in [Topic::Status, Topic::Audit, Topic::ServerStatus, Topic::Console] {
+            assert_eq!(Feature::of_topic(core), None);
+        }
+    }
+
+    #[test]
+    fn a_feature_requires_only_one_that_requires_nothing() {
+        for feature in Feature::ALL {
+            if let Some(required) = feature.requires() {
+                assert_ne!(required, feature);
+                assert_eq!(required.requires(), None, "{feature:?}");
+            }
+        }
+    }
+}

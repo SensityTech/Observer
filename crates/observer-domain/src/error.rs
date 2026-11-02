@@ -178,6 +178,10 @@ pub enum ErrorCode {
     ServerNotStopped,
     /// The tool does not run on this server. Params: `game`, the game the cfg sets (`rdr3`).
     ToolNotAvailable,
+    /// The route belongs to a feature that does not run. Params: `feature`, a `Feature`.
+    FeatureDisabled,
+    /// `observer.toml` turns the feature off, which only the host can undo. Params: `feature`.
+    FeatureLocked,
 }
 
 /// The body of every error response.
