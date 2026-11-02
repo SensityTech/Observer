@@ -259,7 +259,10 @@ pub fn page(conn: &Connection, query: &PlayerQuery) -> Result<Vec<(PlayerSummary
         PlayerFilter::Name(start) => {
             values.push(Box::new(format!("{}%", like_escaped(start))));
             values.push(Box::new(start.clone()));
-            format!(" AND (p.name LIKE ?2 ESCAPE '\\' OR p.id IN ({}))", labelled(2, 3))
+            format!(
+                " AND (p.name LIKE ?2 ESCAPE '\\' OR p.id IN ({}))",
+                labelled(2, 3)
+            )
         }
         PlayerFilter::License(license) => {
             values.push(Box::new(license.clone()));
@@ -322,7 +325,10 @@ pub fn pseudonyms(conn: &Connection, filter: &PlayerFilter, limit: u32) -> Resul
         PlayerFilter::All => ("1".to_owned(), Vec::new()),
         PlayerFilter::Name(start) => (
             format!("name LIKE ?1 ESCAPE '\\' OR id IN ({})", labelled(1, 2)),
-            vec![Box::new(format!("{}%", like_escaped(start))), Box::new(start.clone())],
+            vec![
+                Box::new(format!("{}%", like_escaped(start))),
+                Box::new(start.clone()),
+            ],
         ),
         PlayerFilter::License(license) => ("license = ?1".to_owned(), vec![Box::new(license.clone())]),
         PlayerFilter::Identifier(kind, value) => (

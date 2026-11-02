@@ -914,7 +914,10 @@ mod tests {
     #[test]
     fn a_label_with_nothing_left_to_show_is_none() {
         assert_eq!(PlayerLabel::clean(None, None, Some("characters")), None);
-        assert_eq!(PlayerLabel::clean(Some(" \u{200B}"), Some("\u{FEFF}"), None), None);
+        assert_eq!(
+            PlayerLabel::clean(Some(" \u{200B}"), Some("\u{FEFF}"), None),
+            None
+        );
     }
 
     #[test]

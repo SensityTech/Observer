@@ -286,7 +286,10 @@ impl Players {
             .into_iter()
             .filter(|session| session.confirmation == Confirmation::Confirmed)
             .filter_map(|session| {
-                Some((session.license?, ((now_ms - session.seen_ms).max(0), session.label)))
+                Some((
+                    session.license?,
+                    ((now_ms - session.seen_ms).max(0), session.label),
+                ))
             })
             .collect();
         Ok(PlayerPage {

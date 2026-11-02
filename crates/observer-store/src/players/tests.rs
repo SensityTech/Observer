@@ -457,9 +457,21 @@ fn a_label_given_again_keeps_when_it_was_first_given() {
     let mut conn = memory();
     let id = see(&mut conn, ADA, "Ada", &[], "2026-10-30T10:00:00Z").0;
 
-    give_label(&mut conn, ADA, Some("John Doe"), Some("CHAR-1234"), "2026-10-30T10:05:00Z");
+    give_label(
+        &mut conn,
+        ADA,
+        Some("John Doe"),
+        Some("CHAR-1234"),
+        "2026-10-30T10:05:00Z",
+    );
     give_label(&mut conn, ADA, None, Some("CHAR-1"), "2026-10-30T11:00:00Z");
-    give_label(&mut conn, ADA, Some("John Doe"), Some("CHAR-1234"), "2026-10-31T10:05:00Z");
+    give_label(
+        &mut conn,
+        ADA,
+        Some("John Doe"),
+        Some("CHAR-1234"),
+        "2026-10-31T10:05:00Z",
+    );
 
     let labels = labels(&conn, id).unwrap();
     assert_eq!(labels.len(), 2);
@@ -469,7 +481,10 @@ fn a_label_given_again_keeps_when_it_was_first_given() {
     );
     assert_eq!(labels[0].first_seen, at("2026-10-30T10:05:00Z"));
     assert_eq!(labels[0].last_seen, at("2026-10-31T10:05:00Z"));
-    assert_eq!((labels[1].name.as_deref(), labels[1].id.as_deref()), (None, Some("CHAR-1")));
+    assert_eq!(
+        (labels[1].name.as_deref(), labels[1].id.as_deref()),
+        (None, Some("CHAR-1"))
+    );
     assert_eq!(
         latest_labels(&conn, &[id]).unwrap()[&id],
         PlayerLabel {
@@ -520,7 +535,13 @@ fn a_search_finds_a_player_by_the_start_of_a_label_name_or_its_whole_id() {
     let mut conn = memory();
     see(&mut conn, ADA, "Ada", &[], "2026-10-31T10:00:00Z");
     see(&mut conn, GRACE, "Grace", &[], "2026-10-31T10:00:00Z");
-    give_label(&mut conn, ADA, Some("John Doe"), Some("CHAR-1234"), "2026-10-31T10:05:00Z");
+    give_label(
+        &mut conn,
+        ADA,
+        Some("John Doe"),
+        Some("CHAR-1234"),
+        "2026-10-31T10:05:00Z",
+    );
     let found = |text: &str| -> Vec<String> {
         let query = PlayerQuery {
             filter: PlayerFilter::Name(text.to_owned()),
@@ -529,7 +550,11 @@ fn a_search_finds_a_player_by_the_start_of_a_label_name_or_its_whole_id() {
             after: None,
             limit: 10,
         };
-        page(&conn, &query).unwrap().into_iter().map(|(row, _)| row.name).collect()
+        page(&conn, &query)
+            .unwrap()
+            .into_iter()
+            .map(|(row, _)| row.name)
+            .collect()
     };
 
     assert_eq!(found("john"), ["Ada"]);

@@ -737,7 +737,10 @@ mod tests {
             .filter_map(|line| Some(line.strip_prefix("exports('")?.split_once('\'')?.0))
             .collect();
 
-        assert_eq!(exports, ["getContractVersion", "setPlayerLabel", "clearPlayerLabel"]);
+        assert_eq!(
+            exports,
+            ["getContractVersion", "setPlayerLabel", "clearPlayerLabel"]
+        );
         for export in exports {
             let call = format!("]:{export}(");
             assert!(CONTRACT.contains(&call), "CONTRACT.md does not show {export}");
@@ -748,7 +751,9 @@ mod tests {
     #[test]
     fn the_contract_gives_the_label_fields_and_limits_the_bridge_and_observer_check() {
         let lua = FILES[1].1;
-        let start = CONTRACT.find("## Player labels").expect("CONTRACT.md documents labels");
+        let start = CONTRACT
+            .find("## Player labels")
+            .expect("CONTRACT.md documents labels");
         let section = &CONTRACT[start..];
         let section = &section[..section[1..].find("\n## ").map_or(section.len(), |end| end + 1)];
 

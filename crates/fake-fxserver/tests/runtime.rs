@@ -1588,7 +1588,12 @@ async fn a_label_a_resource_gives_shows_online_stays_on_the_profile_and_finds_th
     let deadline = Instant::now() + WAIT;
     let found = loop {
         let found = players
-            .page(Some("char-1234"), PlayerSort::PlayTime, None, Permissions::PLAYERS_VIEW)
+            .page(
+                Some("char-1234"),
+                PlayerSort::PlayTime,
+                None,
+                Permissions::PLAYERS_VIEW,
+            )
             .await
             .unwrap();
         if !found.players.is_empty() {
