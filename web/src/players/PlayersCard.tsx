@@ -1,5 +1,4 @@
 import { keepPreviousData, useInfiniteQuery } from '@tanstack/react-query';
-import { Link } from '@tanstack/react-router';
 import { ArrowDown, ChevronDown, ChevronsUpDown, Contact, Search } from 'lucide-react';
 import { useId, useState, type ReactNode } from 'react';
 
@@ -19,7 +18,7 @@ import { errorMessage } from '../i18n/errors';
 import { zoneDate } from '../i18n/format';
 import { useI18n } from '../i18n/I18nProvider';
 import { cn } from '../lib/cn';
-import { OnlineState, PlayerName, useVisit } from './words';
+import { OnlineState, ShownName, useVisit } from './words';
 
 const SORTS: PlayerSort[] = ['playTime', 'recent', 'sessions', 'firstSeen', 'lastSeen'];
 
@@ -242,15 +241,7 @@ function SortHeader({
 }
 
 function Name({ player }: { player: PlayerSummary }) {
-    return (
-        <Link
-            to="/players/$id"
-            params={{ id: String(player.id) }}
-            className="font-medium text-ink underline-offset-2 [overflow-wrap:anywhere] hover:underline"
-        >
-            <PlayerName name={player.name} />
-        </Link>
-    );
+    return <ShownName name={player.name} label={player.label} player={player.id} />;
 }
 
 function PlayerRow({ player, zone }: { player: PlayerSummary; zone: string }) {

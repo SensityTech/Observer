@@ -207,6 +207,83 @@ describe('PlayersPage', () => {
         );
     });
 
+    it('should name a labelled player by their label, with its ID, who gave it and their FiveM name', async () => {
+        const ruby = ONLINE.players[0]!;
+        await open(
+            '/players',
+            MODERATOR,
+            api((url) =>
+                url.pathname === `${PLAYERS_PATH}/online`
+                    ? json({
+                          players: [
+                              {
+                                  ...ruby,
+                                  label: { name: 'Mara Quinn', id: 'CHAR-1234', resource: 'characters' },
+                              },
+                              {
+                                  ...ruby,
+                                  netId: 4,
+                                  player: 9,
+                                  name: 'Lena',
+                                  label: { name: null, id: 'CHAR-9', resource: null },
+                              },
+                              {
+                                  ...ruby,
+                                  netId: 5,
+                                  player: 10,
+                                  name: 'Kenji',
+                                  label: { name: 'Sol Reyes', id: null, resource: null },
+                              },
+                          ],
+                      })
+                    : undefined,
+            ),
+        );
+
+        const [labelled, idOnly, nameOnly] = rows('players-online');
+        expect(within(labelled!).getByRole('link', { name: 'Mara Quinn' }).getAttribute('href')).toBe(
+            '/players/7',
+        );
+        expect(within(labelled!).getByText(en.players.label.fivem('Ruby Vex'))).not.toBeNull();
+        const chip = within(labelled!).getByRole('button', { name: 'CHAR-1234' });
+        const tip = document.getElementById(chip.getAttribute('aria-describedby')!);
+        expect(tip?.textContent).toBe(en.players.label.given('characters'));
+        expect(within(idOnly!).getByRole('link', { name: 'Lena' })).not.toBeNull();
+        expect(within(idOnly!).getByRole('button', { name: 'CHAR-9' })).not.toBeNull();
+        expect(within(idOnly!).queryByText(en.players.label.fivem('Lena'))).toBeNull();
+        expect(within(nameOnly!).getByRole('link', { name: 'Sol Reyes' })).not.toBeNull();
+        expect(within(nameOnly!).getByRole('button', { name: en.players.label.mark })).not.toBeNull();
+        expect(within(nameOnly!).getByText(en.players.label.fivem('Kenji'))).not.toBeNull();
+    });
+
+    it('should show the last label of a player in the list, online or not', async () => {
+        await open(
+            '/players',
+            MODERATOR,
+            api((url) =>
+                url.pathname === PLAYERS_PATH
+                    ? json({
+                          ...PLAYERS,
+                          players: [
+                              {
+                                  ...PLAYERS.players[0]!,
+                                  online: false,
+                                  label: { name: 'Mara Quinn', id: 'CHAR-1234', resource: 'characters' },
+                              },
+                          ],
+                      })
+                    : undefined,
+            ),
+        );
+
+        const [ruby] = rows('players-list');
+        expect(within(ruby!).getByRole('link', { name: 'Mara Quinn' }).getAttribute('href')).toBe(
+            '/players/7',
+        );
+        expect(within(ruby!).getByRole('button', { name: 'CHAR-1234' })).not.toBeNull();
+        expect(within(ruby!).getByText(en.players.label.fivem('Ruby Vex'))).not.toBeNull();
+    });
+
     it('should count the time txAdmin saw and the session under way into the total', async () => {
         await open('/players', MODERATOR);
 
@@ -353,9 +430,44 @@ describe('PlayerPage', () => {
         expect(screen.queryByRole('heading', { name: en.players.profile.identifiers.title })).toBeNull();
         expect(screen.queryByRole('heading', { name: en.players.profile.linked.title })).toBeNull();
         expect(screen.queryByRole('button', { name: en.players.profile.forget.button })).toBeNull();
+        expect(screen.queryByRole('heading', { name: en.players.profile.labels.title })).toBeNull();
         // Each drop shows twice: in the table, and as a card at phone width.
         expect(screen.getAllByText(en.players.profile.drops.categories.crash)).toHaveLength(2);
         expect(screen.getAllByText('afk_kick')).toHaveLength(2);
+    });
+
+    it("should list the labels the server's resources gave, the latest beside the player's facts", async () => {
+        const labels = [
+            {
+                name: 'Mara Quinn',
+                id: 'CHAR-1234',
+                resource: 'characters',
+                firstSeen: '2026-10-28T19:00:00Z',
+                lastSeen: '2026-10-30T18:03:00Z',
+            },
+            {
+                name: null,
+                id: 'CHAR-9',
+                resource: null,
+                firstSeen: '2026-10-21T18:05:00Z',
+                lastSeen: '2026-10-21T18:05:00Z',
+            },
+        ];
+        await open(
+            '/players/7',
+            MODERATOR,
+            api((url) => (url.pathname === `${PLAYERS_PATH}/7` ? json({ ...PROFILE, labels }) : undefined)),
+        );
+
+        expect(screen.getByRole('heading', { level: 1, name: 'Ruby Vex' })).not.toBeNull();
+        const facts = screen.getByRole('region', { name: en.players.profile.facts });
+        expect(within(facts).getByText('Mara Quinn')).not.toBeNull();
+        expect(within(facts).getByRole('button', { name: 'CHAR-1234' })).not.toBeNull();
+        const [latest, older] = rows('player-labels');
+        expect(within(latest!).getByText('Mara Quinn')).not.toBeNull();
+        expect(within(latest!).getByText(en.players.profile.labels.by('characters'))).not.toBeNull();
+        expect(within(latest!).getByText('2026-10-30 19:03')).not.toBeNull();
+        expect(within(older!).getByText('CHAR-9')).not.toBeNull();
     });
 
     it('should open the drop log on this player from their disconnections', async () => {

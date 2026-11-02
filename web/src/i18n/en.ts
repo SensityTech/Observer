@@ -1311,6 +1311,16 @@ export const en = {
         copyLicence: (license: string) => `Copy the licence ${license}`,
         // A name the player chose that nothing was left of once cleaned of control characters.
         noName: 'No name',
+        // What the server's own resources call a player, a character for instance: their word,
+        // which the panel shows as given and never takes for who the player is.
+        label: {
+            given: (resource: string | null) =>
+                resource === null
+                    ? "Given by the server's resources. Observer shows it as given: who the player is stays their licence."
+                    : `Given by ${resource}, one of the server's resources. Observer shows it as given: who the player is stays their licence.`,
+            mark: "Label from the server's resources",
+            fivem: (name: string) => `FiveM: ${name}`,
+        },
         now: {
             title: 'Online now',
             meta: (players: number) => `${count(players, { one: 'player', other: 'players' })} · every 10 s`,
@@ -1359,9 +1369,9 @@ export const en = {
         list: {
             title: 'All players',
             search: 'Search players',
-            searchHint: 'The start of a name, or a licence.',
+            searchHint: "The start of a name or of a label's name, a label's whole ID, or a licence.",
             searchHintIdentifiers:
-                'The start of a name, a licence, or any identifier with its prefix, such as discord:. Never an address.',
+                "The start of a name or of a label's name, a label's whole ID, a licence, or any identifier with its prefix, such as discord:. Never an address.",
             submit: 'Search',
             clear: 'Clear',
             sort: 'Sort by',
@@ -1390,6 +1400,7 @@ export const en = {
             loading: 'Reading the player',
             failed: 'The player could not be read.',
             facts: 'About this player',
+            label: 'Label',
             licence: 'Licence',
             firstSeen: 'First visit',
             lastSeen: 'Last visit',
@@ -1429,6 +1440,16 @@ export const en = {
                 name: 'Name',
                 firstSeen: 'First seen',
                 lastSeen: 'Last seen',
+            },
+            labels: {
+                title: 'Labels',
+                meta: "From the server's resources",
+                caption:
+                    "Labels the server's resources gave this player, with when they were first and last given",
+                label: 'Label',
+                by: (resource: string) => `Given by ${resource}`,
+                firstSeen: 'First given',
+                lastSeen: 'Last given',
             },
             drops: {
                 title: 'Disconnections',
@@ -1923,9 +1944,9 @@ export const en = {
             anySignature: 'Any signature',
             signatureId: (id: number) => `Signature ${id}`,
             player: 'Player',
-            playerHint: 'Player: the start of a name, or a licence.',
+            playerHint: "Player: the start of a name or of a label's name, a label's whole ID, or a licence.",
             playerHintIdentifiers:
-                'Player: the start of a name, a licence, or any identifier with its prefix, such as discord:. Never an address. A player typed takes the place of a profile kept.',
+                "Player: the start of a name or of a label's name, a label's whole ID, a licence, or any identifier with its prefix, such as discord:. Never an address. A player typed takes the place of a profile kept.",
             run: 'Run',
             runInvalid: 'A run is a number, as the log shows it.',
             apply: 'Apply',
