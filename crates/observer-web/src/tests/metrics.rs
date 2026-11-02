@@ -396,6 +396,64 @@ async fn saying_a_link_is_not_related_takes_both_views_and_is_audited() {
 }
 
 #[tokio::test]
+async fn a_feature_turned_off_is_left_out_of_the_events_and_refuses_what_needs_it() {
+    let server = Server::new().await;
+    let owner = server.owner().await;
+    let path = format!("/api/metrics/events?from={}&to={NOW}", NOW - 86_400);
+    let off = Some(json!({ "enabled": false }));
+
+    let changes_off = server
+        .call(Method::PUT, "/api/features/changes", Some(&owner), off.clone())
+        .await;
+    let without_changes = server.call(Method::GET, &path, Some(&owner), None).await;
+    let effects_without_changes = server
+        .call(
+            Method::GET,
+            "/api/servers/default/drops/effects",
+            Some(&owner),
+            None,
+        )
+        .await;
+    let drops_off = server
+        .call(Method::PUT, "/api/features/drops", Some(&owner), off)
+        .await;
+    let without_either = server.call(Method::GET, &path, Some(&owner), None).await;
+    let effects = server
+        .call(
+            Method::GET,
+            "/api/servers/default/drops/effects",
+            Some(&owner),
+            None,
+        )
+        .await;
+    let dismissed = server
+        .call(
+            Method::PUT,
+            "/api/metrics/links",
+            Some(&owner),
+            Some(json!({ "link": "start:4>wave:9:120", "dismissed": true })),
+        )
+        .await;
+
+    assert_eq!(changes_off.status, StatusCode::OK, "{}", changes_off.text);
+    assert_eq!(without_changes.status, StatusCode::OK, "{}", without_changes.text);
+    assert_eq!(without_changes.json()["omitted"], json!(["changes"]));
+    assert_eq!(
+        effects_without_changes.status,
+        StatusCode::OK,
+        "{}",
+        effects_without_changes.text
+    );
+    assert_eq!(drops_off.status, StatusCode::OK, "{}", drops_off.text);
+    assert_eq!(without_either.json()["omitted"], json!(["changes", "drops"]));
+    let refused = json!({ "code": "feature_disabled", "params": { "feature": "drops" } });
+    assert_eq!(effects.status, StatusCode::NOT_FOUND);
+    assert_eq!(effects.json(), refused);
+    assert_eq!(dismissed.status, StatusCode::NOT_FOUND);
+    assert_eq!(dismissed.json(), refused);
+}
+
+#[tokio::test]
 async fn the_insights_take_the_dashboard_or_the_drops_permission() {
     let server = Server::new().await;
     let owner = server.owner().await;
