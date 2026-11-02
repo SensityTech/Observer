@@ -19,7 +19,7 @@ const MAX_WALKED: usize = 5000;
 /// Resources without a manifest named in a summary.
 const MAX_UNMANIFESTED: usize = 20;
 /// Folders FXServer's walk passes over, as txAdmin's does.
-const SKIPPED: [&str; 6] = ["cache", "db", "node_modules", ".git", ".idea", ".vscode"];
+pub(crate) const SKIPPED: [&str; 6] = ["cache", "db", "node_modules", ".git", ".idea", ".vscode"];
 const MANIFESTS: [&str; 2] = ["fxmanifest.lua", "__resource.lua"];
 /// Entries read from one folder when looking around a refused folder or for cfg files.
 const MAX_ENTRIES: usize = 200;
@@ -192,7 +192,7 @@ pub fn check_cfg(data_path: &str, cfg_file: &str, observer: &Path, context: &Con
 
 /// The first problem of a folder whose path the rules accept, in the order they are checked, or
 /// else the resources it holds.
-fn inspect(folder: &Path, observer: Option<&Path>) -> Result<Resources, FolderProblem> {
+pub(crate) fn inspect(folder: &Path, observer: Option<&Path>) -> Result<Resources, FolderProblem> {
     let metadata = fs::metadata(folder).map_err(|error| match error.kind() {
         io::ErrorKind::NotFound => FolderProblem::Missing,
         _ => FolderProblem::Unreadable,
@@ -280,7 +280,7 @@ fn is_resources(name: &OsStr) -> bool {
 
 /// The cfg files of a server folder, at its root and one folder down, with txAdmin's guesses at
 /// the root, and the one detected: the first guess that is a file, else the only cfg at the root.
-fn cfg_files(folder: &Path) -> (Vec<String>, Option<String>) {
+pub(crate) fn cfg_files(folder: &Path) -> (Vec<String>, Option<String>) {
     let fits = |name: &str| launch::cfg_problem(name, Platform::host()).is_none();
     let mut root = Vec::new();
     let mut nested = Vec::new();
