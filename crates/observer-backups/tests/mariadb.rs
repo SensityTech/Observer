@@ -12,8 +12,8 @@ use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use observer_backups::dump::{self, DumpRequest};
-use observer_domain::backups::{DatabaseEngine, parse_connection_string};
+use observer_backups::dump::{self, Client, DumpRequest};
+use observer_domain::backups::{DatabaseConnection, DatabaseEngine, parse_connection_string};
 use tokio_util::sync::CancellationToken;
 
 const ROOT_PASSWORD: &str = "disposable-root";
@@ -166,6 +166,24 @@ const SCHEMA: &str = "
     CREATE PROCEDURE pay(who VARCHAR(60), amount INT) UPDATE users SET money = money + amount WHERE identifier = who;
 ";
 
+fn request<'a>(
+    client: &'a Client,
+    connection: &'a DatabaseConnection,
+    work: &'a Path,
+    name: &'a str,
+    output: &'a Path,
+) -> DumpRequest<'a> {
+    DumpRequest {
+        client,
+        connection,
+        work,
+        name,
+        output,
+        progress: Arc::default(),
+        cancel: CancellationToken::new(),
+    }
+}
+
 const CONTENTS: &str = "SELECT identifier, name, money, HEX(avatar) FROM users ORDER BY identifier";
 
 #[tokio::test]
@@ -207,17 +225,9 @@ async fn a_real_dump_restores_into_the_same_database() {
     );
 
     let output = work.join("1.partial");
-    let written = dump::dump(DumpRequest {
-        client: &client,
-        connection: &connection,
-        work: &work,
-        name: "1",
-        output: &output,
-        progress: Arc::default(),
-        cancel: CancellationToken::new(),
-    })
-    .await
-    .unwrap();
+    let written = dump::dump(request(&client, &connection, &work, "1", &output))
+        .await
+        .unwrap();
 
     assert_eq!(written.inspection.loose_tables, ["player_logs"]);
     assert_eq!(
@@ -255,17 +265,9 @@ async fn a_real_dump_restores_into_the_same_database() {
         server.port
     ))
     .unwrap();
-    let refused = dump::dump(DumpRequest {
-        client: &client,
-        connection: &wrong,
-        work: &work,
-        name: "2",
-        output: &work.join("2.partial"),
-        progress: Arc::default(),
-        cancel: CancellationToken::new(),
-    })
-    .await
-    .unwrap_err();
+    let refused = dump::dump(request(&client, &wrong, &work, "2", &work.join("2.partial")))
+        .await
+        .unwrap_err();
     assert_eq!(refused.error, observer_domain::backups::BackupError::DumpFailed);
     assert!(
         refused
