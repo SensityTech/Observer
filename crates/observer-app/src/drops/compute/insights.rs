@@ -12,7 +12,7 @@ use observer_domain::drops::{CrashForm, DropCategory, DropKind, DropsRange};
 use observer_domain::statistics::{
     EARLY_MINUTES, EFFECT_DAYS, EFFECTS_DAYS, EffectKind, EffectRow, EventDetail, SURVIVAL_BEFORE_DAYS,
     SURVIVAL_MINUTES, SURVIVAL_STEP, SessionSurvival, StabilityEffects, Survival, TimelineEvent,
-    WAVE_BASELINE_MS, WAVE_GAP_MS, WAVE_LEAST_SPAN_MS, bursts, is_wave, survival,
+    WAVE_BASELINE_MS, WAVE_LEAST_SPAN_MS, bursts, is_wave, survival,
 };
 use observer_store::metrics::drops::{self as stored, SignatureRow};
 use observer_store::{Connection, StoreError};
