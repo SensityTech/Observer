@@ -41,7 +41,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 use self::identity::{Fingerprints, Keys, hex, split_days};
-use self::sessions::{Identity, IdentityWrite, SessionWrite, Sessions};
+use self::sessions::{Identity, IdentityWrite, LabelWrite, SessionWrite, Sessions};
 use crate::audit::Record;
 use crate::metrics::runs::Change;
 use crate::{Caller, Clock, Error, Metrics, Servers, Supervision};
@@ -173,6 +173,7 @@ impl Players {
             },
             pseudonyms: Keys::new(random::<32>()?),
             identities: Vec::new(),
+            labels: Vec::new(),
             credits: Vec::new(),
             later: Later::default(),
             failing: false,
@@ -731,8 +732,9 @@ struct Worker {
     observer_started: i64,
     sessions: Sessions,
     pseudonyms: Keys,
-    /// Identities to write, then sessions to credit, in the state database.
+    /// Identities to write, then labels, then sessions to credit, in the state database.
     identities: Vec<IdentityWrite>,
+    labels: Vec<LabelWrite>,
     credits: Vec<Credit>,
     later: Later,
     failing: bool,
@@ -810,7 +812,11 @@ impl Worker {
             self.event(&event);
         }
         self.flush().await;
-        if !self.identities.is_empty() || !self.credits.is_empty() || !self.later.is_empty() {
+        if !self.identities.is_empty()
+            || !self.labels.is_empty()
+            || !self.credits.is_empty()
+            || !self.later.is_empty()
+        {
             warn!("some sessions of players could not be written before Observer stopped");
         }
     }
@@ -1079,6 +1085,7 @@ impl Worker {
         let writes = self.sessions.take_writes();
         let zone = zone_of(&self.schedule.borrow());
         self.identities.extend(writes.identities);
+        self.labels.extend(writes.labels);
         for write in writes.sessions {
             if let SessionWrite::Close {
                 closure,
@@ -1103,8 +1110,9 @@ impl Worker {
     /// Identities, crediting records and credits, in one state transaction. `false` while they
     /// cannot be written: the sessions wait, since a session is closed only once credited.
     async fn flush_identities(&mut self) -> bool {
-        if !self.identities.is_empty() || !self.credits.is_empty() {
+        if !self.identities.is_empty() || !self.labels.is_empty() || !self.credits.is_empty() {
             let identities = self.identities.clone();
+            let labels = self.labels.clone();
             let credits = self.credits.clone();
             let pseudonyms: Vec<[u8; 16]> = identities.iter().map(|_| self.pseudonyms.next()).collect();
             let written = self
@@ -1127,6 +1135,10 @@ impl Worker {
                         stored::open_credit(tx, identity.credit, player, at, identity.session)?;
                         identified.push((identity.session, player, pseudonym, identity.credit));
                     }
+                    for label in &labels {
+                        let at = Timestamp::from_millisecond(label.at_ms).unwrap_or(Timestamp::UNIX_EPOCH);
+                        stored::record_label(tx, &label.license, &label.label, at)?;
+                    }
                     for credit in &credits {
                         stored::credit(tx, credit)?;
                     }
@@ -1136,6 +1148,7 @@ impl Worker {
             match written {
                 Ok(identified) => {
                     self.identities.clear();
+                    self.labels.clear();
                     self.credits.clear();
                     for (session, player, pseudonym, credit) in identified {
                         self.sessions.identified(session, player);
@@ -1145,7 +1158,7 @@ impl Worker {
                 Err(error) => {
                     self.failed(
                         &error,
-                        "the players' identities and play time could not be written",
+                        "the players' identities, labels and play time could not be written",
                     );
                     return false;
                 }
@@ -1238,6 +1251,7 @@ impl Worker {
             return Ok(None);
         };
         let mut theirs = self.sessions.forget(&license);
+        self.labels.retain(|label| label.license != license);
         theirs.extend(
             self.later
                 .attaches
@@ -1302,12 +1316,14 @@ impl Worker {
                 info!(
                     links = expired.links,
                     names = expired.names,
+                    labels = expired.labels,
                     days = expired.days,
                     players = expired.players,
                     dropped_identifiers = counts.dropped_identifiers,
                     unconfirmed = counts.unconfirmed,
                     clamped = counts.clamped,
                     rosters_given_up = counts.rosters_given_up,
+                    unmatched_labels = counts.unmatched_labels,
                     "players' upkeep"
                 );
             }

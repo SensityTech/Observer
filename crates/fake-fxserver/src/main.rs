@@ -34,9 +34,10 @@
 //!   `fake_drop <id> <category> <resource or -> <reason...>`: a player joins or drops, which
 //!   `/players.json` follows and the bridge reports (a join shows a full set of identifiers and
 //!   tokens, and the address `192.0.2.77`, IPv4-mapped for every other player, unless given);
-//!   `fake_drop_before_join <id>`, a resource's kick inside its own `playerJoining` handler; the
-//!   players already there are reported once the bridge starts, and `quit` drops every player
-//!   with category 7 through the trace thread, as FXServer does;
+//!   `fake_drop_before_join <id>`, a resource's kick inside its own `playerJoining` handler;
+//!   `fake_label <id> [label id] [name...]`, a resource giving a player a label, or clearing it
+//!   without one; the players already there are reported once the bridge starts, and `quit` drops
+//!   every player with category 7 through the trace thread, as FXServer does;
 //! - on stdin: `fake_crash [code]`, `fake_hang`, `fake_spin` (a busy loop), `fake_print <text>`,
 //!   `fake_trace <type>`, `fake_stall_input <ms>`, which stops reading stdin for a while, as
 //!   FXServer does while its main loop is stuck; `fake_spawn [NAME=value...] <program> <args...>`,
@@ -379,6 +380,17 @@ impl Fake {
                     self.drop_player(id, category, resource, &reason);
                 }
             }
+            ("fake_label", Some(id)) => {
+                if let Ok(id) = id.parse::<u32>() {
+                    let label = args
+                        .get(1)
+                        .map(|label_id| json!({ "id": label_id, "name": args[2..].join(" ") }));
+                    self.bridge_report(&json!({
+                        "type": "observer", "kind": "labels",
+                        "labels": [{ "id": id, "label": label, "resource": "fake" }],
+                    }));
+                }
+            }
             ("fake_drop_before_join", Some(id)) => {
                 if let Ok(id) = id.parse::<u32>() {
                     let t = self.server.uptime_ms();
@@ -451,7 +463,7 @@ impl Fake {
             bridge.ready = true;
             self.traces.script(
                 &bridge.name,
-                &json!({ "type": "observer", "kind": "ready", "contractVersion": 2 }),
+                &json!({ "type": "observer", "kind": "ready", "contractVersion": 3 }),
             );
             self.traces.script(
                 &bridge.name,
