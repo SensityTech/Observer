@@ -20,9 +20,14 @@ use russh::server::{Auth, ChannelOpenHandle, Msg, PublicKeyOffer, Server as _, S
 use russh::{Channel, ChannelId, MethodKind, MethodSet, Preferred, cipher, kex, mac};
 use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
+use tokio_util::task::TaskTracker;
+use tokio_util::task::task_tracker::TaskTrackerToken;
 
 /// How fingerprints are shown, as OpenSSH prints them.
 pub const FINGERPRINT: HashAlg = HashAlg::Sha256;
+
+/// How long a stop waits for the sessions to end, their unfinished uploads removed.
+const SESSIONS_END: Duration = Duration::from_secs(10);
 
 /// The user key algorithms accepted, and the host key's.
 const KEY_ALGORITHMS: [Algorithm; 3] = [
@@ -118,16 +123,23 @@ pub async fn serve(
     refused: Vec<PathBuf>,
     stop: CancellationToken,
 ) -> std::io::Result<()> {
+    let sessions = TaskTracker::new();
     let mut server = Server {
         files,
         refused: Arc::new(refused),
+        sessions: sessions.clone(),
     };
     let running = server.run_on_socket(Arc::new(config(host_key)), &listener);
     let shutdown = running.handle();
     tokio::select! {
         result = running => result,
         () = stop.cancelled() => {
-            shutdown.shutdown("Observer is stopping".to_owned());
+            shutdown.shutdown("the SFTP server is closing".to_owned());
+            // So that no write lands once the server said it stopped.
+            sessions.close();
+            if tokio::time::timeout(SESSIONS_END, sessions.wait()).await.is_err() {
+                tracing::warn!("SFTP sessions are still ending");
+            }
             Ok(())
         }
     }
@@ -137,6 +149,7 @@ pub async fn serve(
 struct Server {
     files: Files,
     refused: Arc<Vec<PathBuf>>,
+    sessions: TaskTracker,
 }
 
 impl russh::server::Server for Server {
@@ -149,6 +162,7 @@ impl russh::server::Server for Server {
             ip: peer.map_or(IpAddr::from([0, 0, 0, 0]), |peer| peer.ip()),
             grant: None,
             channel: None,
+            session: self.sessions.token(),
         }
     }
 }
@@ -159,6 +173,7 @@ struct Connection {
     ip: IpAddr,
     grant: Option<Grant>,
     channel: Option<Channel<Msg>>,
+    session: TaskTrackerToken,
 }
 
 // The trait's methods are async; the refusals answer at once.
@@ -248,6 +263,7 @@ impl russh::server::Handler for Connection {
             tree,
             refused,
             watch.drop_guard(),
+            self.session.clone(),
         );
         russh_sftp::server::run(channel.into_stream(), handler).await;
         Ok(())

@@ -159,10 +159,14 @@ pub enum AuditAction {
     /// tool; `details` holds the `run`, the `reason` (`heal` or `undo`), the `files` (a capped
     /// list) and their `count`.
     ToolFilesRestored,
+    /// The owner turned an optional feature on or off. The target is the feature; `details`
+    /// holds `enabled` and when it `applies` (`now` or `nextStart`). A refusal by the host's
+    /// lock in `observer.toml` is `denied`.
+    FeatureChanged,
 }
 
 impl AuditAction {
-    pub const ALL: [Self; 84] = [
+    pub const ALL: [Self; 85] = [
         Self::SetupCompleted,
         Self::SetupLinkCreated,
         Self::LoginSucceeded,
@@ -247,6 +251,7 @@ impl AuditAction {
         Self::ToolSettingsChanged,
         Self::ToolFilesChanged,
         Self::ToolFilesRestored,
+        Self::FeatureChanged,
     ];
 
     pub const fn as_str(self) -> &'static str {
@@ -335,6 +340,7 @@ impl AuditAction {
             Self::ToolSettingsChanged => "tool_settings_changed",
             Self::ToolFilesChanged => "tool_files_changed",
             Self::ToolFilesRestored => "tool_files_restored",
+            Self::FeatureChanged => "feature_changed",
         }
     }
 

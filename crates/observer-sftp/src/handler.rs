@@ -12,6 +12,7 @@ use russh_sftp::protocol::{
 };
 use serde_json::json;
 use tokio_util::sync::DropGuard;
+use tokio_util::task::task_tracker::TaskTrackerToken;
 
 /// The largest file any rule allows.
 const CEILING: u64 = 2 * 1024 * 1024 * 1024;
@@ -34,6 +35,8 @@ pub(crate) struct Sftp {
     next: u64,
     /// Ends the session's revocation watch when the session ends.
     _watch: DropGuard,
+    /// Counts the session among those the server waits for when it stops.
+    session: TaskTrackerToken,
 }
 
 enum Open {
@@ -77,6 +80,7 @@ impl Sftp {
         tree: Arc<ConfinedTree>,
         refused: Vec<Vec<String>>,
         watch: DropGuard,
+        session: TaskTrackerToken,
     ) -> Self {
         Self {
             files,
@@ -87,6 +91,7 @@ impl Sftp {
             handles: HashMap::new(),
             next: 0,
             _watch: watch,
+            session,
         }
     }
 
@@ -387,7 +392,8 @@ impl Sftp {
     }
 }
 
-/// A session that drops with uploads open removes their temporary files.
+/// A session that drops with uploads open removes their temporary files, before the server it
+/// belongs to counts it as ended.
 impl Drop for Sftp {
     fn drop(&mut self) {
         let Ok(runtime) = tokio::runtime::Handle::try_current() else {
@@ -397,6 +403,7 @@ impl Drop for Sftp {
             if let Open::Write(upload) = open {
                 let tree = Arc::clone(&self.tree);
                 let files = self.files.clone();
+                let session = self.session.clone();
                 let Upload {
                     folder,
                     temporary,
@@ -409,6 +416,7 @@ impl Drop for Sftp {
                     if matches!(discarded, Ok(Ok(()))) {
                         let _ = files.forget_upload(record).await;
                     }
+                    drop(session);
                 });
             }
         }

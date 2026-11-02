@@ -10,6 +10,7 @@ mod auth;
 mod changes;
 mod diagnostics;
 mod drops;
+mod features;
 mod files;
 mod metrics;
 mod players;
@@ -27,6 +28,7 @@ use axum::routing::{MethodFilter, MethodRouter, on};
 use axum::{Json, Router, middleware};
 use observer_domain::api::{Health, HealthStatus};
 use observer_domain::error::ErrorCode;
+use observer_domain::features::Feature;
 use observer_domain::permissions::Permissions;
 
 use crate::AppState;
@@ -99,6 +101,10 @@ pub(crate) fn routes() -> Vec<Route> {
     let change_tools = ReauthenticatedOwner;
     // `observer.toml` names the host's folders and addresses; the panel only reads it.
     let read_bootstrap = Owner;
+    // A feature turned on may open a port or read the host's folders: the owner's alone, as the
+    // launch settings are.
+    let read_features = Permission(P::SETTINGS_VIEW);
+    let switch_features = ReauthenticatedOwner;
     vec![
         route(M::GET,    "/health",                     Public,       health),
         route(M::GET,    "/setup",                      Public,       setup::status),
@@ -205,6 +211,8 @@ pub(crate) fn routes() -> Vec<Route> {
         route(M::POST,   "/tools/duplicate-archetypes/undo",         change_tools, tools::undo),
         route(M::PUT,    "/tools/duplicate-archetypes/settings",     change_tools, tools::change_settings),
         route(M::GET,    "/settings/observer",                       read_bootstrap, settings::observer),
+        route(M::GET,    "/features",           read_features,   features::list),
+        route(M::PUT,    "/features/{feature}", switch_features, features::switch),
     ]
 }
 
@@ -240,6 +248,7 @@ fn add(router: Router<AppState>, route: Route, state: &AppState) -> Router<AppSt
         state: state.clone(),
         gate: route.gate,
         path: route.path,
+        feature: Feature::of_route(route.path),
     };
     let handler = route
         .handler
