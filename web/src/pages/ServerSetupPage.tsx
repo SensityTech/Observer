@@ -24,6 +24,7 @@ import { BuildStep } from '../setup/BuildStep';
 import { CfgStep } from '../setup/CfgStep';
 import { FirstLaunch } from '../setup/FirstLaunch';
 import { FolderStep } from '../setup/FolderStep';
+import { SetupStage } from '../setup/SetupStage';
 import { StartStep, type AfterSave } from '../setup/StartStep';
 import {
     SETUP_STEPS,
@@ -52,7 +53,7 @@ export function ServerSetupPage() {
     const launch = useQuery(launchQuery);
 
     return (
-        <div className="flex flex-col gap-5 max-md:gap-4">
+        <SetupStage>
             <div className="page-head">
                 <h1 className="page-title">
                     {t.serverSetup.title} <span className="gloss">{t.serverSetup.gloss}</span>
@@ -72,7 +73,7 @@ export function ServerSetupPage() {
                 </Notice>
             )}
             {launch.data !== undefined && <Setup saved={launch.data} />}
-        </div>
+        </SetupStage>
     );
 }
 
