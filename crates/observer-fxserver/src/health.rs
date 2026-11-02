@@ -429,15 +429,20 @@ async fn dynamic(address: SocketAddr) -> Result<Players, ProbeError> {
 }
 
 /// What `/info.json` says that Observer keeps.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Info {
     pub build: u32,
     /// `sv_enforceGameBuild`, when the server sets it.
     pub game_build: Option<u32>,
+    /// `sv_projectName` as [`project_name`] cleans it, when the server sets one.
+    pub name: Option<String>,
 }
 
-/// Only the build and the enforced game build are read: the rest of `/info.json` lists the server's
-/// convars, one of them derived from the licence key.
+/// The longest project name kept: the panel shows it on one line of its rail.
+const MAX_PROJECT_NAME: usize = 64;
+
+/// Only the build, the enforced game build and the project name are read: the rest of `/info.json`
+/// lists the server's convars, one of them derived from the licence key.
 async fn info(address: SocketAddr) -> Result<Info, ProbeError> {
     let (status, body) = get(address, "/info.json", &[], MAX_BODY).await?;
     if status != StatusCode::OK {
@@ -545,7 +550,33 @@ fn parse_info(body: &[u8]) -> Result<Info, ProbeError> {
         .and_then(|vars| vars.get("sv_enforceGameBuild"))
         .and_then(Value::as_str)
         .and_then(|game_build| game_build.trim().parse().ok());
-    Ok(Info { build, game_build })
+    let name = value
+        .get("vars")
+        .and_then(|vars| vars.get("sv_projectName"))
+        .and_then(Value::as_str)
+        .and_then(project_name);
+    Ok(Info {
+        build,
+        game_build,
+        name,
+    })
+}
+
+/// A project name without FXServer's colour codes (`^1`) or control characters, trimmed, at most
+/// [`MAX_PROJECT_NAME`] characters; none when nothing is left.
+fn project_name(raw: &str) -> Option<String> {
+    let mut name = String::with_capacity(raw.len());
+    let mut chars = raw.chars().peekable();
+    while let Some(char) = chars.next() {
+        if char == '^' && chars.peek().is_some_and(char::is_ascii_digit) {
+            chars.next();
+        } else if !char.is_control() {
+            name.push(char);
+        }
+    }
+    let kept: String = name.trim().chars().take(MAX_PROJECT_NAME).collect();
+    let kept = kept.trim_end();
+    (!kept.is_empty()).then(|| kept.to_owned())
 }
 
 /// A JSON array of players, each with a numeric `id` and `ping`. The public list FXServer answers
@@ -1026,6 +1057,21 @@ mod tests {
 
         assert_eq!(parse_info(enforced).unwrap().game_build, Some(3095));
         assert_eq!(parse_info(default).unwrap().game_build, None);
+    }
+
+    #[test]
+    fn the_project_name_loses_its_colour_codes_and_control_characters() {
+        let named = br#"{"server":"FXServer-master SERVER v1.0.0.35245 win32","vars":{"sv_projectName":"^1Sensity ^7| RP\u0007 "}}"#;
+        let blank =
+            br#"{"server":"FXServer-master SERVER v1.0.0.35245 win32","vars":{"sv_projectName":"^3 ^0"}}"#;
+        let long = format!(
+            r#"{{"server":"FXServer-master SERVER v1.0.0.35245 win32","vars":{{"sv_projectName":"{}"}}}}"#,
+            "é".repeat(80)
+        );
+
+        assert_eq!(parse_info(named).unwrap().name.as_deref(), Some("Sensity | RP"));
+        assert_eq!(parse_info(blank).unwrap().name, None);
+        assert_eq!(parse_info(long.as_bytes()).unwrap().name, Some("é".repeat(64)));
     }
 
     #[test]

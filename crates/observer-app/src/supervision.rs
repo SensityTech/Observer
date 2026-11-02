@@ -824,6 +824,8 @@ fn server_status(
         }),
         restart_at,
         launch,
+        name: status.name.clone(),
+        port: status.port,
     }
 }
 

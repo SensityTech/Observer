@@ -170,6 +170,10 @@ pub struct ServerStatus {
     /// When the restart after a failure is due.
     pub restart_at: Option<Timestamp>,
     pub launch: LaunchReadiness,
+    /// `sv_projectName` without its colour codes, as of the last run that set it.
+    pub name: Option<String>,
+    /// The game port, as of the last run.
+    pub port: Option<u16>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]

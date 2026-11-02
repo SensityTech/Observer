@@ -433,6 +433,8 @@ mod tests {
             players: None,
             restart_at: None,
             launch,
+            name: None,
+            port: None,
         }
     }
 

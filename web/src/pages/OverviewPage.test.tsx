@@ -270,6 +270,8 @@ const hungFor = async (me: Me) => {
             players: null,
             restartAt: null,
             launch: 'ready',
+            name: null,
+            port: null,
         } satisfies ServerStatus,
     });
     return view;
