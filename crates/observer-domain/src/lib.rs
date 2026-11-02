@@ -15,6 +15,7 @@ pub mod delegation;
 pub mod diagnostics;
 pub mod drops;
 pub mod error;
+pub mod features;
 pub mod files;
 pub mod launch;
 pub mod live;

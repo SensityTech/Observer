@@ -18,10 +18,11 @@ use std::sync::Arc;
 use axum::extract::Request;
 use axum::{Router, middleware};
 use observer_app::{
-    Accounts, Artifacts, AuditLog, Backups, Changes, Diagnostics, Drops, Files, Metrics, Players, Schedule,
-    Servers, Supervision, Tools,
+    Accounts, Artifacts, AuditLog, Backups, Changes, Diagnostics, Drops, Error, Features, Files, Metrics,
+    Players, Schedule, Servers, Supervision, Tools,
 };
 use observer_domain::about::Build;
+use observer_domain::features::Feature;
 use tower_http::catch_panic::CatchPanicLayer;
 use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::trace::TraceLayer;
@@ -42,15 +43,18 @@ pub struct AppState {
     pub audit: AuditLog,
     pub servers: Servers,
     pub supervision: Supervision,
-    pub metrics: Metrics,
     pub schedule: Schedule,
     pub artifacts: Artifacts,
-    pub diagnostics: Diagnostics,
     pub files: Files,
-    pub players: Players,
-    pub drops: Drops,
-    pub changes: Changes,
     pub tools: Tools,
+    pub features: Features,
+    /// The services of the features Observer started without are absent. Their routes and topics
+    /// are refused before anything reaches for them, through the accessors below.
+    diagnostics: Option<Diagnostics>,
+    metrics: Option<Metrics>,
+    players: Option<Players>,
+    drops: Option<Drops>,
+    changes: Option<Changes>,
     pub backups: Backups,
     pub live: Live,
     /// Cookies ignore ports, so the name carries the instance id: two Observers on one host never
@@ -67,15 +71,17 @@ pub struct Services {
     pub audit: AuditLog,
     pub servers: Servers,
     pub supervision: Supervision,
-    pub metrics: Metrics,
     pub schedule: Schedule,
     pub artifacts: Artifacts,
-    pub diagnostics: Diagnostics,
     pub files: Files,
-    pub players: Players,
-    pub drops: Drops,
-    pub changes: Changes,
     pub tools: Tools,
+    pub features: Features,
+    /// `None` for each feature that does not run at Observer's start.
+    pub diagnostics: Option<Diagnostics>,
+    pub metrics: Option<Metrics>,
+    pub players: Option<Players>,
+    pub drops: Option<Drops>,
+    pub changes: Option<Changes>,
     pub backups: Backups,
 }
 
@@ -92,15 +98,16 @@ impl AppState {
             audit,
             servers,
             supervision,
-            metrics,
             schedule,
             artifacts,
-            diagnostics,
             files,
+            tools,
+            features,
+            diagnostics,
+            metrics,
             players,
             drops,
             changes,
-            tools,
             backups,
         } = services;
         Self {
@@ -109,21 +116,54 @@ impl AppState {
             audit,
             servers,
             supervision,
-            metrics,
             schedule,
             artifacts,
-            diagnostics,
             files,
+            tools,
+            features,
+            diagnostics,
+            metrics,
             players,
             drops,
             changes,
-            tools,
             backups,
             live: Live::new(),
             cookie: format!("observer_session_{instance_id}"),
             hosts: hosts.into(),
             proxies: proxies.into(),
         }
+    }
+}
+
+impl AppState {
+    pub(crate) fn diagnostics(&self) -> Result<&Diagnostics, Error> {
+        self.diagnostics
+            .as_ref()
+            .ok_or_else(|| self.features.refusal(Feature::Diagnostics))
+    }
+
+    pub(crate) fn metrics(&self) -> Result<&Metrics, Error> {
+        self.metrics
+            .as_ref()
+            .ok_or_else(|| self.features.refusal(Feature::Metrics))
+    }
+
+    pub(crate) fn players(&self) -> Result<&Players, Error> {
+        self.players
+            .as_ref()
+            .ok_or_else(|| self.features.refusal(Feature::Players))
+    }
+
+    pub(crate) fn drops(&self) -> Result<&Drops, Error> {
+        self.drops
+            .as_ref()
+            .ok_or_else(|| self.features.refusal(Feature::Drops))
+    }
+
+    pub(crate) fn changes(&self) -> Result<&Changes, Error> {
+        self.changes
+            .as_ref()
+            .ok_or_else(|| self.features.refusal(Feature::Changes))
     }
 }
 

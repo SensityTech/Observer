@@ -29,6 +29,7 @@ import type { EndpointProtocol } from '../api/generated/EndpointProtocol';
 import type { EnvironmentFact } from '../api/generated/EnvironmentFact';
 import type { ErrorCode } from '../api/generated/ErrorCode';
 import type { EscrowPolicy } from '../api/generated/EscrowPolicy';
+import type { Feature } from '../api/generated/Feature';
 import type { FileChangeKind } from '../api/generated/FileChangeKind';
 import type { FileFlag } from '../api/generated/FileFlag';
 import type { FileFormat } from '../api/generated/FileFormat';
@@ -190,6 +191,18 @@ const permissionNames = (hex: string) =>
     list(permissionKeys(parsePermissions(hex)).map((key) => permissions[key].name));
 
 const isPermissionKey = (key: string): key is PermissionKey => Object.hasOwn(permissions, key);
+
+const features = {
+    sftp: 'File access over SFTP',
+    changes: 'File changes',
+    tools: 'Server tools',
+    diagnostics: 'Diagnostics',
+    metrics: 'Statistics',
+    players: 'Players',
+    drops: 'Player drops',
+} satisfies Record<Feature, string>;
+
+const isFeature = (key: string): key is Feature => Object.hasOwn(features, key);
 
 const commandRefusals = {
     empty: 'Type a command first.',
@@ -3735,6 +3748,7 @@ export const en = {
             tool_settings_changed: 'Tool settings changed',
             tool_files_changed: 'Files changed by a tool',
             tool_files_restored: 'Files restored by a tool',
+            feature_changed: 'Feature turned on or off',
             backup_settings_changed: 'Backup settings changed',
             backup_destination_created: 'Backup destination added',
             backup_destination_changed: 'Backup destination changed',
@@ -4214,6 +4228,25 @@ export const en = {
             'The duplicates changed since this report, so nothing was applied. Check the new report, then fix again.',
         server_not_stopped: 'Stop FXServer first: the tools change files only while it is stopped.',
         tool_not_available: 'This tool works on GTA V servers only: this server runs RedM.',
+        feature_disabled: (params) => {
+            const key = stringParam(params, 'feature');
+            const name = isFeature(key) ? features[key] : 'This part of Observer';
+            switch (stringParam(params, 'held')) {
+                case 'host':
+                    return `${name} is turned off in observer.toml on the host.`;
+                case 'notConfigured':
+                    return `${name} is not set up: it needs its address in observer.toml on the host.`;
+                case 'requires':
+                    return `${name} needs another part of Observer that does not run.`;
+                default:
+                    return `${name} does not run on this Observer.`;
+            }
+        },
+        feature_locked: (params) => {
+            const key = stringParam(params, 'feature');
+            const name = isFeature(key) ? features[key] : 'This part of Observer';
+            return `${name} is turned off in observer.toml on the host: only a change there turns it back on.`;
+        },
         backup_running: 'A backup is already under way. Wait for it to end, or cancel it.',
         invalid_backup_settings: 'Some settings need fixing. Each one says why next to its field.',
         invalid_backup_destination: 'This destination needs fixing. Each field says why.',

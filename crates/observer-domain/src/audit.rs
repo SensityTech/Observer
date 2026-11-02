@@ -159,6 +159,10 @@ pub enum AuditAction {
     /// tool; `details` holds the `run`, the `reason` (`heal` or `undo`), the `files` (a capped
     /// list) and their `count`.
     ToolFilesRestored,
+    /// The owner turned an optional feature on or off. The target is the feature; `details`
+    /// holds `enabled` and when it `applies` (`now` or `nextStart`). A refusal by the host's
+    /// lock in `observer.toml` is `denied`.
+    FeatureChanged,
     /// `details` holds each changed setting with its value before and after, and
     /// `passwordChanged` when the manual source's password was replaced, never the password.
     BackupSettingsChanged,
@@ -187,7 +191,7 @@ pub enum AuditAction {
 }
 
 impl AuditAction {
-    pub const ALL: [Self; 93] = [
+    pub const ALL: [Self; 94] = [
         Self::SetupCompleted,
         Self::SetupLinkCreated,
         Self::LoginSucceeded,
@@ -272,6 +276,7 @@ impl AuditAction {
         Self::ToolSettingsChanged,
         Self::ToolFilesChanged,
         Self::ToolFilesRestored,
+        Self::FeatureChanged,
         Self::BackupSettingsChanged,
         Self::BackupDestinationCreated,
         Self::BackupDestinationChanged,
@@ -369,6 +374,7 @@ impl AuditAction {
             Self::ToolSettingsChanged => "tool_settings_changed",
             Self::ToolFilesChanged => "tool_files_changed",
             Self::ToolFilesRestored => "tool_files_restored",
+            Self::FeatureChanged => "feature_changed",
             Self::BackupSettingsChanged => "backup_settings_changed",
             Self::BackupDestinationCreated => "backup_destination_created",
             Self::BackupDestinationChanged => "backup_destination_changed",

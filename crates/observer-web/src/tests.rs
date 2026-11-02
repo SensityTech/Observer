@@ -6,6 +6,7 @@ mod backups;
 mod changes;
 mod diagnostics;
 mod drops;
+mod features;
 mod files;
 mod live;
 mod metrics;
@@ -16,6 +17,7 @@ mod servers;
 mod setup;
 mod tools;
 
+use std::collections::BTreeSet;
 use std::net::SocketAddr;
 
 use axum::Router;
@@ -27,8 +29,9 @@ use jiff::SignedDuration;
 use observer_app::{
     Accounts, Artifacts, ArtifactsSetup, ArtifactsTask, AuditLog, Backups, BackupsSetup, BackupsTask,
     Changes, ChangesSetup, ChangesTask, Clock, Diagnostics, DiagnosticsSetup, DiagnosticsTask, Drops,
-    DropsSetup, DropsTask, Metrics, MetricsSetup, OwnPaths, PasswordCost, Players, PlayersSetup, PlayersTask,
-    Running, Schedule, ScheduleSetup, ScheduleTask, Servers, Setup, Supervision, Tools, ToolsSetup,
+    DropsSetup, DropsTask, Features, FeaturesSetup, Metrics, MetricsSetup, OwnPaths, PasswordCost, Players,
+    PlayersSetup, PlayersTask, Running, Schedule, ScheduleSetup, ScheduleTask, Servers, Setup, Supervision,
+    Tools, ToolsSetup,
 };
 use observer_artifacts::Http;
 use observer_artifacts::catalog::{Catalog, Listing};
@@ -230,6 +233,16 @@ impl Server {
             players: players.clone(),
         });
         let instance_id = db.instance_id().await.unwrap();
+        // Every feature on, SFTP's address given though nothing listens on it here.
+        let features = Features::load(FeaturesSetup {
+            db: db.clone(),
+            clock: clock.clone(),
+            host_off: BTreeSet::new(),
+            sftp: Some(SocketAddr::from(([127, 0, 0, 1], 41976))),
+            data_dir: dir.path().join("data"),
+        })
+        .await
+        .unwrap();
         let files = observer_app::Files::new(db.clone(), clock.clone(), accounts.clone());
         let tools = Tools::new(ToolsSetup {
             db: db.clone(),
@@ -256,15 +269,16 @@ impl Server {
             audit: audit.clone(),
             servers,
             supervision: supervision.clone(),
-            metrics: metrics.clone(),
             schedule,
             artifacts,
-            diagnostics,
             files,
-            players,
-            drops,
-            changes,
             tools,
+            features,
+            diagnostics: Some(diagnostics),
+            metrics: Some(metrics.clone()),
+            players: Some(players),
+            drops: Some(drops),
+            changes: Some(changes),
             backups,
         };
         let state = AppState::new(

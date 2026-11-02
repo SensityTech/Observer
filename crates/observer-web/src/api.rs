@@ -11,6 +11,7 @@ mod backups;
 mod changes;
 mod diagnostics;
 mod drops;
+mod features;
 mod files;
 mod metrics;
 mod players;
@@ -27,6 +28,7 @@ use axum::routing::{MethodFilter, MethodRouter, on};
 use axum::{Json, Router, middleware};
 use observer_domain::api::{Health, HealthStatus};
 use observer_domain::error::ErrorCode;
+use observer_domain::features::Feature;
 use observer_domain::permissions::Permissions;
 
 use crate::AppState;
@@ -97,6 +99,10 @@ pub(crate) fn routes() -> Vec<Route> {
     // settings write into it, now or at every start, so they take the password again.
     let read_tools = Owner;
     let change_tools = ReauthenticatedOwner;
+    // A feature turned on may open a port or read the host's folders: the owner's alone, as the
+    // launch settings are.
+    let read_features = Permission(P::SETTINGS_VIEW);
+    let switch_features = ReauthenticatedOwner;
     // A backup is the whole game database. Seeing the backups and starting one are permissions;
     // taking one out takes the critical one and the password again. The settings and destinations
     // decide what is dumped and where the database goes, so they are the owner's, with the password
@@ -211,6 +217,8 @@ pub(crate) fn routes() -> Vec<Route> {
         route(M::POST,   "/tools/duplicate-archetypes/fix",          change_tools, tools::fix),
         route(M::POST,   "/tools/duplicate-archetypes/undo",         change_tools, tools::undo),
         route(M::PUT,    "/tools/duplicate-archetypes/settings",     change_tools, tools::change_settings),
+        route(M::GET,    "/features",           read_features,   features::list),
+        route(M::PUT,    "/features/{feature}", switch_features, features::switch),
         route(M::GET,    "/servers/default/backups",                      read_backups,     backups::view),
         route(M::PUT,    "/servers/default/backups/settings",             change_backups,   backups::change_settings),
         route(M::POST,   "/servers/default/backups/source/test",          test_backups,     backups::test_source),
@@ -259,6 +267,7 @@ fn add(router: Router<AppState>, route: Route, state: &AppState) -> Router<AppSt
         state: state.clone(),
         gate: route.gate,
         path: route.path,
+        feature: Feature::of_route(route.path),
     };
     let handler = route
         .handler
