@@ -15,16 +15,16 @@ pub(crate) const MANIFEST_FORMAT: u32 = 2;
 /// Where FXServer and its `citizen/` folder live inside a build.
 const LINUX_SERVER: &str = "alpine/opt/cfx-server";
 
-/// What FXServer and Observer write into a build while it runs, relative to the folder that holds
-/// `citizen/`: the crash dumps, the bridge resource, and the TLS pair FXServer makes at its first
-/// start. Everything else is never written again after the install; these are left out of its
-/// measure and of an import.
-pub const RUNTIME_PATHS: [&str; 4] = [
-    "crashes",
-    "citizen/system_resources/observer",
-    "server-tls.crt",
-    "server-tls.key",
-];
+/// What FXServer writes into a build while it runs, relative to the folder that holds `citizen/`:
+/// the crash dumps and the TLS pair it makes at its first start. Besides Observer's bridge (see
+/// [`is_bridge_folder`]), everything else is never written again after the install; these are
+/// left out of its measure and of an import.
+pub const RUNTIME_PATHS: [&str; 3] = ["crashes", "server-tls.crt", "server-tls.key"];
+
+/// Where Observer writes its bridge, relative to the folder that holds `citizen/`.
+const SYSTEM_RESOURCES: &str = "citizen/system_resources";
+const BRIDGE_PREFIX: &str = "sys_";
+const BRIDGE_RANDOM_CHARS: usize = 12;
 
 /// What Observer recorded about a build when it installed it, kept in the build's folder so the disk
 /// alone says what is installed, even without the database.
@@ -193,13 +193,35 @@ fn executable(_metadata: &fs::Metadata) -> bool {
     true
 }
 
-/// The [`RUNTIME_PATHS`] of a build.
+/// Whether a folder of `system_resources` is a bridge Observer wrote: under the name drawn for a
+/// start of FXServer, or `observer`, the one it had before. The fxserver crate draws the names.
+pub fn is_bridge_folder(name: &str) -> bool {
+    name == "observer"
+        || name.strip_prefix(BRIDGE_PREFIX).is_some_and(|random| {
+            random.len() == BRIDGE_RANDOM_CHARS
+                && random
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || (b'2'..=b'7').contains(&byte))
+        })
+}
+
+/// The [`RUNTIME_PATHS`] of a build, and the bridge folders it holds.
 pub(crate) fn runtime_paths(build_dir: &Path, platform: Platform) -> Vec<PathBuf> {
     let server = match platform {
         Platform::Windows => build_dir.to_path_buf(),
         Platform::Linux => build_dir.join(LINUX_SERVER),
     };
-    RUNTIME_PATHS.iter().map(|path| server.join(path)).collect()
+    let mut paths: Vec<PathBuf> = RUNTIME_PATHS.iter().map(|path| server.join(path)).collect();
+    // A folder that cannot be read fails the walk that follows, with its path.
+    if let Ok(entries) = fs::read_dir(server.join(SYSTEM_RESOURCES)) {
+        paths.extend(
+            entries
+                .flatten()
+                .filter(|entry| entry.file_name().to_str().is_some_and(is_bridge_folder))
+                .map(|entry| entry.path()),
+        );
+    }
+    paths
 }
 
 /// Counts the regular files of a build and their bytes, without following links and without the
@@ -411,21 +433,41 @@ mod tests {
     fn the_measure_leaves_out_what_fxserver_and_observer_write_at_runtime() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
-        fs::create_dir_all(root.join("citizen/system_resources/observer")).unwrap();
         fs::create_dir_all(root.join("crashes")).unwrap();
         fs::write(root.join("FXServer.exe"), [0; 10]).unwrap();
+        fs::create_dir_all(root.join("citizen/system_resources")).unwrap();
         fs::write(root.join("citizen/system_resources/chat.lua"), [0; 5]).unwrap();
-        fs::write(
-            root.join("citizen/system_resources/observer/fxmanifest.lua"),
-            [0; 100],
-        )
-        .unwrap();
+        for bridge in ["observer", "sys_k3jx7qmw2pza", "sys_234567abcdef"] {
+            let folder = root.join("citizen/system_resources").join(bridge);
+            fs::create_dir_all(&folder).unwrap();
+            fs::write(folder.join("fxmanifest.lua"), [0; 100]).unwrap();
+        }
         fs::write(root.join("crashes/dump.dmp"), [0; 1000]).unwrap();
         fs::write(root.join("server-tls.crt"), [0; 300]).unwrap();
         fs::write(root.join("server-tls.key"), [0; 200]).unwrap();
         manifest().write(root).unwrap();
 
         assert_eq!(measure(root, Platform::Windows).unwrap(), (2, 15));
+    }
+
+    #[test]
+    fn only_drawn_names_and_the_old_fixed_one_are_bridge_folders() {
+        for name in ["observer", "sys_abcdefghijkl", "sys_234567zzzzzz"] {
+            assert!(is_bridge_folder(name), "{name}");
+        }
+        for name in [
+            "monitor",
+            "chat",
+            "Observer",
+            "sys_",
+            "sys_abcdefghijk",
+            "sys_abcdefghijklm",
+            "sys_abcdefghijk1",
+            "sys_ABCDEFGHIJKL",
+            "xys_abcdefghijkl",
+        ] {
+            assert!(!is_bridge_folder(name), "{name}");
+        }
     }
 
     #[cfg(unix)]
