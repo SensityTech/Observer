@@ -101,6 +101,25 @@ pub struct Scan {
     /// Whether `resource_commands` holds every one the chain runs: false when a file FXServer may
     /// run was left unread, or once the list took all the memory it may.
     pub resource_commands_complete: bool,
+    /// The `mysql_connection_string` the chain sets last, which the backups dump.
+    pub database: Option<ConnectionString>,
+}
+
+/// The value of `mysql_connection_string`. It holds the database's password, so it prints as
+/// `[REDACTED]` and is kept apart from the facts the panel reads.
+#[derive(Clone, PartialEq, Eq)]
+pub struct ConnectionString(String);
+
+impl ConnectionString {
+    pub fn expose(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for ConnectionString {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("[REDACTED]")
+    }
 }
 
 /// A command that starts or stops resources, written the way FXServer runs one: with exactly one
@@ -196,6 +215,7 @@ pub fn scan(data: &Path, cfg_file: &str, text: &str, resources: &Resources, cont
         resource_commands: Vec::new(),
         resource_command_bytes: 0,
         resource_commands_cut: false,
+        database: None,
     };
     if let Ok(resolved) = fs::canonicalize(data.join(cfg_file)) {
         scanner.read.insert(resolved);
@@ -268,6 +288,7 @@ struct Scanner<'a> {
     resource_command_bytes: usize,
     /// A resource command was left out, past the memory the list may take.
     resource_commands_cut: bool,
+    database: Option<ConnectionString>,
 }
 
 impl Scanner<'_> {
@@ -351,6 +372,8 @@ impl Scanner<'_> {
                 self.report_at(FindingKind::GameTwice, place, params);
             }
             self.game = Some((value, place.clone()));
+        } else if named("mysql_connection_string") {
+            self.database = Some(ConnectionString(value.to_owned()));
         } else if named("sv_enforceGameBuild") {
             self.game_build = value.trim().parse().ok();
         } else if named("txAdminServerMode") {
@@ -654,6 +677,7 @@ impl Scanner<'_> {
             started: self.started,
             resource_commands: self.resource_commands,
             resource_commands_complete: !self.unchecked && !self.resource_commands_cut,
+            database: self.database,
         }
     }
 
@@ -1332,9 +1356,35 @@ restart spawnmanager
 
         assert_eq!(scan.facts.licence, LicenceState::Malformed);
         let report = serde_json::to_string(&(&scan.files, &scan.facts, &scan.findings)).unwrap();
+        let printed = format!("{scan:?}");
         for secret in secrets {
             assert!(!report.contains(secret), "{secret} reached {report}");
+            assert!(!printed.contains(secret), "{secret} reached {printed}");
         }
+        assert_eq!(
+            scan.database.as_ref().map(ConnectionString::expose),
+            Some(secrets[3])
+        );
+    }
+
+    #[test]
+    fn the_last_connection_string_the_chain_sets_is_the_one_kept() {
+        let folder = Folder::new();
+        folder.file(
+            "database.cfg",
+            "setr mysql_connection_string \"mysql://first@localhost/es\"\n",
+        );
+
+        let scan = folder.scan(&format!(
+            "{QUIET}exec database.cfg\nset MYSQL_CONNECTION_STRING \"server=db;database=es;password=x\"\n"
+        ));
+        let unset = folder.scan(QUIET);
+
+        assert_eq!(
+            scan.database.as_ref().map(ConnectionString::expose),
+            Some("server=db;database=es;password=x")
+        );
+        assert_eq!(unset.database, None);
     }
 
     #[test]

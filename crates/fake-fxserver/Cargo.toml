@@ -18,6 +18,7 @@ zip.workspace = true
 rustix.workspace = true
 
 [dev-dependencies]
+flate2.workspace = true
 jiff.workspace = true
 observer-app.workspace = true
 observer-artifacts = { workspace = true, features = ["test-support"] }
@@ -25,8 +26,9 @@ observer-domain.workspace = true
 observer-fxserver.workspace = true
 observer-platform.workspace = true
 observer-store.workspace = true
+serde_json.workspace = true
 tempfile.workspace = true
-tokio = { workspace = true, features = ["macros", "rt", "time"] }
+tokio = { workspace = true, features = ["io-util", "macros", "rt", "time"] }
 
 [lints]
 workspace = true

@@ -147,7 +147,7 @@ export function Dialog({
             role={role}
             aria-labelledby={titleId}
             className={cn(
-                'mx-auto mt-24 mb-auto max-h-[calc(100dvh-8rem)] w-[calc(100%-2rem)] max-w-dialog flex-col overflow-hidden rounded-dialog border border-line bg-surface p-0 text-ink shadow-lg open:flex open:animate-rise max-md:mt-16',
+                'mx-auto mt-24 mb-auto max-h-[calc(100dvh-8rem)] w-[calc(100%-2rem)] max-w-dialog flex-col overflow-clip rounded-dialog border border-line bg-surface p-0 text-ink shadow-lg open:flex open:animate-rise max-md:mt-16',
                 'backdrop:bg-overlay backdrop:animate-fade',
                 className,
             )}
