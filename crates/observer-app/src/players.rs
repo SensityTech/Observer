@@ -24,7 +24,8 @@ use observer_domain::error::{ApiError, ErrorCode};
 use observer_domain::permissions::Permissions;
 use observer_domain::players::{
     Community, CommunityDay, CommunityTotals, Confirmation, ImportState, OnlinePlayer, OnlinePlayers,
-    PlayDay, PlayerPage, PlayerProfile, PlayerSort, PlayersImport, PlayersSettings, Search, SearchRefusal,
+    PlayDay, PlayerLabel, PlayerPage, PlayerProfile, PlayerSort, PlayersImport, PlayersSettings, Search,
+    SearchRefusal,
 };
 use observer_domain::schedule::ScheduleStatus;
 use observer_fxserver::players::PlayerReport;
@@ -132,6 +133,7 @@ struct Connected {
     license: Option<String>,
     name: Option<String>,
     player: Option<i64>,
+    label: Option<PlayerLabel>,
 }
 
 impl Players {
@@ -239,6 +241,7 @@ impl Players {
                     since: Timestamp::from_millisecond(session.seen_ms).unwrap_or(Timestamp::UNIX_EPOCH),
                     session_ms,
                     total_ms: profile.map(|(_, total)| total + session_ms),
+                    label: session.label,
                 }
             })
             .collect();
@@ -270,21 +273,31 @@ impl Players {
             rows.truncate(PAGE as usize);
             rows.last().map(|(row, key)| format!("{key}.{}", row.id))
         });
+        let ids: Vec<i64> = rows.iter().map(|(row, _)| row.id).collect();
+        let mut labels = self
+            .inner
+            .db
+            .read(move |conn| stored::latest_labels(conn, &ids))
+            .await?;
         let now_ms = Timestamp::now().as_millisecond();
-        let online: HashMap<String, i64> = self
+        let online: HashMap<String, (i64, Option<PlayerLabel>)> = self
             .connected()
             .await
             .into_iter()
             .filter(|session| session.confirmation == Confirmation::Confirmed)
-            .filter_map(|session| Some((session.license?, (now_ms - session.seen_ms).max(0))))
+            .filter_map(|session| {
+                Some((session.license?, ((now_ms - session.seen_ms).max(0), session.label)))
+            })
             .collect();
         Ok(PlayerPage {
             players: rows
                 .into_iter()
                 .map(|(mut row, _)| {
-                    if let Some(session_ms) = online.get(&row.license) {
+                    row.label = labels.remove(&row.id);
+                    if let Some((session_ms, label)) = online.get(&row.license) {
                         row.online = true;
                         row.in_progress_ms = *session_ms;
+                        row.label = label.clone().or(row.label);
                     }
                     row
                 })
@@ -378,7 +391,7 @@ impl Players {
         let week_from = days_before(&today, 6);
         let activity_from = days_before(&today, ACTIVITY_DAYS - 1);
         let identifiers = held.contains(Permissions::PLAYER_IDENTIFIERS_VIEW);
-        let (profile, names, mut days, shown, linked) = {
+        let (profile, names, labels, mut days, shown, linked) = {
             let activity_from = activity_from.clone();
             let recent_from = recent_from.clone();
             self.inner
@@ -388,10 +401,11 @@ impl Players {
                         return Ok(None);
                     };
                     let names = stored::names(conn, id)?;
+                    let labels = stored::labels(conn, id)?;
                     let days = stored::days(conn, id, &activity_from)?;
                     let shown = identifiers.then(|| stored::identifiers(conn, id)).transpose()?;
                     let linked = identifiers.then(|| stored::links(conn, id)).transpose()?;
-                    Ok(Some((profile, names, days, shown, linked)))
+                    Ok(Some((profile, names, labels, days, shown, linked)))
                 })
                 .await?
                 .ok_or(ErrorCode::PlayerNotFound)?
@@ -459,6 +473,7 @@ impl Players {
                 .then(|| stored_sessions::per_hundred_hours(profile.crashes, summary.play_ms)),
             server_crash_rate,
             names,
+            labels,
             days,
             drops,
             identifiers: shown,
@@ -1066,6 +1081,11 @@ impl Worker {
                         (Confirmation::Unconfirmed, None, None, None)
                     }
                 };
+                let label = open
+                    .label
+                    .as_ref()
+                    .filter(|_| confirmation == Confirmation::Confirmed)
+                    .map(|(label, _)| label.clone());
                 Connected {
                     net_id: open.net_id,
                     seen_ms: open.seen_ms,
@@ -1073,6 +1093,7 @@ impl Worker {
                     license,
                     name,
                     player,
+                    label,
                 }
             })
             .collect()

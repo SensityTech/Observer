@@ -26,7 +26,7 @@ use observer_domain::error::ErrorCode;
 use observer_domain::launch::{ExtraArgument, LaunchSettings, OneSync};
 use observer_domain::metrics::{LiveSample, MarkerKind, Range, Series, ThreadGroup, ThreadShares};
 use observer_domain::permissions::Permissions;
-use observer_domain::players::{Confirmation, IdentifierKind, PlayerProfile, PlayerSort};
+use observer_domain::players::{Confirmation, IdentifierKind, PlayerLabel, PlayerProfile, PlayerSort};
 use observer_domain::schedule::{
     OneOffRequest, OneOffRestart, RestartSource, ScheduleChange, ScheduleSettings,
 };
@@ -1563,6 +1563,70 @@ async fn confirmed(players: &Players, count: usize) {
         assert!(Instant::now() < deadline, "never {count} confirmed: {online:?}");
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
+}
+
+#[tokio::test]
+async fn a_label_a_resource_gives_shows_online_stays_on_the_profile_and_finds_the_player() {
+    let mut observer = Observer::new(false).await;
+    let (metrics, sampling, players, playing) = follow_players(&observer).await;
+    let (supervision, owner) = (observer.supervision.clone(), observer.owner.clone());
+    let command = |line: &'static str| {
+        let (supervision, owner) = (supervision.clone(), owner.clone());
+        async move {
+            supervision
+                .command(&owner, line, CONSOLE_ROUTE.0, CONSOLE_ROUTE.1)
+                .await
+                .unwrap();
+        }
+    };
+    observer.supervision.start_server(&observer.owner).await.unwrap();
+    observer.state(ServerState::Online).await;
+
+    command("fake_join Ada").await;
+    command("fake_label 1 CHAR-1234 John Doe").await;
+    confirmed(&players, 1).await;
+    let deadline = Instant::now() + WAIT;
+    let found = loop {
+        let found = players
+            .page(Some("char-1234"), PlayerSort::PlayTime, None, Permissions::PLAYERS_VIEW)
+            .await
+            .unwrap();
+        if !found.players.is_empty() {
+            break found;
+        }
+        assert!(Instant::now() < deadline, "the label was never kept");
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    };
+    let online = players.online().await.unwrap();
+    command("fake_label 1").await;
+    let deadline = Instant::now() + WAIT;
+    while players.online().await.unwrap().players[0].label.is_some() {
+        assert!(Instant::now() < deadline, "the label was never cleared");
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    let profile = players
+        .profile(found.players[0].id, Permissions::PLAYERS_VIEW)
+        .await
+        .unwrap();
+    observer.supervision.stop_server(&observer.owner).await.unwrap();
+    observer.state(ServerState::Stopped).await;
+    playing.close().await;
+    sampling.close().await;
+    metrics.close().await.unwrap();
+    observer.stop_observer().await;
+
+    let john = PlayerLabel {
+        name: Some("John Doe".to_owned()),
+        id: Some("CHAR-1234".to_owned()),
+        resource: Some("fake".to_owned()),
+    };
+    assert_eq!(online.players[0].name.as_deref(), Some("Ada"));
+    assert_eq!(online.players[0].label.as_ref(), Some(&john));
+    assert_eq!(found.players[0].name, "Ada");
+    assert_eq!(found.players[0].label.as_ref(), Some(&john));
+    assert_eq!(profile.name, "Ada");
+    assert_eq!(profile.labels.len(), 1);
+    assert_eq!(profile.labels[0].id.as_deref(), Some("CHAR-1234"));
 }
 
 #[tokio::test]

@@ -325,6 +325,8 @@ pub struct PlayerSummary {
     pub first_seen: Timestamp,
     pub last_seen: Timestamp,
     pub online: bool,
+    /// The label of the session under way, or else the last one the server's resources gave.
+    pub label: Option<PlayerLabel>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
@@ -365,6 +367,8 @@ pub struct OnlinePlayer {
     pub session_ms: i64,
     /// Total play time with this session, imported time included.
     pub total_ms: Option<i64>,
+    /// Once the identity is confirmed.
+    pub label: Option<PlayerLabel>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
@@ -524,6 +528,8 @@ pub struct PlayerProfile {
     /// The server's, over the sessions kept.
     pub server_crash_rate: Option<f64>,
     pub names: Vec<PlayerName>,
+    /// The labels the server's resources gave, the latest first.
+    pub labels: Vec<SeenLabel>,
     /// The days of the last 90 with play, the session under way included.
     pub days: Vec<PlayDay>,
     pub drops: Vec<PlayerDrop>,
