@@ -34,7 +34,6 @@ import {
     withFilters,
     type DropsSearch,
 } from '../drops/search';
-import { SettingsCard } from '../drops/SettingsCard';
 import { SignaturesCard } from '../drops/SignaturesCard';
 import { UptimeCard } from '../drops/UptimeCard';
 import { formatShare, keptSince, trendWindows } from '../drops/words';
@@ -44,6 +43,7 @@ import { useI18n } from '../i18n/I18nProvider';
 import { cn } from '../lib/cn';
 import { ZoneNote } from '../players/words';
 import { useSchedule } from '../schedule/context';
+import { MovedSettings } from '../settings/Moved';
 
 /** Repeat crashers are counted over the last 7 days, whatever the range. */
 const REPEAT_DAYS = 7;
@@ -261,7 +261,7 @@ export function DropsPage() {
                     onFilters={(filters) => void go(withFilters(search, filters), false)}
                 />
             )}
-            {me.isOwner && <SettingsCard />}
+            {me.isOwner && <MovedSettings category="data" setting="sessionDays" page="drops" />}
         </div>
     );
 }

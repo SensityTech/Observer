@@ -9,7 +9,7 @@ import {
     Menu as MenuIcon,
     Package,
     ScrollText,
-    Server,
+    Settings,
     SquareTerminal,
     Stethoscope,
     TriangleAlert,
@@ -51,7 +51,7 @@ type NavEntry = {
         | '/players'
         | '/changes'
         | '/drops'
-        | '/server'
+        | '/settings'
         | '/tools'
         | '/users'
         | '/files'
@@ -136,7 +136,7 @@ export function AppShell() {
         { to: '/drops', label: t.nav.drops, icon: Unplug, access: Permission.DropsView, nested: true },
     ];
     const administration: NavEntry[] = [
-        { to: '/server', label: t.nav.server, icon: Server, access: 'owner' },
+        { to: '/settings', label: t.nav.settings, icon: Settings, access: 'owner', nested: true },
         { to: '/tools', label: t.nav.tools, icon: Wrench, access: 'owner' },
         { to: '/users', label: t.nav.users, icon: Users, access: Permission.UsersManage },
         { to: '/files', label: t.nav.files, icon: FolderLock, access: Permission.FilesManage },

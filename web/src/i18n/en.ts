@@ -77,6 +77,7 @@ import type { TrendVerdict } from '../api/generated/TrendVerdict';
 import { parsePermissions, permissionKeys, type PermissionKey } from '../auth/permissions';
 import type { InvisibleKind } from '../changes/invisible';
 import type { LinkState } from '../live/realtime';
+import type { Applies, CategoryGroup, CategoryId, SettingId } from '../settings/catalog';
 import type { LaunchStep, SetupStep } from '../setup/state';
 import { formatBytes, formatDuration, formatNumber, plural } from './format';
 import { numberParam, stringParam } from './params';
@@ -387,7 +388,7 @@ export const en = {
         operations: 'Operations',
         schedule: 'Schedule',
         artifacts: 'Artifacts',
-        server: 'Server',
+        settings: 'Settings',
         users: 'Users',
         audit: 'Audit log',
         files: 'Files',
@@ -713,15 +714,7 @@ export const en = {
             started: (build: string) => `The install of build ${build} started.`,
         },
         settings: {
-            title: 'Settings',
             readOnly: 'Your account cannot change these settings.',
-            keepBuilds: 'Builds to keep',
-            keepBuildsHint: 'Besides the ones in use: 1 to 20.',
-            autoRollback: 'Go back to the last healthy build when a new one fails',
-            autoRollbackHint:
-                'A build that crashes or stops answering before it stayed up 10 minutes is replaced by the last healthy one, which FXServer restarts on.',
-            branches: 'Test branches',
-            branchesHint: 'Builds of these runtime.fivem.net branches are listed too: 10 at most.',
             branchName: 'Branch name',
             addBranch: 'Add a branch',
             removeBranch: (name: string) => `Remove ${name}`,
@@ -733,9 +726,6 @@ export const en = {
                 master: 'master is always listed.',
                 duplicate: 'This branch is listed already.',
             } satisfies Record<ArtifactSettingsProblem, string>,
-            changes: (changes: number) => `${count(changes, { one: 'change', other: 'changes' })} not saved`,
-            discard: 'Discard',
-            save: 'Save',
             saved: 'Settings saved.',
             discarded: 'Changes discarded.',
             changedElsewhere:
@@ -1048,11 +1038,7 @@ export const en = {
         skippedStart: (time: string) => `Skipped: FXServer started at ${time}`,
         delayedTo: (time: string) => `Delayed to ${time}`,
         moved: 'Moved by the clock change',
-        settingsTitle: 'Settings',
         readOnly: 'Your account can see these settings, not change them.',
-        enabled: 'Restart on a schedule',
-        enabledHint: 'FXServer restarts at the times below, or at the interval, while it runs.',
-        mode: 'Restarts',
         modes: {
             fixedTimes: 'Fixed times',
             interval: 'Interval',
@@ -1074,7 +1060,6 @@ export const en = {
         intervalHours: 'Hours',
         intervalMinutes: 'Minutes',
         intervalHint: 'Counts from each start of FXServer, a restart after a crash included.',
-        timeZone: 'Time zone',
         hostZone: (zone: string | null) => (zone === null ? "Host's zone" : `Host's zone (${zone})`),
         timeZoneHint:
             'Observer has the last word: a zone its own time zone database does not know is refused.',
@@ -1084,14 +1069,6 @@ export const en = {
             `Remove the warning ${count(minutes, { one: 'minute', other: 'minutes' })} before`,
         addWarning: 'Add a warning, in minutes before',
         resetWarnings: 'Reset to the defaults',
-        warningsHint:
-            'Observer raises observer:restartScheduled at each. Your resources decide what players see.',
-        skipAfterStart: 'Skip a fixed time this soon after a start, in minutes',
-        skipAfterStartHint:
-            'After a start the schedule did not make, by hand or after a crash, a fixed time that comes this soon is skipped. 0 turns this off.',
-        changes: (value: number) => `${count(value, { one: 'unsaved change', other: 'unsaved changes' })}`,
-        discard: 'Discard',
-        save: 'Save the schedule',
         saved: 'The schedule is saved. It applies at once.',
         discarded: 'Changes discarded.',
         changedElsewhere:
@@ -1549,14 +1526,6 @@ export const en = {
             },
         },
         data: {
-            title: 'Player data',
-            meta: 'Owner only',
-            retention: 'Retention',
-            retentionLead:
-                'How long Observer keeps what it knows of players. Each identifier, name and day expires on its own, after it was last seen.',
-            linkDays: 'Identifiers and names',
-            addressDays: 'Address fingerprints',
-            dayDays: 'Play time per day',
             profileDays: 'Profiles',
             ranges: {
                 linkDays: "Days after each was last seen, from 30 up to the profiles' retention.",
@@ -1568,16 +1537,10 @@ export const en = {
             outOfRange: (range: string) => `Out of range. ${range}`,
             keepForGood: 'Keep profiles for good',
             keepForGoodHint: 'A profile and its play time stay until the player is forgotten on request.',
-            changes: (changes: number) => `${count(changes, { one: 'change', other: 'changes' })} not saved`,
-            discard: 'Discard',
             discarded: 'Changes discarded.',
-            save: 'Save the retention',
             saved: 'Retention saved. What it no longer keeps goes at the next daily upkeep.',
             loading: 'Reading the retention',
             failed: 'The retention could not be read.',
-            import: 'Import from txAdmin',
-            importLead:
-                "Takes in the play time, first and last visits, names and identifiers of txAdmin's players database. Observer only reads the file; notes, bans, warnings and the whitelist stay out. Importing it again changes nothing, and forgotten players stay forgotten.",
             path: 'Players database',
             pathHint: 'The full path on this host of <txData>/<profile>/data/playersDB.json.',
             start: 'Import',
@@ -1964,16 +1927,8 @@ export const en = {
             failed: 'The drop log could not be read.',
         },
         settings: {
-            title: 'Drop data',
-            meta: 'Owner only',
-            lead: "How long Observer keeps each player's sessions, with their crash and kick texts. The hourly figures behind the charts and the rates stay.",
-            sessionDays: 'Keep sessions for',
-            hint: 'Days, from 14 to 365.',
             outOfRange: 'Out of range. Days, from 14 to 365.',
-            changes: (changes: number) => `${count(changes, { one: 'change', other: 'changes' })} not saved`,
-            discard: 'Discard',
             discarded: 'Changes discarded.',
-            save: 'Save the retention',
             saved: 'Retention saved. Older sessions go within the hour.',
             loading: 'Reading the retention',
             failed: 'The retention could not be read.',
@@ -2302,41 +2257,13 @@ export const en = {
             } satisfies Record<FileChangeKind, string>,
         },
         settings: {
-            title: 'Change tracking',
-            meta: 'Owner only',
             loadFailed: 'The settings could not be loaded.',
-            enabled: 'Take a snapshot at each start',
-            enabledHint: 'Lists the server folder as FXServer starts and hashes what changed once it is up.',
-            extensions: 'Extensions with line diffs',
-            extensionsHint:
-                'Separated by spaces or commas, without the dot. Other files are compared by size and hash.',
             extensionsInvalid:
                 'Each extension is 1 to 16 letters, digits, dashes or underscores, 200 at most.',
-            excluded: 'Never walked',
-            excludedHint:
-                'One pattern a line. * and ? are wildcards; a pattern with / is a path from the server data folder, one without names a file or folder anywhere.',
-            hidden: 'Contents never kept',
-            hiddenHint: 'Files compared by digest only: their lines are never stored nor shown.',
             matches: (value: number) => `matches ${count(value, { one: 'file', other: 'files' })}`,
             matchesNone: 'matches no file',
-            maxText: 'Largest text kept',
-            maxTextHint: 'In MB, up to 8. A larger text file is compared by digest only.',
-            budget: 'Contents kept at most',
-            budgetHint: 'In GB. Past it, the oldest contents go first; the last two starts stay whole.',
             stored: (used: string) => `${used} kept now`,
-            retentionDays: 'Days a start is kept',
-            hashRate: 'Hashing rate',
-            hashRateHint: 'In MB/s while the server runs.',
-            verifyDays: 'Days between full verifications',
-            verifyDaysHint:
-                '0 for none. A full verification hashes every file again, which catches a copy that kept both size and time.',
-            startEvent: 'Raise observer:startChanges',
-            startEventHint: 'Once per run, for resources that post a changelog or tell the staff.',
             outOfRange: 'Out of range.',
-            changes: (value: number) =>
-                `${count(value, { one: 'unsaved change', other: 'unsaved changes' })}`,
-            discard: 'Discard',
-            save: 'Save',
             saved: 'Settings saved.',
             verify: 'Verify all files',
             verifyStarted: 'Verification started: every file is hashed again in the background.',
@@ -2576,30 +2503,13 @@ export const en = {
             >,
         },
         settings: {
-            title: 'Settings',
-            meta: 'Saving asks for your password',
-            atStart: 'At start',
             atStartModes: { off: 'Off', report: 'Report', fix: 'Fix' } satisfies Record<ToolMode, string>,
-            atStartHint:
-                'Off runs the tool only when you ask. Report scans before every start of FXServer and writes to the console when the result changed. Fix applies the fixes before every start. Whatever this says, every start first puts back the copies whose kept copy is gone.',
-            differences: 'Differences',
             differencesModes: {
                 identical: 'Identical only',
                 keepLatest: 'Keep the latest copy',
             } satisfies Record<Differences, string>,
-            differencesHint:
-                'Keep the latest copy also fixes copies that differ, keeping the last one registered. Which copy the game uses when they differ is not known for sure: this can change the model, the textures or the draw distance players see.',
-            escrowed: 'Escrowed resources',
             escrowedModes: { skip: 'Skip', allow: 'Allow' } satisfies Record<EscrowPolicy, string>,
-            escrowedHint:
-                'Skip only reports resources protected by the asset escrow. Allow fixes their plain files too.',
-            excluded: 'Excluded resources',
-            excludedHint:
-                'One resource name a line, as FXServer knows it, case included. The tool never changes them: put there those a pipeline or a file group keeps.',
             excludedInvalid: 'Each name is 1 to 255 characters without / or \\, and 1,000 names at most.',
-            changes: (value: number) => count(value, { one: 'unsaved change', other: 'unsaved changes' }),
-            discard: 'Discard',
-            save: 'Save',
             saved: 'Settings saved. The next scan, fix and start use them.',
             changedElsewhere:
                 'These settings were changed in another session since you opened them. Discard your changes to see theirs, then make yours again.',
@@ -2873,27 +2783,15 @@ export const en = {
         submit: 'Confirm',
     },
     server: {
-        title: 'Server',
-        gloss: 'How Observer starts FXServer.',
-        nextStart: 'Changes apply at the next start of FXServer; hang detection applies at once',
         loadFailed: 'The launch settings could not be loaded.',
         unsaved: 'Nothing is saved yet: Observer needs these settings to start FXServer.',
-        runSetup: 'Run the setup',
         changedElsewhere:
             'These settings were changed in another session since you opened them. Discard your changes to see theirs, then make yours again.',
-        files: 'Files',
-        build: 'Build',
         buildSelected: (build: string) => `FXServer starts build ${build}, chosen on the Artifacts page.`,
         buildNone: 'No build is selected yet.',
         buildUnknown: 'The selected build is not known while the live link is down.',
-        openArtifacts: 'Open the Artifacts page',
         legacyBuild:
             'FXServer ran from a folder of yours until this version. Observer now runs builds from its data folder: import it on the Artifacts page to keep using it.',
-        dataPath: 'Server data folder',
-        dataPathHint: 'The folder of your resources and cfg. FXServer runs from it.',
-        cfgFile: 'Config file',
-        cfgFileHint: 'Relative to the server data folder, such as server.cfg or configs/live.cfg.',
-        start: 'Start',
         onesync: 'OneSync',
         onesyncModes: { off: 'Off', on: 'On', legacy: 'Legacy' } satisfies Record<OneSync, string>,
         onesyncHint: 'Set after your cfg on the command line, so it wins over the cfg.',
@@ -2902,27 +2800,13 @@ export const en = {
         txadminEvents: "Send txAdmin's events too",
         txadminEventsHint:
             "Resources written for txAdmin also receive txAdmin's events, such as txAdmin:events:scheduledRestart, next to Observer's.",
-        hang: 'Hang detection',
-        hangMeta: 'Applies at once, to a running server too',
-        hangDetection: 'Restart FXServer when it stops responding',
-        hangDetectionHint:
-            'Observer restarts FXServer once its main loop or its HTTP endpoints have stayed silent for the delay below. Off, it waits as long as they stay silent. A crash restarts FXServer either way.',
-        hangTimeout: 'Restart after, in minutes',
-        hangTimeoutHint:
-            'From 1 to 60, 6 by default. Raise it if a first start takes longer, while resources build their caches of clothing and vehicles.',
-        arguments: 'Extra arguments',
-        argumentsMeta: 'Each one goes on the command line as +set <name> <value>, after the cfg.',
         argument: (position: number) => `Argument ${formatNumber('en', position)}`,
         argumentName: 'Name',
         argumentValue: 'Value',
         removeArgument: (position: number) => `Remove argument ${formatNumber('en', position)}`,
         addArgument: 'Add an argument',
         noArguments: 'No extra argument.',
-        notSaved: 'Not saved yet',
-        changes: (value: number) => `${count(value, { one: 'unsaved change', other: 'unsaved changes' })}`,
-        discard: 'Discard',
         discarded: 'Changes discarded: the form shows the settings as stored.',
-        save: 'Save',
         saved: 'Saved. FXServer uses these settings from its next start, a restart after a crash included.',
         savedHang: 'Saved. Hang detection applies at once, to a running server too.',
         savedBoth:
@@ -3121,8 +3005,6 @@ export const en = {
         },
     },
     files: {
-        title: 'Files',
-        gloss: 'SFTP',
         intro: 'Groups say which parts of the server folder an access reaches. People log in with their own SSH keys; pipelines with a key Observer makes. Nothing connects until the owner adds an [sftp] section to observer.toml.',
         groups: 'Groups',
         newGroup: 'New group',
@@ -3205,8 +3087,6 @@ export const en = {
         },
     },
     users: {
-        title: 'Users',
-        gloss: 'Who signs in, and what they may do.',
         add: 'Add a user',
         caption: 'Accounts',
         user: 'User',
@@ -3287,8 +3167,6 @@ export const en = {
             addKeyHint: 'Paste one line of your .pub file. Make one with ssh-keygen -t ed25519.',
             add: 'Add key',
         },
-        title: 'My account',
-        gloss: 'Your password and sessions.',
         password: {
             title: 'Password',
             current: 'Current password',
@@ -3314,6 +3192,355 @@ export const en = {
             unknown: 'Unknown',
             revoked: 'The session was signed out.',
             loadFailed: 'The sessions could not be loaded.',
+        },
+    },
+    settings: {
+        title: 'Settings',
+        categoriesLabel: 'Settings categories',
+        ownerOnly:
+            'Only the owner opens these settings: they decide what runs on the host, which no permission grants.',
+        category: (name: string) => `Category: ${name}`,
+        search: {
+            label: 'Search the settings',
+            placeholder: 'Search a setting',
+            shortcut: 'Press / to search',
+            clear: 'Clear the search',
+            found: (found: number, query: string) =>
+                `${count(found, { one: 'setting matches', other: 'settings match' })} “${query}”`,
+            none: (query: string) => `No setting matches “${query}”. Try another word, or fewer.`,
+        },
+        groups: {
+            server: 'Server',
+            observer: 'Observer',
+            people: 'People',
+        } satisfies Record<CategoryGroup, string>,
+        categories: {
+            launch: {
+                name: 'Launch',
+                about: 'How Observer starts FXServer: the folder, the cfg, OneSync and what goes on the command line. Most of these apply at the next start of FXServer.',
+            },
+            restarts: {
+                name: 'Restarts',
+                about: 'When FXServer restarts by itself, and how long before your resources hear of it. Skipping or delaying one restart is on the Schedule page.',
+            },
+            builds: {
+                name: 'FXServer builds',
+                about: 'Which builds Observer lists, keeps and falls back to. Installing and choosing a build is on the Artifacts page.',
+            },
+            data: {
+                name: 'Data kept',
+                about: 'What Observer records, and for how long: file changes, players and their sessions, statistics.',
+            },
+            tools: {
+                name: 'Server tools',
+                about: 'What the duplicate archetypes tool does before each start. Scanning and fixing by hand is on the Tools page.',
+            },
+            panel: {
+                name: 'Web panel',
+                about: 'Where this panel listens and whom it trusts. Observer reads these from observer.toml when it starts: change them in that file, then restart Observer.',
+            },
+            users: {
+                name: 'Users and permissions',
+                about: 'Who signs in to this panel, and what each account may do.',
+            },
+            files: {
+                name: 'File access (SFTP)',
+                about: 'Who reaches the server folder over SFTP, and which folders each group opens.',
+            },
+            account: {
+                name: 'My account',
+                about: 'Your password, where you are signed in, and your SSH keys.',
+            },
+        } satisfies Record<CategoryId, { name: string; about: string }>,
+        items: {
+            dataPath: {
+                label: 'Server data folder',
+                about: 'The folder that holds your resources and your cfg. FXServer runs from it.',
+            },
+            cfgFile: {
+                label: 'Config file',
+                about: 'The cfg FXServer runs first, as a path inside the server data folder: server.cfg, or configs/live.cfg for one in a subfolder.',
+            },
+            build: {
+                label: 'FXServer build',
+                about: 'The build of FXServer that starts. It is installed, chosen and rolled back on the Artifacts page.',
+            },
+            onesync: {
+                label: 'OneSync',
+                about: "How many players the server holds, and whether the server or the players' games keep the world in sync. Observer sets it after your cfg, so it wins over what the cfg says.",
+            },
+            autoStart: {
+                label: 'Start FXServer with Observer',
+                about: 'When Observer starts, with the machine or after an update, it starts FXServer too. Off, FXServer waits until someone presses Start.',
+            },
+            txadminEvents: {
+                label: "Send txAdmin's events too",
+                about: "For resources written for txAdmin: they also receive txAdmin:events:*, such as txAdmin:events:scheduledRestart, next to Observer's own events.",
+            },
+            hangDetection: {
+                label: 'Restart a server that stops responding',
+                about: 'Observer restarts FXServer once its main loop or its HTTP endpoints stay silent for the delay below. Off, a stuck server stays stuck until someone restarts it. A crash restarts FXServer either way.',
+            },
+            hangTimeout: {
+                label: 'Wait before restarting',
+                about: 'Minutes of silence, from 1 to 60, 6 by default. Raise it if a first start is slow while resources build their caches of clothing and vehicles.',
+            },
+            extraArguments: {
+                label: 'Extra arguments',
+                about: "Each goes on FXServer's command line as +set <name> <value>, after your cfg, so it wins over it. Keep secrets in the cfg: anyone on the host can read a command line.",
+            },
+            scheduleEnabled: {
+                label: 'Restart on a schedule',
+                about: 'FXServer restarts at the times below, or at the interval, while it runs. Off, it restarts only when someone asks or after a crash.',
+            },
+            scheduleMode: {
+                label: 'Plan restarts by',
+                about: 'Fixed times, such as 04:00 and 16:00 every day, or an interval counted from each start, such as every 6 hours.',
+            },
+            scheduleTimes: {
+                label: 'Restart times',
+                about: 'Every day at these times, read in the time zone below, at least 30 minutes apart.',
+            },
+            scheduleInterval: {
+                label: 'Interval',
+                about: 'Time from each start of FXServer to its next restart, a start after a crash included: from 30 minutes to 7 days.',
+            },
+            timeZone: {
+                label: 'Time zone',
+                about: "The zone the restart times are read in: 04:00 is 04:00 there, clock changes included, wherever the host or your browser is. The panel shows restart times, and the days of the players' figures, in it too. The host's zone follows the machine Observer runs on.",
+            },
+            warnings: {
+                label: 'Warnings before a restart',
+                about: 'Minutes before each restart when Observer raises observer:restartScheduled. Your resources decide what players see: a chat line, a banner, or nothing.',
+            },
+            skipAfterStart: {
+                label: 'Skip a restart right after a start',
+                about: 'After a start the schedule did not make, by hand or after a crash, a fixed time this many minutes away or less is skipped, so the server does not restart twice in a row. 0 turns this off.',
+            },
+            keepBuilds: {
+                label: 'Builds to keep',
+                about: 'Only used when you press Clean up on the Artifacts page: it deletes the oldest builds past this count, besides those in use. Observer never deletes a build by itself.',
+            },
+            autoRollback: {
+                label: 'Go back to the last healthy build',
+                about: 'A new build that crashes or stops answering before it stayed up 10 minutes is replaced by the last healthy one, and FXServer restarts on it.',
+            },
+            branches: {
+                label: 'Test branches',
+                about: "Builds of these runtime.fivem.net branches are listed next to master's on the Artifacts page, to try one before it is released. 10 at most.",
+            },
+            changesEnabled: {
+                label: 'Take a snapshot at each start',
+                about: 'Observer lists the server folder as FXServer starts, then reads what changed once it is up: the Changes page compares two starts with it.',
+            },
+            startEvent: {
+                label: 'Raise observer:startChanges',
+                about: 'Once a run, when the snapshot is done, for resources that post a changelog or tell the staff what changed.',
+            },
+            extensions: {
+                label: 'Files compared line by line',
+                about: 'Extensions, separated by spaces or commas, without the dot. Other files are compared by size and hash. A change here makes the next start read every file again.',
+            },
+            excluded: {
+                label: 'Never looked at',
+                about: 'Files and folders Observer skips. One pattern a line; * and ? are wildcards. A pattern with / is a path from the server data folder, one without names a file or folder anywhere.',
+            },
+            hidden: {
+                label: 'Contents never kept',
+                about: 'Files compared by hash only, for configs that hold secrets: their lines are never stored nor shown. Same patterns as above.',
+            },
+            maxText: {
+                label: 'Largest text kept',
+                about: 'In MB, up to 8. A larger text file is compared by hash only.',
+            },
+            budget: {
+                label: 'Room for kept texts',
+                about: 'In GB. Past it, the oldest texts go first; the two latest starts stay whole.',
+            },
+            retentionDays: {
+                label: 'How long a start is kept',
+                about: 'Days each start stays in the history, with what changed at it: from 1 to 3,650. The latest start, and the start of a server still running, stay whatever their age.',
+            },
+            hashRate: {
+                label: 'Reading speed',
+                about: "How fast Observer reads the server's files while FXServer runs, in MB/s, to hash them: a hash is a short fingerprint of a file, the same for the same bytes. Lower it if a snapshot slows the disk down.",
+            },
+            verifyDays: {
+                label: 'Days between full verifications',
+                about: 'Every so many days, a start hashes every file again instead of trusting its size and time, which catches a copy that kept both. 0 for never.',
+            },
+            sessionDays: {
+                label: 'Player sessions',
+                about: "Days each player's sessions, with their crash and kick texts, are kept: from 14 to 365. The hourly figures behind the Drops charts and rates stay.",
+            },
+            linkDays: {
+                label: 'Identifiers and names',
+                about: "Days each identifier of a player (Steam, Discord, licence…) and each name they used stays after it was last seen: from 30 up to the profiles' retention.",
+            },
+            addressDays: {
+                label: 'Address fingerprints',
+                about: "Observer never keeps a player's IP address, only a keyed fingerprint of it: the same address always gives the same fingerprint, which links accounts that play from one place, but the address cannot be read back from it. Days each one stays after it was last seen: from 7 up to the identifiers' retention.",
+            },
+            dayDays: {
+                label: 'Play time per day',
+                about: "Days each day of a player's play time is kept, for their profile and the community figures: from 30 up to the profiles' retention.",
+            },
+            profileDays: {
+                label: 'Profiles',
+                about: "Days a profile stays after the player's last visit, 365 or more, with everything attached to it. Or keep profiles until a player is forgotten on request.",
+            },
+            playersImport: {
+                label: 'Import from txAdmin',
+                about: "Takes in the play time, first and last visits, names and identifiers of txAdmin's players database. Observer only reads the file; notes, bans, warnings and the whitelist stay out. Importing it again changes nothing, and forgotten players stay forgotten.",
+            },
+            statisticsKept: {
+                label: 'Statistics',
+                about: 'How long the CPU, memory, tick and player figures are kept, finest first. Fixed in Observer: nothing here changes it.',
+            },
+            toolAtStart: {
+                label: 'Before each start',
+                about: 'Off runs the tool only when you ask. Report scans before each start of FXServer and writes to the console when the result changed. Fix applies the fixes before each start. Whatever this says, each start first puts back the copies whose kept copy is gone.',
+            },
+            toolDifferences: {
+                label: 'Copies that differ',
+                about: 'Keep the latest copy also fixes copies that differ, keeping the last one registered. Which copy the game uses when they differ is not known for sure: this can change the model, the textures or the draw distance players see.',
+            },
+            toolEscrowed: {
+                label: 'Escrowed resources',
+                about: 'Skip only reports resources protected by the asset escrow. Allow fixes their plain files too.',
+            },
+            toolExcluded: {
+                label: 'Excluded resources',
+                about: 'One resource name a line, as FXServer knows it, case included. The tool never changes them: put there those a pipeline or a file group keeps.',
+            },
+            listen: {
+                label: 'Address',
+                about: 'Where the panel listens. 0.0.0.0 answers on every network of the host; 127.0.0.1 on the host alone, for a reverse proxy on the same machine.',
+            },
+            hosts: {
+                label: 'Host names',
+                about: "The names the panel answers to, besides addresses and localhost. The API refuses any other name, which a stranger's page could have pointed at this host.",
+            },
+            trustedProxies: {
+                label: 'Trusted proxies',
+                about: 'Reverse proxies whose X-Forwarded-For and X-Forwarded-Proto Observer believes: the audit log then shows the address of each client, and the panel knows it was reached over HTTPS. From any other peer these headers are ignored.',
+            },
+            accounts: {
+                label: 'Accounts and permissions',
+                about: 'Add an account, change what it may do, reset its password or sign it out everywhere.',
+            },
+            fileGroups: {
+                label: 'Groups',
+                about: 'Which folders of the server an SFTP access reaches, rule by rule.',
+            },
+            filePeople: {
+                label: 'People',
+                about: 'Who logs in over SFTP with their own SSH keys, and with which groups.',
+            },
+            filePipelines: {
+                label: 'Pipelines',
+                about: 'Uploads from CI/CD, each with a key of its own.',
+            },
+            password: {
+                label: 'Password',
+                about: 'Change your password. Your other sessions are signed out.',
+            },
+            sessions: {
+                label: 'Sessions',
+                about: 'Where your account is signed in. Sign out one you do not know.',
+            },
+            sshKeys: {
+                label: 'My SSH keys',
+                about: 'The keys you log in with over SFTP.',
+            },
+        } satisfies Record<SettingId, { label: string; about: string }>,
+        applies: {
+            now: 'Applies at once',
+            nextStart: 'At the next start of FXServer',
+            observerStart: 'At the next start of Observer',
+            withinHour: 'Within the hour',
+            nextRun: 'At the next scan, fix or start',
+            cleanup: 'At the next cleanup',
+            file: 'In observer.toml, then a restart of Observer',
+        } satisfies Record<Applies, string>,
+        /** How the save bar says when the changes apply, joined: `applies at once and at the next start`. */
+        appliesWhen: {
+            now: 'at once',
+            nextStart: 'at the next start',
+            observerStart: 'when Observer next starts',
+            withinHour: 'within the hour',
+            nextRun: 'at the next scan, fix or start',
+            cleanup: 'at the next cleanup',
+            file: 'once Observer restarts',
+        } satisfies Record<Applies, string>,
+        changed: 'Changed',
+        bar: {
+            changes: (value: number) => count(value, { one: 'unsaved change', other: 'unsaved changes' }),
+            applies: (when: string[]) => `applies ${list(when)}`,
+            notSaved: 'Not saved yet',
+            discard: 'Discard',
+            save: 'Save',
+        },
+        /** The way from a page to its settings, which used to sit at its bottom. */
+        moved: (category: string) => `Settings · ${category}`,
+        movedAbout: {
+            schedule: 'Restart times or interval, time zone, warnings, and the skip after a start.',
+            artifacts: 'Builds to keep, going back to the last healthy build, test branches.',
+            changes: 'What a snapshot looks at, what it keeps, and how long starts stay.',
+            drops: 'How long player sessions and their crash and kick texts stay.',
+            players: "How long player data stays, and taking in txAdmin's players.",
+            tools: 'What the tool does before each start, and the resources it leaves alone.',
+        },
+        launch: {
+            runSetup: 'Run the setup',
+            openArtifacts: 'Open the Artifacts page',
+            groups: { files: 'Files', game: 'Game', hang: 'Hang detection' },
+            onesync: {
+                on: {
+                    name: 'On',
+                    about: 'Up to 2,048 slots, as many as your key allows. The server keeps the world and sends each player what is around them. What most servers run, and the default.',
+                },
+                legacy: {
+                    name: 'Legacy',
+                    about: 'The older OneSync, up to 64 slots, and every player receives every entity. Only for resources that still need it.',
+                },
+                off: {
+                    name: 'Off',
+                    about: "No OneSync: at most 32 slots, and the players' games sync entities among themselves.",
+                },
+            } satisfies Record<OneSync, { name: string; about: string }>,
+            advanced: 'Advanced',
+            argumentsSet: (value: number) =>
+                value === 0
+                    ? 'No extra argument'
+                    : count(value, { one: 'extra argument', other: 'extra arguments' }),
+        },
+        restarts: {
+            openSchedule: 'Open the Schedule page',
+            groups: { when: 'When', around: 'Around each restart' },
+        },
+        builds: {
+            openArtifacts: 'Open the Artifacts page',
+        },
+        data: {
+            changes: 'File changes',
+            drops: 'Player drops',
+            players: 'Players',
+            statistics: 'Statistics',
+            openChanges: 'Open the Changes page',
+            samples: (days: number) => `Five-second samples · ${count(days, { one: 'day', other: 'days' })}`,
+            minutes: (days: number) => `Minute averages · ${count(days, { one: 'day', other: 'days' })}`,
+            hours: 'Hour averages and runs · kept for good',
+            loadFailed: 'These values could not be read.',
+        },
+        tools: {
+            openTools: 'Open the Tools page',
+        },
+        panel: {
+            file: (path: string) => `Read from ${path} when Observer starts.`,
+            noHosts: 'None: the panel answers to its addresses and localhost only.',
+            noProxies: 'None: the panel takes each connection as it comes, over plain HTTP.',
+            loadFailed: 'The values of observer.toml could not be read.',
         },
     },
     audit: {
