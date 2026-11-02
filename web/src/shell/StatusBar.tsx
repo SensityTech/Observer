@@ -18,7 +18,10 @@ export const LINK_LED = {
     refused: 'led-down',
 } satisfies Record<LinkState, string>;
 
-/** FXServer's state, build, players and next restart, and the live link's, updated in place. */
+/**
+ * FXServer's state and for how long, its build and its next restart, updated in place. The live
+ * link shows only while it is not live: the figures above every page then stop moving.
+ */
 export function StatusBar() {
     const { t, format } = useI18n();
     const link = useLinkState();
@@ -26,7 +29,6 @@ export function StatusBar() {
     const { schedule, refused } = useSchedule();
     const { status: builds } = useArtifacts();
     const now = useNow();
-    // One complement at most, from where the next restart's time left shows too.
     const complement =
         builds === null || builds.running === null
             ? null
@@ -37,16 +39,17 @@ export function StatusBar() {
                 : null;
     const unknown = <span className="font-normal text-ink-3">{t.status.unknown}</span>;
 
-    const uptime =
-        status !== null && isRunning(status.state) && status.startedAt !== null
-            ? t.status.upFor(format.duration(secondsSince(status.startedAt, now)))
-            : null;
-    const players = status?.players ?? null;
+    let lasted = null;
+    if (status !== null && isRunning(status.state) && status.startedAt !== null) {
+        lasted = t.status.upFor(format.duration(secondsSince(status.startedAt, now)));
+    } else if (status !== null && !isRunning(status.state)) {
+        lasted = t.status.forTime(format.duration(secondsSince(status.since, now)));
+    }
 
     return (
         <dl className="status">
             <div className="status-cell">
-                <dt className="md:sr-only">{t.status.state}</dt>
+                <dt className="sr-only">{t.status.state}</dt>
                 <dd>
                     {status === null ? (
                         <>
@@ -59,63 +62,35 @@ export function StatusBar() {
                             <span className={cn('font-semibold', STATE_INK[status.state])}>
                                 {t.server_state.states[status.state]}
                             </span>
-                            {uptime !== null && (
-                                <span
-                                    className={cn(
-                                        'font-normal text-ink-3 xl:max-[1261px]:hidden md:max-[941px]:hidden',
-                                        // Where the next restart's cell only just fits, it takes the uptime's room.
-                                        !refused && 'min-[1440px]:max-4xl:hidden',
-                                    )}
-                                >
-                                    · {uptime}
-                                </span>
-                            )}
+                            {lasted !== null && <span className="font-normal text-ink-3"> · {lasted}</span>}
                         </>
                     )}
                 </dd>
             </div>
             <div className="status-cell">
                 <dt>{t.status.build}</dt>
-                <dd className="font-mono text-[12.5px]">
-                    {status?.build == null ? unknown : String(status.build)}
-                    {complement !== null && (
-                        <span className="font-sans font-normal text-ink-3 max-[1620px]:hidden">
-                            {' '}
-                            · {complement}
-                        </span>
-                    )}
-                </dd>
-            </div>
-            <div className="status-cell">
-                <dt>{t.status.players}</dt>
-                <dd className="tabular-nums">
-                    {players === null
-                        ? unknown
-                        : t.status.playerCount(
-                              format.number(players.online),
-                              players.max === null ? null : format.number(players.max),
-                          )}
+                <dd>
+                    <span className="font-mono text-[12.5px]">
+                        {status?.build == null ? unknown : String(status.build)}
+                    </span>
+                    {complement !== null && <span className="font-normal text-ink-3"> · {complement}</span>}
                 </dd>
             </div>
             {!refused && <NextRestartCell schedule={schedule} status={status} now={now} />}
-            <div className="status-cell">
-                <dt>{t.status.updates}</dt>
-                <dd>
-                    <span className={cn('led', LINK_LED[link])} aria-hidden="true" />
-                    {t.status.link[link]}
-                </dd>
-            </div>
+            {link !== 'live' && (
+                <div className="status-cell">
+                    <dt>{t.status.linkLabel}</dt>
+                    <dd>
+                        <span className={cn('led', LINK_LED[link])} aria-hidden="true" />
+                        {t.status.link[link]}
+                    </dd>
+                </div>
+            )}
         </dl>
     );
 }
 
-/**
- * When FXServer restarts next, in the schedule's zone: the time alone today there, with its day
- * otherwise, and the time left on the widest screens. Below 1440 px the bar and the server's
- * controls would no longer share a row with it: the Overview and the Schedule page say it there.
- * These widths, and the uptime's, leave room for the widest values short of a reload notice:
- * Not responding for hours, 2,048 / 2,048 players, a day before the time, and Connecting.
- */
+/** When FXServer restarts next, in the schedule's zone: the time alone today there, with its day otherwise. */
 function NextRestartCell({
     schedule,
     status,
@@ -147,12 +122,12 @@ function NextRestartCell({
                               clock,
                           )}
                 </span>
-                <span className="font-normal text-ink-3 max-[1620px]:hidden">· {t.status.inTime(left)}</span>
+                <span className="font-normal text-ink-3"> · {t.status.inTime(left)}</span>
             </>
         );
     }
     return (
-        <div className="status-cell status-next max-[1440px]:hidden">
+        <div className="status-cell status-next">
             <dt>{t.status.nextRestart}</dt>
             <dd className="tabular-nums">{value}</dd>
         </div>

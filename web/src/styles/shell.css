@@ -79,13 +79,62 @@
         color: var(--ink);
     }
 
+    /* The server Observer runs, under the logo: a tile, as there is nothing to switch to. */
+    .server-tile {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        min-width: 0;
+        margin-top: 10px;
+        padding: 8px 10px;
+        border: 1px solid var(--line);
+        border-radius: var(--r-box);
+        background: var(--surface-2);
+    }
+    .server-tile-mark {
+        display: grid;
+        place-items: center;
+        width: 28px;
+        height: 28px;
+        flex: none;
+        border-radius: var(--r-sm);
+        background: var(--surface-3);
+        color: var(--ink);
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 0.02em;
+    }
+    .server-tile-meta {
+        display: flex;
+        flex-direction: column;
+        min-width: 0;
+        line-height: 1.3;
+    }
+    .server-tile-name {
+        overflow: hidden;
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--ink);
+        white-space: nowrap;
+        text-overflow: ellipsis;
+    }
+    .server-tile-port {
+        overflow: hidden;
+        font-family: var(--mono);
+        font-size: 11px;
+        color: var(--ink-3);
+        white-space: nowrap;
+        text-overflow: ellipsis;
+        font-variant-ligatures: none;
+    }
+
     .nav {
         display: flex;
         flex: 1 1 auto;
         flex-direction: column;
         gap: 2px;
         min-height: 0;
-        margin: 12px calc(-1 * var(--rail-pad)) 0;
+        margin: 8px calc(-1 * var(--rail-pad)) 0;
         padding: 0 var(--rail-pad) 16px;
         overflow-y: auto;
         overscroll-behavior: contain;
@@ -167,46 +216,6 @@
         padding: var(--rail-pad) var(--rail-pad) 0;
         border-top: 1px solid var(--line);
     }
-    .theme-switch {
-        display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: 2px;
-        padding: 3px;
-        border: 1px solid var(--line);
-        border-radius: var(--r);
-        background: var(--surface-2);
-    }
-    .theme-switch > button {
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        gap: 6px;
-        height: 30px;
-        border-radius: 8px;
-        font-size: 12.5px;
-        font-weight: 500;
-        color: var(--ink-3);
-        transition:
-            color 0.15s,
-            background-color 0.15s;
-    }
-    .theme-switch > button:hover {
-        color: var(--ink);
-    }
-    /* At the default offset, the outline would cover the group's border. */
-    .theme-switch > button:focus-visible {
-        outline-offset: 0;
-    }
-    .theme-switch > button[aria-pressed='true'] {
-        background: var(--raise);
-        color: var(--ink);
-        box-shadow:
-            var(--elev-sm),
-            0 0 0 1px var(--line);
-    }
-    .theme-switch > button[aria-pressed='true'] > svg {
-        color: var(--accent);
-    }
     .user {
         display: flex;
         align-items: center;
@@ -263,8 +272,9 @@
         color: var(--ink-2);
     }
 
-    /* The page and its status bar */
+    /* The page: the status card, then the content, both as wide as the page and centred. */
     .main {
+        --page-pad: var(--rail-gap);
         position: relative;
         display: flex;
         flex-direction: column;
@@ -272,32 +282,40 @@
         min-height: 100vh;
         min-height: 100dvh;
     }
+    .topbar,
+    .content {
+        width: 100%;
+        max-width: calc(var(--content-width) + 2 * var(--page-pad));
+        margin-inline: auto;
+        padding-inline: var(--page-pad);
+    }
     .topbar {
+        padding-top: var(--rail-gap);
+    }
+    .status-card {
         display: flex;
         align-items: center;
         flex-wrap: wrap;
-        gap: 12px;
-        padding: calc(var(--rail-gap) + 8px) 32px 0;
+        gap: 8px 18px;
+        min-height: 54px;
+        padding: 8px 10px 8px 16px;
+        border: 1px solid var(--line);
+        border-radius: var(--r-card);
+        background: var(--surface);
     }
     .status {
         display: flex;
-        align-items: stretch;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 6px 20px;
         min-width: 0;
-        height: 38px;
-        border: 1px solid var(--line);
-        border-radius: 12px;
-        background: var(--surface);
-        box-shadow: var(--elev-sm);
     }
     .status-cell {
         display: flex;
         align-items: center;
         gap: 8px;
-        padding: 0 13px;
+        min-width: 0;
         white-space: nowrap;
-    }
-    .status-cell + .status-cell {
-        border-left: 1px solid var(--line);
     }
     .status-cell > dt {
         font-family: var(--mono);
@@ -318,7 +336,7 @@
         color: var(--ink);
     }
 
-    /* Start, Stop and Restart, at the right of the status bar. */
+    /* Restart and Stop, at the end of the status card. */
     .controls {
         display: flex;
         align-items: center;
@@ -330,9 +348,15 @@
         flex-basis: 100%;
     }
 
-    .mobilebar,
-    .scrim {
+    .mobilebar {
         display: none;
+    }
+    /* Rendered only while a drawer is open: the rail's, or the players'. */
+    .scrim {
+        position: fixed;
+        inset: 0;
+        z-index: var(--z-scrim);
+        background: var(--overlay);
     }
 
     .content {
@@ -341,7 +365,8 @@
         flex-direction: column;
         gap: 20px;
         min-width: 0;
-        padding: 24px 32px 56px;
+        padding-top: 20px;
+        padding-bottom: 56px;
     }
     .content:focus {
         outline: none;
@@ -366,12 +391,108 @@
         color: var(--ink-3);
     }
 
+    /* Who plays now, at the right of every page: a column, its folded strip, or a drawer. */
+    .online-wrap {
+        position: sticky;
+        top: 0;
+        z-index: var(--z-rail);
+        width: calc(var(--online-width) + var(--rail-gap));
+        height: 100vh;
+        height: 100dvh;
+        padding: var(--rail-gap) var(--rail-gap) var(--rail-gap) 0;
+    }
+    .online-wrap.is-strip {
+        width: calc(var(--strip-width) + var(--rail-gap));
+    }
+    .online {
+        display: flex;
+        flex-direction: column;
+        height: 100%;
+        min-height: 0;
+        overflow: hidden;
+        background: var(--rail-bg);
+        border: 1px solid var(--line);
+        border-radius: var(--r-rail);
+        box-shadow: var(--elev-rail);
+    }
+    .online-list {
+        flex: 1 1 auto;
+        min-height: 0;
+        overflow-y: auto;
+        overscroll-behavior: contain;
+        scrollbar-width: thin;
+        scrollbar-color: var(--line-strong) transparent;
+    }
+    .online-strip {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 2px;
+        width: 100%;
+        height: 100%;
+        padding: 12px 0;
+        border: 1px solid var(--line);
+        border-radius: var(--r-rail);
+        background: var(--rail-bg);
+        box-shadow: var(--elev-rail);
+        color: var(--ink-3);
+        transition:
+            background-color 0.12s,
+            color 0.12s;
+    }
+    .online-strip:hover {
+        background: var(--surface-2);
+        color: var(--ink-2);
+    }
+    .online-strip-fill {
+        display: flex;
+        align-items: flex-end;
+        width: 6px;
+        height: 72px;
+        margin-top: 10px;
+        overflow: hidden;
+        border-radius: 3px;
+        background: var(--surface-3);
+    }
+    .online-strip-fill > span {
+        display: block;
+        width: 100%;
+        border-radius: 3px;
+        background: var(--accent);
+    }
+    .online-drawer {
+        position: fixed;
+        inset: 0 0 0 auto;
+        z-index: var(--z-drawer);
+        width: min(340px, calc(100vw - 40px));
+        height: 100vh;
+        height: 100dvh;
+        padding: 8px;
+        transform: translateX(104%);
+        visibility: hidden;
+        transition:
+            transform 0.32s var(--ease),
+            visibility 0s linear 0.32s;
+    }
+    .online-drawer.is-open {
+        transform: none;
+        visibility: visible;
+        transition: transform 0.32s var(--ease);
+    }
+
+    /* From tablets up, the players column or its strip takes the right of the page. */
+    @media (min-width: 761px) {
+        .app {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
+            align-items: start;
+        }
+    }
+
     /* Wide screens: the rail floats beside the page. */
     @media (min-width: 1025px) {
         .app {
-            display: grid;
-            grid-template-columns: var(--rail-width) minmax(0, 1fr);
-            align-items: start;
+            grid-template-columns: var(--rail-width) minmax(0, 1fr) auto;
         }
         .rail-wrap {
             position: sticky;
@@ -404,18 +525,11 @@
             visibility: visible;
             transition: transform 0.32s var(--ease);
         }
-        .scrim {
-            display: block;
-            position: fixed;
-            inset: 0;
-            z-index: var(--z-scrim);
-            background: var(--overlay);
-        }
         .nav-item {
             min-height: 44px;
         }
-        .theme-switch > button {
-            height: 38px;
+        .main {
+            --page-pad: 24px;
         }
         .mobilebar {
             position: sticky;
@@ -431,52 +545,30 @@
             -webkit-backdrop-filter: blur(16px) saturate(1.3);
             backdrop-filter: blur(16px) saturate(1.3);
         }
-        .mobilebar-title {
-            overflow: hidden;
-            margin-left: 4px;
-            font-size: 15px;
-            font-weight: 600;
-            white-space: nowrap;
-            text-overflow: ellipsis;
-        }
         .topbar {
-            padding: 16px 24px 0;
+            padding-top: 16px;
         }
         .content {
-            padding: 20px 24px 48px;
+            padding-bottom: 48px;
         }
     }
 
-    /* Phones: 44px touch targets, the status bar stacks. */
+    /* Phones: 44px touch targets, the status card stacks. */
     @media (max-width: 760px) {
+        .main {
+            --page-pad: 16px;
+        }
         .topbar {
-            padding: 12px 16px 0;
+            padding-top: 12px;
+        }
+        .status-card {
+            padding: 12px;
         }
         .status {
-            display: grid;
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-            width: 100%;
-            height: auto;
+            gap: 6px 16px;
         }
         .status-cell {
-            flex-direction: column;
-            align-items: flex-start;
-            gap: 3px;
-            padding: 8px 12px;
             white-space: normal;
-        }
-        .status-cell + .status-cell {
-            border-left: 0;
-        }
-        .status-cell:nth-child(even) {
-            border-left: 1px solid var(--line);
-        }
-        /* The next restart leaves the grid here: the cell after it takes its place on the right. */
-        .status-next + .status-cell {
-            border-left: 1px solid var(--line);
-        }
-        .status-cell:nth-child(n + 3) {
-            border-top: 1px solid var(--line);
         }
         .status-cell > dd {
             flex-wrap: wrap;
@@ -490,7 +582,8 @@
             flex: 1 1 0;
         }
         .content {
-            padding: 16px 16px 40px;
+            padding-top: 16px;
+            padding-bottom: 40px;
         }
         .page-title {
             font-size: 22px;
