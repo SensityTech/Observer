@@ -111,16 +111,35 @@ fn tee(stream: impl Read + Send + 'static, mut file: fs::File, lines: mpsc::Send
 }
 
 impl Observer {
-    /// Observer on a data folder of its own, as it first starts there.
-    fn spawn() -> Self {
+    /// Observer on a data folder of its own, as it first starts there, its `observer.toml` ending
+    /// with `extra`.
+    fn spawn_with(extra: &str) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let port = free_port();
-        let config = dir.path().join("observer.toml");
         fs::write(
-            &config,
-            format!("data_dir = \"data\"\n\n[http]\nlisten = \"127.0.0.1:{port}\"\n"),
+            dir.path().join("observer.toml"),
+            format!("data_dir = \"data\"\n\n[http]\nlisten = \"127.0.0.1:{port}\"\n{extra}"),
         )
         .unwrap();
+        let (process, lines) = Self::run_in(dir.path());
+        Self {
+            dir,
+            port,
+            process,
+            lines,
+        }
+    }
+
+    /// Kills this Observer and starts another on the same folder and configuration.
+    fn respawn(&mut self) {
+        let _ = self.process.kill();
+        let _ = self.process.wait();
+        (self.process, self.lines) = Self::run_in(self.dir.path());
+    }
+
+    /// `observer run` on the configuration in `dir`, what it prints going to files there too.
+    fn run_in(dir: &Path) -> (Child, mpsc::Receiver<String>) {
+        let config = dir.join("observer.toml");
         let mut process = Command::new(env!("CARGO_BIN_EXE_observer"))
             .args(["--config", config.to_str().unwrap(), "run"])
             // A test has no one at the host to show a window to.
@@ -133,19 +152,14 @@ impl Observer {
             .spawn()
             .unwrap();
         let (lines, printed) = mpsc::channel();
-        let file = |name| fs::File::create(dir.path().join(name)).unwrap();
+        let file = |name| fs::File::create(dir.join(name)).unwrap();
         tee(
             process.stdout.take().unwrap(),
             file("observer.out"),
             lines.clone(),
         );
         tee(process.stderr.take().unwrap(), file("observer.err"), lines);
-        Self {
-            dir,
-            port,
-            process,
-            lines: printed,
-        }
+        (process, printed)
     }
 
     /// Waits for Observer to print a line holding `text`, and returns that line.
@@ -165,7 +179,12 @@ impl Observer {
 
     /// An Observer of its own data folder, whose owner `ada` the setup link created.
     fn start() -> (Self, (String, String)) {
-        let observer = Self::spawn();
+        Self::start_with("")
+    }
+
+    /// [`Observer::start`], its `observer.toml` ending with `extra`.
+    fn start_with(extra: &str) -> (Self, (String, String)) {
+        let observer = Self::spawn_with(extra);
         // Observer prints the setup link on its first start, to the terminal only.
         let link = observer.printed("/setup#");
         let token = link.split_once("/setup#").unwrap().1.trim();
@@ -275,7 +294,6 @@ impl Observer {
             .collect()
     }
 
-    #[cfg(unix)]
     /// What Observer printed: the setup link on stdout, its log on stderr.
     fn log(&self) -> String {
         ["observer.out", "observer.err"]
@@ -373,7 +391,7 @@ fn stops_gracefully_on_sigterm(mut observer: Observer) {
 #[cfg(unix)]
 #[test]
 fn a_ctrl_c_while_observer_starts_stops_it_gracefully_rather_than_kill_it() {
-    let mut observer = Observer::spawn();
+    let mut observer = Observer::spawn_with("");
     // Printed once stop requests are caught, before the database is even open.
     observer.printed("starting Observer");
 
@@ -446,4 +464,77 @@ fn observer_run_fixes_duplicate_archetypes_before_fxserver_starts_once_the_owner
     let page = call(observer.port, "GET", "/tools", Some(&owner), None);
     assert_eq!(page.body["tools"][0]["open"].as_array().unwrap().len(), 1);
     assert_eq!(page.body["tools"][0]["lastRun"]["trigger"], "start");
+}
+
+/// SFTP's port opens with Observer, closes as soon as the owner turns SFTP off in the panel, and
+/// stays closed when Observer starts again.
+#[test]
+fn sftp_turned_off_in_the_panel_closes_its_port_at_once_and_at_the_next_start() {
+    let sftp = free_port();
+    let (mut observer, owner) = Observer::start_with(&format!("\n[sftp]\nlisten = \"127.0.0.1:{sftp}\"\n"));
+    assert!(
+        TcpStream::connect(("127.0.0.1", sftp)).is_ok(),
+        "{}",
+        observer.log()
+    );
+
+    let off = json!({ "enabled": false });
+    let switched = call(observer.port, "PUT", "/features/sftp", Some(&owner), Some(off));
+
+    assert_eq!(switched.status, 200, "{}", switched.body);
+    let stopped = observer.printed("turned off; its tasks stopped");
+    assert!(stopped.contains("sftp"), "{stopped}");
+    assert!(TcpStream::connect(("127.0.0.1", sftp)).is_err());
+    let files = call(observer.port, "GET", "/files/accesses", Some(&owner), None);
+    assert_eq!(files.status, 404, "{}", files.body);
+    assert_eq!(files.body["code"], "feature_disabled");
+
+    observer.respawn();
+
+    let off = observer.printed("optional features off");
+    assert!(off.contains("sftp"), "{off}");
+    let port = observer.port;
+    wait_for("the panel answering again", || {
+        TcpStream::connect(("127.0.0.1", port)).is_ok()
+    });
+    assert!(!observer.log().contains("SFTP listening"), "{}", observer.log());
+    assert!(
+        TcpListener::bind(("127.0.0.1", sftp)).is_ok(),
+        "nothing holds SFTP's port"
+    );
+}
+
+/// `[features] sftp = "off"` keeps SFTP's port closed though `[sftp]` names it, and even the
+/// owner's session cannot open it: the refusal is audited.
+#[test]
+fn a_feature_observer_toml_turns_off_never_runs_and_the_panel_cannot_turn_it_on() {
+    let sftp = free_port();
+    let (observer, owner) = Observer::start_with(&format!(
+        "\n[sftp]\nlisten = \"127.0.0.1:{sftp}\"\n\n[features]\nsftp = \"off\"\n"
+    ));
+
+    let on = json!({ "enabled": true });
+    let refused = call(observer.port, "PUT", "/features/sftp", Some(&owner), Some(on));
+    let audit = call(
+        observer.port,
+        "GET",
+        "/audit?action=feature_changed",
+        Some(&owner),
+        None,
+    );
+
+    assert_eq!(refused.status, 403, "{}", refused.body);
+    assert_eq!(refused.body["code"], "feature_locked");
+    let entry = &audit.body["entries"][0];
+    assert_eq!(entry["target"], "sftp", "{}", audit.body);
+    assert_eq!(entry["outcome"], "denied");
+    assert!(
+        TcpListener::bind(("127.0.0.1", sftp)).is_ok(),
+        "SFTP's port was never bound"
+    );
+    let log = observer.log();
+    assert!(
+        log.contains("optional features off") && !log.contains("SFTP listening"),
+        "{log}"
+    );
 }

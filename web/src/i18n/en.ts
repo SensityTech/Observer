@@ -3912,9 +3912,17 @@ export const en = {
         tool_not_available: 'This tool works on GTA V servers only: this server runs RedM.',
         feature_disabled: (params) => {
             const key = stringParam(params, 'feature');
-            return isFeature(key)
-                ? `${features[key]} is turned off on this Observer. The owner can turn it back on.`
-                : 'This part of Observer is turned off. The owner can turn it back on.';
+            const name = isFeature(key) ? features[key] : 'This part of Observer';
+            switch (stringParam(params, 'held')) {
+                case 'host':
+                    return `${name} is turned off in observer.toml on the host.`;
+                case 'notConfigured':
+                    return `${name} is not set up: it needs its address in observer.toml on the host.`;
+                case 'requires':
+                    return `${name} needs another part of Observer that does not run.`;
+                default:
+                    return `${name} does not run on this Observer.`;
+            }
         },
         feature_locked: (params) => {
             const key = stringParam(params, 'feature');

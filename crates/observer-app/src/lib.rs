@@ -38,7 +38,7 @@ pub use clock::Clock;
 pub use diagnostics::{Diagnostics, DiagnosticsSetup, DiagnosticsTask, MAX_DOWNLOAD};
 pub use drops::{DayRates, Drops, DropsSetup, DropsTask, LogQuery};
 pub use error::Error;
-pub use features::{Features, FeaturesSetup, Switched, feature_disabled};
+pub use features::{Features, FeaturesSetup, Switched};
 pub use files::{CommitGate, Files, Grant, Group, Login, SERVER as FILES_SERVER, file_group};
 pub use metrics::{DatabaseFiles, Metrics, MetricsSetup, Sampling, Sources};
 pub use own_paths::{OwnPaths, paths_inside};

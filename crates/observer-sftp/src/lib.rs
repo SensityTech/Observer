@@ -127,7 +127,7 @@ pub async fn serve(
     tokio::select! {
         result = running => result,
         () = stop.cancelled() => {
-            shutdown.shutdown("Observer is stopping".to_owned());
+            shutdown.shutdown("the SFTP server is closing".to_owned());
             Ok(())
         }
     }

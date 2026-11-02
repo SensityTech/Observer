@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { FolderLock } from 'lucide-react';
 import { useState } from 'react';
 
-import { send } from '../api/client';
+import { ApiError, send } from '../api/client';
 import { myFileAccessQuery } from '../api/files';
 import { Button } from '../components/Button';
 import { Card } from '../components/Card';
@@ -38,6 +38,10 @@ export function FilesCard() {
         onError: (error) => setFailure(errorMessage(t, error)),
     });
 
+    // Without SFTP running there is no file access to show, and nothing is wrong with the account.
+    if (mine.error instanceof ApiError && mine.error.code === 'feature_disabled') {
+        return null;
+    }
     return (
         <Card id="account-files" icon={FolderLock} title={t.myAccount.files.title}>
             {mine.isError && <Notice tone="danger">{errorMessage(t, mine.error)}</Notice>}

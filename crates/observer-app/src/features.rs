@@ -53,13 +53,6 @@ struct Inner {
     changing: AsyncMutex<()>,
 }
 
-/// The refusal of a route or a topic whose feature does not run.
-pub fn feature_disabled(feature: Feature) -> Error {
-    ApiError::new(ErrorCode::FeatureDisabled)
-        .with("feature", feature.as_str())
-        .into()
-}
-
 impl Features {
     /// Reads the owner's choices and decides what runs in this Observer.
     pub async fn load(setup: FeaturesSetup) -> Result<Self, Error> {
@@ -100,6 +93,17 @@ impl Features {
     /// What runs, as it changes.
     pub fn running(&self) -> watch::Receiver<BTreeSet<Feature>> {
         self.inner.running.subscribe()
+    }
+
+    /// The refusal of a route of `feature` while it does not run, with what holds it if anything
+    /// does: the panel then tells the owner where to look.
+    pub fn refusal(&self, feature: Feature) -> Error {
+        let refusal = ApiError::new(ErrorCode::FeatureDisabled).with("feature", feature.as_str());
+        let running = self.inner.running.borrow().clone();
+        match self.inner.hold(feature, &running) {
+            Some(held) => refusal.with("held", json!(held)).into(),
+            None => refusal.into(),
+        }
     }
 
     pub fn view(&self) -> FeatureList {
@@ -432,6 +436,31 @@ mod tests {
         );
         let reloaded = lab.features(&[Feature::Sftp]).await;
         assert!(!reloaded.runs(Feature::Sftp));
+    }
+
+    #[tokio::test]
+    async fn a_refusal_names_the_feature_and_what_holds_it() {
+        let lab = Lab::new().await;
+        let features = lab.features(&[Feature::Diagnostics]).await;
+        features.set(&owner(), Feature::Players, false).await.unwrap();
+
+        let params = |feature| match features.refusal(feature) {
+            Error::Refused(refusal) => (refusal.code, Value::Object(refusal.params)),
+            other => panic!("{other:?}"),
+        };
+
+        assert_eq!(
+            params(Feature::Diagnostics),
+            (
+                ErrorCode::FeatureDisabled,
+                json!({ "feature": "diagnostics", "held": "host" })
+            )
+        );
+        assert_eq!(params(Feature::Players).1, json!({ "feature": "players" }));
+        assert_eq!(
+            params(Feature::Drops).1,
+            json!({ "feature": "drops", "held": "requires" })
+        );
     }
 
     #[tokio::test]
