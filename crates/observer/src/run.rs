@@ -7,10 +7,11 @@ use anyhow::Context;
 use axum::Router;
 use jiff::tz::TimeZone;
 use observer_app::{
-    Accounts, Artifacts, ArtifactsSetup, ArtifactsTask, AuditLog, Changes, ChangesSetup, Clock,
-    DatabaseFiles, Diagnostics, DiagnosticsSetup, Drops, DropsSetup, Metrics, MetricsSetup, OwnPaths,
-    PasswordCost, Players, PlayersSetup, Running, Schedule, ScheduleSetup, ScheduleTask, Servers, Setup,
-    Sources, Supervision, Tools, ToolsHook, ToolsSetup,
+    Accounts, Artifacts, ArtifactsSetup, ArtifactsTask, AuditLog, Backups, BackupsHook, BackupsSetup,
+    BeforeSpawn, Changes, ChangesSetup, Clock, DatabaseFiles, Diagnostics, DiagnosticsSetup, Drops,
+    DropsSetup, Metrics, MetricsSetup, OwnPaths, PRE_LAUNCH_LIMIT, PasswordCost, Players, PlayersSetup,
+    Running, Schedule, ScheduleSetup, ScheduleTask, Servers, Setup, Sources, Supervision, Tools, ToolsHook,
+    ToolsSetup,
 };
 use observer_artifacts::Http;
 use observer_artifacts::catalog::Catalog;
@@ -62,9 +63,11 @@ pub async fn run(config: Config, args: RunArgs) -> anyhow::Result<()> {
     let console_logs = paths.logs.join("console");
     let console_log = ConsoleLog::start(&console_logs, LogLimits::default(), TimeZone::system())
         .context("cannot open the console log")?;
-    // The server tools run before every spawn; they need the supervision's status, so they are
-    // bound to the hook once both exist, well before FXServer first starts.
+    // The server tools run before every spawn, and the backup a restart calls for beside them;
+    // both need the supervision's status, so they are bound to their hooks once it exists, well
+    // before FXServer first starts. The phase lasts as long as the longest wait for a backup.
     let tools_hook = ToolsHook::default();
+    let backups_hook = BackupsHook::default();
     let (supervision, mut supervised) = Supervision::start(
         Setup {
             db: db.clone(),
@@ -77,7 +80,13 @@ pub async fn run(config: Config, args: RunArgs) -> anyhow::Result<()> {
             console_logs,
             log: Some(&console_log),
         },
-        |settings| settings.pre_launch = Some(Arc::new(tools_hook.clone())),
+        |settings| {
+            settings.pre_launch = Some(Arc::new(BeforeSpawn {
+                tools: tools_hook.clone(),
+                backups: backups_hook.clone(),
+            }));
+            settings.pre_launch_limit = PRE_LAUNCH_LIMIT;
+        },
     )
     .await?;
     // Before FXServer boots, so that the first run's tree is seen.
@@ -111,6 +120,18 @@ pub async fn run(config: Config, args: RunArgs) -> anyhow::Result<()> {
         |_| {},
     )
     .await?;
+    // After the schedule, whose zone the backups' times are in.
+    let (backups, backing_up) = Backups::start(
+        BackupsSetup {
+            db: db.clone(),
+            clock: clock.clone(),
+            data_dir: paths.root.clone(),
+            schedule: Some(schedule.status()),
+        },
+        |_| {},
+    )
+    .await?;
+    backups_hook.bind(backups.clone());
     let (artifacts, building) =
         builds(&db, &clock, &accounts, &servers, &supervision, &schedule, &paths).await?;
     let metrics = Metrics::open(MetricsSetup {
@@ -199,6 +220,7 @@ pub async fn run(config: Config, args: RunArgs) -> anyhow::Result<()> {
         drops,
         changes,
         tools: tools.clone(),
+        backups,
     };
     let state = observer_web::AppState::new(
         BUILD,
@@ -271,6 +293,8 @@ pub async fn run(config: Config, args: RunArgs) -> anyhow::Result<()> {
     .await;
     // Once FXServer is down: waits for a fix or an undo from the panel to end between two files.
     tools.close().await;
+    // Once FXServer is down, so that no restart waits on it: a backup under way is cancelled.
+    backing_up.close().await;
     supervised.close().await;
     diagnosing.close().await;
     // After the supervision, so that FXServer's stop closes the sessions.
