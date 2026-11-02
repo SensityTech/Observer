@@ -178,6 +178,16 @@ pub enum ErrorCode {
     ServerNotStopped,
     /// The tool does not run on this server. Params: `game`, the game the cfg sets (`rdr3`).
     ToolNotAvailable,
+    /// A backup of the server's database is under way: one at a time.
+    BackupRunning,
+    /// Params: `issues`, a list of `BackupSettingsIssue`.
+    InvalidBackupSettings,
+    /// Params: `issues`, a list of `DestinationIssue`.
+    InvalidBackupDestination,
+    /// No destination is enabled, so a backup would go nowhere.
+    BackupNotConfigured,
+    /// The copy is not stored: it failed, was deleted, or its destination was.
+    BackupCopyUnavailable,
 }
 
 /// The body of every error response.

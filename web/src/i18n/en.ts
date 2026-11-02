@@ -162,6 +162,20 @@ const permissions = {
         description:
             "Line diffs and whole files of the server's resources, secrets hidden. The server's code is its most valuable asset.",
     },
+    backupsView: {
+        name: 'View backups',
+        description:
+            "The game database's backups: when they run, where their copies go and what they weigh, without any password or key.",
+    },
+    backupsRun: {
+        name: 'Run backups',
+        description: 'Back up the game database now, or cancel the backup under way.',
+    },
+    backupsDownload: {
+        name: 'Download backups',
+        description:
+            'A backup is the whole game database: every player, and whatever secrets resources keep in it.',
+    },
 } satisfies Record<PermissionKey, { name: string; description: string }>;
 
 const permissionNames = (hex: string) =>
@@ -3709,6 +3723,7 @@ export const en = {
         players: 'Players',
         drops: 'Player drops',
         changes: 'Changes',
+        backups: 'Backups',
     } satisfies Record<PermissionArea, string>,
     danger: {
         sensitive: 'Sensitive',
@@ -3896,6 +3911,11 @@ export const en = {
             'The duplicates changed since this report, so nothing was applied. Check the new report, then fix again.',
         server_not_stopped: 'Stop FXServer first: the tools change files only while it is stopped.',
         tool_not_available: 'This tool works on GTA V servers only: this server runs RedM.',
+        backup_running: 'A backup is already under way. Wait for it to end, or cancel it.',
+        invalid_backup_settings: 'Some settings need fixing. Each one says why next to its field.',
+        invalid_backup_destination: 'This destination needs fixing. Each field says why.',
+        backup_not_configured: 'Add a destination first: a backup needs somewhere to go.',
+        backup_copy_unavailable: 'This copy is no longer stored there.',
     } satisfies Record<ErrorCode, ErrorMessage>,
     failure: {
         unknown: 'Something went wrong. Try again.',

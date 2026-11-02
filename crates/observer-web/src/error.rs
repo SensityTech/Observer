@@ -94,7 +94,10 @@ fn status(code: ErrorCode) -> StatusCode {
         | ErrorCode::CheckRunning
         | ErrorCode::PlanChanged
         | ErrorCode::ServerNotStopped
-        | ErrorCode::ToolNotAvailable => StatusCode::CONFLICT,
+        | ErrorCode::ToolNotAvailable
+        | ErrorCode::BackupRunning
+        | ErrorCode::BackupNotConfigured
+        | ErrorCode::BackupCopyUnavailable => StatusCode::CONFLICT,
         ErrorCode::LaunchFailed
         | ErrorCode::DelayTooLong
         | ErrorCode::NotDownloadable
@@ -126,7 +129,9 @@ fn status(code: ErrorCode) -> StatusCode {
         | ErrorCode::InvalidGlob
         | ErrorCode::AddressSearch
         | ErrorCode::InvalidSearch
-        | ErrorCode::InvalidPlayersSettings => StatusCode::BAD_REQUEST,
+        | ErrorCode::InvalidPlayersSettings
+        | ErrorCode::InvalidBackupSettings
+        | ErrorCode::InvalidBackupDestination => StatusCode::BAD_REQUEST,
         ErrorCode::TooManyAttempts
         | ErrorCode::TooManySockets
         | ErrorCode::TooManyCommands
