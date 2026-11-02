@@ -10,7 +10,7 @@ use observer_app::{
     Accounts, Artifacts, ArtifactsSetup, ArtifactsTask, AuditLog, Changes, ChangesSetup, Clock,
     DatabaseFiles, Diagnostics, DiagnosticsSetup, Drops, DropsSetup, Metrics, MetricsSetup, OwnPaths,
     PasswordCost, Players, PlayersSetup, Running, Schedule, ScheduleSetup, ScheduleTask, Servers, Setup,
-    Sources, Supervision, Tools, ToolsHook, ToolsSetup,
+    Sources, Statistics, Supervision, Tools, ToolsHook, ToolsSetup,
 };
 use observer_artifacts::Http;
 use observer_artifacts::catalog::Catalog;
@@ -185,6 +185,7 @@ pub async fn run(config: Config, args: RunArgs) -> anyhow::Result<()> {
     let setup_token = setup::offer_link(&accounts, config.http.listen).await?;
 
     let stop = CancellationToken::new();
+    let statistics = Statistics::new(metrics.clone(), drops.clone(), changes.clone(), clock.clone());
     let services = observer_web::Services {
         accounts: accounts.clone(),
         audit: audit.clone(),
@@ -199,6 +200,7 @@ pub async fn run(config: Config, args: RunArgs) -> anyhow::Result<()> {
         drops,
         changes,
         tools: tools.clone(),
+        statistics,
     };
     let state = observer_web::AppState::new(
         BUILD,

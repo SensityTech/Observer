@@ -212,3 +212,252 @@ async fn the_live_topic_gives_the_newest_sample_then_each_one_taken() {
     assert!(sample["cores"].as_u64().unwrap() >= 1);
     assert_eq!(snapshot["data"]["latest"]["ts"], sample["ts"]);
 }
+
+/// Masks: the dashboard, the drops' statistics with the dashboard, and the file changes too.
+const DASHBOARD: &str = "1";
+const DROPS: &str = "10001";
+const DROPS_AND_CHANGES: &str = "30001";
+
+#[tokio::test]
+async fn the_timeline_reads_any_window_with_its_percentiles_and_usual_range() {
+    let server = Server::new().await;
+    let owner = server.owner().await;
+    let console = server.member(&owner, "grace", "2").await;
+    let viewer = server.member(&owner, "kenji", DASHBOARD).await;
+    let path = format!(
+        "/api/metrics/timeline?from={}&to={NOW}&series=players,mainTick,mainThreadCpu",
+        NOW - 86_400
+    );
+
+    let refused = server.call(Method::GET, &path, Some(&console), None).await;
+    let answered = server.call(Method::GET, &path, Some(&viewer), None).await;
+
+    assert_eq!(refused.status, StatusCode::FORBIDDEN);
+    assert_eq!(answered.status, StatusCode::OK, "{}", answered.text);
+    let body = answered.json();
+    // A day that does not start on a multiple of two minutes takes one bucket more.
+    assert_eq!((&body["step"], &body["buckets"]), (&json!(120), &json!(721)));
+    assert_eq!(body["series"][2]["series"], "mainThreadCpu");
+    assert_eq!(body["frames"]["p99"].as_array().unwrap().len(), 721);
+    assert_eq!(body["frames"]["since"], Value::Null, "no histogram yet");
+    assert_eq!(body["usual"]["low"].as_array().unwrap().len(), 721);
+    let only_cpu = server
+        .call(
+            Method::GET,
+            &format!(
+                "/api/metrics/timeline?from={}&to={NOW}&series=fxsCpu&points=48",
+                NOW - 86_400
+            ),
+            Some(&viewer),
+            None,
+        )
+        .await
+        .json();
+    assert_eq!(
+        (&only_cpu["step"], &only_cpu["frames"], &only_cpu["usual"]),
+        (&json!(1800), &Value::Null, &Value::Null)
+    );
+}
+
+#[tokio::test]
+async fn the_timeline_refuses_a_window_it_cannot_read() {
+    let server = Server::new().await;
+    let owner = server.owner().await;
+    let twenty_five: Vec<&str> = Series::ALL[..25].iter().map(|series| series.name()).collect();
+    let twenty_five = twenty_five.join(",");
+    let day = NOW - 86_400;
+
+    for (query, params) in [
+        (format!("to={NOW}&series=players"), json!({ "from": null })),
+        (
+            format!("from=yesterday&to={NOW}&series=players"),
+            json!({ "from": "yesterday" }),
+        ),
+        (
+            format!("from={NOW}&to={day}&series=players"),
+            json!({ "from": NOW, "to": day }),
+        ),
+        (
+            format!("from={}&to={NOW}&series=players", NOW - 30),
+            json!({ "from": NOW - 30, "to": NOW }),
+        ),
+        (
+            format!("from={day}&to={NOW}&series=players&points=many"),
+            json!({ "points": "many" }),
+        ),
+        (
+            format!("from={day}&to={NOW}&series={twenty_five}"),
+            json!({ "series": twenty_five }),
+        ),
+    ] {
+        let reply = server
+            .call(
+                Method::GET,
+                &format!("/api/metrics/timeline?{query}"),
+                Some(&owner),
+                None,
+            )
+            .await;
+
+        assert_eq!(reply.status, StatusCode::BAD_REQUEST, "{query}");
+        assert_eq!(
+            reply.json(),
+            json!({ "code": "invalid_request", "params": params }),
+            "{query}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn events_leave_out_what_the_caller_may_not_see_and_say_so() {
+    let server = Server::new().await;
+    let owner = server.owner().await;
+    let console = server.member(&owner, "grace", "2").await;
+    let viewer = server.member(&owner, "kenji", DASHBOARD).await;
+    let everything = server.member(&owner, "noor", DROPS_AND_CHANGES).await;
+    let path = format!("/api/metrics/events?from={}&to={NOW}", NOW - 86_400);
+
+    let refused = server.call(Method::GET, &path, Some(&console), None).await;
+    let runs_only = server.call(Method::GET, &path, Some(&viewer), None).await;
+    let all = server.call(Method::GET, &path, Some(&everything), None).await;
+    let reversed = server
+        .call(
+            Method::GET,
+            &format!("/api/metrics/events?from={NOW}&to={}", NOW - 60),
+            Some(&viewer),
+            None,
+        )
+        .await;
+
+    assert_eq!(refused.status, StatusCode::FORBIDDEN);
+    assert_eq!(runs_only.status, StatusCode::OK, "{}", runs_only.text);
+    assert_eq!(
+        runs_only.json(),
+        json!({ "events": [], "links": [], "omitted": ["changes", "drops"] })
+    );
+    assert_eq!(all.status, StatusCode::OK, "{}", all.text);
+    assert_eq!(all.json()["omitted"], json!([]));
+    assert_eq!(reversed.status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn saying_a_link_is_not_related_takes_both_views_and_is_audited() {
+    let server = Server::new().await;
+    let owner = server.owner().await;
+    let viewer = server.member(&owner, "kenji", DASHBOARD).await;
+    let drops = server.member(&owner, "grace", DROPS).await;
+    let both = server.member(&owner, "noor", DROPS_AND_CHANGES).await;
+    let body = json!({ "link": "start:4>wave:9:120", "dismissed": true });
+
+    let without_drops = server
+        .call(
+            Method::PUT,
+            "/api/metrics/links",
+            Some(&viewer),
+            Some(body.clone()),
+        )
+        .await;
+    let without_changes = server
+        .call(
+            Method::PUT,
+            "/api/metrics/links",
+            Some(&drops),
+            Some(body.clone()),
+        )
+        .await;
+    let dismissed = server
+        .call(Method::PUT, "/api/metrics/links", Some(&both), Some(body))
+        .await;
+    let malformed = server
+        .call(
+            Method::PUT,
+            "/api/metrics/links",
+            Some(&both),
+            Some(json!({ "link": "wave", "dismissed": true })),
+        )
+        .await;
+
+    assert_eq!(without_drops.status, StatusCode::FORBIDDEN);
+    assert_eq!(without_changes.status, StatusCode::FORBIDDEN);
+    assert_eq!(without_changes.json()["params"]["permission"], "changesView");
+    assert_eq!(dismissed.status, StatusCode::NO_CONTENT, "{}", dismissed.text);
+    assert_eq!(malformed.status, StatusCode::BAD_REQUEST);
+    let audit = server
+        .call(
+            Method::GET,
+            "/api/audit?action=statistics_link_dismissed",
+            Some(&owner),
+            None,
+        )
+        .await
+        .json();
+    assert_eq!(audit["entries"][0]["target"], "start:4>wave:9:120");
+    assert_eq!(audit["entries"][0]["actorName"], "noor");
+}
+
+#[tokio::test]
+async fn the_insights_take_the_dashboard_or_the_drops_permission() {
+    let server = Server::new().await;
+    let owner = server.owner().await;
+    let viewer = server.member(&owner, "kenji", DASHBOARD).await;
+    let drops = server.member(&owner, "grace", DROPS).await;
+    let both = server.member(&owner, "noor", DROPS_AND_CHANGES).await;
+
+    for path in [
+        "/api/metrics/frames?range=7d",
+        "/api/metrics/hours",
+        "/api/metrics/runs?range=30d",
+    ] {
+        let answered = server.call(Method::GET, path, Some(&viewer), None).await;
+        assert_eq!(answered.status, StatusCode::OK, "{path}: {}", answered.text);
+    }
+    for path in [
+        "/api/servers/default/drops/sessions?range=7d",
+        "/api/servers/default/drops/effects",
+    ] {
+        let refused = server.call(Method::GET, path, Some(&viewer), None).await;
+        let answered = server.call(Method::GET, path, Some(&drops), None).await;
+        assert_eq!(refused.status, StatusCode::FORBIDDEN, "{path}");
+        assert_eq!(answered.status, StatusCode::OK, "{path}: {}", answered.text);
+    }
+    let hours = server
+        .call(Method::GET, "/api/metrics/hours", Some(&viewer), None)
+        .await
+        .json();
+    assert_eq!(hours["players"].as_array().unwrap().len(), 168);
+    assert_eq!(hours["quietest"], Value::Null, "nobody played yet");
+    let frames = server
+        .call(Method::GET, "/api/metrics/frames?range=24h", Some(&viewer), None)
+        .await
+        .json();
+    assert_eq!(
+        (&frames["range"], &frames["now"]["ticks"]),
+        (&json!("24h"), &json!(0))
+    );
+    let bad = server
+        .call(Method::GET, "/api/metrics/frames?range=2d", Some(&viewer), None)
+        .await;
+    assert_eq!(bad.status, StatusCode::BAD_REQUEST);
+    let builds_only = server
+        .call(
+            Method::GET,
+            "/api/servers/default/drops/effects",
+            Some(&drops),
+            None,
+        )
+        .await
+        .json();
+    let with_changes = server
+        .call(
+            Method::GET,
+            "/api/servers/default/drops/effects",
+            Some(&both),
+            None,
+        )
+        .await
+        .json();
+    assert_eq!(
+        (&builds_only["changes"], &with_changes["changes"]),
+        (&json!(false), &json!(true))
+    );
+}

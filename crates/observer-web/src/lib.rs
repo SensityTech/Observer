@@ -19,7 +19,7 @@ use axum::extract::Request;
 use axum::{Router, middleware};
 use observer_app::{
     Accounts, Artifacts, AuditLog, Changes, Diagnostics, Drops, Files, Metrics, Players, Schedule, Servers,
-    Supervision, Tools,
+    Statistics, Supervision, Tools,
 };
 use observer_domain::about::Build;
 use tower_http::catch_panic::CatchPanicLayer;
@@ -51,6 +51,7 @@ pub struct AppState {
     pub drops: Drops,
     pub changes: Changes,
     pub tools: Tools,
+    pub statistics: Statistics,
     pub live: Live,
     /// Cookies ignore ports, so the name carries the instance id: two Observers on one host never
     /// read each other's sessions.
@@ -75,6 +76,7 @@ pub struct Services {
     pub drops: Drops,
     pub changes: Changes,
     pub tools: Tools,
+    pub statistics: Statistics,
 }
 
 impl AppState {
@@ -99,6 +101,7 @@ impl AppState {
             drops,
             changes,
             tools,
+            statistics,
         } = services;
         Self {
             build,
@@ -115,6 +118,7 @@ impl AppState {
             drops,
             changes,
             tools,
+            statistics,
             live: Live::new(),
             cookie: format!("observer_session_{instance_id}"),
             hosts: hosts.into(),

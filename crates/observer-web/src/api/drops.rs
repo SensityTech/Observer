@@ -12,6 +12,7 @@ use observer_domain::drops::{
     ChartCategory, CrashDrops, DropCategory, DropChanges, DropKind, DropLog, DropLogRow, DropSeries,
     DropUptime, DropsRange, DropsSettings, DropsSummary, ResourceTable, SignatureTable,
 };
+use observer_domain::statistics::{SessionSurvival, StabilityEffects};
 use serde::Deserialize;
 
 use crate::AppState;
@@ -90,6 +91,21 @@ pub(crate) async fn uptime(
     QueryParams(query): QueryParams<RangeQuery>,
 ) -> Result<Json<DropUptime>, Failure> {
     Ok(Json(state.drops.uptime(query.range).await?))
+}
+
+pub(crate) async fn sessions(
+    State(state): State<AppState>,
+    QueryParams(query): QueryParams<RangeQuery>,
+) -> Result<Json<SessionSurvival>, Failure> {
+    Ok(Json(state.drops.sessions(query.range).await?))
+}
+
+/// What each recorded change did to stability; resources and the cfg only for `CHANGES_VIEW`.
+pub(crate) async fn effects(
+    State(state): State<AppState>,
+    Extension(caller): Extension<Caller>,
+) -> Result<Json<StabilityEffects>, Failure> {
+    Ok(Json(state.statistics.effects(&caller).await?))
 }
 
 #[derive(Debug, Deserialize)]

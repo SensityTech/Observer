@@ -27,7 +27,7 @@ use observer_app::{
     Accounts, Artifacts, ArtifactsSetup, ArtifactsTask, AuditLog, Changes, ChangesSetup, ChangesTask, Clock,
     Diagnostics, DiagnosticsSetup, DiagnosticsTask, Drops, DropsSetup, DropsTask, Metrics, MetricsSetup,
     OwnPaths, PasswordCost, Players, PlayersSetup, PlayersTask, Running, Schedule, ScheduleSetup,
-    ScheduleTask, Servers, Setup, Supervision, Tools, ToolsSetup,
+    ScheduleTask, Servers, Setup, Statistics, Supervision, Tools, ToolsSetup,
 };
 use observer_artifacts::Http;
 use observer_artifacts::catalog::{Catalog, Listing};
@@ -238,6 +238,7 @@ impl Server {
             gate: files.commit_gate(),
             own_paths: OwnPaths::of(vec![dir.path().join("data")]),
         });
+        let statistics = Statistics::new(metrics.clone(), drops.clone(), changes.clone(), clock.clone());
         let services = Services {
             accounts: accounts.clone(),
             audit: audit.clone(),
@@ -252,6 +253,7 @@ impl Server {
             drops,
             changes,
             tools,
+            statistics,
         };
         let state = AppState::new(
             BUILD,

@@ -277,6 +277,11 @@ impl Series {
 
     /// Reads `players,slots,…`: one to [`MAX_SERIES`] distinct names, in the order given.
     pub fn parse_list(list: &str) -> Result<Vec<Self>, InvalidSeries> {
+        Self::parse_list_of(list, MAX_SERIES)
+    }
+
+    /// The same, with one to `most` names.
+    pub fn parse_list_of(list: &str, most: usize) -> Result<Vec<Self>, InvalidSeries> {
         let mut series = Vec::new();
         for name in list.split(',') {
             let known = Self::ALL
@@ -288,7 +293,7 @@ impl Series {
             }
             series.push(known);
         }
-        if series.len() > MAX_SERIES {
+        if series.len() > most {
             return Err(InvalidSeries);
         }
         Ok(series)
