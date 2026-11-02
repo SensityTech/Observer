@@ -619,6 +619,72 @@ pub fn window(conn: &Connection, from_ms: i64, to_ms: i64, now_ms: i64) -> Resul
     Ok(counts)
 }
 
+/// A player's crash, as the crash waves read them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CrashRow {
+    pub session: i64,
+    pub ended_ms: i64,
+    pub signature: i64,
+    /// The player's pseudonym, once their identity was confirmed.
+    pub player: Option<[u8; 16]>,
+}
+
+/// The crashes with a signature that ended from `from_ms` to before `to_ms`, oldest first.
+pub fn crashes(conn: &Connection, from_ms: i64, to_ms: i64) -> Result<Vec<CrashRow>, StoreError> {
+    let mut statement = conn.prepare_cached(
+        "SELECT id, ended_ms, signature, player FROM player_session
+         WHERE category = 'crash' AND signature IS NOT NULL AND ended_ms >= ?1 AND ended_ms < ?2
+         ORDER BY ended_ms, id",
+    )?;
+    let rows = statement.query_map(params![from_ms, to_ms], |row| {
+        Ok(CrashRow {
+            session: row.get(0)?,
+            ended_ms: row.get(1)?,
+            signature: row.get(2)?,
+            player: row
+                .get::<_, Option<Vec<u8>>>(3)?
+                .and_then(|player| <[u8; 16]>::try_from(player).ok()),
+        })
+    })?;
+    Ok(rows.collect::<Result<_, _>>()?)
+}
+
+/// A session whose join Observer saw, as how long players stay reads it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StartedSession {
+    pub joined_ms: i64,
+    pub ended_ms: Option<i64>,
+    /// On FXServer's game timer, for a reported drop.
+    pub length_ms: Option<i64>,
+    pub category: Option<DropCategory>,
+    pub kind: Option<DropKind>,
+}
+
+/// The sessions whose join was seen from `from_ms` to before `to_ms`.
+pub fn started(conn: &Connection, from_ms: i64, to_ms: i64) -> Result<Vec<StartedSession>, StoreError> {
+    // A seen join is when the session was first seen, which the index covers.
+    let mut statement = conn.prepare_cached(
+        "SELECT joined_ms, ended_ms, length_ms, category, kind FROM player_session
+         WHERE seen_ms >= ?1 AND seen_ms < ?2 AND joined_ms IS NOT NULL",
+    )?;
+    let rows = statement.query_map(params![from_ms, to_ms], |row| {
+        Ok(StartedSession {
+            joined_ms: row.get(0)?,
+            ended_ms: row.get(1)?,
+            length_ms: row.get(2)?,
+            category: row
+                .get::<_, Option<String>>(3)?
+                .as_deref()
+                .and_then(DropCategory::from_name),
+            kind: row
+                .get::<_, Option<String>>(4)?
+                .as_deref()
+                .and_then(DropKind::from_name),
+        })
+    })?;
+    Ok(rows.collect::<Result<_, _>>()?)
+}
+
 /// A crash signature as stored.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SignatureRow {

@@ -277,6 +277,11 @@ impl Series {
 
     /// Reads `players,slots,…`: one to [`MAX_SERIES`] distinct names, in the order given.
     pub fn parse_list(list: &str) -> Result<Vec<Self>, InvalidSeries> {
+        Self::parse_list_of(list, MAX_SERIES)
+    }
+
+    /// The same, with one to `most` names.
+    pub fn parse_list_of(list: &str, most: usize) -> Result<Vec<Self>, InvalidSeries> {
         let mut series = Vec::new();
         for name in list.split(',') {
             let known = Self::ALL
@@ -288,7 +293,7 @@ impl Series {
             }
             series.push(known);
         }
-        if series.len() > MAX_SERIES {
+        if series.len() > most {
             return Err(InvalidSeries);
         }
         Ok(series)
@@ -639,11 +644,18 @@ pub struct Growth {
     pub points: u32,
     /// Steady growth past the threshold: a possible leak.
     pub leak: bool,
+    /// How far the points stray from the line: the standard deviation of what it leaves out.
+    /// `None` under three points.
+    pub residual: Option<f64>,
+    /// The standard error of `per_hour`, widened for minutes that follow each other closely.
+    pub slope_error: Option<f64>,
+    /// The mean of the fitted points' times, in seconds since `from`: where the line is surest.
+    pub center: f64,
 }
 
 impl Growth {
     /// The line through `(seconds since from, value, samples)` points spanning `span` seconds, and
-    /// the verdict against `threshold`.
+    /// the verdict against `threshold`. Points come in time order.
     pub fn of(points: &[(f64, f64, f64)], span: i64, threshold: LeakThreshold) -> Option<Self> {
         let line = fit(points)?;
         let per_hour = line.slope * 3600.0;
@@ -652,12 +664,76 @@ impl Growth {
             && span >= LEAK_SPAN
             && line.r2 >= LEAK_FIT
             && per_hour >= threshold.floor.max(threshold.share * line.intercept);
+        let spread = Spread::of(points, line);
         Some(Self {
             per_hour,
             fit: line.r2,
             start: line.intercept,
             points: count,
             leak,
+            residual: spread.map(|spread| spread.residual),
+            slope_error: spread.map(|spread| spread.slope_error * 3600.0),
+            center: spread.map_or(0.0, |spread| spread.center),
+        })
+    }
+
+    /// Where the line puts the value `seconds` after `from`, and the 95 % band a new point would
+    /// fall in: the points' own spread plus the slope's uncertainty, which grows away from the
+    /// centre. `None` without the spread.
+    pub fn forecast(&self, seconds: f64) -> Option<(f64, f64, f64)> {
+        let (residual, slope_error) = (self.residual?, self.slope_error? / 3600.0);
+        let mid = self.start + self.per_hour / 3600.0 * seconds;
+        let away = seconds - self.center;
+        let half = Z_95 * (residual * residual + away * away * slope_error * slope_error).sqrt();
+        Some((mid - half, mid, mid + half))
+    }
+}
+
+/// The normal quantile of a 95 % band.
+const Z_95: f64 = 1.96;
+/// Above this, neighbouring minutes are taken as moving together almost entirely.
+const MOST_CORRELATION: f64 = 0.95;
+
+/// How the points spread around their line.
+#[derive(Debug, Clone, Copy)]
+struct Spread {
+    residual: f64,
+    /// Per second.
+    slope_error: f64,
+    center: f64,
+}
+
+impl Spread {
+    fn of(points: &[(f64, f64, f64)], line: Fit) -> Option<Self> {
+        if points.len() < 3 {
+            return None;
+        }
+        #[allow(clippy::cast_precision_loss)]
+        let count = points.len() as f64;
+        let residuals: Vec<f64> = points
+            .iter()
+            .map(|&(x, y, _)| y - (line.intercept + line.slope * x))
+            .collect();
+        let squares: f64 = residuals.iter().map(|residual| residual * residual).sum();
+        let center = points.iter().map(|&(x, _, _)| x).sum::<f64>() / count;
+        let spread_x: f64 = points.iter().map(|&(x, _, _)| (x - center).powi(2)).sum();
+        if spread_x <= 0.0 {
+            return None;
+        }
+        let variance = squares / (count - 2.0);
+        // Each minute sits close to the one before: as many minutes say less than as many
+        // independent points would, by the lag-one correlation of what the line leaves out.
+        let correlation = if squares > 0.0 {
+            let lagged: f64 = residuals.windows(2).map(|pair| pair[0] * pair[1]).sum();
+            (lagged / squares).clamp(0.0, MOST_CORRELATION)
+        } else {
+            0.0
+        };
+        let widened = (1.0 + correlation) / (1.0 - correlation);
+        Some(Self {
+            residual: variance.sqrt(),
+            slope_error: (variance / spread_x * widened).sqrt(),
+            center,
         })
     }
 }
@@ -896,5 +972,82 @@ mod tests {
         // 10,000 handles: 2% an hour is 200.
         let many = Growth::of(&line(60, 10_000.0, 150.0 / 60.0), 3600, HANDLES_LEAK).unwrap();
         assert!(!many.leak);
+    }
+
+    #[test]
+    fn an_exact_line_forecasts_without_any_band() {
+        let growth = Growth::of(&line(60, 1e9, 1e6), 3600, PRIVATE_LEAK).unwrap();
+
+        let (low, mid, high) = growth.forecast(7200.0).unwrap();
+
+        assert!((mid - (1e9 + 120.0 * 1e6)).abs() < 1.0, "{mid}");
+        assert!((high - low).abs() < 1.0, "{low} {high}");
+        assert!(
+            (growth.center - 1800.0).abs() < 1e-6,
+            "the minutes' middles average half an hour"
+        );
+    }
+
+    #[test]
+    fn the_band_widens_away_from_the_fitted_minutes() {
+        // A rising line with a seesaw of 1 MB: residuals alternate, so no widening for correlation.
+        let points: Vec<(f64, f64, f64)> = (0..60)
+            .map(|minute| {
+                let seesaw = if minute % 2 == 0 { 1e6 } else { -1e6 };
+                (
+                    60.0 * f64::from(minute),
+                    1e9 + 1e6 * f64::from(minute) + seesaw,
+                    12.0,
+                )
+            })
+            .collect();
+        let growth = Growth::of(&points, 3600, PRIVATE_LEAK).unwrap();
+        let width = |seconds: f64| {
+            let (low, _, high) = growth.forecast(seconds).unwrap();
+            high - low
+        };
+
+        assert!((growth.residual.unwrap() - 1e6).abs() < 2e4, "{growth:?}");
+        assert!(width(growth.center) < width(3600.0 * 3.0));
+        assert!(width(3600.0 * 3.0) < width(3600.0 * 24.0));
+        assert!(width(growth.center) >= 2.0 * 1.96 * growth.residual.unwrap() - 1.0);
+    }
+
+    #[test]
+    fn minutes_that_drift_together_widen_the_slope_error() {
+        // Slow waves around the line: neighbouring residuals share their sign.
+        let wave = |minute: u32| 4e6 * (f64::from(minute) / 6.0).sin();
+        let drifting: Vec<(f64, f64, f64)> = (0..120)
+            .map(|minute| {
+                (
+                    60.0 * f64::from(minute),
+                    1e9 + 1e6 * f64::from(minute) + wave(minute),
+                    12.0,
+                )
+            })
+            .collect();
+        // The same residuals, shuffled into alternation by reversing every other one's sign.
+        let alternating: Vec<(f64, f64, f64)> = (0..120)
+            .map(|minute| {
+                let sign = if minute % 2 == 0 { 1.0 } else { -1.0 };
+                (
+                    60.0 * f64::from(minute),
+                    1e9 + 1e6 * f64::from(minute) + sign * wave(minute).abs(),
+                    12.0,
+                )
+            })
+            .collect();
+
+        let drifting = Growth::of(&drifting, 7200, PRIVATE_LEAK).unwrap();
+        let alternating = Growth::of(&alternating, 7200, PRIVATE_LEAK).unwrap();
+
+        assert!(
+            drifting.slope_error.unwrap() > 3.0 * alternating.slope_error.unwrap(),
+            "{drifting:?} {alternating:?}"
+        );
+        assert_eq!(
+            Growth::of(&line(2, 1e9, 1e6), 60, PRIVATE_LEAK).unwrap().residual,
+            None
+        );
     }
 }
