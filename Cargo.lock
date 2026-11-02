@@ -1749,6 +1749,7 @@ dependencies = [
 name = "fake-fxserver"
 version = "0.1.0"
 dependencies = [
+ "flate2",
  "jiff",
  "lzma-rust2",
  "minidump-synth",
@@ -3541,6 +3542,7 @@ dependencies = [
  "hmac",
  "jiff",
  "observer-artifacts",
+ "observer-backups",
  "observer-domain",
  "observer-fxserver",
  "observer-gamefiles",

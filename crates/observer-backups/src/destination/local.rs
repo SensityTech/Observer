@@ -115,6 +115,24 @@ pub async fn open(location: &str) -> Result<(tokio::fs::File, u64), Failure> {
     Ok((file, bytes))
 }
 
+/// Makes the folder if it is missing, then writes and deletes a small file in it.
+pub async fn test(folder: &Path) -> Result<(), Failure> {
+    let folder = folder.to_path_buf();
+    tokio::task::spawn_blocking(move || -> Result<(), Failure> {
+        fs::create_dir_all(&folder)?;
+        let mut name = [0u8; 8];
+        getrandom::fill(&mut name).map_err(|error| Failure::with(BackupError::Io, error.to_string()))?;
+        let path = folder.join(format!(".observer-test-{}", super::sigv4::hex(&name)));
+        let mut file = OpenOptions::new().write(true).create_new(true).open(&path)?;
+        let written = file.write_all(b"observer").and_then(|()| file.sync_all());
+        drop(file);
+        fs::remove_file(&path)?;
+        Ok(written?)
+    })
+    .await
+    .map_err(io::Error::other)?
+}
+
 /// Whether `folder` is `outer` or lies under it, once both are resolved as far as they exist:
 /// links and `..` cannot hide a folder inside another.
 pub fn inside(folder: &Path, outer: &Path) -> bool {

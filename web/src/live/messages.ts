@@ -236,6 +236,15 @@ const AUDIT_ACTIONS = {
     tool_settings_changed: true,
     tool_files_changed: true,
     tool_files_restored: true,
+    backup_settings_changed: true,
+    backup_destination_created: true,
+    backup_destination_changed: true,
+    backup_destination_deleted: true,
+    backup_finished: true,
+    backup_cancelled: true,
+    backup_downloaded: true,
+    backup_deleted: true,
+    backups_expired: true,
 } satisfies Record<AuditAction, true>;
 
 const OUTCOMES = { success: true, failure: true, denied: true } satisfies Record<Outcome, true>;

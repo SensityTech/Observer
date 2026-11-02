@@ -159,10 +159,35 @@ pub enum AuditAction {
     /// tool; `details` holds the `run`, the `reason` (`heal` or `undo`), the `files` (a capped
     /// list) and their `count`.
     ToolFilesRestored,
+    /// `details` holds each changed setting with its value before and after, and
+    /// `passwordChanged` when the manual source's password was replaced, never the password.
+    BackupSettingsChanged,
+    /// The target is the destination's id; `details` hold its name, kind and fields, never its
+    /// secret, and `secretSet` when one was given.
+    BackupDestinationCreated,
+    /// `details` hold each changed field with its value before and after, and `secretChanged`.
+    BackupDestinationChanged,
+    /// `details` hold its name, kind, and the copies left where it pointed (`stored`).
+    BackupDestinationDeleted,
+    /// A run ended, by whoever asked for it or the system. The target is the run; `details` hold
+    /// its `trigger`, `outcome`, `database`, `fileBytes`, the copies `stored` and `failed`,
+    /// `serverStarted`, and the `error` it failed with.
+    BackupFinished,
+    /// Someone cancelled the run under way, the target.
+    BackupCancelled,
+    /// A copy of a backup went out of Observer: the target is the run, `details` hold the `copy` and
+    /// its `destination`.
+    BackupDownloaded,
+    /// The owner deleted a backup's copies everywhere: the target is the run, `details` hold the
+    /// copies `deleted` and those that could not be (`failed`).
+    BackupDeleted,
+    /// A destination's retention let copies go after a run. The target is the destination;
+    /// `details` hold the `run` and the copies `deleted`.
+    BackupsExpired,
 }
 
 impl AuditAction {
-    pub const ALL: [Self; 84] = [
+    pub const ALL: [Self; 93] = [
         Self::SetupCompleted,
         Self::SetupLinkCreated,
         Self::LoginSucceeded,
@@ -247,6 +272,15 @@ impl AuditAction {
         Self::ToolSettingsChanged,
         Self::ToolFilesChanged,
         Self::ToolFilesRestored,
+        Self::BackupSettingsChanged,
+        Self::BackupDestinationCreated,
+        Self::BackupDestinationChanged,
+        Self::BackupDestinationDeleted,
+        Self::BackupFinished,
+        Self::BackupCancelled,
+        Self::BackupDownloaded,
+        Self::BackupDeleted,
+        Self::BackupsExpired,
     ];
 
     pub const fn as_str(self) -> &'static str {
@@ -335,6 +369,15 @@ impl AuditAction {
             Self::ToolSettingsChanged => "tool_settings_changed",
             Self::ToolFilesChanged => "tool_files_changed",
             Self::ToolFilesRestored => "tool_files_restored",
+            Self::BackupSettingsChanged => "backup_settings_changed",
+            Self::BackupDestinationCreated => "backup_destination_created",
+            Self::BackupDestinationChanged => "backup_destination_changed",
+            Self::BackupDestinationDeleted => "backup_destination_deleted",
+            Self::BackupFinished => "backup_finished",
+            Self::BackupCancelled => "backup_cancelled",
+            Self::BackupDownloaded => "backup_downloaded",
+            Self::BackupDeleted => "backup_deleted",
+            Self::BackupsExpired => "backups_expired",
         }
     }
 

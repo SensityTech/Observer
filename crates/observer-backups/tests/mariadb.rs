@@ -3,6 +3,8 @@
 //! an installation: its server is started on a data folder of its own in a temporary folder, with
 //! no option file but its own, on a free port of the loopback. It never connects to the host's own
 //! server.
+// The helpers below are test code too, though not inside a `#[test]` function.
+#![allow(clippy::unwrap_used)]
 
 use std::net::{Ipv4Addr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
