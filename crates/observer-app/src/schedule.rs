@@ -22,6 +22,7 @@ use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
+pub(crate) use self::engine::fixed_occurrences;
 use self::engine::{Applied, DropReason, Effect, Input, Miss, ServerView, Settings, State, Target};
 use crate::audit::Record;
 use crate::supervision::{ScheduledRefusal, ScheduledRestart};

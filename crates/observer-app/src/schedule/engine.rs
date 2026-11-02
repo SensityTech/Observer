@@ -876,7 +876,7 @@ impl State {
 /// time each comes from. A time a clock change skips happens as much later as the change lasts; a
 /// time it repeats happens on its first pass. A time the change moves onto another, or to less than
 /// [`MIN_GAP_MINUTES`] from it, is dropped that day: the other one restarts the server then.
-fn fixed_occurrences(
+pub(crate) fn fixed_occurrences(
     times: &[String],
     zone: &TimeZone,
     after: Timestamp,

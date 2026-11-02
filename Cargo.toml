@@ -11,6 +11,7 @@ publish = false
 [workspace.dependencies]
 observer-app = { path = "crates/observer-app" }
 observer-artifacts = { path = "crates/observer-artifacts" }
+observer-backups = { path = "crates/observer-backups" }
 observer-domain = { path = "crates/observer-domain" }
 observer-fxserver = { path = "crates/observer-fxserver" }
 observer-gamefiles = { path = "crates/observer-gamefiles" }

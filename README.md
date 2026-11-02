@@ -260,6 +260,7 @@ data/
 │   └── .trash/            deleted builds on their way out
 ├── crashes/               FXServer's crash dumps and hang snapshots: the last 10, 20 GiB at most
 ├── tools/backups/         the originals of the files the server tools changed, each with a .json
+├── database-backups/.work/ the game database's backup under way, emptied at every start
 └── fxserver.pid           Linux: the running FXServer, which the next start ends if Observer died
 ```
 
@@ -286,7 +287,8 @@ The backups are complete snapshots of the state database:
 
 Observer itself only talks to Cfx.re, over HTTPS on port 443, when someone lists or installs builds
 from the panel, the setup or `observer artifacts`. It follows redirects only to the same hosts and
-ignores proxy settings. FXServer's own traffic is FXServer's.
+ignores proxy settings. FXServer's own traffic is FXServer's. The database backups reach the
+database server and the SFTP hosts and S3 endpoints the owner adds as destinations, nothing else.
 
 | Host | For |
 |---|---|
@@ -698,6 +700,44 @@ sftp = "off"
 diagnostics = "off"
 ```
 
+## Database backups
+
+Observer can back up the game server's database, the one oxmysql or mysql-async read through
+`mysql_connection_string`, and send each backup to one or more destinations. Observer's own
+`observer.sqlite3` has its own backups, in the data folder's `backups/`.
+
+- **The dump** is made by the database's own tool: `mariadb-dump` for MariaDB, `mysqldump` for MySQL,
+  with `--single-transaction`, so tables in InnoDB are as they were at one instant without locking
+  them. Install the client tools on the host (`apt install mariadb-client`, or the client of the
+  MariaDB or MySQL installer on Windows). Observer finds them on the `PATH` or in the usual install
+  folders, or in the folder the settings name. The password goes to the tool in a temporary option file
+  of Observer's data folder, never on its command line.
+- **The connection** is the cfg's `mysql_connection_string`, read again at each backup, or one typed
+  in the settings, for an account that only reads: it needs `SELECT`, `SHOW VIEW`, `TRIGGER`, `EVENT`,
+  `LOCK TABLES` and the routines (`SHOW_ROUTINE` on MySQL 8, `SELECT` on `mysql.proc` on MariaDB).
+- **The file** is gzipped, `<database>-<UTC time>-<run>.sql.gz`. A dump is kept only when the tool
+  succeeded, the file starts like a dump and ends with its last line, and the file read back is the one
+  written. Tables whose engine has no transactions (MyISAM, Aria, MEMORY) are named in the run: they
+  are copied as the dump reaches them.
+- **When**: before the schedule's restarts and the single restarts someone planned (the default), or
+  before every restart; at fixed times, in the restart schedule's zone; and on request. The backup
+  before a restart is dumped once FXServer has stopped, when resources have saved what they held,
+  and FXServer waits for it one minute at most by default (up to ten): past that it starts anyway,
+  the dump goes on, and the run says so. Copies go out while FXServer runs. A crash restart never waits
+  for a backup.
+- **Destinations**: a folder of the host or a share mounted on it, never inside the server folder; an
+  SFTP server, logging in with a key Observer makes for it (its public half goes in the remote
+  account's `authorized_keys`) or a password, to a host whose key you accept after a test; an
+  S3-compatible store (AWS, Cloudflare R2, Backblaze B2, MinIO, Garage...), over HTTPS. Each keeps the
+  last copies or those of the last days, as you set it, and never loses its newest: older copies go
+  only after a new one arrived. Observer deletes only the files it wrote.
+- **Restoring** is by hand: download a copy from the panel, then `gunzip -c <file>.sql.gz | mariadb -u
+  <user> -p <database>`, into an empty database or one you mean to overwrite. Stop FXServer first.
+
+Seeing the backups, starting one and downloading one are three permissions; the settings and the
+destinations are the owner's, with the password asked again. Passwords and keys are kept in
+`observer.sqlite3`, apart, and never shown again.
+
 ## Integrations
 
 [`resource/CONTRACT.md`](resource/CONTRACT.md) is the integration contract: the server events Observer
@@ -783,6 +823,9 @@ that does.
 - **SFTP: folders are not renamed or moved,** files are; every `*.cfg` file is refused until Observer
   reads which ones the server executes; a file FXServer holds open on Windows cannot be replaced until
   it lets go of it.
+- **Database backups:** MariaDB and MySQL only; one database per server; no encryption by Observer
+  (use the destination's); an S3 copy is one upload of 5 GiB at most; an SFTP host must offer an
+  Ed25519 or ECDSA host key, as every OpenSSH since 6.5 does; no restore from the panel.
 - **Changes: who changed a file** is told only for SFTP writes, by path and time: a hint, since a file
   can be written again after. Changes made while the server runs show at the next start or with
   **Check the disk**, not as they happen.

@@ -34,6 +34,9 @@ impl Permissions {
     pub const DROPS_VIEW: Self = Self(1 << 16);
     pub const CHANGES_VIEW: Self = Self(1 << 17);
     pub const CHANGES_CONTENT: Self = Self(1 << 18);
+    pub const BACKUPS_VIEW: Self = Self(1 << 19);
+    pub const BACKUPS_RUN: Self = Self(1 << 20);
+    pub const BACKUPS_DOWNLOAD: Self = Self(1 << 21);
 
     /// Every permission in the catalog, which is what the owner holds.
     pub fn all() -> Self {
@@ -201,6 +204,7 @@ pub enum PermissionArea {
     Players,
     Drops,
     Changes,
+    Backups,
 }
 
 /// One permission of the catalog, as `GET /api/permissions` returns it.
@@ -391,6 +395,33 @@ pub const CATALOG: &[PermissionInfo] = &[
         danger: Danger::Critical,
         implies: Permissions::CHANGES_VIEW,
     },
+    PermissionInfo {
+        bit: 19,
+        constant: "BACKUPS_VIEW",
+        key: "backupsView",
+        area: PermissionArea::Backups,
+        // Database names, hosts and users, where the copies go and what they weigh: no secret.
+        danger: Danger::Sensitive,
+        implies: Permissions::NONE,
+    },
+    PermissionInfo {
+        bit: 20,
+        constant: "BACKUPS_RUN",
+        key: "backupsRun",
+        area: PermissionArea::Backups,
+        // A dump loads the database server and sends its copies out to every destination.
+        danger: Danger::Sensitive,
+        implies: Permissions::BACKUPS_VIEW,
+    },
+    PermissionInfo {
+        bit: 21,
+        constant: "BACKUPS_DOWNLOAD",
+        key: "backupsDownload",
+        area: PermissionArea::Backups,
+        // A backup is the whole game database: every player, and whatever secrets resources keep there.
+        danger: Danger::Critical,
+        implies: Permissions::BACKUPS_VIEW,
+    },
 ];
 
 #[cfg(test)]
@@ -424,6 +455,9 @@ mod tests {
             (16, "DROPS_VIEW", Permissions::DROPS_VIEW),
             (17, "CHANGES_VIEW", Permissions::CHANGES_VIEW),
             (18, "CHANGES_CONTENT", Permissions::CHANGES_CONTENT),
+            (19, "BACKUPS_VIEW", Permissions::BACKUPS_VIEW),
+            (20, "BACKUPS_RUN", Permissions::BACKUPS_RUN),
+            (21, "BACKUPS_DOWNLOAD", Permissions::BACKUPS_DOWNLOAD),
         ];
 
         assert_eq!(CATALOG.len(), frozen.len());
