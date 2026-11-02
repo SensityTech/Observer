@@ -2,6 +2,7 @@
 //! database in a temporary directory.
 
 mod artifacts;
+mod backups;
 mod changes;
 mod diagnostics;
 mod drops;
@@ -26,10 +27,11 @@ use axum::http::{HeaderMap, Method, Request, StatusCode, header};
 use http_body_util::BodyExt;
 use jiff::SignedDuration;
 use observer_app::{
-    Accounts, Artifacts, ArtifactsSetup, ArtifactsTask, AuditLog, Changes, ChangesSetup, ChangesTask, Clock,
-    Diagnostics, DiagnosticsSetup, DiagnosticsTask, Drops, DropsSetup, DropsTask, Features, FeaturesSetup,
-    Metrics, MetricsSetup, OwnPaths, PasswordCost, Players, PlayersSetup, PlayersTask, Running, Schedule,
-    ScheduleSetup, ScheduleTask, Servers, Setup, Statistics, Supervision, Tools, ToolsSetup,
+    Accounts, Artifacts, ArtifactsSetup, ArtifactsTask, AuditLog, Backups, BackupsSetup, BackupsTask,
+    Changes, ChangesSetup, ChangesTask, Clock, Diagnostics, DiagnosticsSetup, DiagnosticsTask, Drops,
+    DropsSetup, DropsTask, Features, FeaturesSetup, Metrics, MetricsSetup, OwnPaths, PasswordCost, Players,
+    PlayersSetup, PlayersTask, Running, Schedule, ScheduleSetup, ScheduleTask, Servers, Setup, Statistics,
+    Supervision, Tools, ToolsSetup,
 };
 use observer_artifacts::Http;
 use observer_artifacts::catalog::{Catalog, Listing};
@@ -71,6 +73,7 @@ struct Server {
     _playing: PlayersTask,
     _dropping: DropsTask,
     _following: ChangesTask,
+    _backing_up: BackupsTask,
     cookie_name: String,
 }
 
@@ -250,6 +253,17 @@ impl Server {
             gate: files.commit_gate(),
             own_paths: OwnPaths::of(vec![dir.path().join("data")]),
         });
+        let (backups, backing_up) = Backups::start(
+            BackupsSetup {
+                db: db.clone(),
+                clock: clock.clone(),
+                data_dir: dir.path().join("data"),
+                schedule: Some(schedule.status()),
+            },
+            |_| {},
+        )
+        .await
+        .unwrap();
         let statistics = Statistics::new(
             features.clone(),
             Some(metrics.clone()),
@@ -272,6 +286,7 @@ impl Server {
             players: Some(players),
             drops: Some(drops),
             changes: Some(changes),
+            backups,
             statistics,
         };
         let state = AppState::new(
@@ -301,6 +316,7 @@ impl Server {
             _playing: playing,
             _dropping: dropping,
             _following: following,
+            _backing_up: backing_up,
             cookie_name: format!("observer_session_{instance_id}"),
         }
     }
@@ -621,7 +637,7 @@ async fn setup_signs_the_owner_in_with_a_strict_http_only_cookie() {
     assert_eq!(session["sessionKey"].as_str().unwrap().len(), 64);
     assert_eq!(session["me"]["username"], "ada");
     assert_eq!(session["me"]["isOwner"], true);
-    assert_eq!(session["me"]["permissions"], "7ffff");
+    assert_eq!(session["me"]["permissions"], "3fffff");
 
     let again = server.call(Method::POST, "/api/setup", None, Some(body)).await;
     assert_eq!(again.status, StatusCode::CONFLICT);

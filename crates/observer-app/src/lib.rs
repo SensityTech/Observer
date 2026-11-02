@@ -6,6 +6,7 @@
 mod accounts;
 mod artifacts;
 mod audit;
+mod backups;
 mod changes;
 mod clock;
 mod diagnostics;
@@ -34,6 +35,10 @@ mod users;
 pub use accounts::Accounts;
 pub use artifacts::{ArtifactTimings, Artifacts, ArtifactsSetup, ArtifactsTask};
 pub use audit::AuditLog;
+pub use backups::{
+    Backups, BackupsHook, BackupsSetup, BackupsTask, BackupsTimings, BeforeSpawn, Download, PRE_LAUNCH_LIMIT,
+    TOOLS_LIMIT,
+};
 pub use changes::{Changes, ChangesSetup, ChangesTask, ComparedTo, DiffOptions};
 pub use clock::Clock;
 pub use diagnostics::{Diagnostics, DiagnosticsSetup, DiagnosticsTask, MAX_DOWNLOAD};

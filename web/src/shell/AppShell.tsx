@@ -4,6 +4,7 @@ import {
     CalendarClock,
     ChartLine,
     Contact,
+    DatabaseBackup,
     FolderLock,
     GitCompare,
     LayoutDashboard,
@@ -55,6 +56,7 @@ type NavEntry = {
         | '/drops'
         | '/server'
         | '/tools'
+        | '/backups'
         | '/users'
         | '/files'
         | '/audit';
@@ -141,6 +143,7 @@ export function AppShell() {
     const administration: NavEntry[] = [
         { to: '/server', label: t.nav.server, icon: Server, access: 'owner' },
         { to: '/tools', label: t.nav.tools, icon: Wrench, access: 'owner' },
+        { to: '/backups', label: t.nav.backups, icon: DatabaseBackup, access: Permission.BackupsView },
         { to: '/users', label: t.nav.users, icon: Users, access: Permission.UsersManage },
         { to: '/files', label: t.nav.files, icon: FolderLock, access: Permission.FilesManage },
         { to: '/audit', label: t.nav.audit, icon: ScrollText, access: Permission.AuditView },

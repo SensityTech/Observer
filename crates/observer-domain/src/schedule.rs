@@ -155,33 +155,17 @@ impl ScheduleSettings {
             });
         };
 
-        if self.times.len() > MAX_TIMES {
-            note(ScheduleField::Times, None, ScheduleProblem::TooMany);
-        } else if self.times.is_empty() && self.enabled && self.mode == ScheduleMode::FixedTimes {
+        if self.times.is_empty() && self.enabled && self.mode == ScheduleMode::FixedTimes {
             note(ScheduleField::Times, None, ScheduleProblem::Required);
         }
-        let mut valid = Vec::new();
-        let mut seen = HashSet::new();
-        for (index, time) in self.times.iter().take(MAX_TIMES).enumerate() {
-            match parse_time(time) {
-                None => note(ScheduleField::Time, Some(index), ScheduleProblem::InvalidTime),
-                Some(minute) if !seen.insert(minute) => {
-                    note(ScheduleField::Time, Some(index), ScheduleProblem::Duplicate);
-                }
-                Some(minute) => valid.push((minute, index)),
-            }
-        }
-        valid.sort_unstable();
-        for (position, &(minute, index)) in valid.iter().enumerate() {
-            let previous = match position {
-                0 if valid.len() > 1 => valid[valid.len() - 1].0 - 24 * 60,
-                0 => continue,
-                _ => valid[position - 1].0,
+        check_times(&self.times, |index, problem| {
+            let field = if index.is_some() {
+                ScheduleField::Time
+            } else {
+                ScheduleField::Times
             };
-            if minute - previous < i32::try_from(MIN_GAP_MINUTES).unwrap_or(i32::MAX) {
-                note(ScheduleField::Time, Some(index), ScheduleProblem::TooClose);
-            }
-        }
+            note(field, index, problem);
+        });
 
         if !(MIN_INTERVAL_MINUTES..=MAX_INTERVAL_MINUTES).contains(&self.interval_minutes) {
             note(ScheduleField::IntervalMinutes, None, ScheduleProblem::OutOfRange);
@@ -214,6 +198,35 @@ impl ScheduleSettings {
         self.times.sort_by_key(|time| parse_time(time));
         self.warnings.sort_unstable_by(|a, b| b.cmp(a));
         self
+    }
+}
+
+/// Checks a list of fixed times: at most [`MAX_TIMES`], each `HH:MM`, none twice, each at least
+/// [`MIN_GAP_MINUTES`] after the one before it, across midnight too. `note` gets the position of
+/// a time at fault, or none for the list as a whole.
+pub fn check_times(times: &[String], mut note: impl FnMut(Option<usize>, ScheduleProblem)) {
+    if times.len() > MAX_TIMES {
+        note(None, ScheduleProblem::TooMany);
+    }
+    let mut valid = Vec::new();
+    let mut seen = HashSet::new();
+    for (index, time) in times.iter().take(MAX_TIMES).enumerate() {
+        match parse_time(time) {
+            None => note(Some(index), ScheduleProblem::InvalidTime),
+            Some(minute) if !seen.insert(minute) => note(Some(index), ScheduleProblem::Duplicate),
+            Some(minute) => valid.push((minute, index)),
+        }
+    }
+    valid.sort_unstable();
+    for (position, &(minute, index)) in valid.iter().enumerate() {
+        let previous = match position {
+            0 if valid.len() > 1 => valid[valid.len() - 1].0 - 24 * 60,
+            0 => continue,
+            _ => valid[position - 1].0,
+        };
+        if minute - previous < i32::try_from(MIN_GAP_MINUTES).unwrap_or(i32::MAX) {
+            note(Some(index), ScheduleProblem::TooClose);
+        }
     }
 }
 
