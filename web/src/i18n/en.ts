@@ -262,8 +262,6 @@ const cfgFindings = {
         `Starts ${params.name ?? ''}, which is no resource of the server folder or of the build.`,
     resourceMissingMore: (params) =>
         `Starts ${count(params.count ?? 0, { one: 'more resource that is', other: 'more resources that are' })} missing.`,
-    resourceNamedObserver: () =>
-        'Takes the name of the observer bridge, which Observer adds at each launch: rename this resource.',
     execMissing: (params) => `Runs ${params.target ?? ''}, which cannot be read.`,
     execOutside: (params) =>
         `Runs ${params.target ?? ''}, outside the server folder: FXServer runs it, Observer did not check it.`,

@@ -24,7 +24,7 @@ const NAME_PREFIX: &str = "sys_";
 const NAME_RANDOM_CHARS: usize = 12;
 const NAME_ALPHABET: &[u8; 32] = b"abcdefghijklmnopqrstuvwxyz234567";
 /// The bridge's name before it was drawn at each start, which builds may still hold.
-pub const FIXED_NAME: &str = "observer";
+const FIXED_NAME: &str = "observer";
 
 /// What the bridge's reports carry as `type`.
 pub(crate) const REPORT_TYPE: &str = "observer";

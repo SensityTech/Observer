@@ -621,14 +621,6 @@ impl Scanner<'_> {
         let max_clients = self.max_clients();
         let game = self.game();
         self.missing_more(cfg_file);
-        for folder in self.resources.named_observer() {
-            self.report(
-                FindingKind::ResourceNamedObserver,
-                folder,
-                None,
-                FindingParams::default(),
-            );
-        }
         let facts = CfgFacts {
             game,
             endpoints: self
@@ -1037,10 +1029,6 @@ mod tests {
                     writeln!(starts, "ensure missing_{index}").unwrap();
                 }
                 (quiet(&starts), "server.cfg")
-            }
-            FindingKind::ResourceNamedObserver => {
-                folder.resource("[local]/observer");
-                (QUIET.to_owned(), "resources/[local]/observer")
             }
             FindingKind::ExecMissing => (quiet("exec missing.cfg\n"), "server.cfg:4"),
             FindingKind::ExecOutside => {
