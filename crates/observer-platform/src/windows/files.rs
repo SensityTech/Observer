@@ -8,8 +8,26 @@ use std::path::{Path, PathBuf};
 
 use windows_sys::Win32::Storage::FileSystem::{
     FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
-    FILE_NAME_NORMALIZED, FILE_SHARE_READ, FILE_SHARE_WRITE, GetFinalPathNameByHandleW, VOLUME_NAME_DOS,
+    FILE_NAME_NORMALIZED, FILE_SHARE_READ, FILE_SHARE_WRITE, GetDriveTypeW, GetFinalPathNameByHandleW,
+    GetLogicalDrives, VOLUME_NAME_DOS,
 };
+use windows_sys::Win32::System::WindowsProgramming::{DRIVE_FIXED, DRIVE_REMOVABLE};
+
+pub(crate) fn local_drives() -> Vec<PathBuf> {
+    // SAFETY: GetLogicalDrives takes nothing and returns a bit per drive letter.
+    let drives = unsafe { GetLogicalDrives() };
+    (0..26u8)
+        .filter(|letter| drives & (1 << letter) != 0)
+        .map(|letter| format!("{}:\\", char::from(b'A' + letter)))
+        .filter(|root| {
+            let wide: Vec<u16> = root.encode_utf16().chain([0]).collect();
+            // SAFETY: `wide` is a nul-terminated root path that outlives the call.
+            let kind = unsafe { GetDriveTypeW(wide.as_ptr()) };
+            kind == DRIVE_FIXED || kind == DRIVE_REMOVABLE
+        })
+        .map(PathBuf::from)
+        .collect()
+}
 
 pub(crate) fn open_resolved(path: &Path) -> io::Result<(File, PathBuf)> {
     // A link or a junction in the file's place is opened itself, not what it leads to.
@@ -63,5 +81,17 @@ fn final_path(file: &File) -> io::Result<PathBuf> {
             return Ok(PathBuf::from(OsString::from_wide(&buffer)));
         }
         buffer.resize(written, 0);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_system_drive_is_one_of_the_local_drives() {
+        let system = std::env::var("SystemDrive").unwrap();
+
+        assert!(local_drives().contains(&PathBuf::from(format!("{system}\\"))));
     }
 }

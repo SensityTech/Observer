@@ -22,19 +22,27 @@ pub(crate) fn processes_in(dir: &Path) -> io::Result<Vec<u32>> {
         else {
             continue;
         };
-        let Ok(executable) = fs::read_link(entry.path().join("exe")) else {
+        let Some(executable) = executable(pid) else {
             continue;
         };
-        let bytes = executable.as_os_str().as_bytes();
-        let executable = bytes
-            .strip_suffix(DELETED)
-            .map_or(executable.clone(), |kept| PathBuf::from(OsStr::from_bytes(kept)));
         if executable.starts_with(&dir) {
             found.push(pid);
         }
     }
     found.sort_unstable();
     Ok(found)
+}
+
+/// The executable of a process as `/proc/<pid>/exe` names it, a deleted file's included, when this
+/// account may read it.
+pub(crate) fn executable(pid: u32) -> Option<PathBuf> {
+    let executable = fs::read_link(format!("/proc/{pid}/exe")).ok()?;
+    let bytes = executable.as_os_str().as_bytes();
+    Some(
+        bytes
+            .strip_suffix(DELETED)
+            .map_or(executable.clone(), |kept| PathBuf::from(OsStr::from_bytes(kept))),
+    )
 }
 
 #[cfg(test)]

@@ -36,7 +36,7 @@ fn folded(path: &Path) -> PathBuf {
     PathBuf::from(path.as_os_str().to_string_lossy().to_lowercase())
 }
 
-fn image(pid: u32) -> Option<PathBuf> {
+pub(crate) fn image(pid: u32) -> Option<PathBuf> {
     // SAFETY: OpenProcess takes any pid and returns null when it cannot open it.
     let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid) };
     if handle.is_null() {
