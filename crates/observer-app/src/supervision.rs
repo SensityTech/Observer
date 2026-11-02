@@ -551,6 +551,12 @@ impl Supervision {
         self.inner.status.clone()
     }
 
+    /// From now on, a hung server is killed without a snapshot of it first: the diagnostics that
+    /// read it were turned off.
+    pub async fn skip_hang_snapshots(&self) {
+        self.inner.supervisor.skip_hang_snapshots().await;
+    }
+
     /// The supervisor itself, whose status, events and readings the statistics follow.
     pub(crate) fn supervisor(&self) -> &Supervisor {
         &self.inner.supervisor
