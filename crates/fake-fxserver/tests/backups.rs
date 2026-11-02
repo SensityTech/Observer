@@ -288,6 +288,10 @@ async fn a_backup_from_the_cfg_lands_in_a_local_folder_recorded_and_audited() {
         "the work folder is left empty"
     );
 
+    let view = lab.backups.view().await.unwrap();
+    assert_eq!(view.runs_last_30_days, 1);
+    let last = view.destinations[0].last.clone().unwrap();
+    assert_eq!((last.run, last.state), (run.id, CopyState::Stored));
     let finished = lab.audited(AuditAction::BackupFinished).await;
     assert_eq!(finished.len(), 1);
     assert_eq!(finished[0].actor_name.as_deref(), Some("ada"));

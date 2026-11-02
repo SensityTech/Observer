@@ -5,7 +5,7 @@
 use jiff::Timestamp;
 use observer_domain::backups::{
     BackupCopy, BackupDestination, BackupError, BackupOutcome, BackupRun, BackupSettings, BackupTrigger,
-    BeforeRestarts, CopyState, DatabaseEngine, DeleteReason, DestinationKind, DestinationTarget,
+    BeforeRestarts, CopyState, DatabaseEngine, DeleteReason, DestinationKind, DestinationTarget, LastCopy,
     ManualSource, Retention, Secret, SourceKind, StoredBackupSettings, StoredCopy,
 };
 use rusqlite::types::{FromSqlError, Type};
@@ -173,7 +173,7 @@ pub fn destinations(conn: &Connection, server_id: &str) -> Result<Vec<BackupDest
         "SELECT {DESTINATION_COLUMNS} FROM backup_destinations AS d WHERE d.server_id = ?1 ORDER BY d.name, d.id"
     ))?;
     let rows = statement.query_map([server_id], read_destination)?;
-    Ok(rows.collect::<Result<_, _>>()?)
+    with_last(conn, rows.collect::<Result<_, _>>()?)
 }
 
 pub fn destination(
@@ -189,7 +189,10 @@ pub fn destination(
             params![server_id, id],
             read_destination,
         )
-        .optional()?)
+        .optional()?
+        .map(|destination| with_last(conn, vec![destination]))
+        .transpose()?
+        .and_then(|mut found| found.pop()))
 }
 
 /// The SFTP password or private key, or the S3 secret key, of a destination.
@@ -620,7 +623,42 @@ fn read_destination(row: &Row<'_>) -> rusqlite::Result<BackupDestination> {
         has_secret: row.get(10)?,
         stored: row.get(11)?,
         stored_bytes: size(row, 12)?,
+        last: None,
     })
+}
+
+/// The latest copy made to each of `destinations`.
+fn with_last(
+    conn: &Connection,
+    mut destinations: Vec<BackupDestination>,
+) -> Result<Vec<BackupDestination>, StoreError> {
+    let mut statement = conn.prepare(
+        "SELECT run_id, state, coalesce(stored_at, started_at), error, error_detail FROM backup_copies
+         WHERE destination_id = ?1 ORDER BY id DESC LIMIT 1",
+    )?;
+    for destination in &mut destinations {
+        destination.last = statement
+            .query_row([destination.id], |row| {
+                Ok(LastCopy {
+                    run: row.get(0)?,
+                    state: named(row, 1, CopyState::from_name)?,
+                    at: row.get::<_, Utc>(2)?.0,
+                    error: maybe_named(row, 3, BackupError::from_name)?,
+                    error_detail: row.get(4)?,
+                })
+            })
+            .optional()?;
+    }
+    Ok(destinations)
+}
+
+/// How many runs of a server started at `since` or after.
+pub fn runs_since(conn: &Connection, server_id: &str, since: Timestamp) -> Result<u32, StoreError> {
+    Ok(conn.query_row(
+        "SELECT count(*) FROM backup_runs WHERE server_id = ?1 AND started_at >= ?2",
+        params![server_id, Utc(since)],
+        |row| row.get(0),
+    )?)
 }
 
 fn read_run(row: &Row<'_>) -> rusqlite::Result<BackupRun> {

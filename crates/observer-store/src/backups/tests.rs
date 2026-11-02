@@ -231,6 +231,11 @@ fn a_run_ends_once_with_its_file_and_copies() {
     assert_eq!(stored.copies[0].bytes, Some(120_000));
     let destination = destination(&conn, SERVER, here).unwrap().unwrap();
     assert_eq!((destination.stored, destination.stored_bytes), (1, 120_000));
+    let last = destination.last.unwrap();
+    assert_eq!((last.run, last.state), (run, CopyState::Stored));
+    assert_eq!(last.at, at("2026-11-02T09:00:25Z"));
+    assert_eq!(runs_since(&conn, SERVER, at("2026-11-02T09:00:00Z")).unwrap(), 1);
+    assert_eq!(runs_since(&conn, SERVER, at("2026-11-02T09:00:01Z")).unwrap(), 0);
 
     let again = FinishedRun {
         at: at("2026-11-02T09:01:00Z"),

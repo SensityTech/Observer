@@ -615,6 +615,21 @@ pub struct BackupDestination {
     pub stored: u32,
     #[ts(type = "number")]
     pub stored_bytes: u64,
+    /// The latest copy made there, null before the first.
+    pub last: Option<LastCopy>,
+}
+
+/// How the latest copy to a destination went.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct LastCopy {
+    pub run: i64,
+    pub state: CopyState,
+    /// When it was stored, or when it began for one under way or failed.
+    pub at: Timestamp,
+    pub error: Option<BackupError>,
+    pub error_detail: Option<String>,
 }
 
 /// What started a run.
@@ -970,6 +985,10 @@ pub struct BackupsView {
     pub zone: String,
     /// When the next timed run is due.
     pub next_at: Option<Timestamp>,
+    /// The next restart of the schedule, when the settings back up before it.
+    pub next_restart_at: Option<Timestamp>,
+    /// The runs started in the last 30 days.
+    pub runs_last_30_days: u32,
     pub source: SourceView,
     pub client: ClientView,
     pub destinations: Vec<BackupDestination>,

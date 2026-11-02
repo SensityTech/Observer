@@ -25,7 +25,15 @@ zone: string,
 /**
  * When the next timed run is due.
  */
-nextAt: string | null, source: SourceView, client: ClientView, destinations: Array<BackupDestination>, running: BackupProgress | null, 
+nextAt: string | null, 
+/**
+ * The next restart of the schedule, when the settings back up before it.
+ */
+nextRestartAt: string | null, 
+/**
+ * The runs started in the last 30 days.
+ */
+runsLast30Days: number, source: SourceView, client: ClientView, destinations: Array<BackupDestination>, running: BackupProgress | null, 
 /**
  * The latest runs, newest first, the one under way included.
  */

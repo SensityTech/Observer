@@ -309,19 +309,25 @@ impl Backups {
     /// destinations, the run under way and the latest runs.
     pub async fn view(&self) -> Result<observer_domain::backups::BackupsView, Error> {
         let (settings, version) = self.stored_settings().await?;
-        let (has_password, destinations, recent) = self
+        let month = self.inner.clock.now() - SignedDuration::from_hours(30 * 24);
+        let (has_password, destinations, recent, runs_last_30_days) = self
             .inner
             .db
-            .read(|conn| -> Result<_, Error> {
+            .read(move |conn| -> Result<_, Error> {
                 Ok((
                     store::has_password(conn, Servers::DEFAULT)?,
                     store::destinations(conn, Servers::DEFAULT)?,
                     store::runs(conn, Servers::DEFAULT, None, RECENT_RUNS)?,
+                    store::runs_since(conn, Servers::DEFAULT, month)?,
                 ))
             })
             .await?;
         let (zone_name, zone) = self.zone();
         let next_at = next_time(&settings, &zone, self.inner.clock.now());
+        let next_restart_at = match (settings.before_restarts, &self.inner.schedule) {
+            (BeforeRestarts::Off, _) | (_, None) => None,
+            (_, Some(schedule)) => schedule.borrow().next.as_ref().map(|next| next.at),
+        };
         let source = self.source_view(&settings).await?;
         let client = client_view(self.client(&settings).await);
         let running = self.inner.running.lock().await.as_ref().map(|running| {
@@ -349,6 +355,8 @@ impl Backups {
             has_password,
             zone: zone_name,
             next_at,
+            next_restart_at,
+            runs_last_30_days,
             source,
             client,
             destinations,
