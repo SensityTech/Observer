@@ -40,6 +40,7 @@ export const ONLINE: OnlinePlayers = {
             since: '2026-10-30T18:02:00Z',
             sessionMs: 2 * HOUR + 14 * 60_000,
             totalMs: 314 * HOUR,
+            ping: 41,
         },
         {
             netId: 12,
@@ -50,6 +51,7 @@ export const ONLINE: OnlinePlayers = {
             since: '2026-10-30T20:15:55Z',
             sessionMs: 5_000,
             totalMs: null,
+            ping: null,
         },
         {
             netId: 14,
@@ -60,6 +62,7 @@ export const ONLINE: OnlinePlayers = {
             since: '2026-10-30T19:40:00Z',
             sessionMs: 36 * 60_000,
             totalMs: null,
+            ping: 212,
         },
     ],
 };
