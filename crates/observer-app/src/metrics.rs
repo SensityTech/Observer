@@ -1,6 +1,7 @@
 //! The statistics: a sample of FXServer, the host and Observer at the end of every five-second
 //! slot, kept in the metrics database with its aggregates, and sent live to the dashboards.
 
+mod insights;
 pub(crate) mod runs;
 mod sampler;
 mod upkeep;
@@ -8,8 +9,13 @@ mod upkeep;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use jiff::tz::TimeZone;
+use observer_domain::drops::DropsRange;
+use observer_domain::error::{ApiError, ErrorCode};
 use observer_domain::metrics::{LiveSample, MetricsSeries, Range, RunGrowth, Series, ThreadShares};
+use observer_domain::statistics::{FrameDistribution, PlayerHours, RunMemory, Timeline, TimelineEvent};
 use observer_store::MetricsDatabase;
+use observer_store::metrics::series::Window;
 use observer_store::metrics::{growth, runs as stored_runs, series, threads};
 use tokio::sync::{broadcast, watch};
 use tokio::task::JoinHandle;
@@ -116,6 +122,70 @@ impl Metrics {
             .inner
             .db
             .read(move |conn| series::read(conn, range, &wanted, now))
+            .await?)
+    }
+
+    /// The timeline from `from` to `to` (Unix seconds) in at most `points` buckets, at the finest
+    /// step the tables kept for it allow.
+    pub async fn timeline(
+        &self,
+        from: i64,
+        to: i64,
+        points: u32,
+        wanted: &[Series],
+    ) -> Result<Timeline, Error> {
+        let now = self.inner.clock.now().as_second();
+        let window = Window::plan(from, to, points, now).ok_or_else(|| {
+            Error::from(
+                ApiError::new(ErrorCode::InvalidRequest)
+                    .with("from", from)
+                    .with("to", to),
+            )
+        })?;
+        let wanted = wanted.to_vec();
+        Ok(self
+            .inner
+            .db
+            .read(move |conn| series::timeline(conn, &window, &wanted))
+            .await?)
+    }
+
+    /// svMain's frames over the range, against the range before it.
+    pub async fn frames(&self, range: DropsRange) -> Result<FrameDistribution, Error> {
+        let now = self.inner.clock.now().as_second();
+        Ok(self
+            .inner
+            .db
+            .read(move |conn| insights::frames(conn, range, now))
+            .await?)
+    }
+
+    /// Players on average by day and hour of the 4 weeks before, in `zone`.
+    pub async fn hours(&self, zone: TimeZone) -> Result<PlayerHours, Error> {
+        let now = self.inner.clock.now().as_second();
+        Ok(self
+            .inner
+            .db
+            .read(move |conn| insights::hours(conn, &zone, now))
+            .await?)
+    }
+
+    /// FXServer's memory run after run over the range.
+    pub async fn runs(&self, range: DropsRange) -> Result<RunMemory, Error> {
+        let now = self.inner.clock.now().as_second();
+        Ok(self
+            .inner
+            .db
+            .read(move |conn| insights::runs(conn, range, now))
+            .await?)
+    }
+
+    /// The runs' starts, restarts, stops and crashes from `from_ms` to before `to_ms`.
+    pub(crate) async fn run_events(&self, from_ms: i64, to_ms: i64) -> Result<Vec<TimelineEvent>, Error> {
+        Ok(self
+            .inner
+            .db
+            .read(move |conn| insights::run_events(conn, from_ms, to_ms))
             .await?)
     }
 

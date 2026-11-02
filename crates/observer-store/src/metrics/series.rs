@@ -3,7 +3,7 @@
 //! timeline's windows the finest table that still keeps them. Beside them, svMain's percentiles
 //! from its tick histograms and the players' usual range of the weeks before.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 
 use observer_domain::metrics::{MetricsSeries, Range, Series, SeriesData};
 use observer_domain::statistics::{
@@ -244,9 +244,13 @@ impl Window {
             return None;
         }
         let points = i64::from(points.clamp(LEAST_POINTS, MOST_POINTS));
+        // Buckets fall on multiples of the step, so a window off the grid takes one more: it keeps
+        // the step a window of the same length on the grid would have.
+        let aligned =
+            |step: i64| to.div_euclid(step) + i64::from(to.rem_euclid(step) != 0) - from.div_euclid(step);
         let fitting = STEPS
             .into_iter()
-            .find(|&step| (span + step - 1) / step <= points)
+            .find(|&step| aligned(step) <= points + 1)
             .unwrap_or(STEPS[STEPS.len() - 1]);
         let (table, step) = if fitting <= RAW_STEP && from >= now - RAW_KEPT {
             (Table::Raw, fitting)
@@ -256,11 +260,10 @@ impl Window {
             (Table::Hour, fitting.max(3600))
         };
         let start = from.div_euclid(step) * step;
-        let end = to.div_euclid(step) * step + if to.rem_euclid(step) == 0 { 0 } else { step };
         Some(Self {
             from: start,
             step,
-            buckets: (end - start) / step,
+            buckets: aligned(step),
             table,
         })
     }
@@ -407,11 +410,23 @@ fn read_grid(conn: &Connection, window: &Window, series: &[Series]) -> Result<Gr
     })
 }
 
+/// The players each hour from `from` to before `to` (Unix seconds) averaged, and the samples
+/// behind each average, for the hours that measured them.
+pub fn hourly_players(conn: &Connection, from: i64, to: i64) -> Result<Vec<(i64, f64, f64)>, StoreError> {
+    let mut statement = conn.prepare_cached(
+        "SELECT ts, players_avg, players_n FROM sample_1h WHERE ts >= ?1 AND ts < ?2 AND players_n > 0 ORDER BY ts",
+    )?;
+    let rows = statement.query_map(params![from, to], |row| {
+        Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+    })?;
+    Ok(rows.collect::<Result<_, _>>()?)
+}
+
 /// svMain's ticks of each set of bounds in each bucket of `window`, interval by interval.
-pub(crate) fn tick_grid(
+pub fn tick_grid(
     conn: &Connection,
     window: &Window,
-    known: &HashMap<i64, Vec<f64>>,
+    known: &BTreeMap<i64, Vec<f64>>,
 ) -> Result<Vec<BTreeMap<i64, Vec<u64>>>, StoreError> {
     let sql = format!(
         "SELECT ts, bounds, bucket, ticks FROM {} WHERE ts >= ?1 AND ts < ?2",
@@ -484,10 +499,10 @@ fn frames(conn: &Connection, window: &Window) -> Result<FrameBands, StoreError> 
 }
 
 /// Every set of bounds stored, by its id.
-pub fn tick_bounds(conn: &Connection) -> Result<HashMap<i64, Vec<f64>>, StoreError> {
+pub fn tick_bounds(conn: &Connection) -> Result<BTreeMap<i64, Vec<f64>>, StoreError> {
     let mut statement = conn.prepare_cached("SELECT id, bounds FROM tick_bounds")?;
     let rows = statement.query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)))?;
-    let mut known = HashMap::new();
+    let mut known = BTreeMap::new();
     for row in rows {
         let (id, bounds) = row?;
         if let Ok(bounds) = serde_json::from_str::<Vec<f64>>(&bounds) {
