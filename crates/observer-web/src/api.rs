@@ -7,6 +7,7 @@ mod account;
 mod artifacts;
 mod audit;
 mod auth;
+mod backups;
 mod changes;
 mod diagnostics;
 mod drops;
@@ -102,6 +103,15 @@ pub(crate) fn routes() -> Vec<Route> {
     // launch settings are.
     let read_features = Permission(P::SETTINGS_VIEW);
     let switch_features = ReauthenticatedOwner;
+    // A backup is the whole game database. Seeing the backups and starting one are permissions;
+    // taking one out takes the critical one and the password again. The settings and destinations
+    // decide what is dumped and where the database goes, so they are the owner's, with the password
+    // again to change them; their tests reach hosts anyone could name, the owner's alone too.
+    let read_backups = Permission(P::BACKUPS_VIEW);
+    let run_backups = Permission(P::BACKUPS_RUN);
+    let download_backups = Reauthenticated(P::BACKUPS_DOWNLOAD);
+    let test_backups = Owner;
+    let change_backups = ReauthenticatedOwner;
     vec![
         route(M::GET,    "/health",                     Public,       health),
         route(M::GET,    "/setup",                      Public,       setup::status),
@@ -209,6 +219,19 @@ pub(crate) fn routes() -> Vec<Route> {
         route(M::PUT,    "/tools/duplicate-archetypes/settings",     change_tools, tools::change_settings),
         route(M::GET,    "/features",           read_features,   features::list),
         route(M::PUT,    "/features/{feature}", switch_features, features::switch),
+        route(M::GET,    "/servers/default/backups",                      read_backups,     backups::view),
+        route(M::PUT,    "/servers/default/backups/settings",             change_backups,   backups::change_settings),
+        route(M::POST,   "/servers/default/backups/source/test",          test_backups,     backups::test_source),
+        route(M::POST,   "/servers/default/backups/destinations",         change_backups,   backups::create_destination),
+        route(M::POST,   "/servers/default/backups/destinations/test",    test_backups,     backups::test_destination),
+        route(M::PUT,    "/servers/default/backups/destinations/{id}",    change_backups,   backups::change_destination),
+        route(M::DELETE, "/servers/default/backups/destinations/{id}",    change_backups,   backups::delete_destination),
+        route(M::POST,   "/servers/default/backups/run",                  run_backups,      backups::run_now),
+        route(M::DELETE, "/servers/default/backups/run",                  run_backups,      backups::cancel),
+        route(M::GET,    "/servers/default/backups/runs",                 read_backups,     backups::runs),
+        route(M::GET,    "/servers/default/backups/runs/{id}",            read_backups,     backups::run),
+        route(M::DELETE, "/servers/default/backups/runs/{id}",            change_backups,   backups::delete_run),
+        route(M::GET,    "/servers/default/backups/copies/{id}/download", download_backups, backups::download),
     ]
 }
 
