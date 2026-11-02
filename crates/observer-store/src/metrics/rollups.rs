@@ -31,6 +31,13 @@ impl Tier {
             Self::Hour => "sample_1h",
         }
     }
+
+    fn ticks(self) -> &'static str {
+        match self {
+            Self::Minute => "tick_1m",
+            Self::Hour => "tick_1h",
+        }
+    }
 }
 
 /// The buckets that end at or before `closed` (Unix seconds), have samples, and have no
@@ -93,23 +100,33 @@ pub fn compute(tx: &Transaction<'_>, tier: Tier, buckets: &[i64]) -> Result<(), 
         expressions.join(", ")
     );
     let mut statement = tx.prepare_cached(&sql)?;
+    let mut cleared = tx.prepare_cached(&format!("DELETE FROM {} WHERE ts = ?1", tier.ticks()))?;
+    let mut ticks = tx.prepare_cached(&format!(
+        "INSERT INTO {} (ts, bounds, bucket, ticks) SELECT ?1, bounds, bucket, sum(ticks) FROM tick_5s          WHERE ts >= ?1 AND ts < ?1 + ?2 GROUP BY bounds, bucket",
+        tier.ticks()
+    ))?;
     for &bucket in buckets {
         statement.execute(params![bucket, tier.seconds()])?;
+        cleared.execute([bucket])?;
+        ticks.execute(params![bucket, tier.seconds()])?;
     }
     Ok(())
 }
 
-/// Deletes the samples, their thread rows and the minute aggregates past their retention at
-/// `now`, then the thread names no row refers to any more, and returns how many rows went.
+/// Deletes the samples, their thread and tick rows and the minute aggregates past their
+/// retention at `now`, then the thread names no row refers to any more, and returns how many
+/// rows went.
 pub fn expire(tx: &Transaction<'_>, now: i64) -> Result<usize, StoreError> {
     let raw = tx.execute("DELETE FROM sample_5s WHERE ts < ?1", [now - RAW_KEPT])?;
     let threads = tx.execute("DELETE FROM thread_5s WHERE ts < ?1", [now - RAW_KEPT])?;
+    let ticks = tx.execute("DELETE FROM tick_5s WHERE ts < ?1", [now - RAW_KEPT])?
+        + tx.execute("DELETE FROM tick_1m WHERE ts < ?1", [now - MINUTES_KEPT])?;
     let names = tx.execute(
         "DELETE FROM thread_name WHERE id NOT IN (SELECT name FROM thread_5s)",
         [],
     )?;
     let minutes = tx.execute("DELETE FROM sample_1m WHERE ts < ?1", [now - MINUTES_KEPT])?;
-    Ok(raw + threads + names + minutes)
+    Ok(raw + threads + ticks + names + minutes)
 }
 
 /// Gives the pages that deletions freed back to the file system.
@@ -132,7 +149,7 @@ mod tests {
 
     use super::*;
     use crate::metrics::memory;
-    use crate::metrics::samples::tests::{sample, store, with_threads};
+    use crate::metrics::samples::tests::{sample, store, tick_rows, with_frames, with_threads};
 
     const MINUTE: i64 = 1_761_642_000;
 
@@ -287,6 +304,76 @@ mod tests {
         );
         vacuum(&conn).unwrap();
         optimize(&conn).unwrap();
+    }
+
+    #[test]
+    fn a_minute_and_an_hour_add_up_their_slots_ticks_interval_by_interval() {
+        let mut conn = memory();
+        store(
+            &mut conn,
+            &[
+                with_frames(sample(MINUTE, ServerState::Online, &[]), &[(1, 98), (9, 2)]),
+                with_frames(sample(MINUTE + 5, ServerState::Online, &[]), &[(1, 100)]),
+                with_frames(sample(MINUTE + 60, ServerState::Online, &[]), &[(2, 100)]),
+            ],
+        );
+
+        compute_all(&mut conn, Tier::Minute, &[MINUTE, MINUTE + 60]);
+        compute_all(&mut conn, Tier::Hour, &[MINUTE - MINUTE % 3600]);
+
+        assert_eq!(
+            tick_rows(&conn, "tick_1m"),
+            [(MINUTE, 1, 198), (MINUTE, 9, 2), (MINUTE + 60, 2, 100)]
+        );
+        let hour = MINUTE - MINUTE % 3600;
+        assert_eq!(
+            tick_rows(&conn, "tick_1h"),
+            [(hour, 1, 198), (hour, 2, 100), (hour, 9, 2)]
+        );
+
+        // A slot written again with other ticks: the minute computed again follows it.
+        store(
+            &mut conn,
+            &[with_frames(
+                sample(MINUTE + 5, ServerState::Online, &[]),
+                &[(3, 100)],
+            )],
+        );
+        compute_all(&mut conn, Tier::Minute, &[MINUTE]);
+        assert_eq!(
+            tick_rows(&conn, "tick_1m"),
+            [
+                (MINUTE, 1, 98),
+                (MINUTE, 3, 100),
+                (MINUTE, 9, 2),
+                (MINUTE + 60, 2, 100)
+            ]
+        );
+    }
+
+    #[test]
+    fn retention_drops_tick_rows_with_their_tier_and_keeps_hours() {
+        let mut conn = memory();
+        let now = MINUTE + 40 * 86_400;
+        let month_ago = now - 31 * 86_400;
+        store(
+            &mut conn,
+            &[
+                with_frames(sample(now - RAW_KEPT - 5, ServerState::Online, &[]), &[(1, 100)]),
+                with_frames(sample(month_ago, ServerState::Online, &[]), &[(1, 100)]),
+                with_frames(sample(now - 5, ServerState::Online, &[]), &[(1, 100)]),
+            ],
+        );
+        compute_all(&mut conn, Tier::Minute, &[month_ago - month_ago % 60]);
+        compute_all(&mut conn, Tier::Hour, &[month_ago - month_ago % 3600]);
+
+        let tx = conn.transaction().unwrap();
+        expire(&tx, now).unwrap();
+        tx.commit().unwrap();
+
+        assert_eq!(tick_rows(&conn, "tick_5s"), [(now - 5, 1, 100)]);
+        assert_eq!(tick_rows(&conn, "tick_1m"), []);
+        assert_eq!(tick_rows(&conn, "tick_1h").len(), 1);
     }
 
     #[test]

@@ -29,6 +29,7 @@ const MIGRATIONS: &[M<'static>] = &[
     M::up(include_str!("../../migrations/metrics/0002_depth.sql")),
     M::up(include_str!("../../migrations/metrics/0003_sessions.sql")),
     M::up(include_str!("../../migrations/metrics/0004_drops.sql")),
+    M::up(include_str!("../../migrations/metrics/0005_ticks.sql")),
 ];
 
 const SHAPE: Shape = Shape {
