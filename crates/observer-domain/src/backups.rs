@@ -7,7 +7,7 @@
 
 use std::cmp::Reverse;
 use std::fmt;
-use std::path::Path;
+use std::path::{Component, Path};
 
 use jiff::{SignedDuration, Timestamp};
 use serde::{Deserialize, Serialize};
@@ -567,10 +567,10 @@ impl DestinationDraft {
         }
         match &self.secret {
             Some(_) if !self.target.takes_secret() => {
-                note(DestinationField::Secret, FieldProblem::NotAccepted)
+                note(DestinationField::Secret, FieldProblem::NotAccepted);
             }
             Some(secret) if secret.expose().is_empty() => {
-                note(DestinationField::Secret, FieldProblem::Required)
+                note(DestinationField::Secret, FieldProblem::Required);
             }
             Some(secret) if secret.expose().len() > MAX_SECRET_BYTES => {
                 note(DestinationField::Secret, FieldProblem::TooLong);
@@ -1203,7 +1203,7 @@ fn parse_pairs(text: &str) -> Result<DatabaseConnection, ConnectionProblem> {
             "password" | "pwd" | "pass" => connection.password = Secret::new(value),
             "database" | "db" | "initialcatalog" => value.clone_into(&mut connection.database),
             "socketpath" | "socket" => {
-                connection.socket = Some(value.to_owned()).filter(|path| !path.is_empty())
+                connection.socket = Some(value.to_owned()).filter(|path| !path.is_empty());
             }
             _ => {}
         }
@@ -1291,7 +1291,11 @@ fn path_problem(path: &str) -> Option<FieldProblem> {
         Some(FieldProblem::Required)
     } else if path.chars().count() > MAX_PATH_CHARS {
         Some(FieldProblem::TooLong)
-    } else if path.chars().any(char::is_control) {
+    } else if path.chars().any(char::is_control)
+        || Path::new(path)
+            .components()
+            .any(|component| component == Component::ParentDir)
+    {
         Some(FieldProblem::Invalid)
     } else if !Path::new(path).is_absolute() {
         Some(FieldProblem::NotAbsolute)

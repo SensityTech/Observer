@@ -149,6 +149,16 @@ fn a_local_destination_takes_an_absolute_folder_and_no_secret() {
         problems(&local("backups"), false),
         [(DestinationField::Folder, FieldProblem::NotAbsolute)]
     );
+    let climbing = format!(
+        "{}{}..{}server-data",
+        absolute(),
+        std::path::MAIN_SEPARATOR,
+        std::path::MAIN_SEPARATOR
+    );
+    assert_eq!(
+        problems(&local(&climbing), false),
+        [(DestinationField::Folder, FieldProblem::Invalid)]
+    );
 
     let mut with_secret = local(absolute());
     with_secret.secret = Some(Secret::new("hunter2"));

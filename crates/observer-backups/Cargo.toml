@@ -1,0 +1,33 @@
+[package]
+name = "observer-backups"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+flate2.workspace = true
+futures-util.workspace = true
+getrandom.workspace = true
+hmac.workspace = true
+jiff.workspace = true
+memchr.workspace = true
+observer-domain.workspace = true
+# Uploads and downloads of objects go as streams, never whole in memory.
+reqwest = { workspace = true, features = ["stream"] }
+russh.workspace = true
+russh-sftp.workspace = true
+sha2.workspace = true
+ssh-key.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["fs", "io-util", "net", "process", "rt", "sync", "time"] }
+tokio-util = { workspace = true, features = ["io"] }
+tracing.workspace = true
+
+[dev-dependencies]
+axum.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true
