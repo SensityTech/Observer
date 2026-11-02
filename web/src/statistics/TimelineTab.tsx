@@ -11,6 +11,7 @@ import { Button } from '../components/Button';
 import { ErrorBoundary } from '../components/ErrorBoundary';
 import { Notice } from '../components/Notice';
 import { Segmented } from '../components/Segmented';
+import { errorMessage } from '../i18n/errors';
 import { formatTimestamp } from '../i18n/format';
 import { useI18n } from '../i18n/I18nProvider';
 import { cn } from '../lib/cn';
@@ -113,8 +114,9 @@ export function TimelineTab({
         );
     }, [timeline, growth.data, now, window.from, window.to, window.zoomed]);
 
+    // Which feature, and what holds it off: observer.toml, or one it needs that does not run.
     if (isFeatureDisabled(main.error)) {
-        return <Notice>{t.statistics.off}</Notice>;
+        return <Notice>{errorMessage(t, main.error)}</Notice>;
     }
 
     const words: EventWordings = {

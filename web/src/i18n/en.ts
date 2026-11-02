@@ -1012,8 +1012,6 @@ export const en = {
             players: 'Players',
             stability: 'Stability',
         },
-        off: 'Statistics are turned off on this server.',
-        offCard: 'Turned off on this server.',
         needsDrops: 'How long players stay and stability need the permission to view drops.',
         timeline: {
             range: 'Timeline range',
@@ -1124,8 +1122,9 @@ export const en = {
             none: 'Nothing was recorded in this window.',
             more: (more: number) => `and ${count(more, { one: 'more event', other: 'more events' })}`,
             omitted: {
-                changes: 'File changes are left out: they need the permission to view changes.',
-                drops: 'Crash waves and bursts of drops are left out: they need the permission to view drops.',
+                changes:
+                    'File changes are left out: your account may not view them, or they are turned off on this Observer.',
+                drops: 'Crash waves and bursts of drops are left out: your account may not view drops, or player drops are turned off on this Observer.',
             },
             start: 'Start',
             restart: 'Restart',

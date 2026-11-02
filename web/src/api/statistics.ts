@@ -12,7 +12,7 @@ import type { StabilityEffects } from './generated/StabilityEffects';
 import type { Timeline } from './generated/Timeline';
 import type { TimelineEvents } from './generated/TimelineEvents';
 
-/** What the server answers when its owner turned the statistics off. */
+/** What the server answers for a route of a feature that does not run: the statistics or the drops. */
 export const FEATURE_DISABLED = 'feature_disabled';
 
 export const isFeatureDisabled = (error: unknown) =>

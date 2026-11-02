@@ -70,7 +70,7 @@ export function CardState({
         return <div className="skeleton h-[210px] w-full" aria-busy="true" />;
     }
     const text = isFeatureDisabled(error)
-        ? t.statistics.offCard
+        ? errorMessage(t, error)
         : error !== null && error !== undefined
           ? `${failed} ${errorMessage(t, error)}`
           : empty;
