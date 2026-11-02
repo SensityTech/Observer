@@ -231,12 +231,15 @@ fn hidden(entry: &fs::DirEntry, name: &str) -> bool {
     }
 }
 
-/// The resources of a folder FXServer can run from, outside Observer's data folder.
+/// The resources of a server folder: one FXServer can run from, outside Observer's data folder,
+/// with a resource that has its manifest and a cfg.
 fn server(path: &Path, observer: Option<&Path>) -> Option<server_data::Resources> {
     if !path.join("resources").is_dir() {
         return None;
     }
-    server_data::inspect(path, observer).ok()
+    let resources = server_data::inspect(path, observer).ok()?;
+    // Web apps and tools keep a `resources` folder too: a server's has manifests, beside a cfg.
+    (resources.manifested() > 0 && !server_data::cfg_files(path).0.is_empty()).then_some(resources)
 }
 
 /// txAdmin's data folder: its `admins.json`, or the `config.json` of its default profile.
@@ -840,6 +843,36 @@ mod tests {
         assert_eq!(lab.port, Some(port));
         assert_eq!(lab.port_holder, None);
         assert!(!lab.tx_admin);
+    }
+
+    #[test]
+    fn a_resources_folder_without_a_manifest_or_without_a_cfg_is_no_server() {
+        let machine = machine();
+        let app = machine.path(&["drive", "bookstack"]);
+        fs::create_dir_all(app.join("resources").join("views")).unwrap();
+        fs::write(app.join("server.cfg"), "").unwrap();
+        let tool = machine.path(&["drive", "tool"]);
+        server(&tool, free_port());
+        fs::remove_file(tool.join("server.cfg")).unwrap();
+        server(&machine.path(&["drive", "live"]), free_port());
+
+        let found = discover(&machine.search(&[(&["drive"], 2)]));
+        let listing = listed(&machine.path(&["drive"]), "", &machine.path(&["observer-data"]));
+
+        assert_eq!(paths(&found), [text(&machine.path(&["drive", "live"]))]);
+        let kinds: Vec<_> = listing
+            .entries
+            .iter()
+            .map(|entry| (entry.name.as_str(), entry.kind))
+            .collect();
+        assert_eq!(
+            kinds,
+            [
+                ("bookstack", FolderKind::Folder),
+                ("live", FolderKind::Server),
+                ("tool", FolderKind::Folder)
+            ]
+        );
     }
 
     #[test]
