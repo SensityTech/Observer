@@ -23,6 +23,7 @@ import { allows, useMe } from '../auth/me';
 import { DestinationDialog } from '../backups/DestinationDialog';
 import { KIND_ICONS } from '../backups/icons';
 import { WhatDialog, WhenDialog } from '../backups/SettingsDialogs';
+import { useBackupsSummary, useServerTime } from '../backups/summary';
 import { Button, buttonVariants } from '../components/Button';
 import { Card } from '../components/Card';
 import { Chip } from '../components/Chip';
@@ -31,22 +32,10 @@ import { Menu } from '../components/Menu';
 import { Notice } from '../components/Notice';
 import { table } from '../components/table';
 import { errorMessage } from '../i18n/errors';
-import { formatClock, formatDay } from '../i18n/format';
 import { useI18n } from '../i18n/I18nProvider';
 import { cn } from '../lib/cn';
 
 const HISTORY_PAGE = 20;
-
-/** A time in the server's zone: the clock alone today, with its day otherwise. */
-const useServerTime = (zone: string) => {
-    const { locale } = useI18n();
-    return (instant: string) => {
-        const day = formatDay(locale, instant, zone, { weekday: false });
-        const today = formatDay(locale, Date.now(), zone, { weekday: false });
-        const clock = formatClock(locale, instant, zone);
-        return day === today ? clock : `${day} ${clock}`;
-    };
-};
 
 /** The game database's backups: when they run, what they dump, where the copies go, and each run. */
 export function BackupsPage() {
@@ -78,7 +67,6 @@ function Backups({ view }: { view: BackupsView }) {
     const words = t.backups;
     const me = useMe();
     const queryClient = useQueryClient();
-    const at = useServerTime(view.zone);
     const [notice, setNotice] = useState<{ tone: 'success' | 'danger'; message: string } | null>(null);
     const noticeRef = useRef<HTMLDivElement>(null);
     const refresh = () => void queryClient.invalidateQueries({ queryKey: ['backups'] });
@@ -112,30 +100,7 @@ function Backups({ view }: { view: BackupsView }) {
     });
 
     const enabled = view.destinations.filter((destination) => destination.enabled);
-    const last = view.recent.find((run) => run.finishedAt !== null);
-    const sentence = (() => {
-        if (last === undefined) {
-            return words.summary.none;
-        }
-        if (last.outcome === 'succeeded' || last.outcome === 'partial') {
-            const copies = copiesOf(last);
-            return words.summary.last(
-                at(last.startedAt),
-                format.bytes(last.fileBytes ?? 0),
-                copies.stored,
-                copies.total,
-            );
-        }
-        return words.summary.lastFailed(at(last.startedAt));
-    })();
-    const next = (() => {
-        const restart = view.nextRestartAt;
-        const timed = view.nextAt;
-        if (restart !== null && (timed === null || Date.parse(restart) <= Date.parse(timed))) {
-            return words.summary.nextRestart(at(restart));
-        }
-        return timed === null ? words.summary.nothingPlanned : words.summary.nextTime(at(timed));
-    })();
+    const { sentence, next } = useBackupsSummary(view);
     const canRun = allows(me, Permission.BackupsRun);
 
     return (
