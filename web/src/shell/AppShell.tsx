@@ -110,13 +110,7 @@ export function AppShell() {
 
     const main: NavEntry[] = [
         { to: '/', label: t.nav.overview, icon: LayoutDashboard, access: Permission.DashboardView },
-        {
-            to: '/statistics',
-            label: t.nav.statistics,
-            icon: ChartLine,
-            access: Permission.DashboardView,
-            nested: true,
-        },
+        { to: '/statistics', label: t.nav.statistics, icon: ChartLine, access: Permission.DashboardView },
         { to: '/console', label: t.nav.console, icon: SquareTerminal, access: Permission.ConsoleView },
     ];
     const operations: NavEntry[] = [

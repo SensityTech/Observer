@@ -992,7 +992,13 @@ export const en = {
     },
     statistics: {
         title: 'Statistics',
-        tabs: { label: 'Statistics views', timeline: 'Timeline', insights: 'Insights' },
+        tabs: {
+            label: 'Statistics views',
+            timeline: 'Timeline',
+            insights: 'Insights',
+            players: 'Players',
+            stability: 'Stability',
+        },
         off: 'Statistics are turned off on this server.',
         offCard: 'Turned off on this server.',
         needsDrops: 'How long players stay and stability need the permission to view drops.',
