@@ -146,7 +146,7 @@ impl Features {
                     enabled: chosen.get(&feature).is_none_or(|&(enabled, _)| enabled),
                     running: running.contains(&feature),
                     held: self.inner.hold(feature, &running),
-                    requires: feature.requires(),
+                    requires: feature.requires().to_vec(),
                     turn_on: feature.turn_on(),
                     turn_off: feature.turn_off(),
                     changed_at: chosen.get(&feature).map(|&(_, at)| at),
@@ -206,7 +206,7 @@ impl Features {
                 stopped = running
                     .iter()
                     .copied()
-                    .filter(|&other| other == feature || other.requires() == Some(feature))
+                    .filter(|&other| other == feature || other.requires().contains(&feature))
                     .collect();
                 running.retain(|other| !stopped.contains(other));
                 !stopped.is_empty()
@@ -278,7 +278,8 @@ impl Inner {
             Some(FeatureHold::NotConfigured)
         } else if feature
             .requires()
-            .is_some_and(|required| !running.contains(&required))
+            .iter()
+            .any(|required| !running.contains(required))
         {
             Some(FeatureHold::Requires)
         } else {
@@ -367,7 +368,7 @@ mod tests {
     use crate::Client;
 
     struct Lab {
-        _dir: TempDir,
+        dir: TempDir,
         db: Database,
         clock: Clock,
     }
@@ -379,7 +380,7 @@ mod tests {
                 .await
                 .unwrap();
             Self {
-                _dir: dir,
+                dir,
                 db,
                 clock: Clock::manual("2026-11-02T09:00:00Z".parse().unwrap()),
             }
@@ -392,7 +393,7 @@ mod tests {
                 clock: self.clock.clone(),
                 host_off: host_off.iter().copied().collect(),
                 sftp: Some(SocketAddr::from(([0, 0, 0, 0], 40126))),
-                data_dir: self._dir.path().join("data"),
+                data_dir: self.dir.path().join("data"),
             })
             .await
             .unwrap()
@@ -452,7 +453,7 @@ mod tests {
             clock: lab.clock.clone(),
             host_off: BTreeSet::new(),
             sftp: None,
-            data_dir: lab._dir.path().join("data"),
+            data_dir: lab.dir.path().join("data"),
         })
         .await
         .unwrap();
@@ -581,6 +582,20 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn turning_the_statistics_off_stops_the_drops_drawn_from_the_runs_they_record() {
+        let lab = Lab::new().await;
+        let features = lab.features(&[]).await;
+
+        features.set(&owner(), Feature::Metrics, false).await.unwrap();
+
+        assert!(features.runs(Feature::Players));
+        assert!(!features.runs(Feature::Drops));
+        let drops = view(&features.view().await, Feature::Drops);
+        assert_eq!(drops.requires, [Feature::Players, Feature::Metrics]);
+        assert_eq!(drops.held, Some(FeatureHold::Requires));
+    }
+
+    #[tokio::test]
     async fn tools_come_back_at_once_and_the_others_at_the_next_start() {
         let lab = Lab::new().await;
         let features = lab.features(&[]).await;
@@ -606,7 +621,7 @@ mod tests {
     #[tokio::test]
     async fn the_view_weighs_each_database_with_its_journal_and_each_folder_with_its_files() {
         let lab = Lab::new().await;
-        let data = lab._dir.path().join("data");
+        let data = lab.dir.path().join("data");
         fs::create_dir_all(data.join("crashes/2026-11-02")).unwrap();
         fs::write(data.join("metrics.sqlite3"), [0; 4096]).unwrap();
         fs::write(data.join("metrics.sqlite3-wal"), [0; 1000]).unwrap();

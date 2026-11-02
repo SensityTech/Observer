@@ -50,7 +50,7 @@ pub enum FeatureHold {
     Host,
     /// It needs a setting `observer.toml` does not give: SFTP's `listen`.
     NotConfigured,
-    /// It works on what the feature in `requires` collects, which does not run.
+    /// It works on what a feature in `requires` collects, which does not run.
     Requires,
 }
 
@@ -159,11 +159,12 @@ impl Feature {
         Self::ALL.into_iter().find(|feature| feature.as_str() == name)
     }
 
-    /// The feature whose records this one works on, which must run for this one to.
-    pub const fn requires(self) -> Option<Self> {
+    /// The features whose records this one works on, which must run for this one to: the drops
+    /// are drawn from the players' sessions and from the runs the statistics record.
+    pub const fn requires(self) -> &'static [Self] {
         match self {
-            Self::Drops => Some(Self::Players),
-            _ => None,
+            Self::Drops => &[Self::Players, Self::Metrics],
+            _ => &[],
         }
     }
 
@@ -228,6 +229,18 @@ impl Feature {
     /// What goes on while the feature is off, and only while it has something to finish.
     pub const fn while_off(self) -> &'static [FeatureTaskRun] {
         match self {
+            // Failed logins SFTP counted still reach the audit log, and the uploads a crash cut
+            // short still leave the server folder.
+            Self::Sftp => &[
+                FeatureTaskRun {
+                    task: FeatureTask::SftpUpkeep,
+                    cadence: Cadence::Every { seconds: 60 },
+                },
+                FeatureTaskRun {
+                    task: FeatureTask::UploadsSweep,
+                    cadence: Cadence::ObserverStart,
+                },
+            ],
             // A fix took entries out of a file because another copy kept them; once that copy
             // is gone, the entries must come back or the game misses them.
             Self::Tools => &[FeatureTaskRun {
@@ -313,7 +326,7 @@ pub struct FeatureView {
     /// Whether it runs in this Observer now: turning it off stops it at once.
     pub running: bool,
     pub held: Option<FeatureHold>,
-    pub requires: Option<Feature>,
+    pub requires: Vec<Feature>,
     /// When turning it on takes effect.
     pub turn_on: Applies,
     pub turn_off: Applies,
@@ -423,11 +436,11 @@ mod tests {
     }
 
     #[test]
-    fn a_feature_requires_only_one_that_requires_nothing() {
-        for feature in Feature::ALL {
-            if let Some(required) = feature.requires() {
-                assert_ne!(required, feature);
-                assert_eq!(required.requires(), None, "{feature:?}");
+    fn a_feature_requires_only_earlier_ones_that_require_nothing() {
+        for (position, feature) in Feature::ALL.into_iter().enumerate() {
+            for required in feature.requires() {
+                assert!(Feature::ALL[..position].contains(required), "{feature:?}");
+                assert_eq!(required.requires(), &[], "{feature:?}");
             }
         }
     }

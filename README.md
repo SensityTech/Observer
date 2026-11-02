@@ -678,13 +678,16 @@ the restart schedule and FXServer's builds are always on.
 what it opens: its port, its tasks, its files, its routes. Only the owner turns one on or off, with
 `PUT /api/features/{feature}` and the password again; each change is in the audit log.
 
-- **Off applies at once.** By the time the API answers, the port is closed and the feature's tasks have
-  stopped; open SFTP sessions are told to disconnect. Turning the players off turns the drops off too.
+- **Off applies at once.** By the time the API answers, the port is closed, the SFTP sessions have
+  ended and the feature's tasks have stopped. Turning the players or the statistics off turns the drops
+  off too: they are drawn from the players' sessions and from the runs the statistics record.
 - **On applies at the next start of Observer,** which restarts FXServer, except for the server tools,
   which apply from the next start of FXServer. A port only opens when the host restarts Observer.
-- **The tools' heal goes on.** While a fix of the server tools is applied, the work before each start
-  still puts back what it took out once the copy it kept is gone, even with the tools off: undo the
-  fixes first to turn the tools off entirely.
+- **What a feature left behind is still finished.** With SFTP off, the failed logins it counted still
+  reach the audit log, and the uploads a crash cut short still leave the server folder at Observer's
+  start. While a fix of the server tools is applied, the work before each start still puts back what it
+  took out once the copy it kept is gone, even with the tools off: undo the fixes first to turn the
+  tools off entirely.
 
 The host can keep features off whatever the panel says, the owner's account included, in
 `observer.toml`; `"off"` is the only value:

@@ -218,13 +218,13 @@ pub async fn run(config: Config, args: RunArgs) -> anyhow::Result<()> {
     if let Err(error) = tools.recover(observer_started).await {
         warn!(%error, "the server tools' interrupted writes could not be settled");
     }
+    // Whether or not SFTP is on now, a crash may have left uploads from when it was.
+    if let Err(error) = observer_sftp::sweep_uploads(&files).await {
+        warn!(%error, "the temporary SFTP uploads could not all be removed");
+    }
     // Right after the panel's port, so that a port taken stops Observer before FXServer starts.
     let sftp_listener = match &config.sftp {
         Some(sftp) if features.runs(Feature::Sftp) => {
-            // A crash may have left uploads, which go before anyone can upload again.
-            if let Err(error) = observer_sftp::sweep_uploads(&files).await {
-                warn!(%error, "the temporary SFTP uploads could not all be removed");
-            }
             let host_key = observer_sftp::host_key(&files)
                 .await
                 .context("cannot read or create the SFTP host key")?;
@@ -289,7 +289,6 @@ pub async fn run(config: Config, args: RunArgs) -> anyhow::Result<()> {
         accounts.clone(),
         audit.clone(),
         files.clone(),
-        features.clone(),
         stop.clone(),
     ));
     let sftp = sftp_listener.map(|(listener, host_key)| {
@@ -684,23 +683,16 @@ async fn daily_backups(db: Database, stop: CancellationToken) {
     }
 }
 
-/// Every minute, the accounts' upkeep: failed logins reach the audit log, expired sessions go;
-/// SFTP's too while it runs. At start and then daily, the audit entries past their retention go.
-async fn upkeep(
-    accounts: Accounts,
-    audit: AuditLog,
-    files: observer_app::Files,
-    features: Features,
-    stop: CancellationToken,
-) {
+/// Every minute, the accounts' upkeep: failed logins reach the audit log, expired sessions go.
+/// SFTP's failed logins too, whether or not SFTP still runs. At start and then daily, the audit
+/// entries past their retention go too.
+async fn upkeep(accounts: Accounts, audit: AuditLog, files: observer_app::Files, stop: CancellationToken) {
     let mut purged_at: Option<Instant> = None;
     loop {
         if let Err(error) = accounts.sweep().await {
             warn!(%error, "the account upkeep failed");
         }
-        if features.runs(Feature::Sftp)
-            && let Err(error) = files.sweep().await
-        {
+        if let Err(error) = files.sweep().await {
             warn!(%error, "the SFTP login upkeep failed");
         }
         if purged_at.is_none_or(|at| at.elapsed() >= DAILY) {

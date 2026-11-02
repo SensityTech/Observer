@@ -76,7 +76,7 @@ async fn the_switches_are_read_with_the_settings_permission_and_say_what_each_fe
     );
     assert_eq!(features[2]["turnOn"], "nextServerStart");
     let drops = &features[6];
-    assert_eq!(drops["requires"], "players");
+    assert_eq!(drops["requires"], json!(["players", "metrics"]));
     assert_eq!(
         drops["reach"]["files"],
         json!([{ "path": "metrics.sqlite3", "bytes": null }])

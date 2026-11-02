@@ -12,7 +12,7 @@ enabled: boolean,
 /**
  * Whether it runs in this Observer now: turning it off stops it at once.
  */
-running: boolean, held: FeatureHold | null, requires: Feature | null, 
+running: boolean, held: FeatureHold | null, requires: Array<Feature>, 
 /**
  * When turning it on takes effect.
  */
