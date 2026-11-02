@@ -132,6 +132,7 @@ struct Connected {
     license: Option<String>,
     name: Option<String>,
     player: Option<i64>,
+    ping: Option<u32>,
 }
 
 impl Players {
@@ -238,6 +239,7 @@ impl Players {
                     since: Timestamp::from_millisecond(session.seen_ms).unwrap_or(Timestamp::UNIX_EPOCH),
                     session_ms,
                     total_ms: profile.map(|(_, total)| total + session_ms),
+                    ping: session.ping,
                 }
             })
             .collect();
@@ -1067,6 +1069,7 @@ impl Worker {
                     license,
                     name,
                     player,
+                    ping: open.ping,
                 }
             })
             .collect()

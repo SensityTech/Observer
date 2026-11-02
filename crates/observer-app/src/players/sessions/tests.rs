@@ -239,6 +239,41 @@ fn a_forged_drop_cannot_claim_more_than_observer_measured() {
 }
 
 #[test]
+fn a_session_carries_the_ping_of_the_latest_list_that_shows_it() {
+    let mut bench = Bench::new();
+    bench.join(10, 7, LICENSE, "Ada");
+    bench.join(10, 8, OTHER, "Grace");
+    let pings = |bench: &Bench| {
+        let mut pings: Vec<_> = bench
+            .sessions
+            .open()
+            .map(|open| (open.net_id, open.ping))
+            .collect();
+        pings.sort_unstable();
+        pings
+    };
+    let before = pings(&bench);
+
+    let (list_ms, at) = bench.at(20);
+    let list = PlayerList {
+        players: vec![(7, Some(62)), (8, None)],
+        shown: [(7, LICENSE, "Ada"), (8, OTHER, "Grace")]
+            .into_iter()
+            .map(|(id, license, name)| Listed {
+                id,
+                identifiers: vec![license.to_owned()],
+                name: Some(name.to_owned()),
+            })
+            .collect(),
+        anonymous: false,
+    };
+    bench.sessions.listed(1, &list, list_ms, at);
+
+    assert_eq!(before, [(7, None), (8, None)]);
+    assert_eq!(pings(&bench), [(7, Some(62)), (8, None)]);
+}
+
+#[test]
 fn the_game_timer_keeps_a_length_true_when_the_wall_clock_jumps() {
     let mut bench = Bench::new();
     bench.join(10, 7, LICENSE, "Ada");

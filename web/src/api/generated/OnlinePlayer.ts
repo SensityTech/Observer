@@ -16,4 +16,9 @@ since: string, sessionMs: number,
 /**
  * Total play time with this session, imported time included.
  */
-totalMs: number | null, };
+totalMs: number | null, 
+/**
+ * In milliseconds, as FXServer's own player list last gave it: unknown before that list
+ * shows the player, and for a client FXServer has no network peer for.
+ */
+ping: number | null, };
