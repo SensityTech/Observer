@@ -764,7 +764,7 @@ describe('ServerSetupPage', () => {
         });
         const { getByRole, getByText, press } = await page();
 
-        getByText(words.folder.found(2));
+        await waitFor(() => getByText(words.folder.found(2)));
         const found = within(getByRole('list', { name: words.folder.servers }));
         const live = found.getByRole('button', { name: /server-data/ });
         expect(live.getAttribute('aria-pressed')).toBe('true');
@@ -794,11 +794,12 @@ describe('ServerSetupPage', () => {
 
         fireEvent.change(field(), { target: { value: 'D:\\FXServer\\build' } });
         await press(words.folder.browse);
-        const folders = within(getByRole('list', { name: words.folder.browser.folders('FXServer') }));
+        const folders = within(
+            await waitFor(() => getByRole('list', { name: words.folder.browser.folders('FXServer') })),
+        );
         fireEvent.click(folders.getByRole('button', { name: /^server-data/ }));
-        await settle();
 
-        getByText(words.folder.browser.isServer);
+        await waitFor(() => getByText(words.folder.browser.isServer));
         expect(api.of(FOLDERS_ROUTE)).toEqual([{ path: 'D:\\FXServer\\', prefix: '' }]);
         await press(words.folder.browser.use);
 

@@ -129,7 +129,8 @@ export function FolderStep({
             {browsing ? (
                 <FolderBrowser
                     start={start}
-                    chosen={path === '' ? null : path}
+                    // A path half typed is no folder to select.
+                    chosen={picked?.path ?? (problem === null && report !== null ? path : null)}
                     places={discovery.data?.places ?? []}
                     servers={servers}
                     using={checking}
