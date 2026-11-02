@@ -25,6 +25,8 @@ use super::{
 const SAME_CHANGE_MS: i64 = 10 * 60_000;
 /// Resources a row names, the others counted.
 const RESOURCES_NAMED: usize = 3;
+/// How far around a window crashes are read, so that a wave its edges cut is counted whole.
+const WAVE_REACH_MS: i64 = 3_600_000;
 
 /// `GET /drops/sessions`: the sessions that started in the range against those of the 4 weeks
 /// before it, both cut at the oldest session kept.
@@ -118,8 +120,9 @@ pub(in crate::drops) fn waves(
     to_ms: i64,
     now_ms: i64,
 ) -> Result<(Vec<Wave>, Vec<TimelineEvent>), StoreError> {
+    // A wave the window's edges cut is counted whole: crashes are read from a little around it.
     let mut by_signature: BTreeMap<i64, Vec<stored::CrashRow>> = BTreeMap::new();
-    for crash in stored::crashes(conn, from_ms - WAVE_GAP_MS, to_ms)? {
+    for crash in stored::crashes(conn, from_ms - WAVE_REACH_MS, to_ms + WAVE_REACH_MS)? {
         by_signature.entry(crash.signature).or_default().push(crash);
     }
     let mut found = Vec::new();
@@ -128,7 +131,7 @@ pub(in crate::drops) fn waves(
         for burst in bursts(&times) {
             let wave = &crashes[burst];
             let (start_ms, end_ms) = (wave[0].ended_ms, wave[wave.len() - 1].ended_ms);
-            if end_ms < from_ms {
+            if end_ms < from_ms || start_ms >= to_ms {
                 continue;
             }
             // A player not yet confirmed counts once per session.
@@ -179,6 +182,7 @@ pub(in crate::drops) fn waves(
                     at: start_ms.div_euclid(1000),
                     until: Some(end_ms.div_euclid(1000)),
                     detail: EventDetail::CrashWave {
+                        signature_id: signature,
                         signature: shown.map(|row| row.signature.clone()),
                         label: shown.and_then(|row| row.label.clone()),
                         crashes: u32::try_from(crashes).unwrap_or(u32::MAX),

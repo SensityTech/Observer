@@ -639,6 +639,14 @@ async fn crashes_of_one_signature_from_three_players_close_together_are_a_wave()
         .read(|conn| insights::waves(conn, NOW_MS - HOUR_MS, NOW_MS, NOW_MS))
         .await;
     assert!(late.0.is_empty(), "the wave ended before the window");
+    let cut = lab
+        .read(move |conn| insights::waves(conn, start + 10 * MINUTE_MS, NOW_MS, NOW_MS))
+        .await;
+    assert_eq!(
+        wave_crashes(&cut.0),
+        [5],
+        "a wave the window cuts is counted whole"
+    );
 }
 
 #[tokio::test]

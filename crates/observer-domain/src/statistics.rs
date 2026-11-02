@@ -189,6 +189,8 @@ pub enum EventDetail {
     },
     /// Crashes of one signature, close together, from several players, and unusual for it.
     CrashWave {
+        /// The signature's id, for the drop log's filter.
+        signature_id: i64,
         signature: Option<String>,
         label: Option<String>,
         crashes: u32,

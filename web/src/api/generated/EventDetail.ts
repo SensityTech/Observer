@@ -11,7 +11,11 @@ backOnlineAt: number | null, playersDropped: number | null, } | { "kind": "chang
 /**
  * The first resources that changed, by name.
  */
-resources: Array<string>, } | { "kind": "resource", name: string, change: LiveChangeKind, by: string | null, } | { "kind": "files", files: number, resources: Array<string>, by: Array<string>, } | { "kind": "crashWave", signature: string | null, label: string | null, crashes: number, players: number, 
+resources: Array<string>, } | { "kind": "resource", name: string, change: LiveChangeKind, by: string | null, } | { "kind": "files", files: number, resources: Array<string>, by: Array<string>, } | { "kind": "crashWave", 
+/**
+ * The signature's id, for the drop log's filter.
+ */
+signatureId: number, signature: string | null, label: string | null, crashes: number, players: number, 
 /**
  * The resource the crashes name, when they name one.
  */
