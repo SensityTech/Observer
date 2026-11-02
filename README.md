@@ -666,9 +666,10 @@ use the **Tools** page.
 [`resource/CONTRACT.md`](resource/CONTRACT.md) is the integration contract: the server events Observer
 raises before a restart or a stop (`observer:restartScheduled`, `observer:shuttingDown`, ...), what they
 carry, in which order, and what your resources can rely on. The bridge that raises them, a server-side
-resource named `observer`, is written into the build before every start of FXServer: do not ensure it
-yourself. [`resource/observer_example`](resource/observer_example) listens to each event and marks where
-a team plugs in its notifications and its saves.
+resource, is written into the build before every start of FXServer under a name drawn for that start,
+which the `observer_bridge` server convar gives: do not ensure it yourself. Scripts that target a
+fixed name, as they do txAdmin's `monitor`, find nothing. [`resource/observer_example`](resource/observer_example)
+listens to each event and marks where a team plugs in its notifications and its saves.
 
 Resources written for txAdmin keep working with **Send txAdmin's events too**, in the launch settings
 and the setup's last step: from the next start of FXServer, the bridge also raises txAdmin's events,

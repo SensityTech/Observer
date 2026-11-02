@@ -7,24 +7,35 @@ on.
 
 ## The bridge
 
-`observer` is a server-side resource that Observer writes into the build's `system_resources` folder
+The bridge is a server-side resource that Observer writes into the build's `system_resources` folder
 before every start of FXServer, and ensures before your cfg runs. Observer overwrites any change made
 to it. It reports the server's health to Observer and turns Observer's commands into server events.
 It has no client script and no UI.
 
-Do not ensure it yourself, and do not rename it: Observer looks for it by its name.
+Its name changes with every start of FXServer: Observer draws it at random, so that no script can
+target the bridge by a name known in advance. Read it from the `observer_bridge` convar, which
+Observer sets on FXServer's command line with `+set`: a server convar, never sent to clients and
+never listed in `/info.json`. Do not ensure the bridge yourself, and never write its name into a cfg
+or a script: the next start gives it another.
+
+```lua
+local bridge = GetConvar('observer_bridge', '') -- empty when Observer did not start the server
+```
 
 ## Version
 
-This is contract version **1**.
+This is contract version **2**.
 
 ```lua
-local version = exports.observer:getContractVersion() -- 1
+local version = exports[GetConvar('observer_bridge', '')]:getContractVersion() -- 2
 ```
 
 Within a version, fields and `reason` values are only ever added. Ignore fields you do not know, and
 treat a `reason` you do not know as the closest one you do (`stop` for `observer:shuttingDown`). A
-field renamed or removed, or a change of meaning, is version 2.
+field renamed or removed, or a change of meaning, is a new version.
+
+Version 2 changed how a resource finds the bridge: version 1 named it `observer`, version 2 draws its
+name at each start and gives it in `observer_bridge`. The events and their payloads did not change.
 
 ## Events
 
@@ -130,6 +141,10 @@ The bridge raises these events only for commands typed on the server console, wh
 writes, and never for a call from another resource. Listen with `AddEventHandler` only. Never
 `RegisterNetEvent` these names: clients could then raise them.
 
+The drawn name keeps away scripts written against a fixed name, and no resource can take it before
+the bridge starts. It is no secret from the server's own resources: any of them can list the
+resources, read `observer_bridge` and the bridge's files. Run only server resources you trust.
+
 ## txAdmin's events
 
 Resources written for txAdmin can keep working: with **Send txAdmin's events too** checked in the
@@ -151,7 +166,7 @@ Observer, come later.
 
 ## Example
 
-[`observer_example`](observer_example) checks the contract version when it starts, prints each event
-to the server console with its fields, and marks with short comments where a team plugs in its
-notifications, its cancellation notice and its saves. It shows nothing to players. Copy what fits
-into your own resources rather than running it as is.
+[`observer_example`](observer_example) finds the bridge and checks the contract version when it
+starts, prints each event to the server console with its fields, and marks with short comments where
+a team plugs in its notifications, its cancellation notice and its saves. It shows nothing to
+players. Copy what fits into your own resources rather than running it as is.

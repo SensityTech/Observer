@@ -451,7 +451,7 @@ impl Fake {
             bridge.ready = true;
             self.traces.script(
                 &bridge.name,
-                &json!({ "type": "observer", "kind": "ready", "contractVersion": 1 }),
+                &json!({ "type": "observer", "kind": "ready", "contractVersion": 2 }),
             );
             self.traces.script(
                 &bridge.name,

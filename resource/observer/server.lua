@@ -2,8 +2,9 @@
 -- channel, and turns Observer's commands into server events for other resources to handle.
 -- It never shows anything to players.
 
--- Bumped only when a field is renamed or removed; new fields keep the version.
-local CONTRACT_VERSION = 1
+-- Bumped only when a field is renamed or removed, or resources must find the bridge another way;
+-- new fields keep the version.
+local CONTRACT_VERSION = 2
 local HEARTBEAT_MS = 3000
 local RESOURCES_SETTLE_MS = 500
 local PLAYERS_PAGE = 100
@@ -51,7 +52,7 @@ local function shown(id)
     }
 end
 
--- The players already connected when the bridge starts, after `restart observer` for one, in
+-- The players already connected when the bridge starts, after a restart of the bridge for one, in
 -- pages: one report for a full server would pass the size Observer reads.
 local function reportPlayers()
     local players = GetPlayers()

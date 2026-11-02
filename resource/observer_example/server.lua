@@ -3,7 +3,7 @@
 -- notifications, cancellation notices and saves would go.
 
 -- The contract this resource was written for.
-local CONTRACT_VERSION = 1
+local CONTRACT_VERSION = 2
 
 local function log(text)
     print(('[observer_example] %s'):format(text))
@@ -26,11 +26,13 @@ local function fields(payload, names)
 end
 
 CreateThread(function()
-    if GetResourceState('observer') ~= 'started' then
+    -- The bridge's name changes with every start of FXServer: Observer gives it in this convar.
+    local bridge = GetConvar('observer_bridge', '')
+    if bridge == '' or GetResourceState(bridge) ~= 'started' then
         log('^3the observer bridge is not running: is this server started by Observer?^7')
         return
     end
-    local version = exports.observer:getContractVersion()
+    local version = exports[bridge]:getContractVersion()
     if version ~= CONTRACT_VERSION then
         log(('^3Observer speaks contract %s, this resource was written for %d^7'):format(
             show(version), CONTRACT_VERSION))

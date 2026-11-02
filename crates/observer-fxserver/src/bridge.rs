@@ -31,7 +31,7 @@ pub(crate) const REPORT_TYPE: &str = "observer";
 
 /// The version of the server events the bridge raises; it must match `CONTRACT_VERSION` in
 /// `server.lua`.
-pub const CONTRACT_VERSION: u32 = 1;
+pub const CONTRACT_VERSION: u32 = 2;
 
 const FILES: [(&str, &str); 3] = [
     (
@@ -694,6 +694,19 @@ mod tests {
             assert!(CONTRACT.contains(&format!("`{}`", reason.as_str())), "{reason:?}");
         }
         assert!(CONTRACT.contains(&format!("contract version **{CONTRACT_VERSION}**")));
+    }
+
+    #[test]
+    fn resources_find_the_bridge_through_its_convar_and_never_by_a_fixed_name() {
+        let lookup = format!("GetConvar('{NAME_CONVAR}', '')");
+
+        assert!(CONTRACT.contains(&lookup));
+        assert!(CONTRACT.contains(&format!("exports[{lookup}]:getContractVersion()")));
+        assert!(EXAMPLE.contains(&lookup));
+        for fixed in ["exports.observer", "'observer'", "\"observer\""] {
+            assert!(!CONTRACT.contains(fixed), "the contract names the bridge {fixed}");
+            assert!(!EXAMPLE.contains(fixed), "the example names the bridge {fixed}");
+        }
     }
 
     #[test]
