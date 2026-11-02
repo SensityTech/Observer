@@ -14,6 +14,9 @@ use crate::drops::{DropCategory, DropKind};
 
 /// The longest name kept, in bytes.
 pub const MAX_NAME_BYTES: usize = 256;
+/// The longest label name and label id the server's resources may give, in characters.
+pub const MAX_LABEL_NAME_CHARS: usize = 64;
+pub const MAX_LABEL_ID_CHARS: usize = 32;
 
 /// The kinds of identifier Observer keeps beside the licence, which is the player's key.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, TS)]
@@ -189,6 +192,37 @@ pub fn clean_name(name: &str) -> Option<String> {
     (!kept.is_empty()).then(|| kept.to_owned())
 }
 
+/// What the server's own resources call a player, given through the bridge: display data, never
+/// part of who the player is.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct PlayerLabel {
+    pub name: Option<String>,
+    pub id: Option<String>,
+    /// The resource that gave it.
+    pub resource: Option<String>,
+}
+
+impl PlayerLabel {
+    /// A label safe to show, from what a resource gave: each text cleaned as a name is, and left
+    /// out past its length rather than cut, as a cut id would be another one. `None` when neither
+    /// the name nor the id is left.
+    pub fn clean(name: Option<&str>, id: Option<&str>, resource: Option<&str>) -> Option<Self> {
+        let text = |text: Option<&str>, max: usize| {
+            let kept: String = text?.chars().filter(|&c| !hidden(c)).collect();
+            let kept = kept.trim();
+            (!kept.is_empty() && kept.chars().count() <= max).then(|| kept.to_owned())
+        };
+        let label = Self {
+            name: text(name, MAX_LABEL_NAME_CHARS),
+            id: text(id, MAX_LABEL_ID_CHARS),
+            resource: text(resource, MAX_LABEL_NAME_CHARS),
+        };
+        (label.name.is_some() || label.id.is_some()).then_some(label)
+    }
+}
+
 fn hidden(c: char) -> bool {
     c.is_control()
         || matches!(
@@ -205,7 +239,7 @@ fn hidden(c: char) -> bool {
 /// What someone typed into a players search.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Search {
-    /// The start of a name.
+    /// The start of a name or of a label's name, or the whole of a label's id.
     Name(String),
     License(String),
     /// Any other identifier, which only those who see identifiers may search by.
@@ -291,6 +325,8 @@ pub struct PlayerSummary {
     pub first_seen: Timestamp,
     pub last_seen: Timestamp,
     pub online: bool,
+    /// The label of the session under way, or else the last one the server's resources gave.
+    pub label: Option<PlayerLabel>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
@@ -331,6 +367,8 @@ pub struct OnlinePlayer {
     pub session_ms: i64,
     /// Total play time with this session, imported time included.
     pub total_ms: Option<i64>,
+    /// Once the identity is confirmed.
+    pub label: Option<PlayerLabel>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
@@ -381,6 +419,19 @@ pub struct Community {
 #[ts(export)]
 pub struct PlayerName {
     pub name: String,
+    pub first_seen: Timestamp,
+    pub last_seen: Timestamp,
+}
+
+/// A label the server's resources gave the player, first and last.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SeenLabel {
+    pub name: Option<String>,
+    pub id: Option<String>,
+    /// The resource that gave it last.
+    pub resource: Option<String>,
     pub first_seen: Timestamp,
     pub last_seen: Timestamp,
 }
@@ -477,6 +528,8 @@ pub struct PlayerProfile {
     /// The server's, over the sessions kept.
     pub server_crash_rate: Option<f64>,
     pub names: Vec<PlayerName>,
+    /// The labels the server's resources gave, the latest first.
+    pub labels: Vec<SeenLabel>,
     /// The days of the last 90 with play, the session under way included.
     pub days: Vec<PlayDay>,
     pub drops: Vec<PlayerDrop>,
@@ -826,6 +879,45 @@ mod tests {
 
         assert_eq!(cleaned.len(), MAX_NAME_BYTES);
         assert_eq!(cleaned, "é".repeat(128));
+    }
+
+    #[test]
+    fn a_label_loses_what_names_lose_and_keeps_its_resource() {
+        assert_eq!(
+            PlayerLabel::clean(
+                Some(" John\u{202E} Doe\u{0007} "),
+                Some("\u{200B}CHAR-1234\n"),
+                Some("characters")
+            ),
+            Some(PlayerLabel {
+                name: Some("John Doe".to_owned()),
+                id: Some("CHAR-1234".to_owned()),
+                resource: Some("characters".to_owned()),
+            })
+        );
+    }
+
+    #[test]
+    fn a_label_text_past_its_length_is_left_out_and_never_cut() {
+        let name = "é".repeat(MAX_LABEL_NAME_CHARS);
+        let id = "9".repeat(MAX_LABEL_ID_CHARS);
+
+        let kept = PlayerLabel::clean(Some(&name), Some(&id), None).unwrap();
+        let past = PlayerLabel::clean(Some(&format!("{name}é")), Some(&format!("{id}9")), None);
+        let id_past = PlayerLabel::clean(Some("John Doe"), Some(&format!("{id}9")), None);
+
+        assert_eq!((kept.name, kept.id), (Some(name), Some(id)));
+        assert_eq!(past, None);
+        assert_eq!(id_past.map(|label| label.id), Some(None));
+    }
+
+    #[test]
+    fn a_label_with_nothing_left_to_show_is_none() {
+        assert_eq!(PlayerLabel::clean(None, None, Some("characters")), None);
+        assert_eq!(
+            PlayerLabel::clean(Some(" \u{200B}"), Some("\u{FEFF}"), None),
+            None
+        );
     }
 
     #[test]

@@ -1,8 +1,10 @@
 //! A stand-in for FXServer in Observer's tests. It takes FXServer's arguments (`+set`, `+exec`,
 //! `+ensure`), prints lines shaped like FXServer 35245's, runs the commands it reads on stdin from
 //! its main loop, writes structured traces on fd 3 and serves `/dynamic.json`, `/perf/`,
-//! `/players.json` and `/info.json` on the cfg's `endpoint_add_tcp`. With `+ensure observer` it
-//! also plays the bridge: `ready` and the started resources once, then a heartbeat and the heap.
+//! `/players.json` and `/info.json` on the cfg's `endpoint_add_tcp`. Started, a folder of the
+//! `citizen/system_resources` next to the executable that holds Observer's bridge plays it, under
+//! the folder's name as FXServer knows the bridge: `ready` and the started resources once, then a
+//! heartbeat and the heap.
 //!
 //! Failures on demand, through convars (`+set fake_x y`, in the cfg, or in a `fake-build.cfg` next
 //! to the executable, read before the command line, so that one build can crash while another does
@@ -32,9 +34,10 @@
 //!   `fake_drop <id> <category> <resource or -> <reason...>`: a player joins or drops, which
 //!   `/players.json` follows and the bridge reports (a join shows a full set of identifiers and
 //!   tokens, and the address `192.0.2.77`, IPv4-mapped for every other player, unless given);
-//!   `fake_drop_before_join <id>`, a resource's kick inside its own `playerJoining` handler; the
-//!   players already there are reported once the bridge starts, and `quit` drops every player
-//!   with category 7 through the trace thread, as FXServer does;
+//!   `fake_drop_before_join <id>`, a resource's kick inside its own `playerJoining` handler;
+//!   `fake_label <id> [label id] [name...]`, a resource giving a player a label, or clearing it
+//!   without one; the players already there are reported once the bridge starts, and `quit` drops
+//!   every player with category 7 through the trace thread, as FXServer does;
 //! - on stdin: `fake_crash [code]`, `fake_hang`, `fake_spin` (a busy loop), `fake_print <text>`,
 //!   `fake_trace <type>`, `fake_stall_input <ms>`, which stops reading stdin for a while, as
 //!   FXServer does while its main loop is stuck; `fake_spawn [NAME=value...] <program> <args...>`,
@@ -164,6 +167,8 @@ impl Observed {
 }
 
 struct Bridge {
+    /// The resource's name, which FXServer gives each of its traces.
+    name: String,
     next_heartbeat: Instant,
     next_heap: Instant,
     ready: bool,
@@ -306,7 +311,7 @@ impl Fake {
             ("endpoint_add_udp", _) => {}
             ("ensure" | "start", Some(resource)) => {
                 let restarted = self.started.iter().any(|started| started == resource);
-                if self.bridge.is_some() && resource == "observer" {
+                if self.bridge.as_ref().is_some_and(|bridge| bridge.name == resource) {
                     stop(resource);
                 }
                 self.start(resource);
@@ -321,7 +326,7 @@ impl Fake {
             ("stop", Some(resource)) => {
                 stop(resource);
                 self.started.retain(|started| started != resource);
-                if resource == "observer" {
+                if self.bridge.as_ref().is_some_and(|bridge| bridge.name == resource) {
                     self.bridge = None;
                 }
                 self.resources_changed(resource, &["stop"]);
@@ -375,19 +380,9 @@ impl Fake {
                     self.drop_player(id, category, resource, &reason);
                 }
             }
-            ("fake_drop_before_join", Some(id)) => {
-                if let Ok(id) = id.parse::<u32>() {
-                    let t = self.server.uptime_ms();
-                    self.bridge_report(&players::drop_report(id, t, 1, "gate", "Not whitelisted"));
-                    let player = Player {
-                        name: "Late".to_owned(),
-                        identifiers: vec![format!("license:{id:040x}")],
-                        tokens: Vec::new(),
-                    };
-                    self.bridge_report(&players::join_report(id, &player, t));
-                }
-            }
-            ("observer_cmd", Some(hex)) if self.bridge.is_some() => bridge_command(hex),
+            ("fake_label", Some(id)) => self.label(id, &args[1..]),
+            ("fake_drop_before_join", Some(id)) => self.drop_before_join(id),
+            ("observer_cmd", Some(hex)) if self.bridge.is_some() => self.bridge_command(hex),
             // Typing a convar's name with a value sets it.
             (convar, Some(value)) if convar.starts_with("sv_") || convar.starts_with("fake_") => {
                 self.server.set(name, value);
@@ -414,9 +409,10 @@ impl Fake {
         if !self.started.iter().any(|started| started == resource) {
             self.started.push(resource.to_owned());
         }
-        if resource == "observer" {
+        if is_bridge(resource) {
             let heap_period = Duration::from_millis(self.server.number("fake_heap_ms").unwrap_or(10_000));
             self.bridge = Some(Bridge {
+                name: resource.to_owned(),
                 next_heartbeat: Instant::now(),
                 next_heap: Instant::now() + heap_period,
                 ready: false,
@@ -426,12 +422,12 @@ impl Fake {
 
     /// The bridge's report of a resource started or stopped once the cfg has run.
     fn resources_changed(&mut self, resource: &str, changes: &[&str]) {
-        if !self.bridge.as_ref().is_some_and(|bridge| bridge.ready) {
+        let Some(bridge) = self.bridge.as_ref().filter(|bridge| bridge.ready) else {
             return;
-        }
+        };
         let events: Vec<[&str; 2]> = changes.iter().map(|change| [resource, *change]).collect();
         self.traces.script(
-            "observer",
+            &bridge.name,
             &json!({ "type": "observer", "kind": "resources", "started": self.started, "events": events }),
         );
     }
@@ -445,28 +441,28 @@ impl Fake {
         if !bridge.ready {
             bridge.ready = true;
             self.traces.script(
-                "observer",
-                &json!({ "type": "observer", "kind": "ready", "contractVersion": 1 }),
+                &bridge.name,
+                &json!({ "type": "observer", "kind": "ready", "contractVersion": 3 }),
             );
             self.traces.script(
-                "observer",
+                &bridge.name,
                 &json!({ "type": "observer", "kind": "resources", "started": self.started }),
             );
             let roster = self.server.players().roster(self.server.uptime_ms());
             for page in roster {
-                self.traces.script("observer", &page);
+                self.traces.script(&bridge.name, &page);
             }
         }
         if now >= bridge.next_heartbeat {
             bridge.next_heartbeat = now + period;
             self.traces
-                .script("observer", &json!({ "type": "observer", "kind": "hb" }));
+                .script(&bridge.name, &json!({ "type": "observer", "kind": "hb" }));
         }
         if now >= bridge.next_heap {
             bridge.next_heap =
                 now + Duration::from_millis(self.server.number("fake_heap_ms").unwrap_or(10_000));
             self.traces.script(
-                "observer",
+                &bridge.name,
                 &json!({ "type": "observer", "kind": "heap", "heapUsed": 18_874_368, "heapTotal": 25_165_824, "rss": 62_914_560, "external": 2_097_152 }),
             );
         }
@@ -503,6 +499,35 @@ impl Fake {
         self.bridge_report(&report);
     }
 
+    /// A resource's kick inside its own `playerJoining` handler: the drop comes before the join.
+    fn drop_before_join(&self, id: &str) {
+        let Ok(id) = id.parse::<u32>() else {
+            return;
+        };
+        let t = self.server.uptime_ms();
+        self.bridge_report(&players::drop_report(id, t, 1, "gate", "Not whitelisted"));
+        let player = Player {
+            name: "Late".to_owned(),
+            identifiers: vec![format!("license:{id:040x}")],
+            tokens: Vec::new(),
+        };
+        self.bridge_report(&players::join_report(id, &player, t));
+    }
+
+    /// A resource giving player `id` a label of `[label id, name...]`, or clearing it with nothing.
+    fn label(&self, id: &str, label: &[String]) {
+        let Ok(id) = id.parse::<u32>() else {
+            return;
+        };
+        let label = label
+            .split_first()
+            .map(|(label_id, name)| json!({ "id": label_id, "name": name.join(" ") }));
+        self.bridge_report(&json!({
+            "type": "observer", "kind": "labels",
+            "labels": [{ "id": id, "label": label, "resource": "fake" }],
+        }));
+    }
+
     fn drop_player(&self, id: u32, category: u64, resource: &str, reason: &str) {
         if self.server.players().leave(id).is_none() {
             return;
@@ -513,8 +538,30 @@ impl Fake {
 
     /// A report of the bridge, once it started: the real one only hears what happens after.
     fn bridge_report(&self, report: &serde_json::Value) {
-        if self.bridge.as_ref().is_some_and(|bridge| bridge.ready) {
-            self.traces.script("observer", report);
+        if let Some(bridge) = self.bridge.as_ref().filter(|bridge| bridge.ready) {
+            self.traces.script(&bridge.name, report);
+        }
+    }
+
+    /// What the real bridge raises as `observer:<event>`, printed instead.
+    fn bridge_command(&self, hex: &str) {
+        let Some(bridge) = &self.bridge else {
+            return;
+        };
+        let bytes: Option<Vec<u8>> = (0..hex.len())
+            .step_by(2)
+            .map(|index| u8::from_str_radix(hex.get(index..index + 2)?, 16).ok())
+            .collect();
+        let command = bytes.and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok());
+        if let Some(command) = command {
+            console::script(
+                &bridge.name,
+                &format!(
+                    "observer:{} {}",
+                    command["event"].as_str().unwrap_or("?"),
+                    command["payload"]
+                ),
+            );
         }
     }
 
@@ -660,23 +707,14 @@ fn spawn_child() {
         .spawn();
 }
 
-/// What the real bridge raises as `observer:<event>`, printed instead.
-fn bridge_command(hex: &str) {
-    let bytes: Option<Vec<u8>> = (0..hex.len())
-        .step_by(2)
-        .map(|index| u8::from_str_radix(hex.get(index..index + 2)?, 16).ok())
-        .collect();
-    let command = bytes.and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok());
-    if let Some(command) = command {
-        console::script(
-            "observer",
-            &format!(
-                "observer:{} {}",
-                command["event"].as_str().unwrap_or("?"),
-                command["payload"]
-            ),
-        );
-    }
+/// Whether `resource` is Observer's bridge: a folder of the build's `system_resources`, next to the
+/// executable, whose script registers `observer_cmd`. Its name changes with each start.
+fn is_bridge(resource: &str) -> bool {
+    std::env::current_exe()
+        .ok()
+        .and_then(|program| Some(program.parent()?.join("citizen/system_resources")))
+        .and_then(|system| std::fs::read_to_string(system.join(resource).join("server.lua")).ok())
+        .is_some_and(|script| script.contains("RegisterCommand('observer_cmd'"))
 }
 
 /// The dump FXServer's dump server writes, and the report it prints before it ends the process.
@@ -875,7 +913,7 @@ mod tests {
             "+exec",
             "server.cfg",
             "+ensure",
-            "observer",
+            "sys_k3jx7qmw2pza",
         ];
 
         assert_eq!(
@@ -883,7 +921,7 @@ mod tests {
             words(&[
                 &["set", "a", "b c"],
                 &["exec", "server.cfg"],
-                &["ensure", "observer"]
+                &["ensure", "sys_k3jx7qmw2pza"]
             ])
         );
     }

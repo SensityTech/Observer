@@ -2,29 +2,42 @@
 
 Observer never shows anything to players. It tells your resources what is about to happen to the
 server, with data and no text, and your resources decide what players see, what gets saved and when.
-This page is that contract: the server events Observer raises, what they carry, and what you can rely
-on.
+This page is that contract: the server events Observer raises, what they carry, what your resources
+can tell Observer about players, and what you can rely on.
 
 ## The bridge
 
-`observer` is a server-side resource that Observer writes into the build's `system_resources` folder
+The bridge is a server-side resource that Observer writes into the build's `system_resources` folder
 before every start of FXServer, and ensures before your cfg runs. Observer overwrites any change made
 to it. It reports the server's health to Observer and turns Observer's commands into server events.
 It has no client script and no UI.
 
-Do not ensure it yourself, and do not rename it: Observer looks for it by its name.
+Its name changes with every start of FXServer: Observer draws it at random, so that no script can
+target the bridge by a name known in advance. Read it from the `observer_bridge` convar, which
+Observer sets on FXServer's command line with `+set`: a server convar, never sent to clients and
+never listed in `/info.json`. Do not ensure the bridge yourself, and never write its name into a cfg
+or a script: the next start gives it another.
+
+```lua
+local bridge = GetConvar('observer_bridge', '') -- empty when Observer did not start the server
+```
 
 ## Version
 
-This is contract version **1**.
+This is contract version **3**.
 
 ```lua
-local version = exports.observer:getContractVersion() -- 1
+local version = exports[GetConvar('observer_bridge', '')]:getContractVersion() -- 3
 ```
 
 Within a version, fields and `reason` values are only ever added. Ignore fields you do not know, and
 treat a `reason` you do not know as the closest one you do (`stop` for `observer:shuttingDown`). A
-field renamed or removed, or a change of meaning, is version 2.
+field renamed or removed, or a change of meaning, is a new version. So is a new export of the
+bridge, so that a resource can check for it before calling it.
+
+Version 3 added the player labels: `setPlayerLabel` and `clearPlayerLabel`. Version 2 changed how a
+resource finds the bridge: version 1 named it `observer`, version 2 draws its name at each start and
+gives it in `observer_bridge`. The events and their payloads did not change.
 
 ## Events
 
@@ -124,11 +137,56 @@ by third parties. Nothing else of a file's name or contents is ever sent.
 - An announced restart can also vanish without `observer:restartSkipped` when the server stops or
   crashes first: the run ends anyway.
 
+## Player labels
+
+Your resources can give each connected player a label, which Observer's panel shows beside their
+FiveM name: a roleplay character's name, an id of your own. Players never see it.
+
+```lua
+local bridge = GetConvar('observer_bridge', '')
+local ok, refused = exports[bridge]:setPlayerLabel(source, { name = 'John Doe', id = 'CHAR-1234' })
+exports[bridge]:clearPlayerLabel(source)
+```
+
+| Field | Type | Meaning |
+|---|---|---|
+| `name` | string, or nil | What the player is called on your server, up to 64 characters. |
+| `id` | string, or nil | An id of your own, up to 32 characters. |
+
+- Give at least one of the two. Each call replaces the whole label. Spaces around a text are dropped,
+  and a blank text counts as nil.
+- Both exports return `true`, or `false` and why: `notConnected` (no such player; call it once the
+  player has joined, from `playerJoining` on), `invalid` (not a table, a field that is not a string,
+  or neither field), `tooLong`.
+- A label lasts as long as the player's session: it goes when they leave or the server stops, and
+  nothing gives it back at the next start. Give it again when they join again.
+- The bridge sends labels to Observer once a second, the latest of each player: setting one in a
+  loop sends no more than that.
+- Observer notes which resource gave a label, and the panel shows it.
+
+What Observer does with a label:
+
+- It is display data. Observer never compares it with anything and never uses it to find, link,
+  merge or rename a player: who a player is stays what FXServer confirms, their licence.
+- Control characters, bidirectional overrides and invisible characters are removed, and the lengths
+  are checked again. A field past its length is left out.
+- The panel shows a label only once the player's identity is confirmed. Observer keeps each label a
+  player had on their profile, with when it was first and last given, as long as it keeps their
+  names. The Players page finds a player by the start of a label's name, or by a label's whole id,
+  in any case.
+
 ## Security
 
 The bridge raises these events only for commands typed on the server console, where only Observer
 writes, and never for a call from another resource. Listen with `AddEventHandler` only. Never
 `RegisterNetEvent` these names: clients could then raise them.
+
+Any server resource can give a label: the exports are for your resources, which can already do
+anything on the server. Never call them with text a client sent you without checking it first.
+
+The drawn name keeps away scripts written against a fixed name, and no resource can take it before
+the bridge starts. It is no secret from the server's own resources: any of them can list the
+resources, read `observer_bridge` and the bridge's files. Run only server resources you trust.
 
 ## txAdmin's events
 
@@ -144,14 +202,14 @@ no text.
 | `observer:restartRescheduled` | none | |
 | `observer:shuttingDown` | `txAdmin:events:serverShuttingDown` | `delay` (`delayMs`), `author` (`by`), `message = ''` |
 
-## Not in version 1
+## Not in version 3
 
-Exports to read the next restart or the server's state, and a way for a resource to send something to
-Observer, come later.
+Exports to read the next restart or the server's state come later.
 
 ## Example
 
-[`observer_example`](observer_example) checks the contract version when it starts, prints each event
-to the server console with its fields, and marks with short comments where a team plugs in its
-notifications, its cancellation notice and its saves. It shows nothing to players. Copy what fits
-into your own resources rather than running it as is.
+[`observer_example`](observer_example) finds the bridge and checks the contract version when it
+starts, prints each event to the server console with its fields, and marks with short comments where
+a team plugs in its notifications, its cancellation notice and its saves. Its console command
+`observer_example_label` gives a player a label, or clears it, to try the panel's side. It shows
+nothing to players. Copy what fits into your own resources rather than running it as is.
