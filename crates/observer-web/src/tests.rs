@@ -236,6 +236,7 @@ impl Server {
             clock: clock.clone(),
             host_off: BTreeSet::new(),
             sftp: Some(SocketAddr::from(([127, 0, 0, 1], 41976))),
+            data_dir: dir.path().join("data"),
         })
         .await
         .unwrap();

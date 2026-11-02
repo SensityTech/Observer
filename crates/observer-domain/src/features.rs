@@ -35,8 +35,10 @@ pub enum Feature {
 #[ts(export)]
 pub enum Applies {
     Now,
+    /// Its routes at once, its work from the next start of FXServer, which is when it runs.
+    NextServerStart,
     /// At the next start of Observer, which also restarts FXServer.
-    NextStart,
+    ObserverRestart,
 }
 
 /// Why a feature does not run although the owner left it on.
@@ -59,37 +61,64 @@ pub enum FeatureHold {
 pub enum FeatureTask {
     /// Accepts SFTP connections on its port.
     SftpServer,
-    /// Every minute: audits closed windows of failed SFTP logins.
+    /// Audits closed windows of failed SFTP logins.
     SftpUpkeep,
-    /// At Observer's start: removes the temporary uploads a crash left in the server folder.
+    /// Removes the temporary uploads a crash left in the server folder.
     UploadsSweep,
-    /// At every start of FXServer: lists and hashes the server folder; checks on request.
+    /// Lists and hashes the server folder; a check does it on request too.
     Snapshots,
-    /// Every hour: the retention and the budget of the stored texts.
+    /// The retention and the budget of the stored texts.
     ChangesUpkeep,
-    /// Before every start of FXServer: what the tools' settings ask for, a report or a fix.
+    /// What the tools' settings ask for before a start: a report or a fix.
     ToolsAtStart,
-    /// Before every start of FXServer, while a fix of the tools is still applied: puts back what
-    /// the fix took out once the copy it kept is gone.
+    /// While a fix of the tools is still applied: puts back what it took out once the copy it
+    /// kept is gone.
     ToolsHeal,
     /// The processes FXServer's tree starts and ends.
     ProcessRecords,
-    /// Every two seconds: where the tree's processes connect and listen.
+    /// Where the tree's processes connect and listen.
     Connections,
-    /// Reads the dumps of each crash.
+    /// Reads the dumps of a crash.
     CrashAnalysis,
     /// Writes a dump of a hung server before it is killed.
     HangSnapshot,
-    /// Every hour: the retention of the records.
+    /// The retention of the records.
     DiagnosticsUpkeep,
-    /// Every five seconds: the process, host and FXServer measures.
+    /// The process, host and FXServer measures.
     Sampler,
-    /// Every minute: rolls the samples up and applies their retention.
+    /// Rolls the samples up and applies their retention.
     MetricsUpkeep,
     /// Players' sessions from the bridge and `/players.json`, and their retention.
     PlayersFollower,
-    /// The drop statistics, computed again as sessions end.
+    /// The drop statistics, from the sessions that ended.
     DropsWorker,
+}
+
+/// When a task of a feature runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+#[ts(export)]
+pub enum Cadence {
+    Every {
+        seconds: u32,
+    },
+    /// All along, waiting for what comes: a connection, an event of the server.
+    Continuous,
+    ObserverStart,
+    /// At every start of FXServer.
+    ServerStart,
+    /// After a crash of FXServer.
+    Crash,
+    /// When FXServer hangs.
+    Hang,
+}
+
+/// A task of a feature and when it runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[ts(export)]
+pub struct FeatureTaskRun {
+    pub task: FeatureTask,
+    pub cadence: Cadence,
 }
 
 /// What a feature does with the server folder.
@@ -143,36 +172,68 @@ impl Feature {
     /// restarts Observer.
     pub const fn turn_on(self) -> Applies {
         match self {
-            Self::Tools => Applies::Now,
-            _ => Applies::NextStart,
+            Self::Tools => Applies::NextServerStart,
+            _ => Applies::ObserverRestart,
         }
     }
 
-    pub const fn tasks(self) -> &'static [FeatureTask] {
+    /// When turning it off takes effect: at once, for every feature.
+    pub const fn turn_off(self) -> Applies {
+        Applies::Now
+    }
+
+    pub const fn tasks(self) -> &'static [FeatureTaskRun] {
+        use Cadence as C;
         use FeatureTask as T;
+        const fn run(task: FeatureTask, cadence: Cadence) -> FeatureTaskRun {
+            FeatureTaskRun { task, cadence }
+        }
+        const HOURLY: Cadence = C::Every { seconds: 3600 };
+        const EACH_MINUTE: Cadence = C::Every { seconds: 60 };
+        const SFTP: &[FeatureTaskRun] = &[
+            run(T::SftpServer, C::Continuous),
+            run(T::SftpUpkeep, EACH_MINUTE),
+            run(T::UploadsSweep, C::ObserverStart),
+        ];
+        const CHANGES: &[FeatureTaskRun] =
+            &[run(T::Snapshots, C::ServerStart), run(T::ChangesUpkeep, HOURLY)];
+        const TOOLS: &[FeatureTaskRun] = &[
+            run(T::ToolsAtStart, C::ServerStart),
+            run(T::ToolsHeal, C::ServerStart),
+        ];
+        const DIAGNOSTICS: &[FeatureTaskRun] = &[
+            run(T::ProcessRecords, C::Continuous),
+            run(T::Connections, C::Every { seconds: 2 }),
+            run(T::CrashAnalysis, C::Crash),
+            run(T::HangSnapshot, C::Hang),
+            run(T::DiagnosticsUpkeep, HOURLY),
+        ];
+        const METRICS: &[FeatureTaskRun] = &[
+            run(T::Sampler, C::Every { seconds: 5 }),
+            run(T::MetricsUpkeep, EACH_MINUTE),
+        ];
+        const PLAYERS: &[FeatureTaskRun] = &[run(T::PlayersFollower, C::Continuous)];
+        const DROPS: &[FeatureTaskRun] = &[run(T::DropsWorker, EACH_MINUTE)];
         match self {
-            Self::Sftp => &[T::SftpServer, T::SftpUpkeep, T::UploadsSweep],
-            Self::Changes => &[T::Snapshots, T::ChangesUpkeep],
-            Self::Tools => &[T::ToolsAtStart, T::ToolsHeal],
-            Self::Diagnostics => &[
-                T::ProcessRecords,
-                T::Connections,
-                T::CrashAnalysis,
-                T::HangSnapshot,
-                T::DiagnosticsUpkeep,
-            ],
-            Self::Metrics => &[T::Sampler, T::MetricsUpkeep],
-            Self::Players => &[T::PlayersFollower],
-            Self::Drops => &[T::DropsWorker],
+            Self::Sftp => SFTP,
+            Self::Changes => CHANGES,
+            Self::Tools => TOOLS,
+            Self::Diagnostics => DIAGNOSTICS,
+            Self::Metrics => METRICS,
+            Self::Players => PLAYERS,
+            Self::Drops => DROPS,
         }
     }
 
     /// What goes on while the feature is off, and only while it has something to finish.
-    pub const fn while_off(self) -> &'static [FeatureTask] {
+    pub const fn while_off(self) -> &'static [FeatureTaskRun] {
         match self {
             // A fix took entries out of a file because another copy kept them; once that copy
             // is gone, the entries must come back or the game misses them.
-            Self::Tools => &[FeatureTask::ToolsHeal],
+            Self::Tools => &[FeatureTaskRun {
+                task: FeatureTask::ToolsHeal,
+                cadence: Cadence::ServerStart,
+            }],
             _ => &[],
         }
     }
@@ -255,6 +316,7 @@ pub struct FeatureView {
     pub requires: Option<Feature>,
     /// When turning it on takes effect.
     pub turn_on: Applies,
+    pub turn_off: Applies,
     /// When the owner last turned it on or off.
     pub changed_at: Option<Timestamp>,
     pub reach: FeatureReach,
@@ -267,23 +329,40 @@ pub struct FeatureView {
 pub struct FeatureReach {
     /// The addresses it listens on, as `observer.toml` gives them.
     pub listens: Vec<String>,
-    pub tasks: Vec<FeatureTask>,
-    pub while_off: Vec<FeatureTask>,
-    /// Under Observer's data folder.
-    pub files: Vec<String>,
+    pub tasks: Vec<FeatureTaskRun>,
+    pub while_off: Vec<FeatureTaskRun>,
+    pub files: Vec<FeatureFile>,
     pub server_folder: ServerFolder,
     /// API path prefixes, relative to `/api`.
     pub routes: Vec<String>,
     pub topics: Vec<Topic>,
 }
 
+/// A file or a folder a feature keeps.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[ts(export)]
+pub struct FeatureFile {
+    /// Under Observer's data folder, with `/` between folders.
+    pub path: String,
+    /// What it holds on disk, its journal included; `None` when it is not there yet.
+    pub bytes: Option<u64>,
+}
+
 impl FeatureReach {
-    pub fn of(feature: Feature, listens: Vec<String>) -> Self {
+    /// What `feature` reaches, with the size on disk `size` gives each of its files.
+    pub fn of(feature: Feature, listens: Vec<String>, size: impl Fn(&str) -> Option<u64>) -> Self {
         Self {
             listens,
             tasks: feature.tasks().to_vec(),
             while_off: feature.while_off().to_vec(),
-            files: feature.files().iter().map(|&file| file.to_owned()).collect(),
+            files: feature
+                .files()
+                .iter()
+                .map(|&path| FeatureFile {
+                    path: path.to_owned(),
+                    bytes: size(path),
+                })
+                .collect(),
             server_folder: feature.server_folder(),
             routes: feature.routes().iter().map(|&route| route.to_owned()).collect(),
             topics: feature.topics().to_vec(),

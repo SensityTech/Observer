@@ -3,4 +3,4 @@
 /**
  * When a change of a switch takes effect.
  */
-export type Applies = "now" | "nextStart";
+export type Applies = "now" | "nextServerStart" | "observerRestart";

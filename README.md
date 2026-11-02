@@ -678,8 +678,8 @@ the restart schedule and FXServer's builds are always on.
 what it opens: its port, its tasks, its files, its routes. Only the owner turns one on or off, with
 `PUT /api/features/{feature}` and the password again; each change is in the audit log.
 
-- **Off applies at once.** By the time the API answers, the port is closed, its sessions have ended and
-  the feature's tasks have stopped. Turning the players off turns the drops off too.
+- **Off applies at once.** By the time the API answers, the port is closed and the feature's tasks have
+  stopped; open SFTP sessions are told to disconnect. Turning the players off turns the drops off too.
 - **On applies at the next start of Observer,** which restarts FXServer, except for the server tools,
   which apply from the next start of FXServer. A port only opens when the host restarts Observer.
 - **The tools' heal goes on.** While a fix of the server tools is applied, the work before each start

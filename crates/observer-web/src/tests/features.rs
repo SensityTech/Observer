@@ -62,16 +62,25 @@ async fn the_switches_are_read_with_the_settings_permission_and_say_what_each_fe
     let sftp = &features[0];
     assert_eq!(sftp["feature"], "sftp");
     assert_eq!((&sftp["enabled"], &sftp["running"]), (&json!(true), &json!(true)));
-    assert_eq!(sftp["turnOn"], "nextStart");
+    assert_eq!(sftp["turnOn"], "observerRestart");
+    assert_eq!(sftp["turnOff"], "now");
     assert_eq!(sftp["reach"]["listens"], json!(["127.0.0.1:41976"]));
     assert_eq!(sftp["reach"]["serverFolder"], "writes");
     assert_eq!(
         sftp["reach"]["tasks"],
-        json!(["sftpServer", "sftpUpkeep", "uploadsSweep"])
+        json!([
+            { "task": "sftpServer", "cadence": { "kind": "continuous" } },
+            { "task": "sftpUpkeep", "cadence": { "kind": "every", "seconds": 60 } },
+            { "task": "uploadsSweep", "cadence": { "kind": "observerStart" } },
+        ])
     );
+    assert_eq!(features[2]["turnOn"], "nextServerStart");
     let drops = &features[6];
     assert_eq!(drops["requires"], "players");
-    assert_eq!(drops["reach"]["files"], json!(["metrics.sqlite3"]));
+    assert_eq!(
+        drops["reach"]["files"],
+        json!([{ "path": "metrics.sqlite3", "bytes": null }])
+    );
     assert_eq!(refused.status, StatusCode::FORBIDDEN, "{}", refused.text);
     assert_eq!(refused.code(), "forbidden");
 }

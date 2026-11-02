@@ -16,7 +16,7 @@ running: boolean, held: FeatureHold | null, requires: Feature | null,
 /**
  * When turning it on takes effect.
  */
-turnOn: Applies, 
+turnOn: Applies, turnOff: Applies, 
 /**
  * When the owner last turned it on or off.
  */

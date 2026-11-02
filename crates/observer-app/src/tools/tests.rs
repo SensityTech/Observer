@@ -157,6 +157,7 @@ impl Lab {
             clock: Clock::manual("2026-11-01T10:00:00Z".parse().unwrap()),
             host_off: BTreeSet::new(),
             sftp: None,
+            data_dir: self.dir.path().join("data"),
         })
         .await
         .unwrap();

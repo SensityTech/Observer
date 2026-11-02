@@ -13,7 +13,7 @@ use crate::error::Failure;
 use crate::extract::{JsonBody, Name};
 
 pub(crate) async fn list(State(state): State<AppState>) -> Json<FeatureList> {
-    Json(state.features.view())
+    Json(state.features.view().await)
 }
 
 pub(crate) async fn switch(

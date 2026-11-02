@@ -5,8 +5,10 @@
 
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
+use std::fs;
 use std::future::Future;
 use std::net::SocketAddr;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
@@ -36,6 +38,8 @@ pub struct FeaturesSetup {
     pub host_off: BTreeSet<Feature>,
     /// Where SFTP listens, when `observer.toml` says.
     pub sftp: Option<SocketAddr>,
+    /// Observer's data folder, which holds the features' files.
+    pub data_dir: PathBuf,
 }
 
 /// The feature switches. Clones share them.
@@ -49,6 +53,7 @@ struct Inner {
     clock: Clock,
     host_off: BTreeSet<Feature>,
     sftp: Option<SocketAddr>,
+    data_dir: PathBuf,
     /// What the owner chose and when; a feature missing keeps its default, on.
     chosen: Mutex<BTreeMap<Feature, (bool, Timestamp)>>,
     /// What runs in this Observer: decided at its start, then narrowed by every feature turned
@@ -75,6 +80,7 @@ impl Features {
             clock: setup.clock,
             host_off: setup.host_off,
             sftp: setup.sftp,
+            data_dir: setup.data_dir,
             chosen: Mutex::new(chosen),
             running: watch::Sender::new(BTreeSet::new()),
             changing: AsyncMutex::new(()),
@@ -114,7 +120,18 @@ impl Features {
         }
     }
 
-    pub fn view(&self) -> FeatureList {
+    /// Every feature's switch, and what it reaches with the size of its files now.
+    pub async fn view(&self) -> FeatureList {
+        let data_dir = self.inner.data_dir.clone();
+        let sizes: BTreeMap<&str, Option<u64>> = tokio::task::spawn_blocking(move || {
+            Feature::ALL
+                .iter()
+                .flat_map(|feature| feature.files())
+                .map(|&path| (path, size_on_disk(&data_dir, path)))
+                .collect()
+        })
+        .await
+        .unwrap_or_default();
         let running = self.inner.running.borrow().clone();
         let chosen = self.inner.chosen.lock().unwrap_or_else(PoisonError::into_inner);
         let features = Feature::ALL
@@ -131,8 +148,9 @@ impl Features {
                     held: self.inner.hold(feature, &running),
                     requires: feature.requires(),
                     turn_on: feature.turn_on(),
+                    turn_off: feature.turn_off(),
                     changed_at: chosen.get(&feature).map(|&(_, at)| at),
-                    reach: FeatureReach::of(feature, listens),
+                    reach: FeatureReach::of(feature, listens, |path| sizes.get(path).copied().flatten()),
                 }
             })
             .collect();
@@ -157,9 +175,13 @@ impl Features {
                 .into());
         }
         if self.inner.enabled(feature) == enabled {
-            return Ok(self.view());
+            return Ok(self.view().await);
         }
-        let applies = if enabled { feature.turn_on() } else { Applies::Now };
+        let applies = if enabled {
+            feature.turn_on()
+        } else {
+            feature.turn_off()
+        };
         let record = record.details(json!({ "enabled": enabled, "applies": applies }));
         self.inner
             .db
@@ -177,7 +199,7 @@ impl Features {
         let mut stopped = Vec::new();
         self.inner.running.send_if_modified(|running| {
             if enabled {
-                applies == Applies::Now
+                applies != Applies::ObserverRestart
                     && self.inner.hold(feature, running).is_none()
                     && running.insert(feature)
             } else {
@@ -201,7 +223,7 @@ impl Features {
                 "turned off, but its tasks have not stopped yet"
             );
         }
-        Ok(self.view())
+        Ok(self.view().await)
     }
 
     /// Hands over a feature's task: `close` runs as soon as the feature stops running, or when
@@ -263,6 +285,34 @@ impl Inner {
             None
         }
     }
+}
+
+/// What `path` holds on disk under `data_dir`: a database with its journal, or the files of a
+/// folder. `None` when it is not there.
+fn size_on_disk(data_dir: &Path, path: &str) -> Option<u64> {
+    let full = data_dir.join(path);
+    let metadata = fs::metadata(&full).ok()?;
+    if metadata.is_dir() {
+        return Some(folder_size(&full));
+    }
+    let mut journal = full.into_os_string();
+    journal.push("-wal");
+    Some(metadata.len() + fs::metadata(journal).map_or(0, |journal| journal.len()))
+}
+
+/// The files under `folder`, links left out so that none is counted twice.
+fn folder_size(folder: &Path) -> u64 {
+    let Ok(entries) = fs::read_dir(folder) else {
+        return 0;
+    };
+    entries
+        .filter_map(Result::ok)
+        .map(|entry| match entry.metadata() {
+            Ok(metadata) if metadata.is_dir() => folder_size(&entry.path()),
+            Ok(metadata) if metadata.is_file() => metadata.len(),
+            _ => 0,
+        })
+        .sum()
 }
 
 /// Resolves once `feature` no longer runs.
@@ -342,6 +392,7 @@ mod tests {
                 clock: self.clock.clone(),
                 host_off: host_off.iter().copied().collect(),
                 sftp: Some(SocketAddr::from(([0, 0, 0, 0], 40126))),
+                data_dir: self._dir.path().join("data"),
             })
             .await
             .unwrap()
@@ -401,12 +452,13 @@ mod tests {
             clock: lab.clock.clone(),
             host_off: BTreeSet::new(),
             sftp: None,
+            data_dir: lab._dir.path().join("data"),
         })
         .await
         .unwrap();
 
         assert!(!unconfigured.runs(Feature::Sftp));
-        let sftp = view(&unconfigured.view(), Feature::Sftp);
+        let sftp = view(&unconfigured.view().await, Feature::Sftp);
         assert!(sftp.enabled);
         assert_eq!(sftp.held, Some(FeatureHold::NotConfigured));
     }
@@ -473,7 +525,7 @@ mod tests {
 
         assert_eq!(refused.code(), Some(ErrorCode::FeatureLocked));
         assert!(!features.runs(Feature::Sftp));
-        let sftp = view(&features.view(), Feature::Sftp);
+        let sftp = view(&features.view().await, Feature::Sftp);
         assert_eq!(sftp.held, Some(FeatureHold::Host));
         assert_eq!(sftp.changed_at, None, "nothing was stored");
         assert_eq!(
@@ -521,7 +573,7 @@ mod tests {
         features.set(&owner(), Feature::Players, false).await.unwrap();
 
         assert!(!features.runs(Feature::Drops));
-        let drops = view(&features.view(), Feature::Drops);
+        let drops = view(&features.view().await, Feature::Drops);
         assert!(drops.enabled);
         assert_eq!(drops.held, Some(FeatureHold::Requires));
         let restarted = lab.features(&[]).await;
@@ -539,7 +591,7 @@ mod tests {
 
         assert!(features.runs(Feature::Tools));
         assert!(!features.runs(Feature::Diagnostics));
-        let diagnostics = view(&features.view(), Feature::Diagnostics);
+        let diagnostics = view(&features.view().await, Feature::Diagnostics);
         assert!(diagnostics.enabled && diagnostics.held.is_none());
         assert!(lab.features(&[]).await.runs(Feature::Diagnostics));
         let applies: Vec<Value> = lab
@@ -548,7 +600,27 @@ mod tests {
             .into_iter()
             .map(|(_, _, details)| details["applies"].clone())
             .collect();
-        assert_eq!(applies, ["now", "now", "now", "nextStart"]);
+        assert_eq!(applies, ["now", "nextServerStart", "now", "observerRestart"]);
+    }
+
+    #[tokio::test]
+    async fn the_view_weighs_each_database_with_its_journal_and_each_folder_with_its_files() {
+        let lab = Lab::new().await;
+        let data = lab._dir.path().join("data");
+        fs::create_dir_all(data.join("crashes/2026-11-02")).unwrap();
+        fs::write(data.join("metrics.sqlite3"), [0; 4096]).unwrap();
+        fs::write(data.join("metrics.sqlite3-wal"), [0; 1000]).unwrap();
+        fs::write(data.join("crashes/2026-11-02/dump.dmp"), [0; 300]).unwrap();
+        fs::write(data.join("crashes/report.json"), [0; 20]).unwrap();
+
+        let list = lab.features(&[]).await.view().await;
+
+        let files = |feature| view(&list, feature).reach.files;
+        assert_eq!(files(Feature::Metrics)[0].bytes, Some(5096));
+        assert_eq!(files(Feature::Drops)[0].bytes, Some(5096));
+        assert_eq!(files(Feature::Diagnostics)[0].bytes, Some(320));
+        assert_eq!(files(Feature::Changes)[0].path, "changes.sqlite3");
+        assert_eq!(files(Feature::Changes)[0].bytes, None, "never created");
     }
 
     #[tokio::test]
@@ -558,7 +630,7 @@ mod tests {
 
         features.set(&owner(), Feature::Metrics, true).await.unwrap();
 
-        assert_eq!(view(&features.view(), Feature::Metrics).changed_at, None);
+        assert_eq!(view(&features.view().await, Feature::Metrics).changed_at, None);
         assert_eq!(lab.audited().await, []);
     }
 }

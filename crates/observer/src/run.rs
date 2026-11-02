@@ -62,6 +62,7 @@ pub async fn run(config: Config, args: RunArgs) -> anyhow::Result<()> {
         clock: clock.clone(),
         host_off: config.host_off(),
         sftp: config.sftp.as_ref().map(|sftp| sftp.listen),
+        data_dir: paths.root.clone(),
     })
     .await?;
     announce_features(&features);
