@@ -239,7 +239,7 @@ fn hidden(c: char) -> bool {
 /// What someone typed into a players search.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Search {
-    /// The start of a name.
+    /// The start of a name or of a label's name, or the whole of a label's id.
     Name(String),
     License(String),
     /// Any other identifier, which only those who see identifiers may search by.
