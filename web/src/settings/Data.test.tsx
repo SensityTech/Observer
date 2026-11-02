@@ -123,6 +123,26 @@ describe('Data kept settings', () => {
         expect(puts.find(({ route }) => route.includes('drops'))?.body).toEqual({ sessionDays: 120 });
     });
 
+    it('should drop the changes of every section on discard, and the bar with them', async () => {
+        serve();
+        const { getByRole, queryByText } = await openSettings('/settings/data');
+        const maxText = group(en.settings.data.changes).getByLabelText(
+            items.maxText.label,
+        ) as HTMLInputElement;
+        const sessions = group(en.settings.data.drops).getByLabelText(
+            items.sessionDays.label,
+        ) as HTMLInputElement;
+
+        fireEvent.change(maxText, { target: { value: '2' } });
+        fireEvent.change(sessions, { target: { value: '120' } });
+        fireEvent.click(getByRole('button', { name: bar.discard }));
+
+        expect(maxText.value).toBe('1');
+        expect(sessions.value).toBe(String(DROPS.sessionDays));
+        expect(queryByText(bar.changes(2))).toBeNull();
+        expect(queryByText(bar.save)).toBeNull();
+    });
+
     it('should keep an emptied retention empty, and refuse it as out of range without sending it', async () => {
         const asked = serve();
         const { getByRole } = await openSettings('/settings/data');
