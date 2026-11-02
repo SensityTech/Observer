@@ -124,6 +124,7 @@ describe('parseServerMessage', () => {
             { type: 'event', topic: 'metrics.live', data: { ...SAMPLE, cores: null } },
             { type: 'resync', topic: 'metrics.live' },
             { type: 'unsubscribed', topic: 'status', reason: 'forbidden' },
+            { type: 'unsubscribed', topic: 'metrics.live', reason: 'disabled' },
             { type: 'pong' },
             { type: 'error', code: 'invalid_request' },
         ]) {

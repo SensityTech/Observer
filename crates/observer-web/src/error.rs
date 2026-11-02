@@ -59,13 +59,15 @@ fn status(code: ErrorCode) -> StatusCode {
         | ErrorCode::Hierarchy
         | ErrorCode::InvalidSetupToken
         | ErrorCode::OriginMismatch
-        | ErrorCode::ContentHidden => StatusCode::FORBIDDEN,
+        | ErrorCode::ContentHidden
+        | ErrorCode::FeatureLocked => StatusCode::FORBIDDEN,
         ErrorCode::NotFound
         | ErrorCode::BuildNotListed
         | ErrorCode::CrashNotFound
         | ErrorCode::CrashFileNotFound
         | ErrorCode::StartNotFound
-        | ErrorCode::PlayerNotFound => StatusCode::NOT_FOUND,
+        | ErrorCode::PlayerNotFound
+        | ErrorCode::FeatureDisabled => StatusCode::NOT_FOUND,
         ErrorCode::ContentNotKept => StatusCode::GONE,
         ErrorCode::Conflict
         | ErrorCode::NameTaken
@@ -94,7 +96,10 @@ fn status(code: ErrorCode) -> StatusCode {
         | ErrorCode::CheckRunning
         | ErrorCode::PlanChanged
         | ErrorCode::ServerNotStopped
-        | ErrorCode::ToolNotAvailable => StatusCode::CONFLICT,
+        | ErrorCode::ToolNotAvailable
+        | ErrorCode::BackupRunning
+        | ErrorCode::BackupNotConfigured
+        | ErrorCode::BackupCopyUnavailable => StatusCode::CONFLICT,
         ErrorCode::LaunchFailed
         | ErrorCode::DelayTooLong
         | ErrorCode::NotDownloadable
@@ -126,7 +131,9 @@ fn status(code: ErrorCode) -> StatusCode {
         | ErrorCode::InvalidGlob
         | ErrorCode::AddressSearch
         | ErrorCode::InvalidSearch
-        | ErrorCode::InvalidPlayersSettings => StatusCode::BAD_REQUEST,
+        | ErrorCode::InvalidPlayersSettings
+        | ErrorCode::InvalidBackupSettings
+        | ErrorCode::InvalidBackupDestination => StatusCode::BAD_REQUEST,
         ErrorCode::TooManyAttempts
         | ErrorCode::TooManySockets
         | ErrorCode::TooManyCommands

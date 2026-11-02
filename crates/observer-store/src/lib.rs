@@ -5,9 +5,11 @@
 pub mod artifacts;
 pub mod audit;
 mod backup;
+pub mod backups;
 pub mod changes;
 mod database;
 pub mod diagnostics;
+pub mod features;
 pub mod files;
 pub mod launch;
 pub mod login_failures;

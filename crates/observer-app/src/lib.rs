@@ -6,11 +6,13 @@
 mod accounts;
 mod artifacts;
 mod audit;
+mod backups;
 mod changes;
 mod clock;
 mod diagnostics;
 mod drops;
 mod error;
+mod features;
 mod files;
 mod metrics;
 mod own_paths;
@@ -32,11 +34,16 @@ mod users;
 pub use accounts::Accounts;
 pub use artifacts::{ArtifactTimings, Artifacts, ArtifactsSetup, ArtifactsTask};
 pub use audit::AuditLog;
+pub use backups::{
+    Backups, BackupsHook, BackupsSetup, BackupsTask, BackupsTimings, BeforeSpawn, Download, PRE_LAUNCH_LIMIT,
+    TOOLS_LIMIT,
+};
 pub use changes::{Changes, ChangesSetup, ChangesTask, ComparedTo, DiffOptions};
 pub use clock::Clock;
 pub use diagnostics::{Diagnostics, DiagnosticsSetup, DiagnosticsTask, MAX_DOWNLOAD};
 pub use drops::{DayRates, Drops, DropsSetup, DropsTask, LogQuery};
 pub use error::Error;
+pub use features::{Features, FeaturesSetup, Switched};
 pub use files::{CommitGate, Files, Grant, Group, Login, SERVER as FILES_SERVER, file_group};
 pub use metrics::{DatabaseFiles, Metrics, MetricsSetup, Sampling, Sources};
 pub use own_paths::{OwnPaths, paths_inside};

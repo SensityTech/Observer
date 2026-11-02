@@ -439,6 +439,7 @@ enum Request {
         shortened: bool,
     },
     Configure(Box<ServerLaunch>),
+    SkipHangSnapshots,
 }
 
 /// The handle to the supervisor task. Clones talk to the same task.
@@ -580,6 +581,11 @@ impl Supervisor {
     /// once and counts its silence from the change.
     pub async fn configure(&self, launch: ServerLaunch) {
         let _ = self.requests.send(Request::Configure(Box::new(launch))).await;
+    }
+
+    /// From now on, a hung server is killed without a snapshot of it first.
+    pub async fn skip_hang_snapshots(&self) {
+        let _ = self.requests.send(Request::SkipHangSnapshots).await;
     }
 
     /// Stops the server, then the supervisor. `shortened` is for a closing console, which leaves
@@ -953,6 +959,7 @@ impl Actor {
             }
             Request::Shutdown { shortened } => self.shutdown(shortened),
             Request::Configure(launch) => self.configure(*launch),
+            Request::SkipHangSnapshots => self.settings.hang_snapshot = None,
         }
     }
 
