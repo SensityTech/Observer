@@ -415,7 +415,9 @@
         border-radius: var(--r-rail);
         box-shadow: var(--elev-rail);
     }
+    /* Positioned, so that the rows' visually hidden words scroll with it rather than lengthen the page. */
     .online-list {
+        position: relative;
         flex: 1 1 auto;
         min-height: 0;
         overflow-y: auto;
