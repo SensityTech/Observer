@@ -168,8 +168,13 @@ pub fn parse_version(text: &str) -> Option<(ClientFlavour, String)> {
     let line = text.lines().find(|line| !line.trim().is_empty())?;
     let words: Vec<&str> = line.split_whitespace().collect();
     // "mariadb-dump from 11.7.2-MariaDB, client 10.19 for Win64 (AMD64)" and the older
-    // "mysqldump  Ver 10.19 Distrib 10.6.18-MariaDB, for debian-linux-gnu (x86_64)".
-    if let Some(word) = words.iter().find(|word| word.contains("MariaDB")) {
+    // "mysqldump  Ver 10.19 Distrib 10.6.18-MariaDB, for debian-linux-gnu (x86_64)". Windows puts
+    // the tool's full path first, which may hold `MariaDB` itself: the version is the word that
+    // ends with it.
+    if let Some(word) = words
+        .iter()
+        .find(|word| word.trim_end_matches(',').ends_with("-MariaDB"))
+    {
         let version = word.trim_end_matches(',');
         return Some((ClientFlavour::MariaDb, version.to_owned()));
     }
@@ -564,6 +569,10 @@ mod tests {
             (
                 "mysqldump  Ver 10.19 Distrib 10.6.18-MariaDB, for debian-linux-gnu (x86_64)\n",
                 (ClientFlavour::MariaDb, "10.6.18-MariaDB"),
+            ),
+            (
+                "C:\\Program Files\\MariaDB 11.7\\bin\\mariadb-dump.exe from 11.7.2-MariaDB, client 10.19 for Win64 (AMD64)\r\n",
+                (ClientFlavour::MariaDb, "11.7.2-MariaDB"),
             ),
             (
                 "mysqldump  Ver 8.0.36 for Linux on x86_64 (MySQL Community Server - GPL)\n",

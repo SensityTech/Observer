@@ -185,6 +185,11 @@ async fn a_real_dump_restores_into_the_same_database() {
     server.sql(SCHEMA, Some("es_extended"), true);
 
     let client = dump::find(DatabaseEngine::MariaDb, Some(&bin)).await.unwrap();
+    assert!(
+        client.version.ends_with("-MariaDB") && !client.version.contains(['\\', '/']),
+        "{}",
+        client.version
+    );
     let connection = parse_connection_string(&format!(
         "mysql://root:{ROOT_PASSWORD}@127.0.0.1:{}/es_extended?charset=utf8mb4",
         server.port
