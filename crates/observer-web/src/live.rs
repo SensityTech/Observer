@@ -206,6 +206,7 @@ impl Connection {
         }
         let stop = self.state.live.stop.clone();
         let mut sessions = self.state.accounts.session_changes();
+        let mut switches = self.state.features.running();
         let mut ping = interval_at(Instant::now() + PING_EVERY, PING_EVERY);
         let mut silent_until = Instant::now() + SILENCE_LIMIT;
 
@@ -222,6 +223,7 @@ impl Connection {
                     _ => Err(End::Drop),
                 },
                 Ok(()) = sessions.changed() => self.recheck().await,
+                Ok(()) = switches.changed() => self.recheck().await,
                 _ = ping.tick() => match self.queue.offer(Message::Ping(Bytes::new())) {
                     Ok(()) => self.recheck().await,
                     Err(_) => Err(End::Drop),
@@ -268,6 +270,12 @@ impl Connection {
                 reason: UnsubscribeReason::Forbidden,
             });
         }
+        if !topics::runs(topic, &self.state.features) {
+            return self.send(&ServerMessage::Unsubscribed {
+                topic,
+                reason: UnsubscribeReason::Disabled,
+            });
+        }
         let feed = match topics::open(topic, since, &self.state).await {
             Ok(feed) => feed,
             Err(failure) => {
@@ -293,7 +301,7 @@ impl Connection {
     }
 
     /// Ends the socket once its session has, and stops the topics whose permission went with a
-    /// change of the user's.
+    /// change of the user's, or whose feature was turned off.
     async fn recheck(&mut self) -> Result<(), End> {
         match self.state.accounts.recheck(&self.caller).await {
             Ok(Some(caller)) => self.caller = caller,
@@ -303,18 +311,22 @@ impl Connection {
                 return Err(End::Close(CLOSE_INTERNAL_ERROR));
             }
         }
-        let withdrawn: Vec<Topic> = self
+        let withdrawn: Vec<(Topic, UnsubscribeReason)> = self
             .followed
             .keys()
-            .copied()
-            .filter(|&topic| !topics::allows(topic, self.caller.permissions))
+            .filter_map(|&topic| {
+                if !topics::allows(topic, self.caller.permissions) {
+                    Some((topic, UnsubscribeReason::Forbidden))
+                } else if !topics::runs(topic, &self.state.features) {
+                    Some((topic, UnsubscribeReason::Disabled))
+                } else {
+                    None
+                }
+            })
             .collect();
-        for topic in withdrawn {
+        for (topic, reason) in withdrawn {
             self.unfollow(topic);
-            self.send(&ServerMessage::Unsubscribed {
-                topic,
-                reason: UnsubscribeReason::Forbidden,
-            })?;
+            self.send(&ServerMessage::Unsubscribed { topic, reason })?;
         }
         Ok(())
     }

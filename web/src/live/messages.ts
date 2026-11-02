@@ -53,6 +53,7 @@ import type { SyscallGroup } from '../api/generated/SyscallGroup';
 import type { ThreadRun } from '../api/generated/ThreadRun';
 import type { Topic } from '../api/generated/Topic';
 import type { TreeProcess } from '../api/generated/TreeProcess';
+import type { UnsubscribeReason } from '../api/generated/UnsubscribeReason';
 
 // What arrives on the socket is untrusted JSON until it matches the contract field by field. The
 // records below list every value of the generated unions: one the Rust side adds fails the type check
@@ -70,6 +71,8 @@ const TOPICS = {
     'server.diagnostics': true,
     'server.changes': true,
 } satisfies Record<Topic, true>;
+
+const UNSUBSCRIBE_REASONS = { forbidden: true, disabled: true } satisfies Record<UnsubscribeReason, true>;
 
 export const SERIES = {
     players: true,
@@ -236,6 +239,7 @@ const AUDIT_ACTIONS = {
     tool_settings_changed: true,
     tool_files_changed: true,
     tool_files_restored: true,
+    feature_changed: true,
     statistics_link_dismissed: true,
     statistics_link_restored: true,
 } satisfies Record<AuditAction, true>;
@@ -379,6 +383,8 @@ const oneOf =
         isText(value) && Object.hasOwn(values, value);
 
 const isTopic = oneOf<Topic>(TOPICS);
+
+const isUnsubscribeReason = oneOf<UnsubscribeReason>(UNSUBSCRIBE_REASONS);
 
 const isCount = (value: unknown): value is number => isId(value) && value >= 0;
 
@@ -963,7 +969,7 @@ export const parseServerMessage = (text: string): ServerMessage | null => {
             case 'resync':
                 return isTopic(message.topic);
             case 'unsubscribed':
-                return isTopic(message.topic) && message.reason === 'forbidden';
+                return isTopic(message.topic) && isUnsubscribeReason(message.reason);
             case 'pong':
                 return true;
             // The panel does not act on these; a code it does not know reads as any other.

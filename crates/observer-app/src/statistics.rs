@@ -1,12 +1,13 @@
 //! What the Statistics page reads across services: the timeline's events, with the links between
 //! a crash wave and the change just before it, and what each recorded change did to stability.
-//! Each part stays behind its own permission; an answer says what it left out.
+//! Each part stays behind its own permission and its own feature; an answer says what it left out.
 
 use std::collections::HashSet;
 
 use jiff::Timestamp;
 use observer_domain::changes::{EnvironmentFact, LiveChangeKind};
 use observer_domain::error::{ApiError, ErrorCode};
+use observer_domain::features::Feature;
 use observer_domain::permissions::Permissions;
 use observer_domain::statistics::{
     EFFECT_DAYS, EFFECTS_DAYS, EffectKind, EventDetail, EventLink, EventSource, LINK_WINDOW_MS,
@@ -15,7 +16,7 @@ use observer_domain::statistics::{
 
 use crate::changes::Recorded;
 use crate::drops::EffectChange;
-use crate::{Caller, Changes, Clock, Drops, Error, Metrics};
+use crate::{Caller, Changes, Clock, Drops, Error, Features, Metrics};
 
 /// A change event names at most this many resources.
 const RESOURCES_NAMED: usize = 3;
@@ -25,9 +26,11 @@ const LONGEST_LINK: usize = 256;
 /// The statistics across services. Clones share them.
 #[derive(Clone)]
 pub struct Statistics {
-    metrics: Metrics,
-    drops: Drops,
-    changes: Changes,
+    features: Features,
+    /// `None` for each feature Observer started without.
+    metrics: Option<Metrics>,
+    drops: Option<Drops>,
+    changes: Option<Changes>,
     clock: Clock,
 }
 
@@ -39,8 +42,15 @@ struct LinkedChange {
 }
 
 impl Statistics {
-    pub fn new(metrics: Metrics, drops: Drops, changes: Changes, clock: Clock) -> Self {
+    pub fn new(
+        features: Features,
+        metrics: Option<Metrics>,
+        drops: Option<Drops>,
+        changes: Option<Changes>,
+        clock: Clock,
+    ) -> Self {
         Self {
+            features,
             metrics,
             drops,
             changes,
@@ -48,8 +58,19 @@ impl Statistics {
         }
     }
 
+    /// The service of `feature` while it runs: one switched off since the start is still there.
+    fn running<'a, T>(&self, feature: Feature, service: Option<&'a T>) -> Option<&'a T> {
+        service.filter(|_| self.features.runs(feature))
+    }
+
+    fn drops(&self) -> Result<&Drops, Error> {
+        self.running(Feature::Drops, self.drops.as_ref())
+            .ok_or_else(|| self.features.refusal(Feature::Drops))
+    }
+
     /// What happened from `from` to `to` (Unix seconds): the runs for every reader, what changed
-    /// for `CHANGES_VIEW`, crash waves and bursts for `DROPS_VIEW`, and the links for both.
+    /// for `CHANGES_VIEW`, crash waves and bursts for `DROPS_VIEW`, and the links for both. What
+    /// changed and the drops are left out too while their feature does not run.
     pub async fn events(&self, caller: &Caller, from: i64, to: i64) -> Result<TimelineEvents, Error> {
         if to <= from || to - from > LONGEST_WINDOW {
             return Err(ApiError::new(ErrorCode::InvalidRequest)
@@ -58,14 +79,17 @@ impl Statistics {
                 .into());
         }
         let (from_ms, to_ms) = (from * 1000, to * 1000);
-        let mut events = self.metrics.run_events(from_ms, to_ms).await?;
+        let metrics = self
+            .running(Feature::Metrics, self.metrics.as_ref())
+            .ok_or_else(|| self.features.refusal(Feature::Metrics))?;
+        let mut events = metrics.run_events(from_ms, to_ms).await?;
         let mut omitted = Vec::new();
 
         let mut changes = Vec::new();
-        if caller.permissions.contains(Permissions::CHANGES_VIEW) {
+        let recorder = self.running(Feature::Changes, self.changes.as_ref());
+        if let Some(recorder) = recorder.filter(|_| caller.permissions.contains(Permissions::CHANGES_VIEW)) {
             // From a little earlier too: a wave at the start of the window may follow one.
-            let recorded = self
-                .changes
+            let recorded = recorder
                 .recorded(instant(from_ms - LINK_WINDOW_MS), instant(to_ms))
                 .await?;
             for (event, change) in change_events(recorded) {
@@ -80,22 +104,23 @@ impl Statistics {
         }
 
         let mut links = Vec::new();
-        if caller.permissions.contains(Permissions::DROPS_VIEW) {
-            let found = self.drops.waves(from_ms, to_ms).await?;
+        let drops = self.running(Feature::Drops, self.drops.as_ref());
+        if let Some(drops) = drops.filter(|_| caller.permissions.contains(Permissions::DROPS_VIEW)) {
+            let found = drops.waves(from_ms, to_ms).await?;
             let (waves, incidents) = &*found;
             events.extend(incidents.iter().cloned());
             events.extend(waves.iter().map(|wave| wave.event.clone()));
             let dismissed: HashSet<String> = if changes.is_empty() {
                 HashSet::new()
             } else {
-                self.drops.dismissed_links().await?
+                drops.dismissed_links().await?
             };
             let times: Vec<i64> = changes.iter().map(|change| change.at_ms).collect();
             for wave in waves {
                 let Some(change) = linked(&times, wave.start_ms).map(|index| &changes[index]) else {
                     continue;
                 };
-                if !self.drops.quiet_before(wave.signature, change.at_ms).await? {
+                if !drops.quiet_before(wave.signature, change.at_ms).await? {
                     continue;
                 }
                 let key = link_key(&change.key, &wave.event.key);
@@ -124,19 +149,18 @@ impl Statistics {
     }
 
     /// What each change of the last 90 days did to stability: builds for every drops viewer, the
-    /// cfg, launch settings and resources too for `CHANGES_VIEW`.
+    /// cfg, launch settings and resources too for `CHANGES_VIEW` while what changed is recorded.
     pub async fn effects(&self, caller: &Caller) -> Result<StabilityEffects, Error> {
-        let with_changes = caller.permissions.contains(Permissions::CHANGES_VIEW);
+        let drops = self.drops()?;
+        let recorder = self
+            .running(Feature::Changes, self.changes.as_ref())
+            .filter(|_| caller.permissions.contains(Permissions::CHANGES_VIEW));
+        let with_changes = recorder.is_some();
         let mut recorded = Vec::new();
-        if with_changes {
+        if let Some(recorder) = recorder {
             let now_ms = self.clock.now().as_millisecond();
             let from_ms = now_ms - (EFFECTS_DAYS + EFFECT_DAYS) * 86_400_000;
-            for start in self
-                .changes
-                .recorded(instant(from_ms), instant(now_ms))
-                .await?
-                .starts
-            {
+            for start in recorder.recorded(instant(from_ms), instant(now_ms)).await?.starts {
                 let mut kinds: Vec<EffectKind> = start
                     .counts
                     .environment
@@ -159,11 +183,11 @@ impl Statistics {
                 });
             }
         }
-        self.drops.effects(recorded, with_changes).await
+        drops.effects(recorded, with_changes).await
     }
 
     /// Says a link is not related, or takes that back. The route asks for `DROPS_VIEW`; the link
-    /// also names a change, which is `CHANGES_VIEW`'s.
+    /// also names a change, which is `CHANGES_VIEW`'s. The drops keep the links, so they must run.
     pub async fn dismiss(&self, caller: &Caller, dismissal: LinkDismissal) -> Result<(), Error> {
         if !caller.permissions.contains(Permissions::CHANGES_VIEW) {
             let key = Permissions::CHANGES_VIEW
@@ -176,7 +200,7 @@ impl Statistics {
         if link.is_empty() || link.len() > LONGEST_LINK || !link.contains('>') {
             return Err(ApiError::new(ErrorCode::InvalidRequest).with("link", link).into());
         }
-        self.drops
+        self.drops()?
             .dismiss_link(caller, link.to_owned(), dismissal.dismissed)
             .await
     }

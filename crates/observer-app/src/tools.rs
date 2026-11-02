@@ -40,6 +40,7 @@ use std::sync::{Arc, OnceLock};
 use jiff::{SignedDuration, Timestamp};
 use observer_domain::audit::{ActorKind, AuditAction};
 use observer_domain::error::{ApiError, ErrorCode};
+use observer_domain::features::Feature;
 use observer_domain::server::{ServerState, ServerStatus};
 use observer_domain::server_data::Game;
 use observer_domain::tools::{
@@ -59,7 +60,7 @@ use tracing::warn;
 
 use crate::audit::Record;
 use crate::files::CommitGate;
-use crate::{Caller, Clock, Error, OwnPaths, Servers};
+use crate::{Caller, Clock, Error, Features, OwnPaths, Servers};
 use journal::StoreJournal;
 use work::{Finished, Job, Prepared, Steps};
 
@@ -482,14 +483,25 @@ impl Tools {
     /// The work before a start of FXServer: under the writer lock, heals the open changes of the
     /// launch's folder, then, unless the start is a crash recovery, reports or fixes as the
     /// settings say. At most one summary line and ten detail lines for the console.
-    async fn before_start(&self, request: PreLaunchRequest) -> PreLaunchResult {
+    async fn before_start(&self, request: PreLaunchRequest, on: bool) -> PreLaunchResult {
         // Awaited whatever the cancel flag says: FXServer must not start while another run writes.
         let _writer = Arc::clone(&self.inner.writer).lock_owned().await;
         if request.cancel.load(Ordering::Relaxed) {
             return Ok(Vec::new());
         }
+        // Turned off, the tools read nothing of the server folder unless a fix of theirs is still
+        // applied there: what it took out must come back once the copy it kept is gone.
+        if !on
+            && !self
+                .inner
+                .db
+                .read(|conn| stored::any_open(conn, Servers::DEFAULT, TOOL))
+                .await?
+        {
+            return Ok(Vec::new());
+        }
         let (settings, _) = self.settings().await?;
-        let mode = if request.cause == Cause::Recovery {
+        let mode = if request.cause == Cause::Recovery || !on {
             ToolMode::Off
         } else {
             settings.at_start
@@ -930,19 +942,32 @@ impl Tools {
 /// Settles the work before each spawn on the [`Tools`] it is bound to once they exist: the
 /// supervisor is made first, and the tools need its status.
 #[derive(Clone, Default)]
-pub struct ToolsHook(Arc<OnceLock<Tools>>);
+pub struct ToolsHook {
+    tools: Arc<OnceLock<Tools>>,
+    /// The switches, whose tools' switch is read before each spawn; without them the tools run.
+    features: Option<Features>,
+}
 
 impl ToolsHook {
+    /// A hook that runs the tools only while their feature does.
+    pub fn switched(features: Features) -> Self {
+        Self {
+            tools: Arc::default(),
+            features: Some(features),
+        }
+    }
+
     /// Binds the tools; a second call changes nothing.
     pub fn bind(&self, tools: Tools) {
-        let _ = self.0.set(tools);
+        let _ = self.tools.set(tools);
     }
 }
 
 impl fmt::Debug for ToolsHook {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ToolsHook")
-            .field("bound", &self.0.get().is_some())
+            .field("bound", &self.tools.get().is_some())
+            .field("switched", &self.features.is_some())
             .finish()
     }
 }
@@ -950,8 +975,12 @@ impl fmt::Debug for ToolsHook {
 impl PreLaunch for ToolsHook {
     fn run(&self, request: PreLaunchRequest) -> PreLaunchFuture<'_> {
         Box::pin(async move {
-            match self.0.get() {
-                Some(tools) => tools.before_start(request).await,
+            let on = self
+                .features
+                .as_ref()
+                .is_none_or(|features| features.runs(Feature::Tools));
+            match self.tools.get() {
+                Some(tools) => tools.before_start(request, on).await,
                 None => Ok(Vec::new()),
             }
         })

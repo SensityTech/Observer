@@ -192,6 +192,8 @@ pub enum TopicEvent {
 #[ts(export)]
 pub enum UnsubscribeReason {
     Forbidden,
+    /// The topic's feature does not run.
+    Disabled,
 }
 
 /// Observer itself, as the status topic shows it.

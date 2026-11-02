@@ -159,6 +159,10 @@ pub enum AuditAction {
     /// tool; `details` holds the `run`, the `reason` (`heal` or `undo`), the `files` (a capped
     /// list) and their `count`.
     ToolFilesRestored,
+    /// The owner turned an optional feature on or off. The target is the feature; `details`
+    /// holds `enabled` and when it `applies` (`now` or `nextStart`). A refusal by the host's
+    /// lock in `observer.toml` is `denied`.
+    FeatureChanged,
     /// Someone said a crash wave the statistics linked to a change is not related to it. The
     /// target is the link's key.
     StatisticsLinkDismissed,
@@ -167,7 +171,7 @@ pub enum AuditAction {
 }
 
 impl AuditAction {
-    pub const ALL: [Self; 86] = [
+    pub const ALL: [Self; 87] = [
         Self::SetupCompleted,
         Self::SetupLinkCreated,
         Self::LoginSucceeded,
@@ -252,6 +256,7 @@ impl AuditAction {
         Self::ToolSettingsChanged,
         Self::ToolFilesChanged,
         Self::ToolFilesRestored,
+        Self::FeatureChanged,
         Self::StatisticsLinkDismissed,
         Self::StatisticsLinkRestored,
     ];
@@ -342,6 +347,7 @@ impl AuditAction {
             Self::ToolSettingsChanged => "tool_settings_changed",
             Self::ToolFilesChanged => "tool_files_changed",
             Self::ToolFilesRestored => "tool_files_restored",
+            Self::FeatureChanged => "feature_changed",
             Self::StatisticsLinkDismissed => "statistics_link_dismissed",
             Self::StatisticsLinkRestored => "statistics_link_restored",
         }

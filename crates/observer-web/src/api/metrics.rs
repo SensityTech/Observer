@@ -40,16 +40,16 @@ pub(crate) async fn series(
         .ok_or_else(|| refused("range", query.range.clone()))?;
     let series = Series::parse_list(query.series.as_deref().unwrap_or_default())
         .map_err(|_| refused("series", query.series.clone()))?;
-    Ok(Json(state.metrics.series(range, &series).await?))
+    Ok(Json(state.metrics()?.series(range, &series).await?))
 }
 
 pub(crate) async fn threads(State(state): State<AppState>) -> Result<Json<ThreadShares>, Failure> {
-    Ok(Json(state.metrics.threads().await?))
+    Ok(Json(state.metrics()?.threads().await?))
 }
 
 /// `null` while no run is under way.
 pub(crate) async fn growth(State(state): State<AppState>) -> Result<Json<Option<RunGrowth>>, Failure> {
-    Ok(Json(state.metrics.growth().await?))
+    Ok(Json(state.metrics()?.growth().await?))
 }
 
 fn refused(name: &str, given: Option<String>) -> Failure {
@@ -89,7 +89,7 @@ pub(crate) async fn timeline(
     };
     let series = Series::parse_list_of(query.series.as_deref().unwrap_or_default(), MAX_TIMELINE_SERIES)
         .map_err(|_| refused("series", query.series.clone()))?;
-    Ok(Json(state.metrics.timeline(from, to, points, &series).await?))
+    Ok(Json(state.metrics()?.timeline(from, to, points, &series).await?))
 }
 
 #[derive(Deserialize)]
@@ -134,18 +134,18 @@ pub(crate) async fn frames(
     State(state): State<AppState>,
     QueryParams(query): QueryParams<PeriodQuery>,
 ) -> Result<Json<FrameDistribution>, Failure> {
-    Ok(Json(state.metrics.frames(query.range).await?))
+    Ok(Json(state.metrics()?.frames(query.range).await?))
 }
 
 /// Days and hours in the schedule's time zone, as the drops page has them.
 pub(crate) async fn hours(State(state): State<AppState>) -> Result<Json<PlayerHours>, Failure> {
     let zone = TimeZone::get(&state.schedule.status().borrow().zone).unwrap_or(TimeZone::UTC);
-    Ok(Json(state.metrics.hours(zone).await?))
+    Ok(Json(state.metrics()?.hours(zone).await?))
 }
 
 pub(crate) async fn runs(
     State(state): State<AppState>,
     QueryParams(query): QueryParams<PeriodQuery>,
 ) -> Result<Json<RunMemory>, Failure> {
-    Ok(Json(state.metrics.runs(query.range).await?))
+    Ok(Json(state.metrics()?.runs(query.range).await?))
 }
