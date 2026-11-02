@@ -20,4 +20,17 @@ points: number,
 /**
  * Steady growth past the threshold: a possible leak.
  */
-leak: boolean, };
+leak: boolean, 
+/**
+ * How far the points stray from the line: the standard deviation of what it leaves out.
+ * `None` under three points.
+ */
+residual: number | null, 
+/**
+ * The standard error of `per_hour`, widened for minutes that follow each other closely.
+ */
+slopeError: number | null, 
+/**
+ * The mean of the fitted points' times, in seconds since `from`: where the line is surest.
+ */
+center: number, };
