@@ -1,9 +1,11 @@
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
 use anyhow::Context;
+use observer_domain::features::Feature;
 use observer_web::TrustedProxy;
 use serde::Deserialize;
 
@@ -21,7 +23,21 @@ pub struct Config {
     pub http: HttpConfig,
     /// SFTP opens a new network service, so it stays off until the owner adds this section.
     pub sftp: Option<SftpConfig>,
+    /// The optional features the host turns off, such as `sftp = "off"`: the panel then cannot
+    /// turn them on, even from the owner's account.
+    #[expect(
+        clippy::zero_sized_map_values,
+        reason = "a feature takes one value here, which only says it is named on purpose"
+    )]
+    pub features: BTreeMap<Feature, HostSwitch>,
     pub log: LogConfig,
+}
+
+/// What `observer.toml` can say of a feature. Turning one on is the panel's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum HostSwitch {
+    Off,
 }
 
 #[derive(Debug, Deserialize)]
@@ -58,6 +74,7 @@ impl Default for Config {
             data_dir: PathBuf::from("data"),
             http: HttpConfig::default(),
             sftp: None,
+            features: BTreeMap::new(),
             log: LogConfig::default(),
         }
     }
@@ -138,6 +155,10 @@ impl Config {
     pub fn paths(&self) -> DataPaths {
         DataPaths::new(self.data_dir.clone())
     }
+
+    pub fn host_off(&self) -> BTreeSet<Feature> {
+        self.features.keys().copied().collect()
+    }
 }
 
 #[cfg(test)]
@@ -206,6 +227,43 @@ listen = \"0.0.0.0:40126\"
             Config::load(&path).is_err(),
             "a section without listen is a mistake, not SFTP off"
         );
+    }
+
+    #[test]
+    fn the_host_turns_features_off_by_name_and_only_off() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("observer.toml");
+        assert_eq!(Config::load(&path).unwrap().host_off(), BTreeSet::new());
+
+        fs::write(
+            &path,
+            "[features]
+sftp = \"off\"
+diagnostics = \"off\"
+",
+        )
+        .unwrap();
+        assert_eq!(
+            Config::load(&path).unwrap().host_off(),
+            BTreeSet::from([Feature::Sftp, Feature::Diagnostics])
+        );
+
+        fs::write(
+            &path,
+            "[features]
+sftp = \"on\"
+",
+        )
+        .unwrap();
+        assert!(Config::load(&path).is_err(), "the panel turns features on");
+        fs::write(
+            &path,
+            "[features]
+sfpt = \"off\"
+",
+        )
+        .unwrap();
+        assert!(Config::load(&path).is_err(), "a misspelt feature would stay on");
     }
 
     #[test]

@@ -48,14 +48,16 @@ pub(crate) async fn summary(
     Extension(caller): Extension<Caller>,
     QueryParams(query): QueryParams<RangeQuery>,
 ) -> Result<Json<DropsSummary>, Failure> {
-    Ok(Json(state.drops.summary(query.range, caller.permissions).await?))
+    Ok(Json(
+        state.drops()?.summary(query.range, caller.permissions).await?,
+    ))
 }
 
 pub(crate) async fn series(
     State(state): State<AppState>,
     QueryParams(query): QueryParams<SeriesQuery>,
 ) -> Result<Json<DropSeries>, Failure> {
-    Ok(Json(state.drops.series(query.range, query.category).await?))
+    Ok(Json(state.drops()?.series(query.range, query.category).await?))
 }
 
 pub(crate) async fn signatures(
@@ -64,7 +66,7 @@ pub(crate) async fn signatures(
     QueryParams(query): QueryParams<RangeQuery>,
 ) -> Result<Json<SignatureTable>, Failure> {
     Ok(Json(
-        state.drops.signatures(query.range, caller.permissions).await?,
+        state.drops()?.signatures(query.range, caller.permissions).await?,
     ))
 }
 
@@ -74,7 +76,7 @@ pub(crate) async fn resources(
     QueryParams(query): QueryParams<RangeQuery>,
 ) -> Result<Json<ResourceTable>, Failure> {
     Ok(Json(
-        state.drops.resources(query.range, caller.permissions).await?,
+        state.drops()?.resources(query.range, caller.permissions).await?,
     ))
 }
 
@@ -82,14 +84,14 @@ pub(crate) async fn changes(
     State(state): State<AppState>,
     QueryParams(query): QueryParams<RangeQuery>,
 ) -> Result<Json<DropChanges>, Failure> {
-    Ok(Json(state.drops.changes(query.range).await?))
+    Ok(Json(state.drops()?.changes(query.range).await?))
 }
 
 pub(crate) async fn uptime(
     State(state): State<AppState>,
     QueryParams(query): QueryParams<RangeQuery>,
 ) -> Result<Json<DropUptime>, Failure> {
-    Ok(Json(state.drops.uptime(query.range).await?))
+    Ok(Json(state.drops()?.uptime(query.range).await?))
 }
 
 #[derive(Debug, Deserialize)]
@@ -130,7 +132,7 @@ pub(crate) async fn log(
     QueryParams(params): QueryParams<LogParams>,
 ) -> Result<Json<DropLog>, Failure> {
     let query = LogQuery::from(params);
-    Ok(Json(state.drops.log(&query, caller.permissions).await?))
+    Ok(Json(state.drops()?.log(&query, caller.permissions).await?))
 }
 
 /// The filtered log as CSV, audited before it is sent.
@@ -142,7 +144,7 @@ pub(crate) async fn export_log(
     let mut query = LogQuery::from(params);
     query.before = None;
     let rows = state
-        .drops
+        .drops()?
         .export_log(&caller, &query, caller.permissions)
         .await?;
     Ok(attachment("observer-player-drops.csv", log_csv(&rows)))
@@ -161,7 +163,7 @@ pub(crate) async fn export_rates(
     Extension(caller): Extension<Caller>,
     QueryParams(query): QueryParams<RatesQuery>,
 ) -> Result<Response, Failure> {
-    let days = state.drops.export_rates(&caller, query.from, query.to).await?;
+    let days = state.drops()?.export_rates(&caller, query.from, query.to).await?;
     Ok(attachment("observer-drop-rates.csv", rates_csv(&days)))
 }
 
@@ -176,11 +178,11 @@ pub(crate) async fn crash(
     State(state): State<AppState>,
     QueryParams(query): QueryParams<CrashQuery>,
 ) -> Result<Json<Option<CrashDrops>>, Failure> {
-    Ok(Json(state.drops.crash(query.started, query.generation).await?))
+    Ok(Json(state.drops()?.crash(query.started, query.generation).await?))
 }
 
 pub(crate) async fn settings(State(state): State<AppState>) -> Result<Json<DropsSettings>, Failure> {
-    Ok(Json(state.drops.settings().await?))
+    Ok(Json(state.drops()?.settings().await?))
 }
 
 pub(crate) async fn change_settings(
@@ -188,8 +190,8 @@ pub(crate) async fn change_settings(
     Extension(caller): Extension<Caller>,
     JsonBody(settings): JsonBody<DropsSettings>,
 ) -> Result<Json<DropsSettings>, Failure> {
-    state.drops.change_settings(&caller, settings).await?;
-    Ok(Json(state.drops.settings().await?))
+    state.drops()?.change_settings(&caller, settings).await?;
+    Ok(Json(state.drops()?.settings().await?))
 }
 
 fn attachment(name: &str, body: String) -> Response {

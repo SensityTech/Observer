@@ -19,7 +19,7 @@ pub(crate) async fn download_file(
     Path((id, name)): Path<(String, String)>,
 ) -> Result<Response, Failure> {
     let id: i64 = id.parse().map_err(|_| ErrorCode::CrashNotFound)?;
-    let (file, opened) = state.diagnostics.open_file(&caller, id, &name).await?;
+    let (file, opened) = state.diagnostics()?.open_file(&caller, id, &name).await?;
     // A name FXServer or Observer gave the file: a GUID or `hang-<n>-<time>`, nothing to escape.
     let headers = [
         (header::CONTENT_TYPE, "application/octet-stream".to_owned()),
@@ -38,5 +38,5 @@ pub(crate) async fn delete_files(
     Extension(caller): Extension<Caller>,
     Id(id): Id,
 ) -> Result<Json<Crash>, Failure> {
-    Ok(Json(state.diagnostics.delete_files(&caller, id).await?))
+    Ok(Json(state.diagnostics()?.delete_files(&caller, id).await?))
 }

@@ -33,14 +33,14 @@ pub(crate) async fn series(
         .ok_or_else(|| refused("range", query.range.clone()))?;
     let series = Series::parse_list(query.series.as_deref().unwrap_or_default())
         .map_err(|_| refused("series", query.series.clone()))?;
-    Ok(Json(state.metrics.series(range, &series).await?))
+    Ok(Json(state.metrics()?.series(range, &series).await?))
 }
 
 pub(crate) async fn threads(State(state): State<AppState>) -> Result<Json<ThreadShares>, Failure> {
-    Ok(Json(state.metrics.threads().await?))
+    Ok(Json(state.metrics()?.threads().await?))
 }
 
 /// `null` while no run is under way.
 pub(crate) async fn growth(State(state): State<AppState>) -> Result<Json<Option<RunGrowth>>, Failure> {
-    Ok(Json(state.metrics.growth().await?))
+    Ok(Json(state.metrics()?.growth().await?))
 }
