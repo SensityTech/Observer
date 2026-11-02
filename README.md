@@ -228,6 +228,10 @@ level = "info"
 # File access over SFTP stays off until this section exists (see "File access over SFTP").
 # [sftp]
 # listen = "0.0.0.0:40126"
+
+# Optional features the host keeps off, which the panel cannot turn on (see "Turning features off").
+# [features]
+# sftp = "off"
 ```
 
 Two environment variables apply to the log of `observer run` and `observer fxserver run`:
@@ -256,6 +260,7 @@ data/
 │   └── .trash/            deleted builds on their way out
 ├── crashes/               FXServer's crash dumps and hang snapshots: the last 10, 20 GiB at most
 ├── tools/backups/         the originals of the files the server tools changed, each with a .json
+├── database-backups/.work/ the game database's backup under way, emptied at every start
 └── fxserver.pid           Linux: the running FXServer, which the next start ends if Observer died
 ```
 
@@ -275,14 +280,15 @@ The backups are complete snapshots of the state database:
 | Port | What |
 |---|---|
 | 40125/TCP (`http.listen`) | The panel, its API and its websocket (`/api/ws`). |
-| 40126/TCP (`sftp.listen`), when set | File access over SFTP. Off unless `[sftp]` is in `observer.toml`. |
+| 40126/TCP (`sftp.listen`), when set | File access over SFTP. Off unless `[sftp]` is in `observer.toml` and SFTP is not [turned off](#turning-features-off). |
 | The cfg's endpoints, such as 30120 TCP and UDP | FXServer's own. Observer reads FXServer's HTTP endpoint (`/dynamic.json`, `/info.json`, `/perf/`, `/players.json`) on the cfg's first `endpoint_add_tcp`, through loopback when that one listens on every interface. |
 
 ### Outbound connections
 
 Observer itself only talks to Cfx.re, over HTTPS on port 443, when someone lists or installs builds
 from the panel, the setup or `observer artifacts`. It follows redirects only to the same hosts and
-ignores proxy settings. FXServer's own traffic is FXServer's.
+ignores proxy settings. FXServer's own traffic is FXServer's. The database backups reach the
+database server and the SFTP hosts and S3 endpoints the owner adds as destinations, nothing else.
 
 | Host | For |
 |---|---|
@@ -661,6 +667,77 @@ use the **Tools** page.
   holds two stream files of the same name, which one FXServer sends may differ from the prediction.
   The report notes it, and such files are never changed.
 
+## Turning features off
+
+File access over SFTP (`sftp`), file changes (`changes`), the server tools (`tools`), the diagnostics
+(`diagnostics`), the statistics (`metrics`), the players (`players`) and the player drops (`drops`) can
+each be turned off. A feature that is off runs none of its code: Observer does not open its port, start
+its tasks or open its database, and its API routes answer `feature_disabled`. What it recorded stays on
+disk, and its retention waits until it runs again. Supervision, the console, accounts, the audit log,
+the restart schedule and FXServer's builds are always on.
+
+`GET /api/features` (**View settings**) says for each feature whether it runs, what holds it off, and
+what it opens: its port, its tasks, its files, its routes. Only the owner turns one on or off, with
+`PUT /api/features/{feature}` and the password again; each change is in the audit log.
+
+- **Off applies at once.** By the time the API answers, the port is closed, the SFTP sessions have
+  ended and the feature's tasks have stopped. Turning the players or the statistics off turns the drops
+  off too: they are drawn from the players' sessions and from the runs the statistics record.
+- **On applies at the next start of Observer,** which restarts FXServer, except for the server tools,
+  which apply from the next start of FXServer. A port only opens when the host restarts Observer.
+- **What a feature left behind is still finished.** With SFTP off, the failed logins it counted still
+  reach the audit log, and the uploads a crash cut short still leave the server folder at Observer's
+  start. While a fix of the server tools is applied, the work before each start still puts back what it
+  took out once the copy it kept is gone, even with the tools off: undo the fixes first to turn the
+  tools off entirely.
+
+The host can keep features off whatever the panel says, the owner's account included, in
+`observer.toml`; `"off"` is the only value:
+
+```toml
+[features]
+sftp = "off"
+diagnostics = "off"
+```
+
+## Database backups
+
+Observer can back up the game server's database, the one oxmysql or mysql-async read through
+`mysql_connection_string`, and send each backup to one or more destinations. Observer's own
+`observer.sqlite3` has its own backups, in the data folder's `backups/`.
+
+- **The dump** is made by the database's own tool: `mariadb-dump` for MariaDB, `mysqldump` for MySQL,
+  with `--single-transaction`, so tables in InnoDB are as they were at one instant without locking
+  them. Install the client tools on the host (`apt install mariadb-client`, or the client of the
+  MariaDB or MySQL installer on Windows). Observer finds them on the `PATH` or in the usual install
+  folders, or in the folder the settings name. The password goes to the tool in a temporary option file
+  of Observer's data folder, never on its command line.
+- **The connection** is the cfg's `mysql_connection_string`, read again at each backup, or one typed
+  in the settings, for an account that only reads: it needs `SELECT`, `SHOW VIEW`, `TRIGGER`, `EVENT`,
+  `LOCK TABLES` and the routines (`SHOW_ROUTINE` on MySQL 8, `SELECT` on `mysql.proc` on MariaDB).
+- **The file** is gzipped, `<database>-<UTC time>-<run>.sql.gz`. A dump is kept only when the tool
+  succeeded, the file starts like a dump and ends with its last line, and the file read back is the one
+  written. Tables whose engine has no transactions (MyISAM, Aria, MEMORY) are named in the run: they
+  are copied as the dump reaches them.
+- **When**: before the schedule's restarts and the single restarts someone planned (the default), or
+  before every restart; at fixed times, in the restart schedule's zone; and on request. The backup
+  before a restart is dumped once FXServer has stopped, when resources have saved what they held,
+  and FXServer waits for it one minute at most by default (up to ten): past that it starts anyway,
+  the dump goes on, and the run says so. Copies go out while FXServer runs. A crash restart never waits
+  for a backup.
+- **Destinations**: a folder of the host or a share mounted on it, never inside the server folder; an
+  SFTP server, logging in with a key Observer makes for it (its public half goes in the remote
+  account's `authorized_keys`) or a password, to a host whose key you accept after a test; an
+  S3-compatible store (AWS, Cloudflare R2, Backblaze B2, MinIO, Garage...), over HTTPS. Each keeps the
+  last copies or those of the last days, as you set it, and never loses its newest: older copies go
+  only after a new one arrived. Observer deletes only the files it wrote.
+- **Restoring** is by hand: download a copy from the panel, then `gunzip -c <file>.sql.gz | mariadb -u
+  <user> -p <database>`, into an empty database or one you mean to overwrite. Stop FXServer first.
+
+Seeing the backups, starting one and downloading one are three permissions; the settings and the
+destinations are the owner's, with the password asked again. Passwords and keys are kept in
+`observer.sqlite3`, apart, and never shown again.
+
 ## Integrations
 
 [`resource/CONTRACT.md`](resource/CONTRACT.md) is the integration contract: the server events Observer
@@ -745,6 +822,9 @@ that does.
 - **SFTP: folders are not renamed or moved,** files are; every `*.cfg` file is refused until Observer
   reads which ones the server executes; a file FXServer holds open on Windows cannot be replaced until
   it lets go of it.
+- **Database backups:** MariaDB and MySQL only; one database per server; no encryption by Observer
+  (use the destination's); an S3 copy is one upload of 5 GiB at most; an SFTP host must offer an
+  Ed25519 or ECDSA host key, as every OpenSSH since 6.5 does; no restore from the panel.
 - **Changes: who changed a file** is told only for SFTP writes, by path and time: a hint, since a file
   can be written again after. Changes made while the server runs show at the next start or with
   **Check the disk**, not as they happen.

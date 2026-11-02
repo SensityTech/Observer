@@ -569,6 +569,16 @@ pub fn open_changes(
     Ok(rows.collect::<Result<_, _>>()?)
 }
 
+/// Whether a file of any server folder still holds a change of the tool.
+pub fn any_open(conn: &Connection, server_id: &str, tool: ToolKind) -> Result<bool, StoreError> {
+    Ok(conn.query_row(
+        "SELECT EXISTS (SELECT 1 FROM tool_changes
+         WHERE server_id = ?1 AND tool = ?2 AND state IN ('pending', 'applied'))",
+        params![server_id, tool.as_str()],
+        |row| row.get(0),
+    )?)
+}
+
 /// What the Tools page lists: the open records of every server folder, by path, and the records
 /// closed at `closed_since` or later, the latest first, at most `closed_limit` of them.
 pub fn changes(

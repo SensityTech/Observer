@@ -26,6 +26,7 @@ struct Lab {
     db: Database,
     address: std::net::SocketAddr,
     stop: CancellationToken,
+    serving: tokio::task::JoinHandle<std::io::Result<()>>,
     key: Arc<PrivateKey>,
     files: Files,
     linus: i64,
@@ -157,7 +158,7 @@ impl Lab {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let stop = CancellationToken::new();
-        tokio::spawn(observer_sftp::serve(
+        let serving = tokio::spawn(observer_sftp::serve(
             listener,
             files.clone(),
             host_key,
@@ -170,6 +171,7 @@ impl Lab {
             db,
             address,
             stop,
+            serving,
             key: Arc::new(key),
             files,
             linus,
@@ -281,6 +283,36 @@ async fn a_key_login_reads_writes_and_renames_within_its_rules_and_nothing_else(
     assert_eq!(lab.entries(AuditAction::FileWritten).await, 1);
     assert_eq!(lab.entries(AuditAction::FileRenamed).await, 1);
     lab.stop.cancel();
+}
+
+#[tokio::test]
+async fn a_stopped_server_returns_once_its_sessions_ended_and_their_uploads_are_gone() {
+    let lab = Lab::new().await;
+    let sftp = lab.connect("linus", Arc::clone(&lab.key)).await.unwrap();
+    let mut upload = sftp.create("/resources/[maps]/harbour/client.lua").await.unwrap();
+    upload.write_all(b"Citizen.Wait(").await.unwrap();
+    upload.flush().await.unwrap();
+    let folder = lab.root.join("resources/[maps]/harbour");
+    let uploads = || {
+        std::fs::read_dir(&folder)
+            .unwrap()
+            .filter(|entry| {
+                let name = entry.as_ref().unwrap().file_name();
+                name.to_string_lossy().starts_with(".observer-upload-")
+            })
+            .count()
+    };
+    assert_eq!(uploads(), 1, "the upload under way");
+
+    lab.stop.cancel();
+    lab.serving.await.unwrap().unwrap();
+
+    assert_eq!(
+        uploads(),
+        0,
+        "nothing of the session is left once the server returned"
+    );
+    assert!(!folder.join("client.lua").exists());
 }
 
 #[tokio::test]

@@ -5,6 +5,7 @@ use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use observer_app::{Caller, Client};
 use observer_domain::error::ErrorCode;
+use observer_domain::features::Feature;
 use observer_domain::permissions::Permissions;
 
 use crate::AppState;
@@ -49,6 +50,8 @@ pub(crate) struct Guard {
     pub gate: Gate,
     /// The route as the table declares it, relative to `/api`.
     pub path: &'static str,
+    /// The optional feature the route belongs to, refused while it does not run.
+    pub feature: Option<Feature>,
 }
 
 /// Runs a route's gate, then hands the handler the caller it found.
@@ -71,6 +74,13 @@ pub(crate) async fn enforce(
     } else {
         admit(&guard, client, request.headers(), &method, &path).await
     };
+    // After the caller's own gate, so that only who may use the route learns that it is off.
+    let admitted = admitted.and_then(|caller| match guard.feature {
+        Some(feature) if !guard.state.features.runs(feature) => {
+            Err(guard.state.features.refusal(feature).into())
+        }
+        _ => Ok(caller),
+    });
     match admitted {
         Ok(caller) => {
             request.extensions_mut().insert(caller);
