@@ -149,11 +149,18 @@ test.describe.serial('Observer in a browser', () => {
         await expect(page.getByText(en.console.sent('fake_players 5'))).toBeVisible();
     });
 
-    test('the statistics tiles show what FXServer reports', async () => {
+    test('the Overview sums FXServer up, and its details show every measure it reports', async () => {
         await overview();
-        const players = page.getByRole('region', { name: en.tiles.players.label, exact: true });
-        await expect(players).toContainText(en.tiles.players.of('32'));
+        // Folded, the details hold no region: the four figures are the only ones named so.
+        const players = page.getByRole('region', { name: en.overview.tiles.players, exact: true });
+        await expect(players).toContainText(en.overview.tiles.of('32'));
         await expect(players.locator('p').first()).toHaveText(/^5/, { timeout: 15_000 });
+
+        await page.getByRole('button', { name: new RegExp(`^${en.overview.details}`) }).click();
+        const details = page.getByRole('region', { name: en.overview.details, exact: true });
+        await expect(
+            details.getByRole('region', { name: en.tiles.players.label, exact: true }),
+        ).toContainText(en.tiles.players.of('32'));
         const tiles = [
             en.tiles.tick.label,
             en.tiles.cpu.label,
@@ -164,7 +171,7 @@ test.describe.serial('Observer in a browser', () => {
         await Promise.all(
             tiles.map((label) =>
                 expect(
-                    page.getByRole('region', { name: label, exact: true }).locator('p').first(),
+                    details.getByRole('region', { name: label, exact: true }).locator('p').first(),
                     label,
                 ).not.toHaveText(en.tiles.unknown, { timeout: 15_000 }),
             ),
