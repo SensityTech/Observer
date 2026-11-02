@@ -206,6 +206,11 @@ pub async fn run(config: Config, args: RunArgs) -> anyhow::Result<()> {
         &instance_id,
         &config.http.hosts,
         &config.http.trusted_proxies,
+        observer_web::Bootstrap {
+            // Observer may have been started from anywhere: the owner looks for the file itself.
+            config_file: std::path::absolute(&config.path).unwrap_or_else(|_| config.path.clone()),
+            listen: config.http.listen,
+        },
     );
     let live = state.live.clone();
     // Before FXServer starts with Observer, so that the first samples show its start.

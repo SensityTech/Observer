@@ -13,6 +13,8 @@ mod security;
 #[cfg(test)]
 mod tests;
 
+use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::extract::Request;
@@ -58,6 +60,14 @@ pub struct AppState {
     /// The names the panel is reached by, besides addresses and `localhost`.
     hosts: Arc<[String]>,
     proxies: Arc<[TrustedProxy]>,
+    bootstrap: Arc<Bootstrap>,
+}
+
+/// What the owner reads of `observer.toml` on the Settings page besides the hosts and proxies,
+/// which the panel's requests are checked against.
+pub struct Bootstrap {
+    pub config_file: PathBuf,
+    pub listen: SocketAddr,
 }
 
 /// The services the API stands on.
@@ -84,6 +94,7 @@ impl AppState {
         instance_id: &str,
         hosts: &[String],
         proxies: &[TrustedProxy],
+        bootstrap: Bootstrap,
     ) -> Self {
         let Services {
             accounts,
@@ -119,6 +130,7 @@ impl AppState {
             cookie: format!("observer_session_{instance_id}"),
             hosts: hosts.into(),
             proxies: proxies.into(),
+            bootstrap: Arc::new(bootstrap),
         }
     }
 }

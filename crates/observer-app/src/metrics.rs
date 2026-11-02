@@ -9,8 +9,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use observer_domain::metrics::{LiveSample, MetricsSeries, Range, RunGrowth, Series, ThreadShares};
+use observer_domain::settings::StatisticsKept;
 use observer_store::MetricsDatabase;
-use observer_store::metrics::{growth, runs as stored_runs, series, threads};
+use observer_store::metrics::{growth, rollups, runs as stored_runs, series, threads};
 use tokio::sync::{broadcast, watch};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
@@ -149,6 +150,16 @@ impl Metrics {
     pub fn live(&self) -> (Option<LiveSample>, broadcast::Receiver<LiveSample>) {
         let next = self.inner.live.subscribe();
         (self.inner.latest.borrow().clone(), next)
+    }
+
+    /// How long the samples and the minute aggregates stay, which the Settings page shows.
+    pub fn kept() -> StatisticsKept {
+        let seconds =
+            |kept: i64| u32::try_from(kept).expect("a retention of days fits in 32 bits of seconds");
+        StatisticsKept {
+            samples: seconds(rollups::RAW_KEPT),
+            minutes: seconds(rollups::MINUTES_KEPT),
+        }
     }
 
     /// Closes the database for every clone, once the sampling is closed.

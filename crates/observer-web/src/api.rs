@@ -15,6 +15,7 @@ mod metrics;
 mod players;
 mod schedule;
 mod servers;
+mod settings;
 mod setup;
 mod tools;
 mod users;
@@ -96,6 +97,8 @@ pub(crate) fn routes() -> Vec<Route> {
     // settings write into it, now or at every start, so they take the password again.
     let read_tools = Owner;
     let change_tools = ReauthenticatedOwner;
+    // `observer.toml` names the host's folders and addresses; the panel only reads it.
+    let read_bootstrap = Owner;
     vec![
         route(M::GET,    "/health",                     Public,       health),
         route(M::GET,    "/setup",                      Public,       setup::status),
@@ -201,6 +204,7 @@ pub(crate) fn routes() -> Vec<Route> {
         route(M::POST,   "/tools/duplicate-archetypes/fix",          change_tools, tools::fix),
         route(M::POST,   "/tools/duplicate-archetypes/undo",         change_tools, tools::undo),
         route(M::PUT,    "/tools/duplicate-archetypes/settings",     change_tools, tools::change_settings),
+        route(M::GET,    "/settings/observer",                       read_bootstrap, settings::observer),
     ]
 }
 
