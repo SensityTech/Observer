@@ -538,6 +538,8 @@ export const en = {
             title: 'Coming up',
             recovery: 'Restart after the failure',
             restart: 'Scheduled restart',
+            afterBackup: (restart: string) => `${restart}, backed up first`,
+            backup: 'Database backup',
             oneOff: 'Restart planned by hand',
             delayed: (time: string) => `Scheduled restart, moved from ${time}`,
             nextStart: (build: string) => `Build ${build} at the next start`,
@@ -552,6 +554,10 @@ export const en = {
             start: 'Started',
             restart: 'Restarted',
             crash: 'Crashed',
+            backup: (size: string | null) =>
+                size === null ? 'Database backup' : `Database backup · ${size}`,
+            copies: (stored: number, total: number) =>
+                `${formatNumber('en', stored)} of ${count(total, { one: 'copy', other: 'copies' })}`,
             backOnline: (after: string) => `back after ${after}`,
             nothing: 'Nothing in the last 24 hours.',
         },

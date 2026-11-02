@@ -1,6 +1,8 @@
 import { useQuery } from '@tanstack/react-query';
 import { use, useId, type ReactNode } from 'react';
 
+import { backupsQuery, copiesOf } from '../api/backups';
+import type { BackupRun } from '../api/generated/BackupRun';
 import type { RunMarker } from '../api/generated/RunMarker';
 import { Permission } from '../api/generated/Permission';
 import type { ServerStatus } from '../api/generated/ServerStatus';
@@ -21,6 +23,16 @@ const EARLIER_RUNS = 3;
 
 /** A line of the cards: when, what, and a note at its end. */
 type Item = { key: string; at: string | number | null; text: string; note?: string };
+
+const time = (at: string | number) => new Date(at).getTime();
+
+/** The backups' plan and latest runs, for an account that sees them. */
+const useBackups = () => {
+    const me = use(MeContext);
+    return (
+        useQuery({ ...backupsQuery, enabled: me !== null && allows(me, Permission.BackupsView) }).data ?? null
+    );
+};
 
 /**
  * A server time as the cards write it: the clock in the schedule's zone, with its day when that is
@@ -87,13 +99,17 @@ function AgendaCard({
     );
 }
 
-/** What is due next: the next restart, a restart after a failure, a build change, a probation's end. */
+/**
+ * What is due next, soonest first: the next restart and whether a backup comes before it, a restart
+ * after a failure, the next timed backup, a probation's end; then a build waiting for a start.
+ */
 export function ComingUp() {
     const { t, format } = useI18n();
     const words = t.overview.comingUp;
     const { status } = useServerStatus();
     const { schedule } = useSchedule();
     const { status: builds } = useArtifacts();
+    const plan = useBackups();
     const now = useNow();
     const when = useWhen();
     const running = status !== null && isRunning(status.state);
@@ -117,7 +133,16 @@ export function ComingUp() {
         } else if (next.delayedFrom !== null) {
             text = words.delayed(when(next.delayedFrom));
         }
-        items.push({ key: 'restart', at: next.at, text, note: left(next.at) });
+        const backedUp = plan?.nextRestartAt != null && time(plan.nextRestartAt) === time(next.at);
+        items.push({
+            key: 'restart',
+            at: next.at,
+            text: backedUp ? words.afterBackup(text) : text,
+            note: left(next.at),
+        });
+    }
+    if (plan?.nextAt != null) {
+        items.push({ key: 'backup', at: plan.nextAt, text: words.backup, note: left(plan.nextAt) });
     }
     if (builds !== null && builds.running !== null) {
         if (builds.selected !== null && builds.selected !== builds.running) {
@@ -142,13 +167,16 @@ export function ComingUp() {
         }
     }
 
-    return <AgendaCard title={words.title} items={items} empty={words.nothing} />;
+    const soonest = items.toSorted(
+        (a, b) => Number(a.at === null) - Number(b.at === null) || time(a.at ?? 0) - time(b.at ?? 0),
+    );
+    return <AgendaCard title={words.title} items={soonest} empty={words.nothing} />;
 }
 
 /**
- * What happened lately: why the server is in its state (unless the notice above the tiles already
- * says it), the start of the run under way and what became of its build, the day's earlier runs,
- * and what the start changed.
+ * What happened lately, newest first: why the server is in its state (unless the notice above the
+ * tiles already says it), the start of the run under way and what became of its build, the latest
+ * backup, the day's earlier runs, and what the start changed.
  */
 export function Recent({ causeShown }: { causeShown: boolean }) {
     const { t, format } = useI18n();
@@ -157,6 +185,7 @@ export function Recent({ causeShown }: { causeShown: boolean }) {
     const { status } = useServerStatus();
     const { latest } = useLiveMetrics();
     const { status: builds } = useArtifacts();
+    const plan = useBackups();
     const day = useQuery(DAY);
     const when = useWhen();
 
@@ -182,8 +211,9 @@ export function Recent({ causeShown }: { causeShown: boolean }) {
             (builds.selected !== null && builds.selected !== builds.running) ||
             builds.pending !== null);
     const fact = status === null || upcoming ? null : buildFact(t, status, builds, when);
-    if (fact !== null) {
-        items.push({ key: 'build', at: null, text: fact });
+    const backup = plan?.recent.find((run) => run.outcome !== null) ?? null;
+    if (backup !== null) {
+        items.push(backupItem(t, backup, format));
     }
     // The run under way is told above: its own start marker would say it again.
     const since = started === null ? Infinity : Date.parse(started) / 1000 - 30;
@@ -194,9 +224,15 @@ export function Recent({ causeShown }: { causeShown: boolean }) {
     for (const marker of earlier) {
         items.push(markerItem(t, marker, format));
     }
+    const newest = items.toSorted((a, b) => time(b.at ?? 0) - time(a.at ?? 0));
+    // What became of the build goes with the start of the run that runs it.
+    if (fact !== null) {
+        const after = newest.findIndex((item) => item.key === 'started');
+        newest.splice(after < 0 ? newest.length : after + 1, 0, { key: 'build', at: null, text: fact });
+    }
 
     return (
-        <AgendaCard title={words.title} items={items} empty={words.nothing}>
+        <AgendaCard title={words.title} items={newest} empty={words.nothing}>
             {me !== null && allows(me, Permission.ChangesView) && <ChangesFact />}
         </AgendaCard>
     );
@@ -221,5 +257,26 @@ function markerItem(
             marker.backOnlineAt === null
                 ? undefined
                 : words.backOnline(format.duration(marker.backOnlineAt - marker.at)),
+    };
+}
+
+/** The latest backup that ended: its file's size, and its copies, or how it ended without them. */
+function backupItem(
+    t: ReturnType<typeof useI18n>['t'],
+    run: BackupRun,
+    format: ReturnType<typeof useI18n>['format'],
+): Item {
+    const words = t.overview.recent;
+    const { stored, total } = copiesOf(run);
+    return {
+        key: `backup-${run.id}`,
+        at: run.finishedAt ?? run.startedAt,
+        text: words.backup(run.fileBytes === null ? null : format.bytes(run.fileBytes)),
+        note:
+            run.outcome === 'succeeded' || run.outcome === 'partial'
+                ? words.copies(stored, total)
+                : run.outcome === null
+                  ? undefined
+                  : t.backups.history.outcomes[run.outcome],
     };
 }

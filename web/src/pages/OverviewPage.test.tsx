@@ -3,7 +3,10 @@ import { act, cleanup, fireEvent, render, within } from '@testing-library/react'
 import type { ReactNode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { backupsQuery } from '../api/backups';
 import { ApiError } from '../api/client';
+import type { BackupRun } from '../api/generated/BackupRun';
+import type { BackupsView } from '../api/generated/BackupsView';
 import type { LiveSample } from '../api/generated/LiveSample';
 import type { Me } from '../api/generated/Me';
 import type { ServerStatus } from '../api/generated/ServerStatus';
@@ -192,6 +195,7 @@ const page = async (
         threads = null,
         me = null,
         details = true,
+        backups = null,
     }: {
         growth?: RunGrowth | null;
         started?: number | null;
@@ -199,6 +203,7 @@ const page = async (
         /** Signed in, with the server's state followed: the state card shows it. */
         me?: Me | null;
         details?: boolean;
+        backups?: BackupsView | null;
     } = {},
 ) => {
     const client = new QueryClient({
@@ -208,6 +213,9 @@ const page = async (
     client.setQueryData(seriesQuery('1h', TILE_SERIES).queryKey, lastHour);
     client.setQueryData(seriesQuery('1h', ['treeStarted']).queryKey, startedHour(started));
     client.setQueryData(DAY.queryKey, day());
+    if (backups !== null) {
+        client.setQueryData(backupsQuery.queryKey, backups);
+    }
     client.setQueryData(growthQuery.queryKey, growth);
     client.setQueryData(
         threadsQuery.queryKey,
@@ -866,6 +874,40 @@ describe('OverviewPage', () => {
         expect(unknown).toBe(`${en.overview.title} · ${en.overview.verdict.unknown}`);
         expect(fine).toBe(`${en.overview.title} · ${en.overview.verdict.fine}`);
         expect(title()).toBe(`${en.overview.title} · ${en.overview.verdict.look(2)}`);
+        live.stop();
+        vi.unstubAllGlobals();
+    });
+
+    it('should list the next timed backup in Coming up, and the latest one with its copies in Recent', async () => {
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(async () => Response.json({ code: 'not_found' }, { status: 404 })),
+        );
+        const stored = { storedAt: new Date(Date.now() - 3_600_000).toISOString() };
+        const latest = {
+            id: 4,
+            startedAt: new Date(Date.now() - 3_700_000).toISOString(),
+            finishedAt: new Date(Date.now() - 3_600_000).toISOString(),
+            outcome: 'succeeded',
+            fileBytes: 412 * 1024 ** 2,
+            copies: [stored, stored],
+        } as BackupRun;
+        // Only what the Overview reads of the backups: the next timed run and the latest runs.
+        const backups = {
+            nextAt: new Date(Date.now() + 3 * 3_600_000).toISOString(),
+            nextRestartAt: null,
+            recent: [latest],
+        } as unknown as BackupsView;
+        const { live } = await page(hour(), {
+            me: { ...OWNER, permissions: 'fffff' },
+            details: false,
+            backups,
+        });
+
+        expect(card(en.overview.comingUp.title).getByText(en.overview.comingUp.backup)).not.toBeNull();
+        const recent = card(en.overview.recent.title);
+        expect(recent.getByText(en.overview.recent.backup('412 MB'))).not.toBeNull();
+        expect(recent.getByText(en.overview.recent.copies(2, 2))).not.toBeNull();
         live.stop();
         vi.unstubAllGlobals();
     });
