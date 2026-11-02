@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { cleanup, fireEvent, render, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { Me } from '../api/generated/Me';
 import type { OnlinePlayer } from '../api/generated/OnlinePlayer';
@@ -33,6 +33,8 @@ vi.mock('@tanstack/react-router', () => ({
 }));
 
 const MINUTE = 60_000;
+/** The tests' clock: the times since are read against it. */
+const NOW = Date.parse('2026-11-02T18:00:00Z');
 const MODERATOR: Me = {
     id: 2,
     username: 'grace',
@@ -40,7 +42,7 @@ const MODERATOR: Me = {
     permissions: '4000',
     mustChangePassword: false,
 };
-const ago = (ms: number) => new Date(Date.now() - ms).toISOString();
+const ago = (ms: number) => new Date(NOW - ms).toISOString();
 
 const player = (fields: Partial<OnlinePlayer> & Pick<OnlinePlayer, 'netId'>): OnlinePlayer => ({
     confirmation: 'confirmed',
@@ -101,8 +103,14 @@ const names = (list: HTMLElement) =>
     [...list.querySelectorAll('li')].map((row) => row.querySelector('span:nth-child(2)')?.textContent);
 
 describe('the players column', () => {
+    beforeEach(() => {
+        vi.useFakeTimers({ toFake: ['Date'] });
+        vi.setSystemTime(NOW);
+    });
+
     afterEach(() => {
         cleanup();
+        vi.useRealTimers();
         vi.unstubAllGlobals();
         localStorage.clear();
     });
