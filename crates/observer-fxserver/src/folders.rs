@@ -711,12 +711,15 @@ mod tests {
             problem(&text(&dir.path().join("notes.txt"))),
             (Some(FolderProblem::NotAFolder), None)
         );
-        if cfg!(windows) {
-            assert_eq!(
-                problem(r"\\lab-host\share\"),
-                (Some(FolderProblem::InvalidPath), Some(LaunchProblem::NetworkPath))
-            );
-        }
+        let network = if cfg!(windows) {
+            r"\\lab-host\share\"
+        } else {
+            "//lab-host/share/"
+        };
+        assert_eq!(
+            problem(network),
+            (Some(FolderProblem::InvalidPath), Some(LaunchProblem::NetworkPath))
+        );
     }
 
     #[cfg(unix)]

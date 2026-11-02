@@ -174,15 +174,9 @@ async fn a_folders_folders_are_listed_with_what_each_is() {
             "truncated": false,
         })
     );
+    // Linux refuses a leading `//` as Windows does: POSIX leaves it to the system.
     assert_eq!(network.json()["problem"], "invalidPath");
-    assert_eq!(
-        network.json()["pathProblem"],
-        if cfg!(windows) {
-            "networkPath"
-        } else {
-            "notAbsolute"
-        }
-    );
+    assert_eq!(network.json()["pathProblem"], "networkPath");
     assert_eq!(unknown.code(), "invalid_request");
 }
 
