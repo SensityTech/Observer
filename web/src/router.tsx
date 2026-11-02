@@ -14,6 +14,7 @@ import { ReauthDialog } from './auth/ReauthDialog';
 import { RequireOwner, RequirePermission } from './auth/RequirePermission';
 import { changesSearch, resourceSearch } from './changes/search';
 import { parseDropsSearch, type DropsSearch } from './drops/search';
+import { parseStatisticsSearch, type StatisticsSearch } from './statistics/search';
 import { lazyCode } from './lib/lazyCode';
 import { AccountPage } from './pages/AccountPage';
 import { LoginPage } from './pages/LoginPage';
@@ -24,8 +25,8 @@ import { RouteError } from './pages/RouteError';
 import { SetupPage } from './pages/SetupPage';
 import { AppShell } from './shell/AppShell';
 
-// Pages beyond the Overview load when someone opens them: the console's virtual list and colour
-// parser, the restart schedule, the diagnostics, the players and their drops, the changes and their
+// Pages beyond the Overview load when someone opens them: the statistics and their charts, the
+// console's virtual list and colour parser, the restart schedule, the diagnostics, the players and their drops, the changes and their
 // diffs, the owner's launch settings, server setup and server tools, the accounts and the audit log
 // are no one's landing page.
 const ConsolePage = lazyCode(() =>
@@ -64,6 +65,9 @@ const ChangesResourcePage = lazyCode(() =>
     import('./pages/ChangesResourcePage').then((page) => ({ default: page.ChangesResourcePage })),
 );
 const DropsPage = lazyCode(() => import('./pages/DropsPage').then((page) => ({ default: page.DropsPage })));
+const StatisticsPage = lazyCode(() =>
+    import('./pages/StatisticsPage').then((page) => ({ default: page.StatisticsPage })),
+);
 
 type RouterContext = { queryClient: QueryClient };
 
@@ -154,6 +158,18 @@ const overviewRoute = createRoute({
         }
     },
     component: OverviewPage,
+});
+
+// The tab, the ranges, the zoom and the lanes are in the address, so that a view is shared by its link.
+const statisticsRoute = createRoute({
+    getParentRoute: () => panelRoute,
+    path: '/statistics',
+    validateSearch: (search: Record<string, unknown>): StatisticsSearch => parseStatisticsSearch(search),
+    component: () => (
+        <RequirePermission name="DashboardView">
+            <StatisticsPage />
+        </RequirePermission>
+    ),
 });
 
 const consoleRoute = createRoute({
@@ -331,6 +347,7 @@ const routeTree = rootRoute.addChildren([
     passwordRoute,
     panelRoute.addChildren([
         overviewRoute,
+        statisticsRoute,
         consoleRoute,
         scheduleRoute,
         artifactsRoute,
