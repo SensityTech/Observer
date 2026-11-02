@@ -5,6 +5,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 
 import { Permission } from '../api/generated/Permission';
 import type { OnlinePlayer } from '../api/generated/OnlinePlayer';
+import { ApiError } from '../api/client';
 import { seriesQuery } from '../api/metrics';
 import { onlineQuery } from '../api/players';
 import { allows, useMe } from '../auth/me';
@@ -104,13 +105,16 @@ const useCount = () => {
         online,
         count: players?.online ?? online.data?.players.length ?? null,
         max: players?.max ?? null,
+        // Asked again every 10 s, the list brings the column back once the owner turns players on.
+        off: online.error instanceof ApiError && online.error.code === 'feature_disabled',
     };
 };
 
 /**
- * Who plays now, beside every page for an account that sees players. Wide, a column the user may
- * fold to a strip, the choice kept by the browser; narrower, the strip, which opens the column as
- * a drawer; on a phone, the drawer alone, which the mobile bar's button opens.
+ * Who plays now, beside every page for an account that sees players, while the players feature is
+ * on. Wide, a column the user may fold to a strip, the choice kept by the browser; narrower, the
+ * strip, which opens the column as a drawer; on a phone, the drawer alone, which the mobile bar's
+ * button opens.
  */
 export function OnlineColumn({
     open,
@@ -125,7 +129,7 @@ export function OnlineColumn({
     const wide = useMedia(COLUMN_WIDE);
     const phone = useMedia(PHONE);
     const [folded, setFolded] = useState(readFolded);
-    const { count, max } = useCount();
+    const { count, max, off } = useCount();
     const docked = wide && !folded;
     const close = useRef<HTMLButtonElement>(null);
     const opener = useRef<HTMLElement | null>(null);
@@ -160,6 +164,9 @@ export function OnlineColumn({
         };
     }, [open, onClose]);
 
+    if (off) {
+        return null;
+    }
     const shown =
         count === null
             ? t.status.unknown
@@ -250,7 +257,10 @@ export function OnlineColumn({
 /** The mobile bar's way to the players: their count, opening the drawer. */
 export function OnlineButton({ open, onOpen }: { open: boolean; onOpen: () => void }) {
     const { t, format } = useI18n();
-    const { count, max } = useCount();
+    const { count, max, off } = useCount();
+    if (off) {
+        return null;
+    }
     const shown =
         count === null
             ? t.status.unknown

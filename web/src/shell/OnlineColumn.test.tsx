@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { cleanup, fireEvent, render, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -79,14 +79,25 @@ const PLAYERS: OnlinePlayer[] = [
 ];
 
 /** The column for a moderator who sees players, on a screen wide enough for it or not. */
-const column = ({ wide = true, onOpen = () => {} }: { wide?: boolean; onOpen?: () => void } = {}) => {
+const column = ({
+    wide = true,
+    onOpen = () => {},
+    listed = true,
+}: {
+    wide?: boolean;
+    onOpen?: () => void;
+    /** Whether the list is already read; otherwise it is asked of the API. */
+    listed?: boolean;
+} = {}) => {
     vi.stubGlobal('matchMedia', (query: string) => ({
         matches: wide && query === COLUMN_WIDE,
         addEventListener: () => {},
         removeEventListener: () => {},
     }));
     const client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity, retry: false } } });
-    client.setQueryData(onlineQuery.queryKey, { players: PLAYERS });
+    if (listed) {
+        client.setQueryData(onlineQuery.queryKey, { players: PLAYERS });
+    }
     return render(
         <I18nProvider>
             <QueryClientProvider client={client}>
@@ -207,5 +218,17 @@ describe('the players column', () => {
         expect(strip.getAttribute('aria-expanded')).toBe('false');
         expect(queryByRole('searchbox')).toBeNull();
         expect(onOpen).toHaveBeenCalledOnce();
+    });
+
+    it('should leave the page alone while the players feature is turned off', async () => {
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(async () =>
+                Response.json({ code: 'feature_disabled', params: { feature: 'players' } }, { status: 409 }),
+            ),
+        );
+        const { container } = column({ listed: false });
+
+        await waitFor(() => expect(container.innerHTML).toBe(''));
     });
 });
