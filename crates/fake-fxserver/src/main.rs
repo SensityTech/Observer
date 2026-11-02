@@ -380,29 +380,8 @@ impl Fake {
                     self.drop_player(id, category, resource, &reason);
                 }
             }
-            ("fake_label", Some(id)) => {
-                if let Ok(id) = id.parse::<u32>() {
-                    let label = args
-                        .get(1)
-                        .map(|label_id| json!({ "id": label_id, "name": args[2..].join(" ") }));
-                    self.bridge_report(&json!({
-                        "type": "observer", "kind": "labels",
-                        "labels": [{ "id": id, "label": label, "resource": "fake" }],
-                    }));
-                }
-            }
-            ("fake_drop_before_join", Some(id)) => {
-                if let Ok(id) = id.parse::<u32>() {
-                    let t = self.server.uptime_ms();
-                    self.bridge_report(&players::drop_report(id, t, 1, "gate", "Not whitelisted"));
-                    let player = Player {
-                        name: "Late".to_owned(),
-                        identifiers: vec![format!("license:{id:040x}")],
-                        tokens: Vec::new(),
-                    };
-                    self.bridge_report(&players::join_report(id, &player, t));
-                }
-            }
+            ("fake_label", Some(id)) => self.label(id, &args[1..]),
+            ("fake_drop_before_join", Some(id)) => self.drop_before_join(id),
             ("observer_cmd", Some(hex)) if self.bridge.is_some() => self.bridge_command(hex),
             // Typing a convar's name with a value sets it.
             (convar, Some(value)) if convar.starts_with("sv_") || convar.starts_with("fake_") => {
@@ -518,6 +497,35 @@ impl Fake {
         console::line(MAIN, &format!("Player {} connected (id {id})", player.name));
         let report = players::join_report(id, &player, self.server.uptime_ms());
         self.bridge_report(&report);
+    }
+
+    /// A resource's kick inside its own `playerJoining` handler: the drop comes before the join.
+    fn drop_before_join(&self, id: &str) {
+        let Ok(id) = id.parse::<u32>() else {
+            return;
+        };
+        let t = self.server.uptime_ms();
+        self.bridge_report(&players::drop_report(id, t, 1, "gate", "Not whitelisted"));
+        let player = Player {
+            name: "Late".to_owned(),
+            identifiers: vec![format!("license:{id:040x}")],
+            tokens: Vec::new(),
+        };
+        self.bridge_report(&players::join_report(id, &player, t));
+    }
+
+    /// A resource giving player `id` a label of `[label id, name...]`, or clearing it with nothing.
+    fn label(&self, id: &str, label: &[String]) {
+        let Ok(id) = id.parse::<u32>() else {
+            return;
+        };
+        let label = label
+            .split_first()
+            .map(|(label_id, name)| json!({ "id": label_id, "name": name.join(" ") }));
+        self.bridge_report(&json!({
+            "type": "observer", "kind": "labels",
+            "labels": [{ "id": id, "label": label, "resource": "fake" }],
+        }));
     }
 
     fn drop_player(&self, id: u32, category: u64, resource: &str, reason: &str) {
