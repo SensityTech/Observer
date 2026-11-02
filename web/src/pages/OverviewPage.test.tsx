@@ -760,11 +760,10 @@ describe('OverviewPage', () => {
         };
         const { say, live } = await page(hour(), { growth, details: false });
         say({ type: 'snapshot', topic: 'metrics.live', data: { latest: SAMPLE } });
-        const peakAt = formatClock('en', (DAY_FROM + 100 * DAY_STEP) * 1000, 'UTC');
 
         expect(summary(en.overview.tiles.players)).toEqual([
             `187${en.overview.tiles.of('256')}`,
-            en.overview.tiles.peak('112', peakAt),
+            en.overview.tiles.peak('187', formatClock('en', NOW * 1000, 'UTC')),
         ]);
         expect(summary(en.overview.tiles.tick)).toEqual([
             '6.8ms',
@@ -772,6 +771,20 @@ describe('OverviewPage', () => {
         ]);
         expect(summary(en.overview.tiles.cpu)).toEqual(['11.4%', en.overview.tiles.ofCores(16)]);
         expect(summary(en.overview.tiles.memory)).toEqual(['9.4GB', en.overview.tiles.growing('+12 MB')]);
+        live.stop();
+    });
+
+    it("should take the players' peak from the day, unless the latest sample beats it", async () => {
+        const { say, live } = await page(hour(), { details: false });
+        say({
+            type: 'snapshot',
+            topic: 'metrics.live',
+            data: { latest: { ...SAMPLE, values: { ...SAMPLE.values, players: 90 } } },
+        });
+
+        expect(summary(en.overview.tiles.players)[1]).toBe(
+            en.overview.tiles.peak('112', formatClock('en', (DAY_FROM + 100 * DAY_STEP) * 1000, 'UTC')),
+        );
         live.stop();
     });
 

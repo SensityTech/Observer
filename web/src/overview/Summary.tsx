@@ -30,22 +30,32 @@ export function Summary() {
 
     const players = value('players') ?? status?.players?.online ?? null;
     const slots = value('slots') ?? status?.players?.max ?? null;
-    let peak: string = words.unknown;
+    // The day's busiest bucket, or the latest sample when it beats it: the day is read every five minutes.
+    let top: { players: number; at: number } | null = null;
     if (day.data !== undefined) {
+        const { from, step } = day.data;
         const values = day.data.series.find((each) => each.series === 'players')?.values ?? [];
-        let top = -1;
-        values.forEach((count, index) => {
-            if (count !== null && (top < 0 || count > (values[top] ?? 0))) {
-                top = index;
+        for (const [index, count] of values.entries()) {
+            if (count !== null && (top === null || count > top.players)) {
+                top = { players: count, at: (from + index * step) * 1000 };
             }
-        });
-        const most = values[top] ?? null;
-        if (most === null || most === 0) {
-            peak = words.noPeak;
-        } else {
-            const at = (day.data.from + top * day.data.step) * 1000;
-            peak = words.peak(format.number(Math.round(most)), formatClock(locale, at, zone ?? 'UTC'));
         }
+    }
+    const now = latest?.values.players ?? null;
+    if (latest !== null && now !== null && (top === null || now > top.players)) {
+        top = { players: now, at: latest.ts * 1000 };
+    }
+    let peak: string = words.unknown;
+    if (top !== null) {
+        peak =
+            top.players === 0
+                ? words.noPeak
+                : words.peak(
+                      format.number(Math.round(top.players)),
+                      formatClock(locale, top.at, zone ?? 'UTC'),
+                  );
+    } else if (day.data !== undefined) {
+        peak = words.noPeak;
     }
 
     const tick = value('mainTick');
