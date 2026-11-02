@@ -482,9 +482,12 @@ fn sftp_turned_off_in_the_panel_closes_its_port_at_once_and_at_the_next_start() 
     let switched = call(observer.port, "PUT", "/features/sftp", Some(&owner), Some(off));
 
     assert_eq!(switched.status, 200, "{}", switched.body);
+    assert!(
+        TcpStream::connect(("127.0.0.1", sftp)).is_err(),
+        "the port is closed by the time the panel hears back"
+    );
     let stopped = observer.printed("turned off; its tasks stopped");
     assert!(stopped.contains("sftp"), "{stopped}");
-    assert!(TcpStream::connect(("127.0.0.1", sftp)).is_err());
     let files = call(observer.port, "GET", "/files/accesses", Some(&owner), None);
     assert_eq!(files.status, 404, "{}", files.body);
     assert_eq!(files.body["code"], "feature_disabled");

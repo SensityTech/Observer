@@ -3,10 +3,12 @@
 //! Turning one off stops it at once: its routes and topics refuse, and the tasks handed to
 //! [`Features::switched`] close. Turning one on takes effect when [`Feature::turn_on`] says.
 
+use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex, PoisonError};
+use std::time::Duration;
 
 use jiff::Timestamp;
 use observer_domain::audit::{AuditAction, Outcome};
@@ -22,6 +24,9 @@ use tracing::{info, warn};
 
 use crate::audit::Record;
 use crate::{Caller, Clock, Error};
+
+/// How long turning a feature off waits for its tasks to close before it answers all the same.
+const CLOSE_WAIT: Duration = Duration::from_secs(20);
 
 /// What [`Features::load`] works with.
 pub struct FeaturesSetup {
@@ -51,6 +56,8 @@ struct Inner {
     running: watch::Sender<BTreeSet<Feature>>,
     /// One change at a time, so that the store, the audit log and `running` agree.
     changing: AsyncMutex<()>,
+    /// The tasks handed over and not closed yet, by feature.
+    open: Arc<watch::Sender<BTreeMap<Feature, usize>>>,
 }
 
 impl Features {
@@ -71,6 +78,7 @@ impl Features {
             chosen: Mutex::new(chosen),
             running: watch::Sender::new(BTreeSet::new()),
             changing: AsyncMutex::new(()),
+            open: Arc::new(watch::Sender::new(BTreeMap::new())),
         };
         let mut running = BTreeSet::new();
         // A feature comes after the one it requires.
@@ -132,8 +140,9 @@ impl Features {
     }
 
     /// Turns `feature` on or off for the owner, and audits it. Off applies at once, to the
-    /// features that require it too; on, as the feature's switch says. `observer.toml` refuses
-    /// to let a feature it holds off be turned on, and that refusal is audited.
+    /// features that require it too, and answers once their tasks closed; on, as the feature's
+    /// switch says. `observer.toml` refuses to let a feature it holds off be turned on, and that
+    /// refusal is audited.
     pub async fn set(&self, caller: &Caller, feature: Feature, enabled: bool) -> Result<FeatureList, Error> {
         let _changing = self.inner.changing.lock().await;
         let now = self.inner.clock.now();
@@ -165,17 +174,33 @@ impl Features {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .insert(feature, (enabled, now));
+        let mut stopped = Vec::new();
         self.inner.running.send_if_modified(|running| {
             if enabled {
                 applies == Applies::Now
                     && self.inner.hold(feature, running).is_none()
                     && running.insert(feature)
             } else {
-                let before = running.len();
-                running.retain(|&other| other != feature && other.requires() != Some(feature));
-                running.len() != before
+                stopped = running
+                    .iter()
+                    .copied()
+                    .filter(|&other| other == feature || other.requires() == Some(feature))
+                    .collect();
+                running.retain(|other| !stopped.contains(other));
+                !stopped.is_empty()
             }
         });
+        // The answer then means what it says: the port is closed, the tasks are over.
+        if !stopped.is_empty()
+            && tokio::time::timeout(CLOSE_WAIT, closed(self.inner.open.subscribe(), &stopped))
+                .await
+                .is_err()
+        {
+            warn!(
+                feature = feature.as_str(),
+                "turned off, but its tasks have not stopped yet"
+            );
+        }
         Ok(self.view())
     }
 
@@ -187,6 +212,8 @@ impl Features {
     {
         let stopping = CancellationToken::new();
         let running = self.running();
+        let open = Arc::clone(&self.inner.open);
+        open.send_modify(|open| *open.entry(feature).or_default() += 1);
         let waiter = tokio::spawn({
             let stopping = stopping.clone();
             async move {
@@ -198,6 +225,14 @@ impl Features {
                 if turned_off {
                     info!(feature = feature.as_str(), "turned off; its tasks stopped");
                 }
+                open.send_modify(|open| {
+                    if let Entry::Occupied(mut count) = open.entry(feature) {
+                        *count.get_mut() -= 1;
+                        if *count.get() == 0 {
+                            count.remove();
+                        }
+                    }
+                });
             }
         });
         Switched { stopping, waiter }
@@ -236,6 +271,19 @@ async fn turned_off(mut running: watch::Receiver<BTreeSet<Feature>>, feature: Fe
         if running.changed().await.is_err() {
             // The switches are gone with Observer's stop, which closes the task in its turn.
             std::future::pending::<()>().await;
+        }
+    }
+}
+
+/// Resolves once no task of `features` is left open.
+async fn closed(mut open: watch::Receiver<BTreeMap<Feature, usize>>, features: &[Feature]) {
+    while open
+        .borrow_and_update()
+        .keys()
+        .any(|feature| features.contains(feature))
+    {
+        if open.changed().await.is_err() {
+            return;
         }
     }
 }
@@ -367,21 +415,23 @@ mod tests {
     async fn turning_a_feature_off_stops_it_at_once_closes_its_task_and_is_audited() {
         let lab = Lab::new().await;
         let features = lab.features(&[]).await;
-        let (closing, closed) = tokio::sync::oneshot::channel();
+        let (closing, mut closed) = tokio::sync::oneshot::channel();
         let _switched = features.switched(Feature::Sftp, move || async move {
+            // A listener that takes a while to let its connections go.
+            tokio::time::sleep(Duration::from_millis(200)).await;
             let _ = closing.send(());
         });
 
         let list = features.set(&owner(), Feature::Sftp, false).await.unwrap();
 
+        assert!(
+            closed.try_recv().is_ok(),
+            "the answer comes once the task closed, without waiting for Observer's stop"
+        );
         assert!(!features.runs(Feature::Sftp));
         let sftp = view(&list, Feature::Sftp);
         assert!(!sftp.enabled && !sftp.running);
         assert_eq!(sftp.changed_at, Some(lab.clock.now()));
-        tokio::time::timeout(std::time::Duration::from_secs(5), closed)
-            .await
-            .expect("the task closes without waiting for Observer's stop")
-            .unwrap();
         assert_eq!(
             lab.audited().await,
             [(
