@@ -86,10 +86,10 @@ impl Statistics {
         let mut omitted = Vec::new();
 
         let mut changes = Vec::new();
-        let recorder = self.running(Feature::Changes, self.changes.as_ref());
-        if let Some(recorder) = recorder.filter(|_| caller.permissions.contains(Permissions::CHANGES_VIEW)) {
+        let history = self.running(Feature::Changes, self.changes.as_ref());
+        if let Some(history) = history.filter(|_| caller.permissions.contains(Permissions::CHANGES_VIEW)) {
             // From a little earlier too: a wave at the start of the window may follow one.
-            let recorded = recorder
+            let recorded = history
                 .recorded(instant(from_ms - LINK_WINDOW_MS), instant(to_ms))
                 .await?;
             for (event, change) in change_events(recorded) {
@@ -152,15 +152,15 @@ impl Statistics {
     /// cfg, launch settings and resources too for `CHANGES_VIEW` while what changed is recorded.
     pub async fn effects(&self, caller: &Caller) -> Result<StabilityEffects, Error> {
         let drops = self.drops()?;
-        let recorder = self
+        let history = self
             .running(Feature::Changes, self.changes.as_ref())
             .filter(|_| caller.permissions.contains(Permissions::CHANGES_VIEW));
-        let with_changes = recorder.is_some();
+        let with_changes = history.is_some();
         let mut recorded = Vec::new();
-        if let Some(recorder) = recorder {
+        if let Some(history) = history {
             let now_ms = self.clock.now().as_millisecond();
             let from_ms = now_ms - (EFFECTS_DAYS + EFFECT_DAYS) * 86_400_000;
-            for start in recorder.recorded(instant(from_ms), instant(now_ms)).await?.starts {
+            for start in history.recorded(instant(from_ms), instant(now_ms)).await?.starts {
                 let mut kinds: Vec<EffectKind> = start
                     .counts
                     .environment
