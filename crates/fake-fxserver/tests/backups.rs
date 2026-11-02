@@ -14,7 +14,8 @@ use std::time::{Duration, Instant};
 
 use jiff::{SignedDuration, Timestamp};
 use observer_app::{
-    Accounts, AuditLog, Backups, BackupsSetup, BackupsTask, Caller, Client, Clock, PasswordCost, Servers,
+    Accounts, AuditLog, Backups, BackupsHook, BackupsSetup, BackupsTask, BeforeSpawn, Caller, Client, Clock,
+    PasswordCost, Servers, ToolsHook,
 };
 use observer_domain::audit::{ActorKind, AuditAction, AuditFilter};
 use observer_domain::backups::{
@@ -24,6 +25,11 @@ use observer_domain::backups::{
 };
 use observer_domain::error::ErrorCode;
 use observer_domain::launch::{LaunchSettings, OneSync};
+use observer_fxserver::cfg;
+use observer_fxserver::launch::ServerLaunch;
+use observer_fxserver::layout::{Flavour, Layout};
+use observer_fxserver::pre_launch::{PreLaunch, PreLaunchRequest};
+use observer_fxserver::server_data::Resources;
 use observer_fxserver::supervisor::Cause;
 use observer_store::Database;
 use observer_store::backups::{self as store, NewRun};
@@ -426,6 +432,61 @@ async fn a_restart_never_waits_past_its_limit_and_the_dump_still_ends() {
     assert_eq!(run.outcome, Some(BackupOutcome::Succeeded));
     let finished = lab.audited(AuditAction::BackupFinished).await;
     assert_eq!(finished[0].details["serverStarted"], true);
+    lab.close().await;
+}
+
+#[tokio::test]
+async fn the_work_before_a_spawn_backs_up_from_the_cfg_that_spawn_read() {
+    let lab = Lab::new().await;
+    lab.local(KEEP_ALL).await;
+    let data = lab.data();
+    let text = fs::read_to_string(data.join("server.cfg")).unwrap();
+    let scan = cfg::scan(
+        &data,
+        "server.cfg",
+        &text,
+        &Resources::default(),
+        &cfg::Context {
+            panel: None,
+            onesync: OneSync::On,
+            probe_ports: false,
+            system_resources: None,
+            follow_outside: false,
+        },
+    );
+    // Edited after the spawn read it: the backup goes by what FXServer is about to run.
+    cfg(&data, "es_fail");
+    let hook = BackupsHook::default();
+    hook.bind(lab.backups.clone());
+    let work = BeforeSpawn {
+        tools: ToolsHook::default(),
+        backups: hook,
+    };
+    let build = lab.dir.path().join("build");
+
+    let lines = work
+        .run(PreLaunchRequest {
+            launch: ServerLaunch {
+                build: build.clone(),
+                settings: launch(&data),
+            },
+            layout: Layout::new(build, Flavour::HOST),
+            scan,
+            cause: Cause::Scheduled {
+                by: "observer".to_owned(),
+            },
+            generation: 2,
+            cancel: Arc::new(AtomicBool::new(false)),
+        })
+        .await
+        .unwrap();
+
+    assert!(
+        lines[0].starts_with("Backed up es_extended before the start"),
+        "{lines:?}"
+    );
+    let run = lab.backups.runs(None, None).await.unwrap().runs.remove(0);
+    assert_eq!(lab.ended(run.id).await.outcome, Some(BackupOutcome::Succeeded));
     lab.close().await;
 }
 
