@@ -2,6 +2,7 @@
 //! directory: the panel's scan, fix and undo with their gates, the settings, the work before each
 //! start for every mode and cause, and the settling at Observer's start.
 
+use std::collections::BTreeSet;
 use std::fs;
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
@@ -28,7 +29,7 @@ use tempfile::TempDir;
 use tokio::sync::watch;
 
 use super::*;
-use crate::Client;
+use crate::{Client, FeaturesSetup};
 
 const CAMP: &str = "resources/props/stream/camp.ytyp";
 const GIFT: &str = "resources/props/stream/gift.ytyp";
@@ -147,6 +148,21 @@ impl Lab {
             .fix(&owner(), scanned.plan.as_deref().unwrap())
             .await
             .unwrap()
+    }
+
+    /// Has the owner turn the tools off, and the work before a start follow their switch.
+    async fn turn_off(&mut self) {
+        let features = Features::load(FeaturesSetup {
+            db: self.db.clone(),
+            clock: Clock::manual("2026-11-01T10:00:00Z".parse().unwrap()),
+            host_off: BTreeSet::new(),
+            sftp: None,
+        })
+        .await
+        .unwrap();
+        features.set(&owner(), Feature::Tools, false).await.unwrap();
+        self.hook = ToolsHook::switched(features);
+        self.hook.bind(self.tools.clone());
     }
 
     /// The work before a start, as the supervisor asks for it, with its lines.
@@ -760,6 +776,41 @@ async fn nothing_runs_and_nothing_is_recorded_before_a_start_in_mode_off_without
     assert_eq!(lines, Vec::<String>::new());
     assert_eq!(lab.runs().await, Vec::new());
     assert_eq!(lab.read(CAMP), camp);
+}
+
+#[tokio::test]
+async fn turned_off_the_tools_do_nothing_before_a_start_whatever_their_settings_say() {
+    let mut lab = Lab::new().await;
+    let camp = lab.read(CAMP);
+    lab.configure(ToolMode::Fix).await;
+    lab.turn_off().await;
+
+    let lines = lab.start(Cause::Requested { by: "ada".to_owned() }).await;
+
+    assert_eq!(lines, Vec::<String>::new());
+    assert_eq!(lab.runs().await, Vec::new());
+    assert_eq!(lab.read(CAMP), camp);
+}
+
+#[tokio::test]
+async fn turned_off_the_tools_still_heal_a_fix_left_applied_and_fix_nothing_new() {
+    let mut lab = Lab::new().await;
+    let gift = lab.read(GIFT);
+    lab.fix().await;
+    lab.configure(ToolMode::Fix).await;
+    lab.turn_off().await;
+    fs::remove_file(lab.folder().join(KEEPER)).unwrap();
+    ytyp(&lab.folder(), TENT, &["tent", "tent"]);
+
+    let lines = lab.start(Cause::Requested { by: "ada".to_owned() }).await;
+
+    assert_eq!(lab.read(GIFT), gift);
+    assert_eq!(lab.archetypes(TENT), hashes(&["tent", "tent"]));
+    assert!(
+        lines[0].starts_with("duplicate archetypes: put back 1 archetype"),
+        "{lines:?}"
+    );
+    assert_eq!(lab.runs().await[0].mode, ToolRunMode::Heal);
 }
 
 #[tokio::test]
