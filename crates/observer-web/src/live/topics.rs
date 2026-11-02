@@ -6,9 +6,10 @@ use std::sync::Arc;
 
 use futures_util::Stream;
 use futures_util::stream;
-use observer_app::{ConsoleLines, Error};
+use observer_app::{ConsoleLines, Error, Features};
 use observer_domain::audit::AuditEntry;
 use observer_domain::diagnostics::DiagnosticsEvent;
+use observer_domain::features::Feature;
 use observer_domain::live::{AuditSnapshot, ObserverStatus, Topic, TopicEvent, TopicSnapshot};
 use observer_domain::metrics::{LiveSample, MetricsSnapshot};
 use observer_domain::permissions::Permissions;
@@ -57,6 +58,11 @@ pub(super) fn allows(topic: Topic, held: Permissions) -> bool {
         Topic::ServerDiagnostics => any(&[Permissions::DIAGNOSTICS_VIEW]),
         Topic::ServerChanges => any(&[Permissions::CHANGES_VIEW]),
     }
+}
+
+/// Whether the feature `topic` belongs to runs; the topics of no feature always do.
+pub(super) fn runs(topic: Topic, features: &Features) -> bool {
+    Feature::of_topic(topic).is_none_or(|feature| features.runs(feature))
 }
 
 /// Opens a topic for one socket. Its events are subscribed to before its snapshot is taken, so
@@ -112,14 +118,14 @@ pub(super) async fn open(topic: Topic, since: Option<u64>, state: &AppState) -> 
             })
         }
         Topic::MetricsLive => {
-            let (latest, samples) = state.metrics.live();
+            let (latest, samples) = state.metrics()?.live();
             Ok(Feed {
                 snapshot: TopicSnapshot::MetricsLive(MetricsSnapshot { latest }),
                 events: Some(metrics_events(samples)),
             })
         }
         Topic::ServerAlerts => {
-            let mut alerts = state.diagnostics.alerts();
+            let mut alerts = state.diagnostics()?.alerts();
             let snapshot = alerts.borrow_and_update().clone();
             Ok(Feed {
                 snapshot: TopicSnapshot::ServerAlerts(snapshot),
@@ -127,14 +133,14 @@ pub(super) async fn open(topic: Topic, since: Option<u64>, state: &AppState) -> 
             })
         }
         Topic::ServerDiagnostics => {
-            let (snapshot, events) = state.diagnostics.follow().await?;
+            let (snapshot, events) = state.diagnostics()?.follow().await?;
             Ok(Feed {
                 snapshot: TopicSnapshot::ServerDiagnostics(snapshot),
                 events: Some(diagnostics_events(events)),
             })
         }
         Topic::ServerChanges => {
-            let mut live = state.changes.live();
+            let mut live = state.changes()?.live();
             let snapshot = live.borrow_and_update().clone();
             Ok(Feed {
                 snapshot: TopicSnapshot::ServerChanges(snapshot),

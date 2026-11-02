@@ -1447,6 +1447,23 @@ async fn a_hung_server_is_dumped_before_its_tree_is_killed() {
 }
 
 #[tokio::test]
+async fn once_hang_snapshots_are_skipped_a_hung_server_is_killed_without_one() {
+    let mut lab = Lab::tuned(&[], hang_snapshot(HangSnapshotLimits::default())).await;
+    lab.supervisor.skip_hang_snapshots().await;
+    lab.supervisor.start("test").await.unwrap();
+    lab.state(State::Online).await;
+
+    lab.type_command("fake_hang", "test").await;
+
+    lab.state(State::Hung).await;
+    let next = lab
+        .event(|kind| matches!(kind, EventKind::HangSnapshot { .. } | EventKind::Exited { .. }))
+        .await;
+    assert!(matches!(next, EventKind::Exited { .. }), "{next:?}");
+    lab.shut_down(false).await;
+}
+
+#[tokio::test]
 async fn a_busy_server_is_pictured_with_svmain_on_the_processor() {
     let mut lab = Lab::tuned(&[], hang_snapshot(HangSnapshotLimits::default())).await;
 

@@ -31,7 +31,7 @@ pub(crate) async fn page(
     QueryParams(query): QueryParams<PageQuery>,
 ) -> Result<Json<PlayerPage>, Failure> {
     let page = state
-        .players
+        .players()?
         .page(
             query.search.as_deref(),
             query.sort,
@@ -43,11 +43,11 @@ pub(crate) async fn page(
 }
 
 pub(crate) async fn online(State(state): State<AppState>) -> Result<Json<OnlinePlayers>, Failure> {
-    Ok(Json(state.players.online().await?))
+    Ok(Json(state.players()?.online().await?))
 }
 
 pub(crate) async fn community(State(state): State<AppState>) -> Result<Json<Community>, Failure> {
-    Ok(Json(state.players.community().await?))
+    Ok(Json(state.players()?.community().await?))
 }
 
 pub(crate) async fn profile(
@@ -55,7 +55,7 @@ pub(crate) async fn profile(
     Extension(caller): Extension<Caller>,
     Id(id): Id,
 ) -> Result<Json<PlayerProfile>, Failure> {
-    Ok(Json(state.players.profile(id, caller.permissions).await?))
+    Ok(Json(state.players()?.profile(id, caller.permissions).await?))
 }
 
 pub(crate) async fn forget(
@@ -63,9 +63,11 @@ pub(crate) async fn forget(
     Extension(caller): Extension<Caller>,
     Id(id): Id,
 ) -> Result<StatusCode, Failure> {
-    state.players.forget(&caller, id).await?;
+    state.players()?.forget(&caller, id).await?;
     // The drops' cached statistics may hold what the player wrote.
-    state.drops.clear();
+    if let Some(drops) = &state.drops {
+        drops.clear();
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -76,16 +78,18 @@ pub(crate) async fn import(
     Extension(caller): Extension<Caller>,
     JsonBody(request): JsonBody<PlayersImportRequest>,
 ) -> Result<(StatusCode, Json<PlayersImport>), Failure> {
-    let import = state.players.import(&caller, &request.path).await?;
+    let import = state.players()?.import(&caller, &request.path).await?;
     Ok((StatusCode::ACCEPTED, Json(import)))
 }
 
-pub(crate) async fn import_status(State(state): State<AppState>) -> Json<Option<PlayersImport>> {
-    Json(state.players.import_status())
+pub(crate) async fn import_status(
+    State(state): State<AppState>,
+) -> Result<Json<Option<PlayersImport>>, Failure> {
+    Ok(Json(state.players()?.import_status()))
 }
 
 pub(crate) async fn settings(State(state): State<AppState>) -> Result<Json<PlayersSettings>, Failure> {
-    Ok(Json(state.players.settings().await?))
+    Ok(Json(state.players()?.settings().await?))
 }
 
 pub(crate) async fn change_settings(
@@ -93,6 +97,6 @@ pub(crate) async fn change_settings(
     Extension(caller): Extension<Caller>,
     JsonBody(settings): JsonBody<PlayersSettings>,
 ) -> Result<Json<PlayersSettings>, Failure> {
-    state.players.change_settings(&caller, settings).await?;
-    Ok(Json(state.players.settings().await?))
+    state.players()?.change_settings(&caller, settings).await?;
+    Ok(Json(state.players()?.settings().await?))
 }
