@@ -228,6 +228,10 @@ level = "info"
 # File access over SFTP stays off until this section exists (see "File access over SFTP").
 # [sftp]
 # listen = "0.0.0.0:40126"
+
+# Optional features the host keeps off, which the panel cannot turn on (see "Turning features off").
+# [features]
+# sftp = "off"
 ```
 
 Two environment variables apply to the log of `observer run` and `observer fxserver run`:
@@ -275,7 +279,7 @@ The backups are complete snapshots of the state database:
 | Port | What |
 |---|---|
 | 40125/TCP (`http.listen`) | The panel, its API and its websocket (`/api/ws`). |
-| 40126/TCP (`sftp.listen`), when set | File access over SFTP. Off unless `[sftp]` is in `observer.toml`. |
+| 40126/TCP (`sftp.listen`), when set | File access over SFTP. Off unless `[sftp]` is in `observer.toml` and SFTP is not [turned off](#turning-features-off). |
 | The cfg's endpoints, such as 30120 TCP and UDP | FXServer's own. Observer reads FXServer's HTTP endpoint (`/dynamic.json`, `/info.json`, `/perf/`, `/players.json`) on the cfg's first `endpoint_add_tcp`, through loopback when that one listens on every interface. |
 
 ### Outbound connections
@@ -660,6 +664,36 @@ use the **Tools** page.
 - **Folder order on Linux.** Windows lists folders in a set order, Linux in none: where a resource
   holds two stream files of the same name, which one FXServer sends may differ from the prediction.
   The report notes it, and such files are never changed.
+
+## Turning features off
+
+File access over SFTP (`sftp`), file changes (`changes`), the server tools (`tools`), the diagnostics
+(`diagnostics`), the statistics (`metrics`), the players (`players`) and the player drops (`drops`) can
+each be turned off. A feature that is off runs none of its code: Observer does not open its port, start
+its tasks or open its database, and its API routes answer `feature_disabled`. What it recorded stays on
+disk, and its retention waits until it runs again. Supervision, the console, accounts, the audit log,
+the restart schedule and FXServer's builds are always on.
+
+`GET /api/features` (**View settings**) says for each feature whether it runs, what holds it off, and
+what it opens: its port, its tasks, its files, its routes. Only the owner turns one on or off, with
+`PUT /api/features/{feature}` and the password again; each change is in the audit log.
+
+- **Off applies at once.** By the time the API answers, the port is closed, its sessions have ended and
+  the feature's tasks have stopped. Turning the players off turns the drops off too.
+- **On applies at the next start of Observer,** which restarts FXServer, except for the server tools,
+  which apply from the next start of FXServer. A port only opens when the host restarts Observer.
+- **The tools' heal goes on.** While a fix of the server tools is applied, the work before each start
+  still puts back what it took out once the copy it kept is gone, even with the tools off: undo the
+  fixes first to turn the tools off entirely.
+
+The host can keep features off whatever the panel says, the owner's account included, in
+`observer.toml`; `"off"` is the only value:
+
+```toml
+[features]
+sftp = "off"
+diagnostics = "off"
+```
 
 ## Integrations
 
