@@ -983,6 +983,10 @@ impl Backups {
         }
         let mut destinations = destinations;
         job::order(&mut destinations);
+        // Before the run is recorded, so that nothing but the run itself can leave it unfinished.
+        let connection = self.connection(&settings, password, scanned).await?;
+        let client = self.client(&settings).await;
+        let server_folder = self.server_folder().await?;
         let started_at = self.inner.clock.now();
         let (trigger, engine, actor) = (asker.trigger(), settings.engine, asker.actor());
         let run = self
@@ -1001,8 +1005,6 @@ impl Backups {
                 )
             })
             .await?;
-        let connection = self.connection(&settings, password.clone(), scanned).await?;
-        let client = self.client(&settings).await;
         let (dumped_tx, dumped) = watch::channel(None);
         let running = Running {
             run,
@@ -1020,7 +1022,7 @@ impl Backups {
             run,
             started_at,
             asker,
-            server_folder: self.server_folder().await.ok().flatten(),
+            server_folder,
             connection,
             client,
             destinations,
