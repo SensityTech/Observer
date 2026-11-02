@@ -10,7 +10,7 @@ use std::time::Instant;
 
 use serde_json::Value;
 
-use crate::bridge::NAME;
+use crate::bridge::REPORT_TYPE;
 use crate::health::is_address;
 use crate::trace::TraceKind;
 
@@ -110,12 +110,12 @@ pub struct RosterPage {
 
 impl PlayerReportKind {
     /// The bridge's player report in a trace, if the trace is one. Like the other reports, only
-    /// the `observer` resource may send it.
-    pub fn from_trace(trace: &TraceKind) -> Option<Self> {
+    /// the bridge of this start, named `bridge`, may send it.
+    pub fn from_trace(trace: &TraceKind, bridge: &str) -> Option<Self> {
         let TraceKind::Script { resource, payload } = trace else {
             return None;
         };
-        if resource != NAME || payload.get("type").and_then(Value::as_str) != Some(NAME) {
+        if resource != bridge || payload.get("type").and_then(Value::as_str) != Some(REPORT_TYPE) {
             return None;
         }
         match payload.get("kind").and_then(Value::as_str)? {
@@ -222,17 +222,22 @@ mod tests {
 
     use super::*;
 
+    const BRIDGE: &str = "sys_k3jx7qmw2pza";
+
     fn report(resource: &str, payload: Value) -> Option<PlayerReportKind> {
-        PlayerReportKind::from_trace(&TraceKind::Script {
-            resource: resource.to_owned(),
-            payload,
-        })
+        PlayerReportKind::from_trace(
+            &TraceKind::Script {
+                resource: resource.to_owned(),
+                payload,
+            },
+            BRIDGE,
+        )
     }
 
     #[test]
     fn a_join_keeps_the_address_apart_and_never_prints_it() {
         let join = report(
-            "observer",
+            BRIDGE,
             json!({
                 "type": "observer", "kind": "join", "id": 7, "t": 120_000,
                 "identifiers": ["license:abc", "ip:192.0.2.7", "discord:1", 4, null],
@@ -260,7 +265,7 @@ mod tests {
     fn a_drop_takes_what_it_can_read() {
         assert_eq!(
             report(
-                "observer",
+                BRIDGE,
                 json!({ "type": "observer", "kind": "drop", "id": 7, "t": 5,
                         "reason": "Exiting", "resource": "", "category": 2, "ped": true }),
             ),
@@ -275,7 +280,7 @@ mod tests {
         );
         assert_eq!(
             report(
-                "observer",
+                BRIDGE,
                 json!({ "type": "observer", "kind": "drop", "id": 7, "reason": 3 })
             ),
             Some(PlayerReportKind::Drop(Dropped {
@@ -299,10 +304,7 @@ mod tests {
             json!(5_000_000_000_u64),
         ] {
             assert_eq!(
-                report(
-                    "observer",
-                    json!({ "type": "observer", "kind": "drop", "id": id })
-                ),
+                report(BRIDGE, json!({ "type": "observer", "kind": "drop", "id": id })),
                 None
             );
         }
@@ -311,7 +313,7 @@ mod tests {
     #[test]
     fn a_roster_page_keeps_numbered_players() {
         let page = report(
-            "observer",
+            BRIDGE,
             json!({ "type": "observer", "kind": "players", "t": 9, "page": 2, "last": true,
                     "players": [{ "id": 3, "identifiers": ["license:abc"], "name": "Grace" }, { "name": "?" }] }),
         );
@@ -326,19 +328,18 @@ mod tests {
     }
 
     #[test]
-    fn only_the_bridge_reports_players() {
+    fn only_the_bridge_of_this_start_reports_players() {
         let join = json!({ "type": "observer", "kind": "join", "id": 7 });
 
-        assert!(report("observer", join.clone()).is_some());
-        assert_eq!(report("mischief", join), None);
+        assert!(report(BRIDGE, join.clone()).is_some());
+        for impostor in ["mischief", "observer", "sys_aaaaaaaaaaaa"] {
+            assert_eq!(report(impostor, join.clone()), None, "{impostor}");
+        }
         assert_eq!(
-            report("observer", json!({ "type": "other", "kind": "join", "id": 7 })),
+            report(BRIDGE, json!({ "type": "other", "kind": "join", "id": 7 })),
             None
         );
-        assert_eq!(
-            report("observer", json!({ "type": "observer", "kind": "hb" })),
-            None
-        );
+        assert_eq!(report(BRIDGE, json!({ "type": "observer", "kind": "hb" })), None);
     }
 
     #[test]
@@ -346,7 +347,7 @@ mod tests {
         let reason = "é".repeat(MAX_TEXT_BYTES);
 
         let Some(PlayerReportKind::Drop(dropped)) = report(
-            "observer",
+            BRIDGE,
             json!({ "type": "observer", "kind": "drop", "id": 1, "reason": reason }),
         ) else {
             panic!("not a drop");

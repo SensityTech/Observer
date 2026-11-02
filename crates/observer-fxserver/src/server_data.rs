@@ -100,7 +100,7 @@ pub fn walk(data: &Path) -> Resources {
             if !manifest && resources.summary.without_manifest.len() < MAX_UNMANIFESTED {
                 resources.summary.without_manifest.push(name.clone());
             }
-            if lower == crate::bridge::NAME {
+            if lower == crate::bridge::FIXED_NAME {
                 resources.named_observer.push(format!("{relative}/{name}"));
             }
             resources.names.insert(lower);

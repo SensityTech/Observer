@@ -1,9 +1,7 @@
--- Observer's bridge. Observer installs it before every start and overwrites any change.
+-- Observer's bridge. Observer installs it before every start, under a name drawn for that start,
+-- and overwrites any change. No name or description metadata: scripts read those first.
 fx_version 'cerulean'
 game 'common'
-
-name 'observer'
-description 'Relays Observer lifecycle events as server events and reports the server health to Observer'
 
 server_scripts {
     'server.lua',

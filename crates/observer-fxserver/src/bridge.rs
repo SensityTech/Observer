@@ -1,10 +1,10 @@
-//! The `observer` resource Observer installs in every build: it turns Observer's commands into
+//! The bridge resource Observer installs in every build: it turns Observer's commands into
 //! server events, and reports the heartbeat, readiness, started resources, the JS heap and the
-//! players back through the structured trace channel. The resource lives in `resource/observer`.
+//! players back through the structured trace channel. The resource lives in `resource/observer`;
+//! in a build it takes a name drawn for each start of FXServer.
 
 use std::fs;
 use std::io;
-use std::path::Path;
 
 use observer_domain::schedule::RestartSource;
 use serde::{Deserialize, Serialize};
@@ -14,7 +14,20 @@ use crate::layout::Layout;
 use crate::stdin::MAX_BRIDGE_JSON;
 use crate::trace::TraceKind;
 
-pub const NAME: &str = "observer";
+/// The server convar that holds the bridge's name, for resources to find it. Set with `+set`,
+/// it stays out of `/info.json` and never reaches clients.
+pub const NAME_CONVAR: &str = "observer_bridge";
+
+/// What every drawn name starts with: nothing that says Observer.
+const NAME_PREFIX: &str = "sys_";
+/// 60 random bits after the prefix.
+const NAME_RANDOM_CHARS: usize = 12;
+const NAME_ALPHABET: &[u8; 32] = b"abcdefghijklmnopqrstuvwxyz234567";
+/// The bridge's name before it was drawn at each start, which builds may still hold.
+pub const FIXED_NAME: &str = "observer";
+
+/// What the bridge's reports carry as `type`.
+pub(crate) const REPORT_TYPE: &str = "observer";
 
 /// The version of the server events the bridge raises; it must match `CONTRACT_VERSION` in
 /// `server.lua`.
@@ -32,40 +45,48 @@ const FILES: [(&str, &str); 3] = [
     ("heap.js", include_str!("../../../resource/observer/heap.js")),
 ];
 
-/// Puts the bridge into the build's `system_resources`, where `+ensure observer` finds it. Files
-/// whose content already matches are left alone, and anything else in the folder is removed, so
-/// the folder holds exactly this version. Returns whether anything changed.
-pub fn install(layout: &Layout) -> io::Result<bool> {
-    let dir = layout.system_resources().join(NAME);
-    fs::create_dir_all(&dir)?;
-    let mut changed = false;
-    for entry in fs::read_dir(&dir)? {
-        let entry = entry?;
-        if !FILES.iter().any(|(name, _)| entry.file_name() == *name) {
-            if entry.file_type()?.is_dir() {
-                fs::remove_dir_all(entry.path())?;
-            } else {
-                fs::remove_file(entry.path())?;
-            }
-            changed = true;
-        }
-    }
-    for (name, content) in FILES {
-        let path = dir.join(name);
-        if read_if_exists(&path)?.as_deref() != Some(content.as_bytes()) {
-            fs::write(&path, content)?;
-            changed = true;
-        }
-    }
-    Ok(changed)
+/// Draws the bridge's resource name for one start of FXServer, so that no script can target the
+/// bridge by a name known before the start.
+pub fn draw_name() -> io::Result<String> {
+    let mut random = [0; NAME_RANDOM_CHARS];
+    getrandom::fill(&mut random).map_err(io::Error::other)?;
+    let mut name = String::from(NAME_PREFIX);
+    // 256 is a multiple of 32: every character is as likely as the others.
+    name.extend(
+        random
+            .iter()
+            .map(|byte| char::from(NAME_ALPHABET[usize::from(byte % 32)])),
+    );
+    Ok(name)
 }
 
-fn read_if_exists(path: &Path) -> io::Result<Option<Vec<u8>>> {
-    match fs::read(path) {
-        Ok(bytes) => Ok(Some(bytes)),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(error),
+/// Whether a folder of `system_resources` named `name` is a bridge Observer wrote, under a drawn
+/// name or the fixed one it had before.
+pub fn is_folder(name: &str) -> bool {
+    name == FIXED_NAME
+        || name.strip_prefix(NAME_PREFIX).is_some_and(|random| {
+            random.len() == NAME_RANDOM_CHARS && random.bytes().all(|byte| NAME_ALPHABET.contains(&byte))
+        })
+}
+
+/// Puts the bridge into the build's `system_resources` as `name`, where `+ensure <name>` finds it.
+/// The bridges of earlier starts are removed first, so that this one is the only one a command
+/// can start, and the folder holds exactly this version.
+pub fn install(layout: &Layout, name: &str) -> io::Result<()> {
+    let system = layout.system_resources();
+    fs::create_dir_all(&system)?;
+    for entry in fs::read_dir(&system)? {
+        let entry = entry?;
+        if entry.file_name().to_str().is_some_and(is_folder) && entry.file_type()?.is_dir() {
+            fs::remove_dir_all(entry.path())?;
+        }
     }
+    let dir = system.join(name);
+    fs::create_dir(&dir)?;
+    for (file, content) in FILES {
+        fs::write(dir.join(file), content)?;
+    }
+    Ok(())
 }
 
 /// Why the server is stopping, from a closed list: it is the only thing Observer's `quit` line
@@ -303,7 +324,7 @@ impl BridgeEvent {
 
 const HEX: &[u8; 16] = b"0123456789abcdef";
 
-/// What the bridge reports, through `PrintStructuredTrace` from the `observer` resource.
+/// What the bridge reports, through `PrintStructuredTrace`.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", rename_all_fields = "camelCase")]
 pub enum Report {
@@ -337,12 +358,13 @@ pub enum Report {
 
 impl Report {
     /// The bridge's report in a trace, if the trace is one. FXServer names the resource that
-    /// printed it, so another resource cannot pose as the bridge.
-    pub fn from_trace(trace: &TraceKind) -> Option<Self> {
+    /// printed it, and `bridge` is the name drawn for this start: no resource can take it ahead
+    /// and pose as the bridge.
+    pub fn from_trace(trace: &TraceKind, bridge: &str) -> Option<Self> {
         let TraceKind::Script { resource, payload } = trace else {
             return None;
         };
-        if resource != NAME || payload.get("type").and_then(Value::as_str) != Some(NAME) {
+        if resource != bridge || payload.get("type").and_then(Value::as_str) != Some(REPORT_TYPE) {
             return None;
         }
         Self::deserialize(payload).ok()
@@ -543,34 +565,86 @@ mod tests {
     }
 
     #[test]
-    fn the_bridge_is_written_once_and_kept_as_is() {
-        let dir = tempfile::tempdir().unwrap();
-        let layout = Layout::new(dir.path(), Flavour::Windows);
+    fn each_start_draws_a_name_that_says_nothing_of_observer() {
+        let names: Vec<String> = (0..64).map(|_| draw_name().unwrap()).collect();
 
-        assert!(install(&layout).unwrap());
-        let installed = layout.system_resources().join("observer");
-        let manifest = fs::read_to_string(installed.join("fxmanifest.lua")).unwrap();
-        assert!(manifest.contains("fx_version 'cerulean'"));
-        assert!(manifest.contains("game 'common'"));
-        assert!(!install(&layout).unwrap());
+        for name in &names {
+            assert!(is_folder(name), "{name}");
+            assert!(!name.contains("observer"), "{name}");
+            assert!(safe(name, 64, b"_"), "{name}");
+            assert_eq!(names.iter().filter(|other| *other == name).count(), 1, "{name}");
+        }
     }
 
     #[test]
-    fn a_changed_or_extra_file_is_put_back_in_order() {
+    fn only_drawn_names_and_the_old_fixed_one_are_bridge_folders() {
+        for name in ["observer", "sys_abcdefghijkl", "sys_234567zzzzzz"] {
+            assert!(is_folder(name), "{name}");
+        }
+        for name in [
+            "monitor",
+            "chat",
+            "Observer",
+            "sys_",
+            "sys_abcdefghijk",
+            "sys_abcdefghijklm",
+            "sys_abcdefghijk1",
+            "sys_ABCDEFGHIJKL",
+            "xys_abcdefghijkl",
+        ] {
+            assert!(!is_folder(name), "{name}");
+        }
+    }
+
+    #[test]
+    fn the_bridge_is_written_under_the_name_drawn_for_the_start() {
         let dir = tempfile::tempdir().unwrap();
         let layout = Layout::new(dir.path(), Flavour::Windows);
-        install(&layout).unwrap();
-        let installed = layout.system_resources().join("observer");
-        fs::write(installed.join("server.lua"), "print('edited')").unwrap();
-        fs::write(installed.join("extra.lua"), "print('extra')").unwrap();
+        let name = draw_name().unwrap();
 
-        assert!(install(&layout).unwrap());
+        install(&layout, &name).unwrap();
 
-        assert_eq!(
-            fs::read_to_string(installed.join("server.lua")).unwrap(),
-            FILES[1].1
-        );
-        assert!(!installed.join("extra.lua").exists());
+        let installed = layout.system_resources().join(&name);
+        for (file, content) in FILES {
+            assert_eq!(fs::read_to_string(installed.join(file)).unwrap(), content);
+        }
+        let manifest = FILES[0].1;
+        assert!(manifest.contains("fx_version 'cerulean'"));
+        assert!(manifest.contains("game 'common'"));
+        assert!(!manifest.contains("name '"), "the manifest names the bridge");
+    }
+
+    #[test]
+    fn the_bridges_of_earlier_starts_are_removed_and_nothing_else() {
+        let dir = tempfile::tempdir().unwrap();
+        let layout = Layout::new(dir.path(), Flavour::Windows);
+        let system = layout.system_resources();
+        let earlier = draw_name().unwrap();
+        install(&layout, &earlier).unwrap();
+        fs::write(system.join(&earlier).join("extra.lua"), "print('extra')").unwrap();
+        for kept in ["monitor", "chat", "sys_not_a_bridge"] {
+            fs::create_dir_all(system.join(kept)).unwrap();
+            fs::write(system.join(kept).join("fxmanifest.lua"), "fx_version 'cerulean'").unwrap();
+        }
+        fs::create_dir_all(system.join("observer")).unwrap();
+        fs::write(system.join("observer/server.lua"), FILES[1].1).unwrap();
+
+        let name = draw_name().unwrap();
+        install(&layout, &name).unwrap();
+
+        let mut folders: Vec<String> = fs::read_dir(&system)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .collect();
+        folders.sort();
+        let mut expected = vec![
+            "chat".to_owned(),
+            "monitor".to_owned(),
+            "sys_not_a_bridge".to_owned(),
+            name,
+        ];
+        expected.sort();
+        assert_eq!(folders, expected);
     }
 
     #[test]
@@ -664,31 +738,42 @@ mod tests {
         );
     }
 
+    const BRIDGE: &str = "sys_k3jx7qmw2pza";
+
     #[test]
-    fn reports_come_only_from_the_bridge_resource() {
+    fn reports_come_only_from_the_bridge_of_this_start() {
         let trace = |resource: &str, payload: Value| TraceKind::Script {
             resource: resource.to_owned(),
             payload,
         };
 
         assert_eq!(
-            Report::from_trace(&trace("observer", json!({ "type": "observer", "kind": "hb" }))),
+            Report::from_trace(
+                &trace(BRIDGE, json!({ "type": "observer", "kind": "hb" })),
+                BRIDGE
+            ),
             Some(Report::Heartbeat)
         );
         assert_eq!(
-            Report::from_trace(&trace(
-                "observer",
-                json!({ "type": "observer", "kind": "ready", "contractVersion": 1 })
-            )),
+            Report::from_trace(
+                &trace(
+                    BRIDGE,
+                    json!({ "type": "observer", "kind": "ready", "contractVersion": 1 })
+                ),
+                BRIDGE
+            ),
             Some(Report::Ready {
                 contract_version: Some(1)
             })
         );
         assert_eq!(
-            Report::from_trace(&trace(
-                "observer",
-                json!({ "type": "observer", "kind": "heap", "heapUsed": 10, "heapTotal": 20, "rss": 30, "external": 1 })
-            )),
+            Report::from_trace(
+                &trace(
+                    BRIDGE,
+                    json!({ "type": "observer", "kind": "heap", "heapUsed": 10, "heapTotal": 20, "rss": 30, "external": 1 })
+                ),
+                BRIDGE
+            ),
             Some(Report::Heap {
                 heap_used: 10,
                 heap_total: 20,
@@ -696,31 +781,42 @@ mod tests {
                 external: 1
             })
         );
+        for impostor in ["mischief", "observer", "sys_aaaaaaaaaaaa"] {
+            assert_eq!(
+                Report::from_trace(
+                    &trace(impostor, json!({ "type": "observer", "kind": "hb" })),
+                    BRIDGE
+                ),
+                None,
+                "{impostor}"
+            );
+        }
         assert_eq!(
-            Report::from_trace(&trace("mischief", json!({ "type": "observer", "kind": "hb" }))),
-            None
-        );
-        assert_eq!(
-            Report::from_trace(&trace("observer", json!({ "type": "other", "kind": "hb" }))),
+            Report::from_trace(&trace(BRIDGE, json!({ "type": "other", "kind": "hb" })), BRIDGE),
             None
         );
     }
 
     #[test]
     fn a_resources_report_carries_its_starts_and_stops_when_it_has_some() {
-        let trace = |payload: Value| TraceKind::Script {
-            resource: "observer".to_owned(),
-            payload,
+        let report = |payload: Value| {
+            Report::from_trace(
+                &TraceKind::Script {
+                    resource: BRIDGE.to_owned(),
+                    payload,
+                },
+                BRIDGE,
+            )
         };
 
         assert_eq!(
-            Report::from_trace(&trace(json!({
+            report(json!({
                 "type": "observer",
                 "kind": "resources",
                 "started": ["chat", "qb-core"],
                 "events": [["qb-core", "stop"], ["qb-core", "start"]],
                 "dropped": 2
-            }))),
+            })),
             Some(Report::Resources {
                 started: vec!["chat".to_owned(), "qb-core".to_owned()],
                 events: vec![
@@ -731,9 +827,7 @@ mod tests {
             })
         );
         assert_eq!(
-            Report::from_trace(&trace(
-                json!({ "type": "observer", "kind": "resources", "started": ["chat"] })
-            )),
+            report(json!({ "type": "observer", "kind": "resources", "started": ["chat"] })),
             Some(Report::Resources {
                 started: vec!["chat".to_owned()],
                 events: Vec::new(),
