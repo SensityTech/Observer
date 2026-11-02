@@ -1,8 +1,11 @@
+import { useQuery } from '@tanstack/react-query';
 import { Link, Outlet, useParams } from '@tanstack/react-router';
 import { ChevronDown, Clock, Search, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 
+import { featuresQuery } from '../api/features';
 import { useMe } from '../auth/me';
+import { Chip } from '../components/Chip';
 import { buttonVariants } from '../components/Button';
 import { inputClass } from '../components/Field';
 import { useI18n } from '../i18n/I18nProvider';
@@ -176,8 +179,20 @@ function CategoryLink({ id, onNavigate }: { id: CategoryId; onNavigate: () => vo
             onClick={onNavigate}
         >
             {t.settings.categories[id].name}
+            {id === 'features' && <FeatureCount />}
         </Link>
     );
+}
+
+/** How many optional features the owner left on, beside their category. */
+function FeatureCount() {
+    const { t } = useI18n();
+    const features = useQuery(featuresQuery).data?.features;
+    if (features === undefined) {
+        return null;
+    }
+    const on = features.filter((feature) => feature.enabled).length;
+    return <Chip className="ml-auto">{t.settings.features.count(on, features.length)}</Chip>;
 }
 
 /** What the search found, by category, each leading to its row. */

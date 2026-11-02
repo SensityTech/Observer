@@ -1,3 +1,4 @@
+import type { Feature } from '../api/generated/Feature';
 import type { Me } from '../api/generated/Me';
 import { Permission } from '../api/generated/Permission';
 import { allows } from '../auth/me';
@@ -27,6 +28,13 @@ export type SettingId =
     | 'keepBuilds'
     | 'autoRollback'
     | 'branches'
+    | 'switchSftp'
+    | 'switchChanges'
+    | 'switchTools'
+    | 'switchDiagnostics'
+    | 'switchMetrics'
+    | 'switchPlayers'
+    | 'switchDrops'
     | 'changesEnabled'
     | 'startEvent'
     | 'extensions'
@@ -60,7 +68,16 @@ export type SettingId =
     | 'sshKeys';
 
 export type CategoryId =
-    'launch' | 'restarts' | 'builds' | 'data' | 'tools' | 'panel' | 'users' | 'files' | 'account';
+    | 'launch'
+    | 'restarts'
+    | 'builds'
+    | 'features'
+    | 'data'
+    | 'tools'
+    | 'panel'
+    | 'users'
+    | 'files'
+    | 'account';
 
 export type CategoryGroup = 'server' | 'observer' | 'people';
 
@@ -114,6 +131,20 @@ export const CATEGORIES: readonly Category[] = [
             { id: 'keepBuilds', applies: 'cleanup' },
             { id: 'autoRollback', applies: 'now' },
             { id: 'branches', applies: 'now' },
+        ],
+    },
+    {
+        id: 'features',
+        group: 'observer',
+        access: ['SettingsView'],
+        settings: [
+            { id: 'switchSftp' },
+            { id: 'switchChanges' },
+            { id: 'switchTools' },
+            { id: 'switchDiagnostics' },
+            { id: 'switchMetrics' },
+            { id: 'switchPlayers' },
+            { id: 'switchDrops' },
         ],
     },
     {
@@ -182,6 +213,17 @@ export const CATEGORIES: readonly Category[] = [
 ];
 
 export const GROUPS: readonly CategoryGroup[] = ['server', 'observer', 'people'];
+
+/** The switch of each optional feature; when a switch applies, the API says, feature by feature. */
+export const SWITCH_OF = {
+    sftp: 'switchSftp',
+    changes: 'switchChanges',
+    tools: 'switchTools',
+    diagnostics: 'switchDiagnostics',
+    metrics: 'switchMetrics',
+    players: 'switchPlayers',
+    drops: 'switchDrops',
+} satisfies Record<Feature, SettingId>;
 
 /** When each setting applies, found by its id. */
 export const APPLIES = new Map(

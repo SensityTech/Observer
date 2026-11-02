@@ -10,6 +10,7 @@ import { AccountSettings } from './Account';
 import { BuildSettings } from './Builds';
 import { CATEGORIES, opens, type Category, type CategoryId } from './catalog';
 import { DataSettings } from './Data';
+import { FeatureSettings } from './Features';
 import { FilesSettings } from './Files';
 import { LaunchSettings } from './Launch';
 import { PanelSettings } from './Panel';
@@ -22,6 +23,7 @@ const CONTENT = {
     launch: LaunchSettings,
     restarts: RestartSettings,
     builds: BuildSettings,
+    features: FeatureSettings,
     data: DataSettings,
     tools: ToolSettings,
     panel: PanelSettings,
