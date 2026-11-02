@@ -59,13 +59,15 @@ fn status(code: ErrorCode) -> StatusCode {
         | ErrorCode::Hierarchy
         | ErrorCode::InvalidSetupToken
         | ErrorCode::OriginMismatch
-        | ErrorCode::ContentHidden => StatusCode::FORBIDDEN,
+        | ErrorCode::ContentHidden
+        | ErrorCode::FeatureLocked => StatusCode::FORBIDDEN,
         ErrorCode::NotFound
         | ErrorCode::BuildNotListed
         | ErrorCode::CrashNotFound
         | ErrorCode::CrashFileNotFound
         | ErrorCode::StartNotFound
-        | ErrorCode::PlayerNotFound => StatusCode::NOT_FOUND,
+        | ErrorCode::PlayerNotFound
+        | ErrorCode::FeatureDisabled => StatusCode::NOT_FOUND,
         ErrorCode::ContentNotKept => StatusCode::GONE,
         ErrorCode::Conflict
         | ErrorCode::NameTaken

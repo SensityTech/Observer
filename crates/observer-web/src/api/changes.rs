@@ -111,7 +111,7 @@ pub(crate) async fn starts(
     QueryParams(query): QueryParams<StartsQuery>,
 ) -> Result<Json<StartList>, Failure> {
     let before = id("before", query.before.as_deref())?;
-    Ok(Json(state.changes.starts(before).await?))
+    Ok(Json(state.changes()?.starts(before).await?))
 }
 
 pub(crate) async fn compare(
@@ -120,7 +120,7 @@ pub(crate) async fn compare(
     QueryParams(query): QueryParams<PairQuery>,
 ) -> Result<Json<Comparison>, Failure> {
     let (from, to) = pair(query.from.as_deref(), query.to.as_deref())?;
-    Ok(Json(state.changes.compare(&caller, from, to).await?))
+    Ok(Json(state.changes()?.compare(&caller, from, to).await?))
 }
 
 pub(crate) async fn resource(
@@ -130,7 +130,7 @@ pub(crate) async fn resource(
 ) -> Result<Json<ResourceDetail>, Failure> {
     let (from, to) = pair(query.from.as_deref(), query.to.as_deref())?;
     let path = path(query.path)?;
-    Ok(Json(state.changes.resource(&caller, from, to, path).await?))
+    Ok(Json(state.changes()?.resource(&caller, from, to, path).await?))
 }
 
 pub(crate) async fn history(
@@ -140,7 +140,7 @@ pub(crate) async fn history(
     if query.name.is_empty() || query.name.len() > 256 {
         return Err(invalid("name"));
     }
-    Ok(Json(state.changes.history(query.name).await?))
+    Ok(Json(state.changes()?.history(query.name).await?))
 }
 
 /// Lists and hashes the disk now; the result comes as the latest check, under way at once.
@@ -148,7 +148,7 @@ pub(crate) async fn check(
     State(state): State<AppState>,
     Extension(caller): Extension<Caller>,
 ) -> Result<StatusCode, Failure> {
-    state.changes.check(&caller).await?;
+    state.changes()?.check(&caller).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -170,7 +170,7 @@ pub(crate) async fn diff(
     let from_path = query.from_path.map(path).transpose()?;
     let path = path(query.path)?;
     let diff = state
-        .changes
+        .changes()?
         .diff(&caller, from, to, (path, from_path), options)
         .await;
     Ok(Json(
@@ -186,7 +186,7 @@ pub(crate) async fn file(
     let start = id("start", Some(&query.start))?.ok_or_else(|| invalid("start"))?;
     let page = number("page", query.page.as_deref(), 0, usize::MAX)?;
     let path = path(query.path)?;
-    let file = state.changes.file(&caller, start, path, page).await;
+    let file = state.changes()?.file(&caller, start, path, page).await;
     Ok(Json(
         owner_only(&state, &caller, "/api/servers/default/changes/file", file).await?,
     ))
@@ -210,7 +210,7 @@ async fn owner_only<T>(
 }
 
 pub(crate) async fn settings(State(state): State<AppState>) -> Result<Json<ChangesSettingsView>, Failure> {
-    Ok(Json(state.changes.settings_view().await?))
+    Ok(Json(state.changes()?.settings_view().await?))
 }
 
 pub(crate) async fn change_settings(
@@ -218,15 +218,15 @@ pub(crate) async fn change_settings(
     Extension(caller): Extension<Caller>,
     Json(changed): Json<ChangesSettings>,
 ) -> Result<Json<ChangesSettingsView>, Failure> {
-    state.changes.change_settings(&caller, changed).await?;
-    Ok(Json(state.changes.settings_view().await?))
+    state.changes()?.change_settings(&caller, changed).await?;
+    Ok(Json(state.changes()?.settings_view().await?))
 }
 
 pub(crate) async fn verify(
     State(state): State<AppState>,
     Extension(caller): Extension<Caller>,
 ) -> Result<StatusCode, Failure> {
-    state.changes.verify(&caller).await?;
+    state.changes()?.verify(&caller).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -236,5 +236,5 @@ pub(crate) async fn purge(
     QueryParams(query): QueryParams<PurgeQuery>,
 ) -> Result<Json<Purged>, Failure> {
     let path = path(query.path)?;
-    Ok(Json(state.changes.purge(&caller, path).await?))
+    Ok(Json(state.changes()?.purge(&caller, path).await?))
 }

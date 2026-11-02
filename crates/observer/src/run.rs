@@ -8,12 +8,13 @@ use axum::Router;
 use jiff::tz::TimeZone;
 use observer_app::{
     Accounts, Artifacts, ArtifactsSetup, ArtifactsTask, AuditLog, Changes, ChangesSetup, Clock,
-    DatabaseFiles, Diagnostics, DiagnosticsSetup, Drops, DropsSetup, Metrics, MetricsSetup, OwnPaths,
-    PasswordCost, Players, PlayersSetup, Running, Schedule, ScheduleSetup, ScheduleTask, Servers, Setup,
-    Sources, Supervision, Tools, ToolsHook, ToolsSetup,
+    DatabaseFiles, Diagnostics, DiagnosticsSetup, Drops, DropsSetup, Features, FeaturesSetup, Metrics,
+    MetricsSetup, OwnPaths, PasswordCost, Players, PlayersSetup, Running, Schedule, ScheduleSetup,
+    ScheduleTask, Servers, Setup, Sources, Supervision, Switched, Tools, ToolsHook, ToolsSetup,
 };
 use observer_artifacts::Http;
 use observer_artifacts::catalog::Catalog;
+use observer_domain::features::Feature;
 use observer_fxserver::console::{ConsoleLog, LogLimits};
 use observer_store::{BackupKind, ChangesDatabase, Database};
 use tokio::net::TcpListener;
@@ -55,6 +56,16 @@ pub async fn run(config: Config, args: RunArgs) -> anyhow::Result<()> {
         .with_context(|| format!("cannot open {}", paths.database.display()))?;
     let clock = Clock::system();
     let observer_started = clock.now();
+    // Before every optional feature: one that is off now is never built.
+    let features = Features::load(FeaturesSetup {
+        db: db.clone(),
+        clock: clock.clone(),
+        host_off: config.host_off(),
+        sftp: config.sftp.as_ref().map(|sftp| sftp.listen),
+        data_dir: paths.root.clone(),
+    })
+    .await?;
+    announce_features(&features);
     let accounts = Accounts::new(db.clone(), clock.clone(), PasswordCost::STANDARD).await?;
     let audit = AuditLog::new(db.clone(), clock.clone());
     let servers = Servers::new(db.clone(), clock.clone());
@@ -64,7 +75,8 @@ pub async fn run(config: Config, args: RunArgs) -> anyhow::Result<()> {
         .context("cannot open the console log")?;
     // The server tools run before every spawn; they need the supervision's status, so they are
     // bound to the hook once both exist, well before FXServer first starts.
-    let tools_hook = ToolsHook::default();
+    let tools_hook = ToolsHook::switched(features.clone());
+    let diagnosing_at_start = features.runs(Feature::Diagnostics);
     let (supervision, mut supervised) = Supervision::start(
         Setup {
             db: db.clone(),
@@ -77,30 +89,52 @@ pub async fn run(config: Config, args: RunArgs) -> anyhow::Result<()> {
             console_logs,
             log: Some(&console_log),
         },
-        |settings| settings.pre_launch = Some(Arc::new(tools_hook.clone())),
+        |settings| {
+            settings.pre_launch = Some(Arc::new(tools_hook.clone()));
+            // A hung server's snapshot is the diagnostics' to read.
+            if !diagnosing_at_start {
+                settings.hang_snapshot = None;
+            }
+        },
     )
     .await?;
     // Before FXServer boots, so that the first run's tree is seen.
-    let (diagnostics, diagnosing) = Diagnostics::start(DiagnosticsSetup {
-        db: db.clone(),
-        clock: clock.clone(),
-        supervision: supervision.clone(),
-        data_dir: paths.root.clone(),
-    })
-    .await?;
+    let (diagnostics, diagnosing) = if features.runs(Feature::Diagnostics) {
+        let (diagnostics, task) = Diagnostics::start(DiagnosticsSetup {
+            db: db.clone(),
+            clock: clock.clone(),
+            supervision: supervision.clone(),
+            data_dir: paths.root.clone(),
+        })
+        .await?;
+        let supervision = supervision.clone();
+        let switched = features.switched(Feature::Diagnostics, move || async move {
+            supervision.skip_hang_snapshots().await;
+            task.close().await;
+        });
+        (Some(diagnostics), Some(switched))
+    } else {
+        (None, None)
+    };
     // Before FXServer boots, so that its first start gets a snapshot.
-    let changes_db = ChangesDatabase::open(&paths.changes)
-        .await
-        .with_context(|| format!("cannot open {}", paths.changes.display()))?;
-    let (changes, following) = Changes::start(ChangesSetup {
-        db: db.clone(),
-        store: changes_db.clone(),
-        clock: clock.clone(),
-        supervision: supervision.clone(),
-        data_dir: paths.root.clone(),
-        artifacts: paths.artifacts.clone(),
-    })
-    .await?;
+    let (changes, changes_db, following) = if features.runs(Feature::Changes) {
+        let changes_db = ChangesDatabase::open(&paths.changes)
+            .await
+            .with_context(|| format!("cannot open {}", paths.changes.display()))?;
+        let (changes, task) = Changes::start(ChangesSetup {
+            db: db.clone(),
+            store: changes_db.clone(),
+            clock: clock.clone(),
+            supervision: supervision.clone(),
+            data_dir: paths.root.clone(),
+            artifacts: paths.artifacts.clone(),
+        })
+        .await?;
+        let switched = features.switched(Feature::Changes, move || task.close());
+        (Some(changes), Some(changes_db), Some(switched))
+    } else {
+        (None, None, None)
+    };
     // Before FXServer boots, so that Observer's own start counts as one for the schedule.
     let (schedule, scheduling) = Schedule::start(
         ScheduleSetup {
@@ -113,30 +147,53 @@ pub async fn run(config: Config, args: RunArgs) -> anyhow::Result<()> {
     .await?;
     let (artifacts, building) =
         builds(&db, &clock, &accounts, &servers, &supervision, &schedule, &paths).await?;
-    let metrics = Metrics::open(MetricsSetup {
-        path: paths.metrics.clone(),
-        clock: Clock::system(),
-    })
-    .await
-    .with_context(|| format!("cannot open {}", paths.metrics.display()))?;
+    // The statistics' database also holds the players' sessions, which the drops are drawn from.
+    let metrics = if [Feature::Metrics, Feature::Players, Feature::Drops]
+        .into_iter()
+        .any(|feature| features.runs(feature))
+    {
+        let metrics = Metrics::open(MetricsSetup {
+            path: paths.metrics.clone(),
+            clock: Clock::system(),
+        })
+        .await
+        .with_context(|| format!("cannot open {}", paths.metrics.display()))?;
+        Some(metrics)
+    } else {
+        None
+    };
     // Before FXServer boots, so that the first run's players are followed from its start.
-    let (players, playing) = Players::start(PlayersSetup {
-        db: db.clone(),
-        metrics: metrics.clone(),
-        clock: clock.clone(),
-        supervision: supervision.clone(),
-        schedule: schedule.status(),
-        data_dir: paths.root.clone(),
-    })
-    .await?;
+    let (players, playing) = match &metrics {
+        Some(metrics) if features.runs(Feature::Players) => {
+            let (players, task) = Players::start(PlayersSetup {
+                db: db.clone(),
+                metrics: metrics.clone(),
+                clock: clock.clone(),
+                supervision: supervision.clone(),
+                schedule: schedule.status(),
+                data_dir: paths.root.clone(),
+            })
+            .await?;
+            let switched = features.switched(Feature::Players, move || task.close());
+            (Some(players), Some(switched))
+        }
+        _ => (None, None),
+    };
     // After the players, whose start closes what an earlier Observer left open.
-    let (drops, dropping) = Drops::start(DropsSetup {
-        db: db.clone(),
-        metrics: metrics.clone(),
-        clock: clock.clone(),
-        schedule: schedule.status(),
-        players: players.clone(),
-    });
+    let (drops, dropping) = match (&metrics, &players) {
+        (Some(metrics), Some(players)) if features.runs(Feature::Drops) => {
+            let (drops, task) = Drops::start(DropsSetup {
+                db: db.clone(),
+                metrics: metrics.clone(),
+                clock: clock.clone(),
+                schedule: schedule.status(),
+                players: players.clone(),
+            });
+            let switched = features.switched(Feature::Drops, move || task.close());
+            (Some(drops), Some(switched))
+        }
+        _ => (None, None),
+    };
 
     let listener = TcpListener::bind(config.http.listen)
         .await
@@ -155,8 +212,9 @@ pub async fn run(config: Config, args: RunArgs) -> anyhow::Result<()> {
         own_paths: own_paths.clone(),
     });
     tools_hook.bind(tools.clone());
-    // Before the uploads' sweep, which would remove a tool's temporary file all the same: the
-    // journal then tells from the file itself whether the write landed.
+    // Whether the tools are on or not, an interrupted write leaves a file half Observer's. Before
+    // the uploads' sweep, which would remove a tool's temporary file all the same: the journal
+    // then tells from the file itself whether the write landed.
     if let Err(error) = tools.recover(observer_started).await {
         warn!(%error, "the server tools' interrupted writes could not be settled");
     }
@@ -166,7 +224,7 @@ pub async fn run(config: Config, args: RunArgs) -> anyhow::Result<()> {
     }
     // Right after the panel's port, so that a port taken stops Observer before FXServer starts.
     let sftp_listener = match &config.sftp {
-        Some(sftp) => {
+        Some(sftp) if features.runs(Feature::Sftp) => {
             let host_key = observer_sftp::host_key(&files)
                 .await
                 .context("cannot read or create the SFTP host key")?;
@@ -180,7 +238,7 @@ pub async fn run(config: Config, args: RunArgs) -> anyhow::Result<()> {
             );
             Some((listener, host_key))
         }
-        None => None,
+        _ => None,
     };
     let setup_token = setup::offer_link(&accounts, config.http.listen).await?;
 
@@ -190,15 +248,16 @@ pub async fn run(config: Config, args: RunArgs) -> anyhow::Result<()> {
         audit: audit.clone(),
         servers,
         supervision: supervision.clone(),
-        metrics: metrics.clone(),
         schedule: schedule.clone(),
         artifacts,
-        diagnostics,
         files: files.clone(),
+        tools: tools.clone(),
+        features: features.clone(),
+        diagnostics,
+        metrics: metrics.clone(),
         players,
         drops,
         changes,
-        tools: tools.clone(),
     };
     let state = observer_web::AppState::new(
         BUILD,
@@ -214,15 +273,21 @@ pub async fn run(config: Config, args: RunArgs) -> anyhow::Result<()> {
     );
     let live = state.live.clone();
     // Before FXServer starts with Observer, so that the first samples show its start.
-    let sampling = metrics.start(Sources {
-        supervision: supervision.clone(),
-        sockets: live.sockets(),
-        data_dir: paths.root.clone(),
-        databases: DatabaseFiles {
-            state: paths.database.clone(),
-            metrics: paths.metrics.clone(),
-        },
-    });
+    let sampling = match &metrics {
+        Some(metrics) if features.runs(Feature::Metrics) => {
+            let sampling = metrics.start(Sources {
+                supervision: supervision.clone(),
+                sockets: live.sockets(),
+                data_dir: paths.root.clone(),
+                databases: DatabaseFiles {
+                    state: paths.database.clone(),
+                    metrics: paths.metrics.clone(),
+                },
+            });
+            Some(features.switched(Feature::Metrics, move || sampling.close()))
+        }
+        _ => None,
+    };
     let server = tokio::spawn(serve(listener, observer_web::router(state), stop.clone()));
     let backups = tokio::spawn(daily_backups(db.clone(), stop.clone()));
     let upkeep = tokio::spawn(upkeep(
@@ -232,13 +297,22 @@ pub async fn run(config: Config, args: RunArgs) -> anyhow::Result<()> {
         stop.clone(),
     ));
     let sftp = sftp_listener.map(|(listener, host_key)| {
-        tokio::spawn(observer_sftp::serve(
+        let closing = CancellationToken::new();
+        let task = tokio::spawn(observer_sftp::serve(
             listener,
             files.clone(),
             host_key,
             own_paths.paths().to_vec(),
-            stop.clone(),
-        ))
+            closing.clone(),
+        ));
+        features.switched(Feature::Sftp, move || async move {
+            closing.cancel();
+            match task.await {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => error!(%error, "the SFTP server stopped with an error"),
+                Err(error) => error!(%error, "the SFTP server task failed"),
+            }
+        })
     });
     let audit_feed = tokio::spawn(publish_audit(audit.clone(), stop.clone()));
     let host = Host::start(HostSetup {
@@ -277,32 +351,32 @@ pub async fn run(config: Config, args: RunArgs) -> anyhow::Result<()> {
     // Once FXServer is down: waits for a fix or an undo from the panel to end between two files.
     tools.close().await;
     supervised.close().await;
-    diagnosing.close().await;
+    close(diagnosing).await;
     // After the supervision, so that FXServer's stop closes the sessions.
-    playing.close().await;
-    dropping.close().await;
+    close(playing).await;
+    close(dropping).await;
     // After the supervision: a stop of FXServer ends a snapshot's job, which this joins.
-    following.close().await;
+    close(following).await;
     // After the supervision, so that FXServer's stop is in the statistics.
-    sampling.close().await;
+    close(sampling).await;
     stop.cancel();
+    close(sftp).await;
     live.shutdown().await;
 
     join(server, [backups, upkeep, audit_feed]).await?;
-    if let Some(sftp) = sftp
-        && let Err(error) = sftp.await.context("the SFTP server task failed")?
-    {
-        error!(%error, "the SFTP server stopped with an error");
-    }
     console_log.close().await;
-    metrics
-        .close()
-        .await
-        .context("cannot close the metrics database")?;
-    changes_db
-        .close()
-        .await
-        .context("cannot close the changes database")?;
+    if let Some(metrics) = metrics {
+        metrics
+            .close()
+            .await
+            .context("cannot close the metrics database")?;
+    }
+    if let Some(changes_db) = changes_db {
+        changes_db
+            .close()
+            .await
+            .context("cannot close the changes database")?;
+    }
     db.close().await.context("cannot close the database")?;
     // Before the release, so that the tray icon leaves the notification area while Windows lets
     // the process run.
@@ -502,6 +576,25 @@ fn test_catalog(port: &std::ffi::OsStr) -> anyhow::Result<(Catalog, Http)> {
     Ok((Catalog::fixed(Ok(listing)), Http::local(port)))
 }
 
+/// Says which optional features this Observer starts without.
+fn announce_features(features: &Features) {
+    let off: Vec<&str> = Feature::ALL
+        .into_iter()
+        .filter(|&feature| !features.runs(feature))
+        .map(Feature::as_str)
+        .collect();
+    if !off.is_empty() {
+        info!(features = %off.join(", "), "optional features off");
+    }
+}
+
+/// Closes a feature's tasks, when it started with Observer and still runs.
+async fn close(switched: Option<Switched>) {
+    if let Some(switched) = switched {
+        switched.close().await;
+    }
+}
+
 /// Waits for the tasks the stop token ends: the HTTP server, then the periodic ones.
 async fn join(server: JoinHandle<io::Result<()>>, periodic: [JoinHandle<()>; 3]) -> anyhow::Result<()> {
     if let Err(error) = server.await.context("the HTTP server task failed")? {
@@ -596,7 +689,8 @@ async fn daily_backups(db: Database, stop: CancellationToken) {
 }
 
 /// Every minute, the accounts' upkeep: failed logins reach the audit log, expired sessions go.
-/// At start and then daily, the audit entries past their retention go too.
+/// SFTP's failed logins too, whether or not SFTP still runs. At start and then daily, the audit
+/// entries past their retention go too.
 async fn upkeep(accounts: Accounts, audit: AuditLog, files: observer_app::Files, stop: CancellationToken) {
     let mut purged_at: Option<Instant> = None;
     loop {
