@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Link, Outlet } from '@tanstack/react-router';
 import {
     CalendarClock,
+    ChartLine,
     Contact,
     DatabaseBackup,
     FolderLock,
@@ -45,6 +46,7 @@ import { UserMenu } from './UserMenu';
 type NavEntry = {
     to:
         | '/'
+        | '/statistics'
         | '/console'
         | '/schedule'
         | '/artifacts'
@@ -110,6 +112,7 @@ export function AppShell() {
 
     const main: NavEntry[] = [
         { to: '/', label: t.nav.overview, icon: LayoutDashboard, access: Permission.DashboardView },
+        { to: '/statistics', label: t.nav.statistics, icon: ChartLine, access: Permission.DashboardView },
         { to: '/console', label: t.nav.console, icon: SquareTerminal, access: Permission.ConsoleView },
     ];
     const operations: NavEntry[] = [

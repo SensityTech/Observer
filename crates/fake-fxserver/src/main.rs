@@ -35,9 +35,10 @@
 //!   `fake_drop <id> <category> <resource or -> <reason...>`: a player joins or drops, which
 //!   `/players.json` follows and the bridge reports (a join shows a full set of identifiers and
 //!   tokens, and the address `192.0.2.77`, IPv4-mapped for every other player, unless given);
-//!   `fake_drop_before_join <id>`, a resource's kick inside its own `playerJoining` handler; the
-//!   players already there are reported once the bridge starts, and `quit` drops every player
-//!   with category 7 through the trace thread, as FXServer does;
+//!   `fake_drop_before_join <id>`, a resource's kick inside its own `playerJoining` handler;
+//!   `fake_label <id> [label id] [name...]`, a resource giving a player a label, or clearing it
+//!   without one; the players already there are reported once the bridge starts, and `quit` drops
+//!   every player with category 7 through the trace thread, as FXServer does;
 //! - on stdin: `fake_crash [code]`, `fake_hang`, `fake_spin` (a busy loop), `fake_print <text>`,
 //!   `fake_trace <type>`, `fake_stall_input <ms>`, which stops reading stdin for a while, as
 //!   FXServer does while its main loop is stuck; `fake_spawn [NAME=value...] <program> <args...>`,
@@ -381,18 +382,8 @@ impl Fake {
                     self.drop_player(id, category, resource, &reason);
                 }
             }
-            ("fake_drop_before_join", Some(id)) => {
-                if let Ok(id) = id.parse::<u32>() {
-                    let t = self.server.uptime_ms();
-                    self.bridge_report(&players::drop_report(id, t, 1, "gate", "Not whitelisted"));
-                    let player = Player {
-                        name: "Late".to_owned(),
-                        identifiers: vec![format!("license:{id:040x}")],
-                        tokens: Vec::new(),
-                    };
-                    self.bridge_report(&players::join_report(id, &player, t));
-                }
-            }
+            ("fake_label", Some(id)) => self.label(id, &args[1..]),
+            ("fake_drop_before_join", Some(id)) => self.drop_before_join(id),
             ("observer_cmd", Some(hex)) if self.bridge.is_some() => self.bridge_command(hex),
             // Typing a convar's name with a value sets it.
             (convar, Some(value)) if convar.starts_with("sv_") || convar.starts_with("fake_") => {
@@ -453,7 +444,7 @@ impl Fake {
             bridge.ready = true;
             self.traces.script(
                 &bridge.name,
-                &json!({ "type": "observer", "kind": "ready", "contractVersion": 2 }),
+                &json!({ "type": "observer", "kind": "ready", "contractVersion": 3 }),
             );
             self.traces.script(
                 &bridge.name,
@@ -508,6 +499,35 @@ impl Fake {
         console::line(MAIN, &format!("Player {} connected (id {id})", player.name));
         let report = players::join_report(id, &player, self.server.uptime_ms());
         self.bridge_report(&report);
+    }
+
+    /// A resource's kick inside its own `playerJoining` handler: the drop comes before the join.
+    fn drop_before_join(&self, id: &str) {
+        let Ok(id) = id.parse::<u32>() else {
+            return;
+        };
+        let t = self.server.uptime_ms();
+        self.bridge_report(&players::drop_report(id, t, 1, "gate", "Not whitelisted"));
+        let player = Player {
+            name: "Late".to_owned(),
+            identifiers: vec![format!("license:{id:040x}")],
+            tokens: Vec::new(),
+        };
+        self.bridge_report(&players::join_report(id, &player, t));
+    }
+
+    /// A resource giving player `id` a label of `[label id, name...]`, or clearing it with nothing.
+    fn label(&self, id: &str, label: &[String]) {
+        let Ok(id) = id.parse::<u32>() else {
+            return;
+        };
+        let label = label
+            .split_first()
+            .map(|(label_id, name)| json!({ "id": label_id, "name": name.join(" ") }));
+        self.bridge_report(&json!({
+            "type": "observer", "kind": "labels",
+            "labels": [{ "id": id, "label": label, "resource": "fake" }],
+        }));
     }
 
     fn drop_player(&self, id: u32, category: u64, resource: &str, reason: &str) {

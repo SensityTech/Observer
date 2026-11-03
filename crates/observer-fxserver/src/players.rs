@@ -1,4 +1,5 @@
-//! What the bridge reports about players: a join, a drop, and the list of players after it starts.
+//! What the bridge reports about players: a join, a drop, the list of players after it starts, and
+//! the labels the server's resources give them.
 //! The reports go to the players service on a bus of their own, never with the supervisor's events,
 //! which are printed and logged: a join carries the player's address.
 //!
@@ -40,6 +41,8 @@ pub enum PlayerReportKind {
     Join(Joined),
     Drop(Dropped),
     Roster(RosterPage),
+    /// The latest label of each player whose label changed in the last second.
+    Labels(Vec<LabelChange>),
 }
 
 /// A player who joined: their net id, FXServer's game timer, and what they showed.
@@ -94,6 +97,23 @@ pub struct Dropped {
     pub category: Option<i64>,
     /// Whether the player's ped existed, with OneSync only.
     pub ped: Option<bool>,
+}
+
+/// A label a resource gave a player through the bridge, or took away. The texts are as the resource
+/// wrote them, within the bridge's limits: the players service cleans them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LabelChange {
+    pub net_id: u32,
+    /// `None` once cleared.
+    pub label: Option<GivenLabel>,
+    /// The resource that called the bridge.
+    pub resource: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct GivenLabel {
+    pub name: Option<String>,
+    pub id: Option<String>,
 }
 
 /// One page of the players listed right after the bridge started.
@@ -153,6 +173,27 @@ impl PlayerReportKind {
                     dropped,
                 }))
             }
+            "labels" => Some(Self::Labels(
+                payload
+                    .get("labels")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|entry| {
+                        Some(LabelChange {
+                            net_id: net_id(entry.get("id"))?,
+                            label: entry.get("label").filter(|label| label.is_object()).map(|label| {
+                                GivenLabel {
+                                    name: text(label.get("name")),
+                                    id: text(label.get("id")),
+                                }
+                            }),
+                            resource: text(entry.get("resource")),
+                        })
+                    })
+                    .take(MAX_PAGE)
+                    .collect(),
+            )),
             _ => None,
         }
     }
@@ -328,12 +369,52 @@ mod tests {
     }
 
     #[test]
+    fn labels_are_given_or_cleared_per_net_id() {
+        let labels = report(
+            BRIDGE,
+            json!({ "type": "observer", "kind": "labels", "labels": [
+                { "id": 3, "label": { "name": "John Doe", "id": "CHAR-1234" }, "resource": "characters" },
+                { "id": 4, "label": { "id": 12 }, "resource": "characters" },
+                { "id": 5, "resource": "characters" },
+                { "label": { "name": "nobody" } },
+            ] }),
+        );
+
+        assert_eq!(
+            labels,
+            Some(PlayerReportKind::Labels(vec![
+                LabelChange {
+                    net_id: 3,
+                    label: Some(GivenLabel {
+                        name: Some("John Doe".to_owned()),
+                        id: Some("CHAR-1234".to_owned()),
+                    }),
+                    resource: Some("characters".to_owned()),
+                },
+                LabelChange {
+                    net_id: 4,
+                    label: Some(GivenLabel::default()),
+                    resource: Some("characters".to_owned()),
+                },
+                LabelChange {
+                    net_id: 5,
+                    label: None,
+                    resource: Some("characters".to_owned()),
+                },
+            ]))
+        );
+    }
+
+    #[test]
     fn only_the_bridge_of_this_start_reports_players() {
         let join = json!({ "type": "observer", "kind": "join", "id": 7 });
+        let labels = json!({ "type": "observer", "kind": "labels", "labels": [{ "id": 7, "label": { "name": "John" } }] });
 
         assert!(report(BRIDGE, join.clone()).is_some());
+        assert!(report(BRIDGE, labels.clone()).is_some());
         for impostor in ["mischief", "observer", "sys_aaaaaaaaaaaa"] {
             assert_eq!(report(impostor, join.clone()), None, "{impostor}");
+            assert_eq!(report(impostor, labels.clone()), None, "{impostor}");
         }
         assert_eq!(
             report(BRIDGE, json!({ "type": "other", "kind": "join", "id": 7 })),

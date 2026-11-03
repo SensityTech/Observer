@@ -3,15 +3,18 @@ import type { MetricsSeries } from '../api/generated/MetricsSeries';
 /** A stretch of buckets, from the first one's start to the last one's end, in Unix seconds. */
 export type Period = { from: number; to: number };
 
+/** What tells a stretch down: a grid of buckets and how many samples each took, online or not. */
+type Coverage = Pick<MetricsSeries, 'from' | 'step' | 'buckets' | 'observed' | 'online'>;
+
 /** Observer sampled the bucket and the server was never online or degraded in it: a start counts. */
-const isDown = (page: MetricsSeries, index: number) =>
+const isDown = (page: Coverage, index: number) =>
     (page.observed[index] ?? 0) > 0 && (page.online[index] ?? 0) === 0;
 
 /**
  * The stretches the server was down over the page. A bucket Observer did not sample at all is a
  * gap, not a stretch down.
  */
-export const downPeriods = (page: MetricsSeries): Period[] => {
+export const downPeriods = (page: Coverage): Period[] => {
     const periods: Period[] = [];
     let open: Period | null = null;
     for (let index = 0; index < page.buckets; index += 1) {

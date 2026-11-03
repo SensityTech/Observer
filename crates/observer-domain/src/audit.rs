@@ -188,10 +188,15 @@ pub enum AuditAction {
     /// A destination's retention let copies go after a run. The target is the destination;
     /// `details` hold the `run` and the copies `deleted`.
     BackupsExpired,
+    /// Someone said a crash wave the statistics linked to a change is not related to it. The
+    /// target is the link's key.
+    StatisticsLinkDismissed,
+    /// The link was taken back.
+    StatisticsLinkRestored,
 }
 
 impl AuditAction {
-    pub const ALL: [Self; 94] = [
+    pub const ALL: [Self; 96] = [
         Self::SetupCompleted,
         Self::SetupLinkCreated,
         Self::LoginSucceeded,
@@ -286,6 +291,8 @@ impl AuditAction {
         Self::BackupDownloaded,
         Self::BackupDeleted,
         Self::BackupsExpired,
+        Self::StatisticsLinkDismissed,
+        Self::StatisticsLinkRestored,
     ];
 
     pub const fn as_str(self) -> &'static str {
@@ -384,6 +391,8 @@ impl AuditAction {
             Self::BackupDownloaded => "backup_downloaded",
             Self::BackupDeleted => "backup_deleted",
             Self::BackupsExpired => "backups_expired",
+            Self::StatisticsLinkDismissed => "statistics_link_dismissed",
+            Self::StatisticsLinkRestored => "statistics_link_restored",
         }
     }
 

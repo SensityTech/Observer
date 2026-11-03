@@ -1,9 +1,10 @@
 -- Listens to the server events of Observer's integration contract (resource/CONTRACT.md) and prints
--- each one with its fields. It shows nothing to players: the comments mark where your own
--- notifications, cancellation notices and saves would go.
+-- each one with its fields, and gives players labels for Observer's panel from the console. It
+-- shows nothing to players: the comments mark where your own notifications, cancellation notices,
+-- saves and labels would go.
 
 -- The contract this resource was written for.
-local CONTRACT_VERSION = 2
+local CONTRACT_VERSION = 3
 
 local function log(text)
     print(('[observer_example] %s'):format(text))
@@ -71,3 +72,25 @@ AddEventHandler('observer:startChanges', function(payload)
     end
     -- Your changelog goes here: post what changed since the previous start to your staff's channel.
 end)
+
+-- Your framework gives the label where it knows the player's character, once they picked it for
+-- instance, and clears it when they go back to the character menu. To try it from the server
+-- console: `observer_example_label 1 CHAR-1234 John Doe` labels player 1, `observer_example_label 1`
+-- clears the label.
+RegisterCommand('observer_example_label', function(source, args)
+    if source ~= 0 then
+        return
+    end
+    local bridge = GetConvar('observer_bridge', '')
+    local ok, refused
+    if args[2] then
+        ok, refused = exports[bridge]:setPlayerLabel(args[1], { id = args[2], name = table.concat(args, ' ', 3) })
+    else
+        ok, refused = exports[bridge]:clearPlayerLabel(args[1])
+    end
+    if ok then
+        log('label sent to Observer')
+    else
+        log('label refused: ' .. tostring(refused))
+    end
+end, true)

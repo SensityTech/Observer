@@ -748,6 +748,11 @@ which the `observer_bridge` server convar gives: do not ensure it yourself. Scri
 fixed name, as they do txAdmin's `monitor`, find nothing. [`resource/observer_example`](resource/observer_example)
 listens to each event and marks where a team plugs in its notifications and its saves.
 
+Your resources can also give each connected player a label, a roleplay character's name or an ID of
+your own, through the bridge's `setPlayerLabel` export. The panel shows it beside the player's FiveM
+name, marked as your resources' word, keeps each label on the player's profile as long as their names,
+and finds players by them. Who a player is stays their licence: a label never links or renames anyone.
+
 Resources written for txAdmin keep working with **Send txAdmin's events too**, in the launch settings
 and the setup's last step: from the next start of FXServer, the bridge also raises txAdmin's events,
 such as `txAdmin:events:scheduledRestart` and `txAdmin:events:serverShuttingDown`, right after Observer's

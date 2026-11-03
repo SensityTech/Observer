@@ -31,7 +31,7 @@ pub(crate) const REPORT_TYPE: &str = "observer";
 
 /// The version of the server events the bridge raises; it must match `CONTRACT_VERSION` in
 /// `server.lua`.
-pub const CONTRACT_VERSION: u32 = 2;
+pub const CONTRACT_VERSION: u32 = 3;
 
 const FILES: [(&str, &str); 3] = [
     (
@@ -373,6 +373,7 @@ impl Report {
 
 #[cfg(test)]
 mod tests {
+    use observer_domain::players::{MAX_LABEL_ID_CHARS, MAX_LABEL_NAME_CHARS};
     use serde_json::json;
 
     use super::*;
@@ -726,6 +727,49 @@ mod tests {
         }
         assert!(EXAMPLE.contains(&format!("local CONTRACT_VERSION = {CONTRACT_VERSION}\n")));
         assert!(!EXAMPLE.contains("RegisterNetEvent("));
+    }
+
+    #[test]
+    fn the_contract_and_the_example_call_every_export_of_the_bridge() {
+        let exports: Vec<&str> = FILES[1]
+            .1
+            .lines()
+            .filter_map(|line| Some(line.strip_prefix("exports('")?.split_once('\'')?.0))
+            .collect();
+
+        assert_eq!(
+            exports,
+            ["getContractVersion", "setPlayerLabel", "clearPlayerLabel"]
+        );
+        for export in exports {
+            let call = format!("]:{export}(");
+            assert!(CONTRACT.contains(&call), "CONTRACT.md does not show {export}");
+            assert!(EXAMPLE.contains(&call), "the example does not call {export}");
+        }
+    }
+
+    #[test]
+    fn the_contract_gives_the_label_fields_and_limits_the_bridge_and_observer_check() {
+        let lua = FILES[1].1;
+        let start = CONTRACT
+            .find("## Player labels")
+            .expect("CONTRACT.md documents labels");
+        let section = &CONTRACT[start..];
+        let section = &section[..section[1..].find("\n## ").map_or(section.len(), |end| end + 1)];
+
+        for (field, max, constant) in [
+            ("name", MAX_LABEL_NAME_CHARS, "LABEL_NAME_MAX"),
+            ("id", MAX_LABEL_ID_CHARS, "LABEL_ID_MAX"),
+        ] {
+            assert!(lua.contains(&format!("label.{field}, {constant})")), "{field}");
+            assert!(lua.contains(&format!("local {constant} = {max}\n")), "{constant}");
+            assert!(section.contains(&format!("| `{field}` |")), "{field}");
+            assert!(section.contains(&format!("up to {max} characters")), "{field}");
+        }
+        for refusal in ["notConnected", "invalid", "tooLong"] {
+            assert!(lua.contains(&format!("'{refusal}'")), "{refusal}");
+            assert!(section.contains(&format!("`{refusal}`")), "{refusal}");
+        }
     }
 
     #[test]

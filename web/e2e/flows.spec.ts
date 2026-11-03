@@ -191,6 +191,35 @@ test.describe.serial('Observer in a browser', () => {
         await expect(page.getByText(en.players.online, { exact: true }).first()).toBeVisible();
     });
 
+    test("a label the server's resources give shows online, finds the player and stays on their profile", async () => {
+        await page.getByRole('link', { name: en.nav.console, exact: true }).click();
+        const command = page.getByRole('textbox', { name: en.console.commandLabel });
+        await command.fill('fake_label 1 CHAR-1234 Mara Quinn');
+        await command.press('Enter');
+        await expect(page.getByText(en.console.sent('fake_label 1 CHAR-1234 Mara Quinn'))).toBeVisible();
+
+        await page.getByRole('link', { name: en.nav.players, exact: true }).click();
+        const online = page.getByRole('region', { name: en.players.now.title, exact: true });
+        const mara = online.getByRole('link', { name: 'Mara Quinn', exact: true });
+        await expect(mara).toBeVisible({ timeout: 15_000 });
+        await expect(online.getByText(en.players.label.fivem('Ada')).first()).toBeVisible();
+        // The search reads the database, where the players' flush writes the label within a second.
+        const list = page.getByRole('region', { name: en.players.list.title, exact: true });
+        await expect(async () => {
+            await page.reload();
+            await list.getByRole('searchbox', { name: en.players.list.search }).fill('char-1234');
+            await list.getByRole('button', { name: en.players.list.submit, exact: true }).click();
+            await expect(list.getByRole('link', { name: 'Mara Quinn', exact: true }).first()).toBeVisible({
+                timeout: 2_000,
+            });
+        }).toPass({ timeout: 15_000 });
+        await mara.click();
+
+        await expect(page.getByRole('heading', { level: 1 })).toContainText('Ada');
+        const labels = page.getByRole('region', { name: en.players.profile.labels.title, exact: true });
+        await expect(labels.getByRole('cell', { name: /CHAR-1234/ })).toBeVisible();
+    });
+
     test('a player who crashes shows in the drop log, then with their crash signature', async () => {
         // The page reads the log every 30 s, and the drops service classifies a crash at its next
         // round, every minute.
