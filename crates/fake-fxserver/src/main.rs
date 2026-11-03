@@ -2,9 +2,10 @@
 //! `+ensure`), prints lines shaped like FXServer 35245's, runs the commands it reads on stdin from
 //! its main loop, writes structured traces on fd 3 and serves `/dynamic.json`, `/perf/`,
 //! `/players.json` and `/info.json` on the cfg's `endpoint_add_tcp`. Started, a folder of the
-//! `citizen/system_resources` next to the executable that holds Observer's bridge plays it, under
-//! the folder's name as FXServer knows the bridge: `ready` and the started resources once, then a
-//! heartbeat and the heap.
+//! build's `citizen/system_resources` that holds Observer's bridge plays it, under the folder's name
+//! as FXServer knows the bridge: `ready` and the started resources once, then a heartbeat and the
+//! heap. The build's `citizen/` is the `citizen_dir` convar, as on Linux, or else the one next to the
+//! executable.
 //!
 //! Failures on demand, through convars (`+set fake_x y`, in the cfg, or in a `fake-build.cfg` next
 //! to the executable, read before the command line, so that one build can crash while another does
@@ -61,6 +62,7 @@ mod traces;
 use std::collections::HashMap;
 use std::io::{self, BufRead};
 use std::net::{TcpListener, TcpStream, UdpSocket};
+use std::path::PathBuf;
 use std::process::{self, Child, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError, mpsc};
@@ -409,7 +411,7 @@ impl Fake {
         if !self.started.iter().any(|started| started == resource) {
             self.started.push(resource.to_owned());
         }
-        if is_bridge(resource) {
+        if self.is_bridge(resource) {
             let heap_period = Duration::from_millis(self.server.number("fake_heap_ms").unwrap_or(10_000));
             self.bridge = Some(Bridge {
                 name: resource.to_owned(),
@@ -541,6 +543,21 @@ impl Fake {
         if let Some(bridge) = self.bridge.as_ref().filter(|bridge| bridge.ready) {
             self.traces.script(&bridge.name, report);
         }
+    }
+
+    /// Whether `resource` is Observer's bridge: a folder of the build's `system_resources` whose
+    /// script registers `observer_cmd`. Its name changes with each start.
+    fn is_bridge(&self, resource: &str) -> bool {
+        let citizen = self.server.convar("citizen_dir").map(PathBuf::from).or_else(|| {
+            let program = std::env::current_exe().ok()?;
+            Some(program.parent()?.join("citizen"))
+        });
+        citizen
+            .and_then(|citizen| {
+                let script = citizen.join("system_resources").join(resource).join("server.lua");
+                std::fs::read_to_string(script).ok()
+            })
+            .is_some_and(|script| script.contains("RegisterCommand('observer_cmd'"))
     }
 
     /// What the real bridge raises as `observer:<event>`, printed instead.
@@ -705,16 +722,6 @@ fn spawn_child() {
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
         .spawn();
-}
-
-/// Whether `resource` is Observer's bridge: a folder of the build's `system_resources`, next to the
-/// executable, whose script registers `observer_cmd`. Its name changes with each start.
-fn is_bridge(resource: &str) -> bool {
-    std::env::current_exe()
-        .ok()
-        .and_then(|program| Some(program.parent()?.join("citizen/system_resources")))
-        .and_then(|system| std::fs::read_to_string(system.join(resource).join("server.lua")).ok())
-        .is_some_and(|script| script.contains("RegisterCommand('observer_cmd'"))
 }
 
 /// The dump FXServer's dump server writes, and the report it prints before it ends the process.
