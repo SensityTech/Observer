@@ -15,7 +15,7 @@ use observer_domain::diagnostics::ThreadRun;
 use observer_domain::launch::{ExtraArgument, LaunchSettings, OneSync};
 use observer_domain::schedule::RestartSource;
 use observer_domain::server::SpawnFailure;
-use observer_fxserver::bridge::BridgeEvent;
+use observer_fxserver::bridge::{self, BridgeEvent};
 use observer_fxserver::console::{ConsoleHub, LineKind, plain};
 use observer_fxserver::crashes::analysis;
 use observer_fxserver::crashes::{HangSnapshotLimits, SnapshotFailure};
@@ -247,6 +247,19 @@ impl Lab {
         self.supervisor.status().borrow().generation
     }
 
+    /// The bridge's name in the server that runs now.
+    fn bridge(&self) -> String {
+        self.supervisor.status().borrow().bridge.clone().unwrap()
+    }
+
+    /// The build's `system_resources`, next to the fake as FXServer's are next to it.
+    fn system_resources(&self) -> PathBuf {
+        fake_program(&self.dir.path().join("build"))
+            .parent()
+            .unwrap()
+            .join("citizen/system_resources")
+    }
+
     async fn shut_down(&mut self, shortened: bool) {
         self.supervisor.shutdown(shortened).await;
         timeout(WAIT, self.task.take().unwrap())
@@ -420,13 +433,10 @@ async fn a_started_server_goes_online_then_stops_gracefully() {
     assert!(matches!(spawned, EventKind::Spawned { probe, .. } if probe.port() == lab.port.0));
     assert_eq!(lab.state(State::Online).await, Cause::Ready);
     assert!(lab.supervisor.status().borrow().pid.is_some());
-    lab.console_until("Started resource observer").await;
-    let citizen = fake_program(&lab.dir.path().join("build"))
-        .parent()
-        .unwrap()
-        .join("citizen");
+    let bridge = lab.bridge();
+    lab.console_until(&format!("Started resource {bridge}")).await;
     assert_eq!(
-        fs::read_dir(citizen.join("system_resources/observer"))
+        fs::read_dir(lab.system_resources().join(&bridge))
             .unwrap()
             .count(),
         3
@@ -482,6 +492,38 @@ async fn a_quit_typed_in_the_console_is_a_stop_not_a_crash() {
         lab.console()
             .contains(&(LineKind::Command, Some("alice".to_owned()), "quit".to_owned()))
     );
+    lab.shut_down(false).await;
+}
+
+#[tokio::test]
+async fn each_start_gives_the_bridge_a_new_name_and_removes_the_old_folders() {
+    let mut lab = Lab::new(&[]).await;
+    let old = lab.system_resources().join("observer");
+    fs::create_dir_all(&old).unwrap();
+    fs::write(
+        old.join("server.lua"),
+        "RegisterCommand('observer_cmd', function() end, true)",
+    )
+    .unwrap();
+    lab.supervisor.start("test").await.unwrap();
+    lab.state(State::Online).await;
+    let first = lab.bridge();
+
+    lab.supervisor.restart("test").await.unwrap();
+    lab.state(State::Stopping).await;
+    lab.state(State::Online).await;
+
+    let second = lab.bridge();
+    assert_ne!(first, second);
+    for name in [&first, &second] {
+        assert!(bridge::is_folder(name) && !name.contains("observer"), "{name}");
+    }
+    let folders: Vec<String> = fs::read_dir(lab.system_resources())
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .collect();
+    assert_eq!(folders, [second.as_str()]);
+    lab.console_until(&format!("Started resource {second}")).await;
     lab.shut_down(false).await;
 }
 

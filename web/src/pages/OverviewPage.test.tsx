@@ -352,8 +352,26 @@ describe('OverviewPage', () => {
             startedAt: NOW - 7200,
             from: NOW - 5400,
             to: NOW,
-            private: { perHour: 180 * 1024 ** 2, fit: 0.97, start: 9 * 1024 ** 3, points: 90, leak: true },
-            handles: { perHour: 12, fit: 0.2, start: 3200, points: 90, leak: false },
+            private: {
+                perHour: 180 * 1024 ** 2,
+                fit: 0.97,
+                start: 9 * 1024 ** 3,
+                points: 90,
+                leak: true,
+                residual: null,
+                slopeError: null,
+                center: 0,
+            },
+            handles: {
+                perHour: 12,
+                fit: 0.2,
+                start: 3200,
+                points: 90,
+                leak: false,
+                residual: null,
+                slopeError: null,
+                center: 0,
+            },
         };
         const { say, live } = await page(hour(), { growth });
         say({ type: 'snapshot', topic: 'metrics.live', data: { latest: SAMPLE } });
@@ -373,8 +391,26 @@ describe('OverviewPage', () => {
             startedAt: NOW - 7200,
             from: NOW - 5400,
             to: NOW,
-            private: { perHour: 0.3, fit: 0.01, start: 9 * 1024 ** 3, points: 90, leak: false },
-            handles: { perHour: -0.3, fit: 0.01, start: 3200, points: 90, leak: false },
+            private: {
+                perHour: 0.3,
+                fit: 0.01,
+                start: 9 * 1024 ** 3,
+                points: 90,
+                leak: false,
+                residual: null,
+                slopeError: null,
+                center: 0,
+            },
+            handles: {
+                perHour: -0.3,
+                fit: 0.01,
+                start: 3200,
+                points: 90,
+                leak: false,
+                residual: null,
+                slopeError: null,
+                center: 0,
+            },
         };
         const { say, live } = await page(hour(), { growth });
         say({ type: 'snapshot', topic: 'metrics.live', data: { latest: SAMPLE } });
@@ -389,8 +425,26 @@ describe('OverviewPage', () => {
             startedAt: NOW - 7200,
             from: NOW - 5400,
             to: NOW,
-            private: { perHour: 2 * 1024 ** 2, fit: 0.1, start: 9 * 1024 ** 3, points: 90, leak: false },
-            handles: { perHour: 300, fit: 0.9, start: 3200, points: 90, leak: true },
+            private: {
+                perHour: 2 * 1024 ** 2,
+                fit: 0.1,
+                start: 9 * 1024 ** 3,
+                points: 90,
+                leak: false,
+                residual: null,
+                slopeError: null,
+                center: 0,
+            },
+            handles: {
+                perHour: 300,
+                fit: 0.9,
+                start: 3200,
+                points: 90,
+                leak: true,
+                residual: null,
+                slopeError: null,
+                center: 0,
+            },
         };
         const { say, live } = await page(hour(), { growth });
         say({ type: 'snapshot', topic: 'metrics.live', data: { latest: SAMPLE } });

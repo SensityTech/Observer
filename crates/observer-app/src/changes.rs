@@ -36,6 +36,7 @@ use tracing::{info, warn};
 
 use self::job::{Ended, Spawn};
 pub use self::views::ComparedTo;
+pub(crate) use self::views::Recorded;
 use crate::audit::Record;
 use crate::{Caller, Clock, Error, Servers, Supervision};
 pub use observer_fxserver::changes::diff::DiffOptions;

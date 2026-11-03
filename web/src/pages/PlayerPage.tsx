@@ -10,6 +10,7 @@ import {
     Link2,
     OctagonX,
     Signature,
+    Tag,
     UserX,
 } from 'lucide-react';
 import { useState, type ReactNode } from 'react';
@@ -18,6 +19,7 @@ import { ApiError } from '../api/client';
 import type { LinkedLicence } from '../api/generated/LinkedLicence';
 import type { PlayerDrop } from '../api/generated/PlayerDrop';
 import type { PlayerProfile } from '../api/generated/PlayerProfile';
+import type { SeenLabel } from '../api/generated/SeenLabel';
 import type { ShownIdentifier } from '../api/generated/ShownIdentifier';
 import {
     allPlayers,
@@ -44,7 +46,7 @@ import { FIGURE, zoneDate } from '../i18n/format';
 import { useI18n } from '../i18n/I18nProvider';
 import { cn } from '../lib/cn';
 import { Tile, type Fact } from '../overview/Tiles';
-import { DROP_ICONS, OnlineState, PlayerName, useVisit, ZoneNote } from '../players/words';
+import { DROP_ICONS, LabelChip, OnlineState, PlayerName, useVisit, ZoneNote } from '../players/words';
 
 /** The days the activity chart covers, as the API reads them. */
 const ACTIVITY_DAYS = 90;
@@ -98,6 +100,7 @@ function Profile({ profile }: { profile: PlayerProfile }) {
     const me = useMe();
     const visit = useVisit(profile.zone);
     const [forgetting, setForgetting] = useState(false);
+    const label = profile.labels[0];
     return (
         <>
             <div className="page-head">
@@ -118,6 +121,14 @@ function Profile({ profile }: { profile: PlayerProfile }) {
                     <HeaderFact term={t.players.list.state}>
                         <OnlineState online={profile.online} />
                     </HeaderFact>
+                    {label !== undefined && (
+                        <HeaderFact term={words.label}>
+                            <span className="flex flex-wrap items-center gap-x-2 gap-y-1 text-ui text-ink">
+                                {label.name}
+                                <LabelChip label={label} />
+                            </span>
+                        </HeaderFact>
+                    )}
                     <HeaderFact term={words.licence}>
                         <CopyValue
                             value={profile.license}
@@ -144,6 +155,7 @@ function Profile({ profile }: { profile: PlayerProfile }) {
             <ActivityCard profile={profile} />
             <div className="grid grid-cols-1 gap-5 max-md:gap-4 2xl:grid-cols-2">
                 <NamesCard profile={profile} />
+                {profile.labels.length > 0 && <LabelsCard profile={profile} />}
                 <DropsCard profile={profile} />
             </div>
             {profile.identifiers !== null && (
@@ -340,6 +352,84 @@ function NamesCard({ profile }: { profile: PlayerProfile }) {
                 </table>
             </div>
         </Card>
+    );
+}
+
+const labelKey = (label: SeenLabel) => `${label.name ?? ''}-${label.id ?? ''}`;
+
+/** The labels the server's resources gave the player, their word for a character for instance. */
+function LabelsCard({ profile }: { profile: PlayerProfile }) {
+    const { t } = useI18n();
+    const words = t.players.profile.labels;
+    const visit = useVisit(profile.zone);
+    return (
+        <Card id="player-labels" icon={Tag} title={words.title} meta={words.meta} flush>
+            <ul className="flex flex-col md:hidden">
+                {profile.labels.map((label) => (
+                    <li
+                        key={labelKey(label)}
+                        className="flex flex-col gap-1.5 border-b border-line px-4 py-3 last:border-b-0"
+                    >
+                        <LabelText label={label} />
+                        <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-small">
+                            <div className="flex min-w-0 flex-col">
+                                <dt className="text-meta text-ink-3">{words.firstSeen}</dt>
+                                <dd className="font-mono text-ink">{visit(label.firstSeen)}</dd>
+                            </div>
+                            <div className="flex min-w-0 flex-col">
+                                <dt className="text-meta text-ink-3">{words.lastSeen}</dt>
+                                <dd className="font-mono text-ink">{visit(label.lastSeen)}</dd>
+                            </div>
+                        </dl>
+                    </li>
+                ))}
+            </ul>
+            <div className={cn(table.scroll, 'max-md:hidden')}>
+                <table className={table.table}>
+                    <caption className="sr-only">{words.caption}</caption>
+                    <thead>
+                        <tr>
+                            <th scope="col" className={table.th}>
+                                {words.label}
+                            </th>
+                            <th scope="col" className={table.th}>
+                                {words.firstSeen}
+                            </th>
+                            <th scope="col" className={table.th}>
+                                {words.lastSeen}
+                            </th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {profile.labels.map((label) => (
+                            <tr key={labelKey(label)} className={table.row}>
+                                <td className={cn(table.td, 'min-w-40')}>
+                                    <LabelText label={label} />
+                                </td>
+                                <td className={cn(table.td, table.mono)}>{visit(label.firstSeen)}</td>
+                                <td className={cn(table.td, table.mono)}>{visit(label.lastSeen)}</td>
+                            </tr>
+                        ))}
+                    </tbody>
+                </table>
+            </div>
+        </Card>
+    );
+}
+
+/** A label of the history: its name and ID, and the resource that gave it under them. */
+function LabelText({ label }: { label: SeenLabel }) {
+    const { t } = useI18n();
+    return (
+        <span className="flex min-w-0 flex-col">
+            <span className="flex flex-wrap items-baseline gap-x-2 text-ui text-ink [overflow-wrap:anywhere]">
+                {label.name}
+                {label.id !== null && <span className="font-mono text-small">{label.id}</span>}
+            </span>
+            {label.resource !== null && (
+                <span className={table.sub}>{t.players.profile.labels.by(label.resource)}</span>
+            )}
+        </span>
     );
 }
 

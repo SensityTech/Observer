@@ -16,14 +16,9 @@ impl Flavour {
     pub const HOST: Self = if cfg!(windows) { Self::Windows } else { Self::Linux };
 }
 
-/// Paths under the citizen root that FXServer and Observer write while a build runs, which a
-/// verification of the build must skip.
-pub const RUNTIME_PATHS: [&str; 4] = [
-    "crashes",
-    "citizen/system_resources/observer",
-    "server-tls.crt",
-    "server-tls.key",
-];
+/// Paths under the citizen root that FXServer writes while a build runs, which a verification of
+/// the build must skip, with the folders of Observer's bridge in `system_resources`.
+pub const RUNTIME_PATHS: [&str; 3] = ["crashes", "server-tls.crt", "server-tls.key"];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Layout {

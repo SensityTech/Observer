@@ -21,7 +21,7 @@ use axum::extract::Request;
 use axum::{Router, middleware};
 use observer_app::{
     Accounts, Artifacts, AuditLog, Backups, Changes, Diagnostics, Drops, Error, Features, Files, Metrics,
-    Players, Schedule, Servers, Supervision, Tools,
+    Players, Schedule, Servers, Statistics, Supervision, Tools,
 };
 use observer_domain::about::Build;
 use observer_domain::features::Feature;
@@ -49,6 +49,7 @@ pub struct AppState {
     pub artifacts: Artifacts,
     pub files: Files,
     pub tools: Tools,
+    pub statistics: Statistics,
     pub features: Features,
     /// The services of the features Observer started without are absent. Their routes and topics
     /// are refused before anything reaches for them, through the accessors below.
@@ -85,6 +86,7 @@ pub struct Services {
     pub artifacts: Artifacts,
     pub files: Files,
     pub tools: Tools,
+    pub statistics: Statistics,
     pub features: Features,
     /// `None` for each feature that does not run at Observer's start.
     pub diagnostics: Option<Diagnostics>,
@@ -120,6 +122,7 @@ impl AppState {
             drops,
             changes,
             backups,
+            statistics,
         } = services;
         Self {
             build,
@@ -138,6 +141,7 @@ impl AppState {
             drops,
             changes,
             backups,
+            statistics,
             live: Live::new(),
             cookie: format!("observer_session_{instance_id}"),
             hosts: hosts.into(),

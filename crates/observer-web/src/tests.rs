@@ -31,8 +31,8 @@ use observer_app::{
     Accounts, Artifacts, ArtifactsSetup, ArtifactsTask, AuditLog, Backups, BackupsSetup, BackupsTask,
     Changes, ChangesSetup, ChangesTask, Clock, Diagnostics, DiagnosticsSetup, DiagnosticsTask, Drops,
     DropsSetup, DropsTask, Features, FeaturesSetup, Metrics, MetricsSetup, OwnPaths, PasswordCost, Players,
-    PlayersSetup, PlayersTask, Running, Schedule, ScheduleSetup, ScheduleTask, Servers, Setup, Supervision,
-    Tools, ToolsSetup,
+    PlayersSetup, PlayersTask, Running, Schedule, ScheduleSetup, ScheduleTask, Servers, Setup, Statistics,
+    Supervision, Tools, ToolsSetup,
 };
 use observer_artifacts::Http;
 use observer_artifacts::catalog::{Catalog, Listing};
@@ -265,6 +265,13 @@ impl Server {
         )
         .await
         .unwrap();
+        let statistics = Statistics::new(
+            features.clone(),
+            Some(metrics.clone()),
+            Some(drops.clone()),
+            Some(changes.clone()),
+            clock.clone(),
+        );
         let services = Services {
             accounts: accounts.clone(),
             audit: audit.clone(),
@@ -281,6 +288,7 @@ impl Server {
             drops: Some(drops),
             changes: Some(changes),
             backups,
+            statistics,
         };
         let state = AppState::new(
             BUILD,
