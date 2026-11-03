@@ -6,7 +6,9 @@ use axum::{Extension, Json};
 use observer_app::{Caller, Servers};
 use observer_domain::launch::{LaunchChange, StoredLaunch};
 use observer_domain::server::{CommandAck, ConsoleCommand, LogFile};
-use observer_domain::server_data::{CfgCheck, CfgReport, FolderCheck, FolderReport};
+use observer_domain::server_data::{
+    CfgCheck, CfgReport, Discovery, FolderCheck, FolderListing, FolderQuery, FolderReport,
+};
 use tokio_util::io::ReaderStream;
 
 use crate::AppState;
@@ -49,6 +51,18 @@ pub(crate) async fn check_cfg(
     JsonBody(check): JsonBody<CfgCheck>,
 ) -> Result<Json<CfgReport>, Failure> {
     Ok(Json(state.supervision.check_cfg(check).await?))
+}
+
+pub(crate) async fn list_folders(
+    State(state): State<AppState>,
+    JsonBody(query): JsonBody<FolderQuery>,
+) -> Result<Json<FolderListing>, Failure> {
+    Ok(Json(state.supervision.list_folders(query).await?))
+}
+
+/// The search takes a few seconds: the panel asks for it once and when the owner asks again.
+pub(crate) async fn discover(State(state): State<AppState>) -> Result<Json<Discovery>, Failure> {
+    Ok(Json(state.supervision.discover().await?))
 }
 
 /// The setup's save checks the folder and its cfg again before it stores the settings.

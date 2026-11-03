@@ -65,6 +65,132 @@ pub struct ResourceSummary {
     pub truncated: bool,
 }
 
+/// `POST /api/servers/default/setup/folders`: the folders in `path` whose name starts with
+/// `prefix`, case aside.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct FolderQuery {
+    pub path: String,
+    #[serde(default)]
+    pub prefix: String,
+}
+
+/// The folders of one folder of the host, each with what it looks like to the setup.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct FolderListing {
+    /// The folder listed, as asked.
+    pub path: String,
+    /// Null at the root of a drive or of the file system.
+    pub parent: Option<String>,
+    /// Why the folder cannot be listed: `invalidPath`, `missing`, `notAFolder` or `unreadable`.
+    pub problem: Option<FolderProblem>,
+    pub path_problem: Option<LaunchProblem>,
+    /// By name, case aside. Hidden and system folders are left out unless the prefix asks for
+    /// them with a leading dot.
+    pub entries: Vec<FolderEntry>,
+    /// More folders matched than the 200 listed.
+    pub truncated: bool,
+}
+
+/// A folder as the setup sees it from outside: what it is, and for a folder of the host that holds
+/// servers, which ones. Looking into folders stops after a second and a half: the folders past it
+/// come without `folders`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct FolderEntry {
+    pub name: String,
+    /// The full path, as the folder check takes it.
+    pub path: String,
+    pub kind: FolderKind,
+    /// A link or a junction to a folder elsewhere.
+    pub link: bool,
+    /// For a server folder, the resources counted.
+    pub resources: Option<u32>,
+    /// For a server folder, the cfg detected.
+    pub cfg: Option<String>,
+    /// The folders inside, counted up to 200; null when it was not looked into.
+    pub folders: Option<u32>,
+    /// The server folders and txAdmin data folders right inside, at most 5, with nothing inside.
+    pub inside: Vec<FolderEntry>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum FolderKind {
+    Folder,
+    /// It holds a `resources` folder with at least one resource.
+    Server,
+    /// txAdmin's data: its `admins.json`, or a `default` profile with its `config.json`.
+    TxAdminData,
+    /// Observer cannot list it.
+    Unreadable,
+}
+
+/// `POST /api/servers/default/setup/discover`: where the owner may look, and the servers Observer
+/// found in the usual places. The search reads names, the walk of each server's resources, its cfg
+/// as the cfg check does, and from txAdmin's data the server folder each profile names.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct Discovery {
+    pub places: Vec<Place>,
+    pub servers: Vec<FoundServer>,
+    /// The search stopped at its time or entry limit, or at 24 servers: there may be more.
+    pub truncated: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct Place {
+    pub kind: PlaceKind,
+    pub path: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum PlaceKind {
+    /// A local drive on Windows, `/` elsewhere.
+    Drive,
+    Home,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct FoundServer {
+    pub path: String,
+    pub resources: u32,
+    /// The walk stopped at one of its limits: `resources` is a floor.
+    pub resources_truncated: bool,
+    pub cfg: Option<String>,
+    /// As the detected cfg sets it.
+    pub onesync: Option<OneSync>,
+    /// A profile of txAdmin's data names this folder.
+    pub tx_admin: bool,
+    /// The port of the cfg's first `endpoint_add_tcp`.
+    pub port: Option<u16>,
+    /// A program other than Observer's FXServer listens on that port now.
+    pub port_holder: Option<PortHolder>,
+}
+
+/// Who listens on a server's port, as the system's tables say.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct PortHolder {
+    /// The file name of its executable, when the system says whose the socket is.
+    pub program: Option<String>,
+    /// The program is FXServer.
+    pub fx_server: bool,
+}
+
 /// `POST /api/servers/default/setup/cfg`.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

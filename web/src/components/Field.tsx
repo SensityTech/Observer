@@ -34,6 +34,8 @@ type FieldProps = ComponentProps<'input'> & {
     after?: ReactNode;
     /** Under the field's box, before its error and hint. */
     below?: ReactNode;
+    /** Beside the field's box, on its line: the folder field's Browse button. Under it on a phone. */
+    beside?: ReactNode;
 };
 
 /** A labelled input with its hint and error, wired for assistive technology. */
@@ -47,6 +49,7 @@ export function TextField({
     inputClassName,
     after,
     below,
+    beside,
     className,
     ...input
 }: FieldProps) {
@@ -57,6 +60,18 @@ export function TextField({
     const hintId = hint === undefined || errorId ? undefined : `${id}-hint`;
     const described = [errorId, hintId, describedBy].filter(Boolean).join(' ') || undefined;
     const invalid = Boolean(error) || input['aria-invalid'] === true;
+    const box = (
+        <>
+            <input
+                {...input}
+                id={id}
+                aria-invalid={invalid || undefined}
+                aria-describedby={described}
+                className={cn(inputClass, inputClassName)}
+            />
+            {after}
+        </>
+    );
 
     return (
         <div className={cn('flex min-w-0 flex-col gap-1.5', className)}>
@@ -66,16 +81,14 @@ export function TextField({
                 </label>
                 {labelAside}
             </div>
-            <div className="relative">
-                <input
-                    {...input}
-                    id={id}
-                    aria-invalid={invalid || undefined}
-                    aria-describedby={described}
-                    className={cn(inputClass, inputClassName)}
-                />
-                {after}
-            </div>
+            {beside === undefined ? (
+                <div className="relative">{box}</div>
+            ) : (
+                <div className="flex items-center gap-2 max-md:flex-col max-md:items-stretch">
+                    <div className="relative min-w-0 flex-1">{box}</div>
+                    {beside}
+                </div>
+            )}
             {below}
             {error && <FieldError id={errorId}>{error}</FieldError>}
             {hintId && (

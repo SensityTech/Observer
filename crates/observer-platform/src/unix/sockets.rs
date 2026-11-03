@@ -3,7 +3,8 @@ use std::fs;
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 
-use crate::sockets::{Protocol, Socket, SocketState};
+use super::processes::executable;
+use crate::sockets::{Listener, Protocol, Socket, SocketState};
 
 const LISTEN: u8 = 0x0A;
 const ESTABLISHED: u8 = 0x01;
@@ -47,6 +48,62 @@ pub(crate) fn sockets(pids: &[u32]) -> io::Result<Vec<Socket>> {
         }));
     }
     Ok(sockets)
+}
+
+/// Reads the tables of Observer's own network namespace, then looks for the sockets' owners among
+/// the processes whose descriptors this account may read.
+pub(crate) fn tcp_listeners(port: u16) -> io::Result<Vec<Listener>> {
+    let mut inodes = Vec::new();
+    for file in ["tcp", "tcp6"] {
+        let table = match fs::read_to_string(format!("/proc/self/net/{file}")) {
+            Ok(table) => table,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error),
+        };
+        inodes.extend(
+            parse_table(&table, Protocol::Tcp)
+                .into_iter()
+                .filter(|row| row.socket.state == SocketState::Listen && row.socket.local.port() == port)
+                .map(|row| row.inode),
+        );
+    }
+    if inodes.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut owners = HashMap::new();
+    for process in fs::read_dir("/proc")?.filter_map(Result::ok) {
+        let Some(pid) = process
+            .file_name()
+            .to_str()
+            .and_then(|name| name.parse::<u32>().ok())
+        else {
+            continue;
+        };
+        let Ok(descriptors) = fs::read_dir(process.path().join("fd")) else {
+            continue;
+        };
+        for descriptor in descriptors.filter_map(Result::ok) {
+            if let Some(inode) = fs::read_link(descriptor.path())
+                .ok()
+                .and_then(|target| socket_inode(&target.to_string_lossy()))
+                .filter(|inode| inodes.contains(inode))
+            {
+                owners.entry(inode).or_insert(pid);
+            }
+        }
+    }
+    let mut listeners: Vec<Listener> = Vec::new();
+    for inode in inodes {
+        let pid = owners.get(&inode).copied();
+        let listener = Listener {
+            pid,
+            executable: pid.and_then(executable),
+        };
+        if !listeners.contains(&listener) {
+            listeners.push(listener);
+        }
+    }
+    Ok(listeners)
 }
 
 /// `socket:[12345]`, as a descriptor's link names a socket.
