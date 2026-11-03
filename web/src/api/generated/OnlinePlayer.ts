@@ -19,6 +19,11 @@ since: string, sessionMs: number,
  */
 totalMs: number | null, 
 /**
+ * In milliseconds, as FXServer's own player list last gave it: unknown before that list
+ * shows the player, and for a client FXServer has no network peer for.
+ */
+ping: number | null, 
+/**
  * Once the identity is confirmed.
  */
 label: PlayerLabel | null, };

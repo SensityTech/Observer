@@ -267,8 +267,12 @@
         --font: var(--font-sans);
         --mono: var(--font-mono);
         --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
-        --rail-width: 272px;
+        --rail-width: 244px; /* the rail's 232px and its 12px margin */
         --rail-gap: 12px;
+        /* added: the players column beside the page, its folded strip, and the page's own width */
+        --online-width: 296px;
+        --strip-width: 56px;
+        --content-width: 1040px;
         --rail-pad: 8px;
         --drawer-width: min(320px, calc(100vw - 40px));
         --mobilebar-height: 60px;

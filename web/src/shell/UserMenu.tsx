@@ -1,18 +1,20 @@
 import { useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
-import { ChevronsUpDown, Info, LogOut, UserRound } from 'lucide-react';
+import { ChevronsUpDown, Info, LogOut, Moon, Sun, UserRound } from 'lucide-react';
 
 import { signOut } from '../api/auth';
 import type { Me } from '../api/generated/Me';
 import { countPermissions, parsePermissions } from '../auth/permissions';
 import { Menu } from '../components/Menu';
 import { useI18n } from '../i18n/I18nProvider';
+import { useTheme } from '../theme/theme';
 
-/** The signed-in user at the foot of the rail, with their account and the way out. */
+/** The signed-in user at the foot of the rail, with their account, the theme and the way out. */
 export function UserMenu({ me, onNavigate }: { me: Me; onNavigate: () => void }) {
     const { t } = useI18n();
     const navigate = useNavigate();
     const queryClient = useQueryClient();
+    const { theme, setTheme } = useTheme();
 
     const role = me.isOwner
         ? t.account.owner
@@ -30,6 +32,9 @@ export function UserMenu({ me, onNavigate }: { me: Me; onNavigate: () => void })
                         void navigate({ to: '/account' });
                     },
                 },
+                theme === 'dark'
+                    ? { label: t.theme.switchToLight, icon: Sun, onSelect: () => setTheme('light') }
+                    : { label: t.theme.switchToDark, icon: Moon, onSelect: () => setTheme('dark') },
                 {
                     label: t.account.about,
                     icon: Info,

@@ -148,6 +148,7 @@ fn info(server: &Server) -> String {
     json!({
         "resources": server.convar("observer_bridge").into_iter().collect::<Vec<_>>(),
         "server": format!("FXServer-master SERVER v1.0.0.{build} {platform}"),
+        "vars": { "sv_projectName": server.convar("sv_projectName").unwrap_or_default() },
         "version": 0,
     })
     .to_string()

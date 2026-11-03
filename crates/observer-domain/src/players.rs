@@ -367,6 +367,9 @@ pub struct OnlinePlayer {
     pub session_ms: i64,
     /// Total play time with this session, imported time included.
     pub total_ms: Option<i64>,
+    /// In milliseconds, as FXServer's own player list last gave it: unknown before that list
+    /// shows the player, and for a client FXServer has no network peer for.
+    pub ping: Option<u32>,
     /// Once the identity is confirmed.
     pub label: Option<PlayerLabel>,
 }

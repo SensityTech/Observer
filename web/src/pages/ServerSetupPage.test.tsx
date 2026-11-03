@@ -67,6 +67,8 @@ const STOPPED: ServerStatus = {
     players: null,
     restartAt: null,
     launch: 'notConfigured',
+    name: null,
+    port: null,
 };
 
 const FIXTURE = structuredClone(ARTIFACTS) as unknown as ArtifactsStatus;

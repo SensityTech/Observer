@@ -357,6 +357,10 @@ pub struct Status {
     pub build: Option<u32>,
     /// The game build it enforces, once it has said.
     pub game_build: Option<u32>,
+    /// What the server called itself, `sv_projectName`, as of the last run that said.
+    pub name: Option<String>,
+    /// The game port the probes reached, as of the last run.
+    pub port: Option<u16>,
     /// The bridge's resource name in the server that runs now, drawn for its start.
     pub bridge: Option<String>,
 }
@@ -471,6 +475,8 @@ impl Supervisor {
             players: None,
             build: None,
             game_build: None,
+            name: None,
+            port: None,
             bridge: None,
         };
         let (status_tx, status) = watch::channel(initial);
@@ -500,6 +506,8 @@ impl Supervisor {
             since_ms: now_ms(),
             problems: Vec::new(),
             run: None,
+            name: None,
+            port: None,
             pre_launch: None,
             phase: Phase::Idle,
             last_tick: Instant::now(),
@@ -870,6 +878,9 @@ struct Actor {
     problems: Vec<Problem>,
     recovery: Recovery,
     run: Option<Run>,
+    /// What the server called itself and the port it took, kept once its run ends.
+    name: Option<String>,
+    port: Option<u16>,
     /// The pre-launch work under way, in [`Phase::PreLaunch`] only.
     pre_launch: Option<PreLaunching>,
     phase: Phase,
@@ -987,9 +998,14 @@ impl Actor {
                 run.players = Some(*players);
                 true
             }
-            Probe::Info(Ok(info)) if run.build != Some(info.build) || run.game_build != info.game_build => {
+            Probe::Info(Ok(info))
+                if run.build != Some(info.build)
+                    || run.game_build != info.game_build
+                    || self.name != info.name =>
+            {
                 run.build = Some(info.build);
                 run.game_build = info.game_build;
+                self.name.clone_from(&info.name);
                 true
             }
             _ => false,
@@ -1657,6 +1673,7 @@ impl Actor {
                     }),
                 });
                 self.run = Some(run);
+                self.port = Some(probe.port());
                 self.phase = Phase::Running;
                 self.last_tick = Instant::now();
                 if announced {
@@ -2160,6 +2177,8 @@ impl Actor {
             players: run.and_then(|run| run.players),
             build: run.and_then(|run| run.build),
             game_build: run.and_then(|run| run.game_build),
+            name: self.name.clone(),
+            port: self.port,
             bridge: run.map(|run| run.bridge.clone()),
         });
     }

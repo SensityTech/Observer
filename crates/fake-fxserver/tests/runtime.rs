@@ -81,7 +81,7 @@ impl Drop for Port {
 
 struct Observer {
     dir: TempDir,
-    _port: Port,
+    port: Port,
     /// The schedule's clock, which the tests move on rather than wait.
     clock: Clock,
     /// The schedule's longest sleep.
@@ -222,7 +222,7 @@ impl Observer {
         fs::write(
             data.join("server.cfg"),
             format!(
-                "endpoint_add_tcp \"127.0.0.1:{0}\"\nendpoint_add_udp \"127.0.0.1:{0}\"\nsv_maxclients 8\n",
+                "endpoint_add_tcp \"127.0.0.1:{0}\"\nendpoint_add_udp \"127.0.0.1:{0}\"\nsv_maxclients 8\nsets sv_projectName \"^2Observer ^7lab\"\n",
                 port.0
             ),
         )
@@ -282,7 +282,7 @@ impl Observer {
             services.supervise(dir.path(), &clock, longest_sleep).await;
         Self {
             dir,
-            _port: port,
+            port,
             clock,
             longest_sleep,
             db: services.db,
@@ -509,6 +509,8 @@ async fn a_server_started_from_the_panel_runs_a_command_then_stops_gracefully() 
 
     assert_eq!(online.cause, Some(StateCause::Ready));
     assert_eq!(online.build, Some(35245));
+    assert_eq!(online.name.as_deref(), Some("Observer lab"));
+    assert_eq!(online.port, Some(observer.port.0));
     assert!(online.started_at.is_some());
     assert_eq!(
         delivery,

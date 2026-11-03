@@ -52,6 +52,8 @@ pub(super) struct Open {
     received: Instant,
     absent: u8,
     last_listed_ms: Option<i64>,
+    /// What FXServer's latest list gave, unknown for a client it has no network peer for.
+    pub(super) ping: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -391,6 +393,7 @@ impl Sessions {
                 received,
                 absent: 0,
                 last_listed_ms: None,
+                ping: None,
             },
         );
     }
@@ -576,6 +579,7 @@ impl Sessions {
         run.ended_at
             .retain(|_, ended| at.duration_since(*ended) < LIST_LAG * 2);
         let shown: HashMap<u32, _> = list.shown.iter().map(|listed| (listed.id, listed)).collect();
+        let pings: HashMap<u32, Option<u32>> = list.players.iter().copied().collect();
         let mut gone = Vec::new();
         let mut unconfirmed = 0;
         let mut keys = Vec::new();
@@ -585,6 +589,7 @@ impl Sessions {
                 Some(listed) => {
                     open.absent = 0;
                     open.last_listed_ms = Some(list_ms);
+                    open.ping = pings.get(&open.net_id).copied().flatten();
                     if let Identity::Confirming(claim) = &open.identity
                         && (settled || claim.matches(listed))
                     {

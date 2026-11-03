@@ -11,6 +11,7 @@ import {
     Menu as MenuIcon,
     Package,
     ScrollText,
+    Server,
     Settings,
     SquareTerminal,
     Stethoscope,
@@ -21,7 +22,7 @@ import {
     X,
     type LucideIcon,
 } from 'lucide-react';
-import { Suspense, useEffect, useState } from 'react';
+import { Suspense, useCallback, useEffect, useState } from 'react';
 
 import { meQuery } from '../api/auth';
 import { Permission } from '../api/generated/Permission';
@@ -34,13 +35,14 @@ import { AlertsProvider, useAlerts } from '../diagnostics/alerts';
 import { useI18n } from '../i18n/I18nProvider';
 import { useRealtime } from '../live/context';
 import { cn } from '../lib/cn';
+import { PHONE, useMedia } from '../lib/useMedia';
 import { ArtifactsProvider } from '../artifacts/context';
 import { ScheduleProvider } from '../schedule/context';
-import { ServerStatusProvider } from '../server/context';
+import { ServerStatusProvider, useServerStatus } from '../server/context';
 import { Logo } from './Logo';
+import { OnlineButton, OnlineColumn } from './OnlineColumn';
 import { ServerControls } from './ServerControls';
 import { StatusBar } from './StatusBar';
-import { ThemeSwitch } from './ThemeSwitch';
 import { UserMenu } from './UserMenu';
 
 type NavEntry = {
@@ -77,7 +79,11 @@ export function AppShell() {
     const { t } = useI18n();
     const { data: me } = useQuery(meQuery);
     const [menuOpen, setMenuOpen] = useState(false);
+    const [playersOpen, setPlayersOpen] = useState(false);
     const closeMenu = () => setMenuOpen(false);
+    const openPlayers = useCallback(() => setPlayersOpen(true), []);
+    const closePlayers = useCallback(() => setPlayersOpen(false), []);
+    const phone = useMedia(PHONE);
     const live = useRealtime();
 
     // The socket lives as long as the signed-in shell: signing out unmounts it, and closes it.
@@ -87,28 +93,33 @@ export function AppShell() {
     }, [live]);
 
     useEffect(() => {
-        if (!menuOpen) {
+        if (!menuOpen && !playersOpen) {
             return;
         }
         const root = document.documentElement;
         root.classList.add('drawer-open');
+        // Also when the shell goes away with a drawer open, signing out from it: the sign-in page must scroll.
+        return () => root.classList.remove('drawer-open');
+    }, [menuOpen, playersOpen]);
+
+    useEffect(() => {
+        if (!menuOpen) {
+            return;
+        }
         const closeOnEscape = (event: KeyboardEvent) => {
             if (event.key === 'Escape') {
                 setMenuOpen(false);
             }
         };
         window.addEventListener('keydown', closeOnEscape);
-        // Also when the shell goes away with the drawer open, signing out from it: the sign-in page must scroll.
-        return () => {
-            window.removeEventListener('keydown', closeOnEscape);
-            root.classList.remove('drawer-open');
-        };
+        return () => window.removeEventListener('keydown', closeOnEscape);
     }, [menuOpen]);
 
     // Signed out under the shell: the route guard is already on its way to the sign-in page.
     if (!me) {
         return null;
     }
+    const players = allows(me, Permission.PlayersView);
 
     const main: NavEntry[] = [
         { to: '/', label: t.nav.overview, icon: LayoutDashboard, access: Permission.DashboardView },
@@ -122,14 +133,7 @@ export function AppShell() {
             icon: CalendarClock,
             access: [Permission.DashboardView, Permission.ScheduleManage, Permission.ServerControl],
         },
-        { to: '/artifacts', label: t.nav.artifacts, icon: Package, access: Permission.ArtifactsView },
-        {
-            to: '/changes',
-            label: t.nav.changes,
-            icon: GitCompare,
-            access: Permission.ChangesView,
-            nested: true,
-        },
+        { to: '/players', label: t.nav.players, icon: Contact, access: Permission.PlayersView, nested: true },
         {
             to: '/diagnostics',
             label: t.nav.diagnostics,
@@ -137,16 +141,25 @@ export function AppShell() {
             access: Permission.DiagnosticsView,
             alerts: true,
         },
-        { to: '/players', label: t.nav.players, icon: Contact, access: Permission.PlayersView, nested: true },
+        {
+            to: '/changes',
+            label: t.nav.changes,
+            icon: GitCompare,
+            access: Permission.ChangesView,
+            nested: true,
+        },
         { to: '/drops', label: t.nav.drops, icon: Unplug, access: Permission.DropsView, nested: true },
     ];
-    const administration: NavEntry[] = [
-        { to: '/settings', label: t.nav.settings, icon: Settings, access: 'owner', nested: true },
-        { to: '/tools', label: t.nav.tools, icon: Wrench, access: 'owner' },
+    const maintenance: NavEntry[] = [
+        { to: '/artifacts', label: t.nav.artifacts, icon: Package, access: Permission.ArtifactsView },
         { to: '/backups', label: t.nav.backups, icon: DatabaseBackup, access: Permission.BackupsView },
+        { to: '/tools', label: t.nav.tools, icon: Wrench, access: 'owner' },
+        { to: '/audit', label: t.nav.audit, icon: ScrollText, access: Permission.AuditView },
+    ];
+    const settings: NavEntry[] = [
+        { to: '/settings', label: t.nav.settings, icon: Settings, access: 'owner', nested: true },
         { to: '/users', label: t.nav.users, icon: Users, access: Permission.UsersManage },
         { to: '/files', label: t.nav.files, icon: FolderLock, access: Permission.FilesManage },
-        { to: '/audit', label: t.nav.audit, icon: ScrollText, access: Permission.AuditView },
     ];
 
     return (
@@ -180,6 +193,7 @@ export function AppShell() {
                                                 <X size={16} strokeWidth={1.5} aria-hidden="true" />
                                             </button>
                                         </div>
+                                        <ServerTile />
                                         <nav className="nav" aria-label={t.nav.sections}>
                                             <NavEntries me={me} entries={main} onNavigate={closeMenu} />
                                             <NavEntries
@@ -190,20 +204,25 @@ export function AppShell() {
                                             />
                                             <NavEntries
                                                 me={me}
-                                                entries={administration}
-                                                group={t.nav.administration}
+                                                entries={maintenance}
+                                                group={t.nav.maintenance}
+                                                onNavigate={closeMenu}
+                                            />
+                                            <NavEntries
+                                                me={me}
+                                                entries={settings}
+                                                group={t.nav.settings}
                                                 onNavigate={closeMenu}
                                             />
                                         </nav>
                                         <div className="rail-foot">
-                                            <ThemeSwitch />
                                             <UserMenu me={me} onNavigate={closeMenu} />
                                         </div>
                                     </div>
                                 </aside>
                                 {menuOpen && <div className="scrim" aria-hidden="true" onClick={closeMenu} />}
 
-                                <div className="main" inert={menuOpen}>
+                                <div className="main" inert={menuOpen || playersOpen}>
                                     <div className="mobilebar">
                                         <button
                                             type="button"
@@ -216,10 +235,15 @@ export function AppShell() {
                                             <MenuIcon size={18} strokeWidth={1.5} aria-hidden="true" />
                                         </button>
                                         <Logo />
+                                        {players && phone && (
+                                            <OnlineButton open={playersOpen} onOpen={openPlayers} />
+                                        )}
                                     </div>
                                     <header className="topbar" aria-label={t.status.label}>
-                                        <StatusBar />
-                                        <ServerControls />
+                                        <div className="status-card">
+                                            <StatusBar />
+                                            <ServerControls />
+                                        </div>
                                     </header>
                                     <main className="content" id="content" tabIndex={-1}>
                                         <PlainHttpNotice />
@@ -228,12 +252,48 @@ export function AppShell() {
                                         </Suspense>
                                     </main>
                                 </div>
+
+                                {players && (
+                                    <OnlineColumn
+                                        open={playersOpen}
+                                        onOpen={openPlayers}
+                                        onClose={closePlayers}
+                                    />
+                                )}
                             </div>
                         </AlertsProvider>
                     </ArtifactsProvider>
                 </ScheduleProvider>
             </ServerStatusProvider>
         </MeContext>
+    );
+}
+
+/**
+ * The server Observer runs, by the name and port it last ran with. A tile, not a switcher: Observer
+ * runs one server.
+ */
+function ServerTile() {
+    const { t } = useI18n();
+    const { status } = useServerStatus();
+    const name = status?.name ?? null;
+    const port = status?.port ?? null;
+    return (
+        <div className="server-tile">
+            <span className="server-tile-mark" aria-hidden="true">
+                {name === null ? (
+                    <Server size={14} strokeWidth={1.75} />
+                ) : (
+                    [...name.replace(/[^\p{L}\p{N}]/gu, '')].slice(0, 2).join('').toUpperCase()
+                )}
+            </span>
+            <span className="server-tile-meta">
+                <span className="server-tile-name">{name ?? t.shell.server}</span>
+                <span className="server-tile-port">
+                    {port === null ? t.shell.serverUnknown : t.shell.port(String(port))}
+                </span>
+            </span>
+        </div>
     );
 }
 

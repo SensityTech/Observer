@@ -28,4 +28,12 @@ build: number | null, players: PlayerCount | null,
 /**
  * When the restart after a failure is due.
  */
-restartAt: string | null, launch: LaunchReadiness, };
+restartAt: string | null, launch: LaunchReadiness, 
+/**
+ * `sv_projectName` without its colour codes, as of the last run that set it.
+ */
+name: string | null, 
+/**
+ * The game port, as of the last run.
+ */
+port: number | null, };
