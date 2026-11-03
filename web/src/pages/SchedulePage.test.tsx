@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, cleanup, fireEvent, render, within } from '@testing-library/react';
+import type { ReactNode } from 'react';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import type { ScheduleStatus } from '../api/generated/ScheduleStatus';
@@ -12,6 +13,15 @@ import { ScheduleProvider } from '../schedule/context';
 import { ServerStatusProvider } from '../server/context';
 import { StatusBar } from '../shell/StatusBar';
 import { SchedulePage } from './SchedulePage';
+
+// The page links to its settings; no router runs here.
+vi.mock('@tanstack/react-router', () => ({
+    Link: ({ children, className }: { children: ReactNode; className?: string }) => (
+        <a href="/settings/restarts" className={className}>
+            {children}
+        </a>
+    ),
+}));
 
 const settle = () => act(() => new Promise((resolve) => setTimeout(resolve, 0)));
 
@@ -156,7 +166,6 @@ describe('SchedulePage', () => {
         expect(
             getByText(en.schedule.unavailable(en.schedule.restartOnce, en.schedule.notPermittedOnce)),
         ).not.toBeNull();
-        expect(getByText(en.schedule.readOnly)).not.toBeNull();
         live.stop();
     });
 
@@ -196,37 +205,6 @@ describe('SchedulePage', () => {
         live.stop();
     });
 
-    it('should name each warning in its remove button, one minute in the singular', async () => {
-        const { getByRole, live } = await page('11');
-
-        expect(getByRole('button', { name: 'Remove the warning 1 minute before' })).not.toBeNull();
-        expect(getByRole('button', { name: 'Remove the warning 30 minutes before' })).not.toBeNull();
-        live.stop();
-    });
-
-    it('should offer UTC right after the host zone', async () => {
-        const { getByLabelText, live } = await page('11');
-
-        const options = [...(getByLabelText(en.schedule.timeZone) as HTMLSelectElement).options];
-
-        expect(options.slice(0, 2).map((option) => option.value)).toEqual(['', 'UTC']);
-        live.stop();
-    });
-
-    it('should move the keyboard to the next chip, then to the field, as chips are removed', async () => {
-        const { getByRole, getByLabelText, live } = await page('11');
-
-        const sixteen = getByRole('button', { name: en.schedule.removeTime('16:00') });
-        getByRole('button', { name: en.schedule.removeTime('04:00') }).focus();
-        fireEvent.click(getByRole('button', { name: en.schedule.removeTime('04:00') }));
-        const afterFirst = document.activeElement;
-        fireEvent.click(sixteen);
-
-        expect(afterFirst).toBe(sixteen);
-        expect(document.activeElement).toBe(getByLabelText(en.schedule.addTime));
-        live.stop();
-    });
-
     it('should hand the keyboard to the outcome once the action it pressed is done', async () => {
         const answer = {
             ...SCHEDULE,
@@ -256,37 +234,6 @@ describe('SchedulePage', () => {
         const outcome = await findByText(en.schedule.skipped('04:00'));
 
         expect(outcome.closest('[tabindex="-1"]')).toBe(document.activeElement);
-        live.stop();
-    });
-
-    it('should say why a time or a warning was not added, and start the next time afresh', async () => {
-        const { getByRole, getByLabelText, getByText, getAllByRole, live } = await page('11');
-        const add = (index: number) => {
-            const button = getAllByRole('button', { name: en.schedule.add })[index];
-            if (button !== undefined) {
-                fireEvent.click(button);
-            }
-        };
-
-        fireEvent.change(getByLabelText(en.schedule.addTime), { target: { value: '' } });
-        add(0);
-        const incomplete = getByText(en.schedule.timeIncomplete);
-        fireEvent.change(getByLabelText(en.schedule.addTime), { target: { value: '07:30' } });
-        fireEvent.keyDown(getByLabelText(en.schedule.addTime), { key: 'Enter' });
-        const added = within(getByRole('list', { name: en.schedule.times })).queryByText('07:30');
-        const fresh = getByLabelText(en.schedule.addTime);
-        fireEvent.change(getByLabelText(en.schedule.addWarning), { target: { value: '0' } });
-        add(1);
-        const outOfRange = getByText(en.schedule.ranges.warning);
-        fireEvent.change(getByLabelText(en.schedule.addWarning), { target: { value: '30' } });
-        add(1);
-
-        expect(incomplete).not.toBeNull();
-        expect(added).not.toBeNull();
-        expect((fresh as HTMLInputElement).value).toBe('');
-        expect(document.activeElement).toBe(fresh);
-        expect(outOfRange).not.toBeNull();
-        expect(getByText(en.schedule.listedAlready)).not.toBeNull();
         live.stop();
     });
 
@@ -322,88 +269,11 @@ describe('SchedulePage', () => {
         live.stop();
     });
 
-    it('should count the changes typed in the save bar', async () => {
-        const { getByRole, getByText, queryByText, live } = await page('11');
-        expect(queryByText(en.schedule.changes(1))).toBeNull();
-
-        fireEvent.click(getByRole('button', { name: en.schedule.removeTime('16:00') }));
-        fireEvent.click(getByRole('switch', { name: en.schedule.enabled }));
-
-        expect(getByText(en.schedule.changes(2))).not.toBeNull();
-        fireEvent.click(getByRole('button', { name: en.schedule.discard }));
-        expect(queryByText(en.schedule.changes(2))).toBeNull();
-        live.stop();
-    });
-
-    it('should keep the settings typed while the live link drops and comes back', async () => {
-        const { getByRole, getByText, queryByText, say, drop, live } = await page('11');
-        fireEvent.click(getByRole('button', { name: en.schedule.removeTime('16:00') }));
-
-        drop();
-        const down = queryByText(en.schedule.outOfDate);
-        const keptDown = queryByText(en.schedule.changes(1));
-        // The client tries again after a second.
-        await act(() => new Promise((resolve) => setTimeout(resolve, 1_200)));
-        say({ type: 'hello', connectionId: 2, contract: 1 });
-        say({ type: 'snapshot', topic: 'server.status', data: ONLINE });
-        say({ type: 'snapshot', topic: 'server.schedule', data: SCHEDULE });
-
-        expect(down).not.toBeNull();
-        expect(keptDown).not.toBeNull();
-        expect(getByText(en.schedule.changes(1))).not.toBeNull();
-        expect(queryByText(en.schedule.outOfDate)).toBeNull();
-        live.stop();
-    });
-
-    it('should follow newer stored settings while nothing is typed, and warn once something is', async () => {
-        const { getByRole, getByText, queryByText, publish, live } = await page('11');
-        const newer = { ...SCHEDULE, version: 5, settings: { ...SCHEDULE.settings, times: ['05:00'] } };
-
-        publish(newer);
-        const times = within(getByRole('list', { name: en.schedule.times }));
-        expect(times.queryByText('05:00')).not.toBeNull();
-        expect(queryByText(en.schedule.changedElsewhere)).toBeNull();
-
-        fireEvent.click(getByRole('button', { name: en.schedule.removeTime('05:00') }));
-        publish({ ...newer, version: 6 });
-
-        expect(getByText(en.schedule.changedElsewhere)).not.toBeNull();
-        live.stop();
-    });
-
-    it('should show what the save refused next to the settings it names', async () => {
-        const fetch = vi.fn(
-            async () =>
-                new Response(
-                    JSON.stringify({
-                        code: 'invalid_schedule',
-                        params: { issues: [{ field: 'time', index: 0, problem: 'tooClose' }] },
-                    }),
-                    { status: 400, headers: { 'content-type': 'application/json' } },
-                ),
-        );
-        vi.stubGlobal('fetch', fetch);
-        // jsdom lays nothing out, so it has no scrolling to the first setting to fix.
-        Element.prototype.scrollIntoView = () => {};
-        const { getByRole, findByText, live } = await page('11');
-
-        fireEvent.click(getByRole('switch', { name: en.schedule.enabled }));
-        fireEvent.click(getByRole('button', { name: en.schedule.save }));
-
-        expect(await findByText(`04:00: ${en.schedule.problems.tooClose}`)).not.toBeNull();
-        expect(fetch).toHaveBeenCalledOnce();
-        live.stop();
-    });
-
     it('should say what a number or a time needs by its field rather than send what Observer refuses', async () => {
         const fetch = vi.fn();
         vi.stubGlobal('fetch', fetch);
-        Element.prototype.scrollIntoView = () => {};
-        const { getByRole, getByLabelText, getByText, live } = await page('19');
+        const { getByRole, live } = await page('19');
 
-        fireEvent.change(getByLabelText(en.schedule.skipAfterStart), { target: { value: '1.5' } });
-        fireEvent.click(getByRole('button', { name: en.schedule.save }));
-        const skipError = getByText(en.schedule.ranges.skipAfterStart);
         fireEvent.click(getByRole('button', { name: en.schedule.restartOnce }));
         const dialog = within(getByRole('dialog'));
         fireEvent.change(dialog.getByLabelText(en.schedule.onceMinutes), { target: { value: '2000' } });
@@ -412,37 +282,28 @@ describe('SchedulePage', () => {
         fireEvent.click(dialog.getByText(en.schedule.onceAt));
         fireEvent.click(dialog.getByRole('button', { name: en.schedule.onceSubmit }));
 
-        expect(skipError).not.toBeNull();
-        expect(getByLabelText(en.schedule.skipAfterStart).getAttribute('aria-invalid')).toBe('true');
         expect(rangeError).not.toBeNull();
         expect(dialog.getByText(en.schedule.onceTimeRequired)).not.toBeNull();
         expect(fetch).not.toHaveBeenCalled();
         live.stop();
     });
 
-    it('should tie each hint and error to the fields it is about', async () => {
-        Element.prototype.scrollIntoView = () => {};
-        const { getByRole, getByLabelText, live } = await page('19');
+    it('should tie the hint of a single restart to its field', async () => {
+        const { getByRole, live } = await page('19');
 
-        const zone = described(getByLabelText(en.schedule.timeZone));
-        fireEvent.click(getByRole('radio', { name: en.schedule.modes.interval }));
-        fireEvent.change(getByLabelText(en.schedule.intervalMinutes), { target: { value: '1.5' } });
-        fireEvent.click(getByRole('button', { name: en.schedule.save }));
-        const fields = [
-            getByLabelText(en.schedule.intervalHours),
-            getByLabelText(en.schedule.intervalMinutes),
-        ];
         fireEvent.click(getByRole('button', { name: en.schedule.restartOnce }));
         const once = described(within(getByRole('dialog')).getByLabelText(en.schedule.onceMinutes));
 
-        expect(zone).toBe(en.schedule.timeZoneHint);
-        for (const field of fields) {
-            expect(field.getAttribute('aria-invalid')).toBe('true');
-            expect(described(field)).toBe(
-                `${en.schedule.ranges.intervalMinutes} | ${en.schedule.intervalHint}`,
-            );
-        }
         expect(once).toBe(en.schedule.onceHint);
+        live.stop();
+    });
+
+    it('should lead to its settings, now on the Settings page', async () => {
+        const { getByRole, live } = await page('11');
+
+        expect(
+            getByRole('link', { name: new RegExp(en.settings.moved(en.settings.categories.restarts.name)) }),
+        ).not.toBeNull();
         live.stop();
     });
 

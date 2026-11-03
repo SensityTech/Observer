@@ -4,14 +4,16 @@
 //! turns on.
 
 use std::io;
+use std::time::Duration;
 
 use observer_domain::error::{ApiError, ErrorCode};
 use observer_domain::launch::{LaunchChange, OneSync, StoredLaunch};
 use observer_domain::server_data::{
-    CfgCheck, CfgFinding, CfgReport, EndpointProtocol, FindingKind, FolderCheck, FolderReport, LicenceState,
-    Severity,
+    CfgCheck, CfgFinding, CfgReport, Discovery, EndpointProtocol, FindingKind, FolderCheck, FolderListing,
+    FolderQuery, FolderReport, LicenceState, Place, PlaceKind, Severity,
 };
 use observer_fxserver::cfg::Context;
+use observer_fxserver::folders::{self, Search};
 use observer_fxserver::layout::{Flavour, Layout};
 use observer_fxserver::server_data;
 
@@ -19,11 +21,70 @@ use super::{Supervision, read_launch};
 use crate::servers::follow_rules;
 use crate::{Caller, Error};
 
+/// How long the search for servers reads the host's folders, their cfgs read after.
+const SEARCH_BUDGET: Duration = Duration::from_secs(5);
+/// Folders down from the home folder, where `Documents\Servers\live\server-data` is.
+const HOME_DEPTH: usize = 4;
+const DRIVE_DEPTH: usize = 3;
+
 impl Supervision {
     /// Checks the folder of an existing server. It changes nothing.
     pub async fn check_folder(&self, check: FolderCheck) -> Result<FolderReport, Error> {
         let observer = self.inner.data_dir.clone();
         blocking(move || server_data::check_folder(&check.data_path, &observer)).await
+    }
+
+    /// The folders of a folder of the host, for the setup's path field and its folder browser. It
+    /// changes nothing.
+    pub async fn list_folders(&self, query: FolderQuery) -> Result<FolderListing, Error> {
+        let _turn = self
+            .inner
+            .folder_reads
+            .acquire()
+            .await
+            .map_err(io::Error::other)?;
+        let observer = self.inner.data_dir.clone();
+        blocking(move || folders::list(&query, &observer)).await
+    }
+
+    /// Searches the home folder and the local drives for servers, and names the places the owner
+    /// may browse from. It changes nothing.
+    pub async fn discover(&self) -> Result<Discovery, Error> {
+        let _turn = self
+            .inner
+            .folder_reads
+            .acquire()
+            .await
+            .map_err(io::Error::other)?;
+        let home = std::env::home_dir();
+        let drives = observer_platform::local_roots();
+        let search = Search {
+            roots: home
+                .iter()
+                .map(|home| (home.clone(), HOME_DEPTH))
+                .chain(drives.iter().map(|drive| (drive.clone(), DRIVE_DEPTH)))
+                .collect(),
+            observer: self.inner.data_dir.clone(),
+            own_pids: self.inner.supervisor.status().borrow().pid.into_iter().collect(),
+            budget: SEARCH_BUDGET,
+        };
+        let places = drives
+            .iter()
+            .map(|drive| (PlaceKind::Drive, drive))
+            .chain(home.iter().map(|home| (PlaceKind::Home, home)))
+            .filter_map(|(kind, path)| {
+                Some(Place {
+                    kind,
+                    path: path.to_str()?.to_owned(),
+                })
+            })
+            .collect();
+        let found = blocking(move || folders::discover(&search)).await?;
+        Ok(Discovery {
+            places,
+            servers: found.servers,
+            truncated: found.truncated,
+        })
     }
 
     /// Checks the cfg of an existing server and every file it runs. Its endpoints are bound to see
@@ -158,7 +219,6 @@ pub(super) fn console_note(finding: &CfgFinding) -> String {
             text(&params.name)
         ),
         FindingKind::ResourceMissingMore => format!("starts {count} more resources that are missing"),
-        FindingKind::ResourceNamedObserver => "takes the name of Observer's bridge resource".to_owned(),
         FindingKind::ExecMissing => format!("runs {}, which cannot be read", text(&params.target)),
         FindingKind::ExecOutside => format!("runs {}, outside the server folder", text(&params.target)),
         FindingKind::ExecResource => format!("runs {} from a resource", text(&params.target)),

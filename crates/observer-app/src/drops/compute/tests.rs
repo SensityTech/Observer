@@ -1,4 +1,6 @@
+use observer_domain::changes::NumberChange;
 use observer_domain::drops::stats;
+use observer_domain::statistics::{EffectKind, EventDetail, TimelineEvent};
 use observer_store::MetricsDatabase;
 use observer_store::metrics::drops::{Grouping, NewSignature, Unclassified};
 use observer_store::metrics::runs::{EndCause, RunKey, StartCause};
@@ -567,4 +569,272 @@ async fn the_servers_own_stops_and_crashes_get_no_player_rate_and_closures_witho
     );
     assert_eq!(row(DropCategory::Unknown).drops, 0);
     assert_eq!(summary.coverage.lost, 10);
+}
+
+const GRACE: [u8; 16] = [2; 16];
+const MINUTE_MS: i64 = 60_000;
+
+fn wave_crashes(waves: &[insights::Wave]) -> Vec<u32> {
+    waves
+        .iter()
+        .map(|wave| match wave.event.detail {
+            EventDetail::CrashWave { crashes, .. } => crashes,
+            _ => 0,
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn crashes_of_one_signature_from_three_players_close_together_are_a_wave() {
+    let mut lab = Lab::new().await;
+    let run = lab.run(1, NOW_MS - 40 * DAY_MS, None, 3095).await;
+    let start = NOW_MS - 2 * HOUR_MS;
+    // Five crashes in 24 minutes from Ada, Grace and a player not confirmed yet.
+    for (minute, player) in [
+        (0, Some(ADA)),
+        (6, Some(GRACE)),
+        (12, None),
+        (18, Some(ADA)),
+        (24, Some(GRACE)),
+    ] {
+        let ended = start + minute * MINUTE_MS;
+        lab.play(
+            run,
+            ended - 30 * MINUTE_MS,
+            30 * MINUTE_MS,
+            DropCategory::Crash,
+            Some("ERR_NEW"),
+            player,
+        )
+        .await;
+    }
+    // Five crashes of another signature from one player are that player's, not the server's.
+    for minute in 0..5 {
+        let ended = start + minute * MINUTE_MS;
+        lab.play(
+            run,
+            ended - 30 * MINUTE_MS,
+            30 * MINUTE_MS,
+            DropCategory::Crash,
+            Some("ERR_ONE"),
+            Some(ADA),
+        )
+        .await;
+    }
+
+    let (waves, incidents) = lab
+        .read(|conn| insights::waves(conn, NOW_MS - DAY_MS, NOW_MS, NOW_MS))
+        .await;
+
+    assert_eq!(wave_crashes(&waves), [5]);
+    let wave = &waves[0];
+    assert_eq!(wave.start_ms, start);
+    assert_eq!(wave.event.until, Some((start + 24 * MINUTE_MS) / 1000));
+    let EventDetail::CrashWave { players, .. } = wave.event.detail else {
+        unreachable!("a wave's detail")
+    };
+    assert_eq!(players, 3, "Ada and Grace once each, the unconfirmed player once");
+    assert_eq!(incidents, Vec::<TimelineEvent>::new());
+    let late = lab
+        .read(|conn| insights::waves(conn, NOW_MS - HOUR_MS, NOW_MS, NOW_MS))
+        .await;
+    assert!(late.0.is_empty(), "the wave ended before the window");
+    let cut = lab
+        .read(move |conn| insights::waves(conn, start + 10 * MINUTE_MS, NOW_MS, NOW_MS))
+        .await;
+    assert_eq!(
+        wave_crashes(&cut.0),
+        [5],
+        "a wave the window cuts is counted whole"
+    );
+}
+
+#[tokio::test]
+async fn crashes_as_frequent_as_in_the_weeks_before_are_no_wave() {
+    let mut lab = Lab::new().await;
+    let run = lab.run(1, NOW_MS - 40 * DAY_MS, None, 3095).await;
+    // Every day of the four weeks before, the same five crashes in an hour of play.
+    for day in 0..=28 {
+        let start = NOW_MS - 2 * HOUR_MS - day * DAY_MS;
+        for (minute, player) in [
+            (0, Some(ADA)),
+            (6, Some(GRACE)),
+            (12, None),
+            (18, Some(ADA)),
+            (24, None),
+        ] {
+            let ended = start + minute * MINUTE_MS;
+            lab.play(
+                run,
+                ended - 10 * MINUTE_MS,
+                10 * MINUTE_MS,
+                DropCategory::Crash,
+                Some("ERR_DAILY"),
+                player,
+            )
+            .await;
+        }
+    }
+
+    let (waves, _) = lab
+        .read(|conn| insights::waves(conn, NOW_MS - DAY_MS, NOW_MS, NOW_MS))
+        .await;
+
+    assert!(waves.is_empty(), "{waves:?}");
+}
+
+#[tokio::test]
+async fn a_signature_is_quiet_before_a_change_only_without_a_crash_in_the_four_weeks_before() {
+    let mut lab = Lab::new().await;
+    let run = lab.run(1, NOW_MS - 60 * DAY_MS, None, 3095).await;
+    let change = NOW_MS - HOUR_MS;
+    lab.play(
+        run,
+        change - 27 * DAY_MS,
+        HOUR_MS,
+        DropCategory::Crash,
+        Some("ERR_SEEN"),
+        Some(ADA),
+    )
+    .await;
+    lab.play(
+        run,
+        change - 30 * DAY_MS,
+        HOUR_MS,
+        DropCategory::Crash,
+        Some("ERR_OLD"),
+        Some(ADA),
+    )
+    .await;
+    let (seen, old) = lab
+        .read(|conn| {
+            let ids: Vec<i64> = conn
+                .prepare("SELECT id FROM crash_signature ORDER BY signature DESC")?
+                .query_map([], |row| row.get(0))?
+                .collect::<Result<_, _>>()?;
+            Ok((ids[0], ids[1]))
+        })
+        .await;
+
+    let quiet = |signature| lab.read(move |conn| insights::quiet_before(conn, signature, change, NOW_MS));
+
+    assert!(!quiet(seen).await, "a crash 27 days before");
+    assert!(quiet(old).await, "the last crash 30 days before");
+}
+
+#[tokio::test]
+async fn how_long_players_stay_counts_their_own_ends_and_keeps_the_servers_out() {
+    let mut lab = Lab::new().await;
+    let run = lab.run(1, NOW_MS - 60 * DAY_MS, None, 3095).await;
+    let week = NOW_MS - 3 * DAY_MS;
+    lab.play(
+        run,
+        week,
+        5 * MINUTE_MS,
+        DropCategory::Crash,
+        Some("ERR_EARLY"),
+        Some(ADA),
+    )
+    .await;
+    lab.play(
+        run,
+        week + HOUR_MS,
+        20 * MINUTE_MS,
+        DropCategory::Quit,
+        None,
+        None,
+    )
+    .await;
+    lab.play(
+        run,
+        week + 2 * HOUR_MS,
+        30 * MINUTE_MS,
+        DropCategory::ServerStop,
+        None,
+        None,
+    )
+    .await;
+    lab.play(
+        run,
+        week + 3 * HOUR_MS,
+        60 * MINUTE_MS,
+        DropCategory::Quit,
+        None,
+        None,
+    )
+    .await;
+    // The weeks before: one session of two hours.
+    lab.play(
+        run,
+        NOW_MS - 20 * DAY_MS,
+        120 * MINUTE_MS,
+        DropCategory::Quit,
+        None,
+        None,
+    )
+    .await;
+
+    let survival = lab
+        .read(|conn| insights::sessions(conn, DropsRange::Week, now(), NOW_MS - 90 * DAY_MS))
+        .await;
+
+    let now_side = &survival.now;
+    assert_eq!((now_side.sessions, now_side.ended), (4, 3));
+    assert_eq!(now_side.points.len(), 121);
+    // After 5 minutes 1 of 4 left; after 20, 1 of the 3 then at risk; the server's stop at 30
+    // takes nobody's share; after 60, the last.
+    assert!((now_side.points[3] - 0.75).abs() < 1e-9, "{:?}", now_side.points);
+    assert!((now_side.points[10] - 0.5).abs() < 1e-9);
+    assert_eq!(now_side.points[30], 0.0);
+    assert_eq!(now_side.median, Some(20.0));
+    assert!((now_side.early.unwrap() - 0.25).abs() < 1e-9);
+    assert_eq!(now_side.early_crashes, Some(1.0));
+    assert_eq!(
+        (survival.before.sessions, survival.before.median),
+        (1, Some(120.0))
+    );
+}
+
+#[tokio::test]
+async fn a_change_is_compared_with_the_week_before_and_a_rise_is_told_from_noise() {
+    let mut lab = Lab::new().await;
+    let change = NOW_MS - 7 * DAY_MS;
+    let before = lab
+        .run(1, NOW_MS - 50 * DAY_MS, Some((change, EndCause::Stopped)), 3095)
+        .await;
+    let after = lab.run(2, change, None, 3258).await;
+    // Ten hours of play a day; one crash a day before the change, eight a day after.
+    for day in 0..42 {
+        let at = NOW_MS - (42 - day) * DAY_MS + 8 * HOUR_MS;
+        let run = if at < change { before } else { after };
+        let crashes = if at < change { 1 } else { 8 };
+        for slot in 0..10 {
+            let (category, signature) = if slot < crashes {
+                (DropCategory::Crash, Some("ERR_BUILD"))
+            } else {
+                (DropCategory::Quit, None)
+            };
+            lab.play(run, at + slot * HOUR_MS, HOUR_MS, category, signature, None)
+                .await;
+        }
+    }
+
+    let effects = lab
+        .read(|conn| insights::effects(conn, now(), &TimeZone::UTC, Vec::new(), false))
+        .await;
+
+    assert!(!effects.changes);
+    assert_eq!(effects.rows.len(), 1);
+    let row = &effects.rows[0];
+    assert_eq!(row.kinds, [EffectKind::Build]);
+    assert_eq!(
+        row.build,
+        Some(NumberChange {
+            from: Some(3095),
+            to: Some(3258)
+        })
+    );
+    assert_eq!(row.trend.verdict, TrendVerdict::Rising);
+    assert!(row.trend.now.unwrap() > 6.0 * row.trend.before.unwrap());
+    assert!(!row.open, "the week after has passed");
 }

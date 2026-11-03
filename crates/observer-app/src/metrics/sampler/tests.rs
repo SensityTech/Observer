@@ -724,6 +724,43 @@ fn ticks_are_deltas_between_readings_of_one_run_and_a_missing_one_keeps_the_base
 }
 
 #[test]
+fn svmain_s_histogram_follows_its_ticks_from_the_second_reading_of_a_run() {
+    let start = Instant::now();
+    let mut assembler = Assembler::new(start);
+    let reading = |generation: u32, slot: u32, count, ms| {
+        Some(run(
+            generation,
+            Readings {
+                perf: Some(at(mid_slot(start, slot), perf(count, ms))),
+                ..no_readings()
+            },
+        ))
+    };
+    let frames = |assembler: &mut Assembler, slot, run| {
+        assembler
+            .sample(wake(start + SLOT * slot, run, Measures::default()))
+            .frames
+    };
+
+    let first = frames(&mut assembler, 1, reading(1, 1, 100, 12));
+    let second = frames(&mut assembler, 2, reading(1, 2, 160, 12));
+    let new_run = frames(&mut assembler, 3, reading(2, 3, 10, 12));
+    let stopped = frames(&mut assembler, 4, None);
+
+    assert_eq!(first, None, "the first reading of a run is the baseline");
+    // 60 more ticks of 12 ms: between the 8 and 50 ms bounds.
+    assert_eq!(
+        second,
+        Some(Frames {
+            bounds: vec![8.0, 50.0, 250.0],
+            ticks: vec![0, 60, 0, 0],
+        })
+    );
+    assert_eq!(new_run, None);
+    assert_eq!(stopped, None);
+}
+
+#[test]
 fn ticks_over_the_budget_are_counted_and_a_reset_gives_nothing() {
     let start = Instant::now();
     let mut assembler = Assembler::new(start);
@@ -1141,6 +1178,7 @@ fn shares_of_the_machine_count_the_processors_the_host_cpu_counts() {
                 state: ServerState::Stopped,
                 values,
                 threads: Vec::new(),
+                frames: None,
             },
             Vec::new(),
             assembler.processors,

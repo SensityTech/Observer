@@ -51,7 +51,11 @@ function Forbidden({ body }: { body: string }) {
                     <ShieldAlert size={20} strokeWidth={1.5} aria-hidden="true" />
                 </span>
                 <p className="max-w-empty text-body text-ink-3">{body}</p>
-                <Link to="/account" className={buttonVariants({ tone: 'ink', size: 'sm' })}>
+                <Link
+                    to="/settings/$category"
+                    params={{ category: 'account' }}
+                    className={buttonVariants({ tone: 'ink', size: 'sm' })}
+                >
                     {t.forbidden.back}
                 </Link>
             </section>

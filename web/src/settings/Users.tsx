@@ -14,6 +14,8 @@ import { table } from '../components/table';
 import { errorMessage } from '../i18n/errors';
 import { useI18n } from '../i18n/I18nProvider';
 import { cn } from '../lib/cn';
+import { anchorOf } from './catalog';
+import { CategoryHead } from './Row';
 import {
     CreateUserDialog,
     DeleteUserDialog,
@@ -28,7 +30,8 @@ type Open =
     | { dialog: 'edit' | 'reset' | 'revoke' | 'delete'; user: User }
     | { dialog: 'password'; title: string; password: string };
 
-export function UsersPage() {
+/** The accounts and what each may do, for whoever manages users: what was the Users page. */
+export function UsersSettings() {
     const { t } = useI18n();
     const queryClient = useQueryClient();
     const users = useQuery(usersQuery);
@@ -43,34 +46,34 @@ export function UsersPage() {
     };
 
     return (
-        <div className="flex flex-col gap-5 max-md:gap-4">
-            <div className="page-head">
-                <h1 className="page-title">
-                    {t.users.title} <span className="gloss">{t.users.gloss}</span>
-                </h1>
-                <Button
-                    tone="ink"
-                    icon={UserPlus}
-                    className="max-md:w-full"
-                    onClick={() => {
-                        setDone(null);
-                        setOpen({ dialog: 'create' });
-                    }}
-                >
-                    {t.users.add}
-                </Button>
-            </div>
+        <>
+            <CategoryHead
+                category="users"
+                aside={
+                    <Button
+                        tone="ink"
+                        icon={UserPlus}
+                        className="max-md:w-full"
+                        onClick={() => {
+                            setDone(null);
+                            setOpen({ dialog: 'create' });
+                        }}
+                    >
+                        {t.users.add}
+                    </Button>
+                }
+            />
 
             {done && <Notice tone="success">{done}</Notice>}
 
-            <section className="card flex flex-col" aria-labelledby="users-title">
+            <section id={anchorOf('accounts')} className="card flex flex-col" aria-labelledby="users-title">
                 <div className="card-head">
                     <span className="grid size-6 place-items-center rounded-[6px] border border-line bg-surface-2 text-ink-2">
                         <Users size={14} strokeWidth={1.5} aria-hidden="true" />
                     </span>
-                    <h2 id="users-title" className="text-card text-ink">
+                    <h3 id="users-title" className="text-card text-ink">
                         {t.users.caption}
-                    </h2>
+                    </h3>
                 </div>
                 {users.isPending && (
                     <div className="flex flex-col gap-3 p-5" aria-busy="true">
@@ -177,7 +180,7 @@ export function UsersPage() {
             {open?.dialog === 'password' && (
                 <TemporaryPasswordDialog title={open.title} password={open.password} onClose={close} />
             )}
-        </div>
+        </>
     );
 }
 

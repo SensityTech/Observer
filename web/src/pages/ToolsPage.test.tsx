@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, cleanup, fireEvent, render, waitFor, within } from '@testing-library/react';
+import type { ReactNode } from 'react';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import type { ArchetypeGroup } from '../api/generated/ArchetypeGroup';
@@ -17,6 +18,15 @@ import { LiveContext } from '../live/context';
 import { Realtime, type SocketEvents } from '../live/realtime';
 import { ServerStatusProvider } from '../server/context';
 import { ToolsPage } from './ToolsPage';
+
+// The page links to its settings; no router runs here.
+vi.mock('@tanstack/react-router', () => ({
+    Link: ({ children, className }: { children: ReactNode; className?: string }) => (
+        <a href="/settings/tools" className={className}>
+            {children}
+        </a>
+    ),
+}));
 
 const words = en.tools;
 const settle = () => act(() => new Promise((resolve) => setTimeout(resolve, 0)));
@@ -731,60 +741,6 @@ describe('ToolsPage', () => {
                     .map((request) => request.body),
             ).toEqual([{ scope: { run: 5 } }]),
         );
-    });
-
-    it('should save the settings over their version, and say when another session changed them', async () => {
-        const saved = viewOf({
-            settings: {
-                atStart: 'report',
-                differences: 'identical',
-                escrowed: 'skip',
-                excluded: ['qb-props'],
-            },
-            version: 3,
-        });
-        const replies = [saved, answer(409, { code: 'conflict', params: {} })];
-        const asked = serve({
-            'GET /tools': () => (replies.length === 2 ? viewOf() : saved),
-            'PUT /tools/duplicate-archetypes/settings': () => replies.shift(),
-        });
-        const { getByLabelText, getByRole, findByText, getByText } = await page('online');
-
-        fireEvent.click(getByLabelText(words.settings.atStartModes.report));
-        fireEvent.change(getByLabelText(words.settings.excluded), {
-            target: { value: ' qb-props\n\nqb-props\n' },
-        });
-        expect(getByText(words.settings.changes(2))).not.toBeNull();
-        fireEvent.click(getByRole('button', { name: words.settings.save }));
-
-        expect(await findByText(words.settings.saved)).not.toBeNull();
-        expect(asked.find((request) => request.route.startsWith('PUT'))?.body).toEqual({
-            settings: {
-                atStart: 'report',
-                differences: 'identical',
-                escrowed: 'skip',
-                excluded: ['qb-props'],
-            },
-            version: 2,
-        });
-
-        fireEvent.click(getByLabelText(words.settings.escrowedModes.allow));
-        fireEvent.click(getByRole('button', { name: words.settings.save }));
-        expect(await findByText(words.settings.changedElsewhere)).not.toBeNull();
-        expect(asked.findLast((request) => request.route.startsWith('PUT'))?.body).toMatchObject({
-            version: 3,
-        });
-    });
-
-    it('should refuse an excluded name holding a slash before sending it', async () => {
-        const asked = serve({ 'GET /tools': viewOf() });
-        const { getByLabelText, getByRole, getByText } = await page('stopped');
-
-        fireEvent.change(getByLabelText(words.settings.excluded), { target: { value: '[qb]/qb-props' } });
-        fireEvent.click(getByRole('button', { name: words.settings.save }));
-
-        expect(getByText(words.settings.excludedInvalid)).not.toBeNull();
-        expect(asked.some((request) => request.route.startsWith('PUT'))).toBe(false);
     });
 
     it('should say there is nothing to fix before the first scan, and scan on demand', async () => {

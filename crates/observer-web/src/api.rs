@@ -17,6 +17,7 @@ mod metrics;
 mod players;
 mod schedule;
 mod servers;
+mod settings;
 mod setup;
 mod tools;
 mod users;
@@ -62,7 +63,9 @@ pub(crate) fn routes() -> Vec<Route> {
     let read_files = Permission(P::FILES_MANAGE);
     let change_files = Reauthenticated(P::FILES_MANAGE);
     // Launch settings choose what the host runs: the owner's alone, and their password again to
-    // change them. The setup's checks read the host's folders, which is the owner's alone too.
+    // change them. The setup's checks, its folder listing and its search for servers read the
+    // host's folders, which is the owner's alone too: posted, so a path never goes in an address
+    // and a refusal is audited.
     let read_launch = Owner;
     let edit_launch = ReauthenticatedOwner;
     let control = Permission(P::SERVER_CONTROL);
@@ -99,6 +102,8 @@ pub(crate) fn routes() -> Vec<Route> {
     // settings write into it, now or at every start, so they take the password again.
     let read_tools = Owner;
     let change_tools = ReauthenticatedOwner;
+    // `observer.toml` names the host's folders and addresses; the panel only reads it.
+    let read_bootstrap = Owner;
     // A feature turned on may open a port or read the host's folders: the owner's alone, as the
     // launch settings are.
     let read_features = Permission(P::SETTINGS_VIEW);
@@ -150,6 +155,8 @@ pub(crate) fn routes() -> Vec<Route> {
         route(M::PUT,    "/servers/default/launch",     edit_launch,  servers::change_launch_settings),
         route(M::POST,   "/servers/default/setup/folder", read_launch, servers::check_folder),
         route(M::POST,   "/servers/default/setup/cfg",    read_launch, servers::check_cfg),
+        route(M::POST,   "/servers/default/setup/folders",  read_launch, servers::list_folders),
+        route(M::POST,   "/servers/default/setup/discover", read_launch, servers::discover),
         route(M::PUT,    "/servers/default/setup",        edit_launch, servers::save_setup),
         route(M::POST,   "/servers/default/start",      control,      servers::start),
         route(M::POST,   "/servers/default/stop",       control,      servers::stop),
@@ -176,6 +183,12 @@ pub(crate) fn routes() -> Vec<Route> {
         route(M::PUT,    "/servers/default/artifacts/settings",       change_builds, artifacts::change_settings),
         route(M::GET,    "/metrics/threads",            dashboard,    metrics::threads),
         route(M::GET,    "/metrics/growth",             dashboard,    metrics::growth),
+        route(M::GET,    "/metrics/timeline",           dashboard,    metrics::timeline),
+        route(M::GET,    "/metrics/events",             dashboard,    metrics::events),
+        route(M::PUT,    "/metrics/links",              drops,        metrics::link),
+        route(M::GET,    "/metrics/frames",             dashboard,    metrics::frames),
+        route(M::GET,    "/metrics/hours",              dashboard,    metrics::hours),
+        route(M::GET,    "/metrics/runs",               dashboard,    metrics::runs),
         route(M::GET,    "/about",                      Session,      about::about),
         route(M::GET,    "/about/licences",             Session,      about::licences),
         route(M::GET,    "/servers/default/crashes/{id}/files/{name}", dumps, diagnostics::download_file),
@@ -196,6 +209,8 @@ pub(crate) fn routes() -> Vec<Route> {
         route(M::GET,    "/servers/default/drops/uptime",      drops,   drops::uptime),
         route(M::GET,    "/servers/default/drops/rates.csv",   drops,   drops::export_rates),
         route(M::GET,    "/servers/default/drops/crash",       drops,   drops::crash),
+        route(M::GET,    "/servers/default/drops/sessions",    drops,   drops::sessions),
+        route(M::GET,    "/servers/default/drops/effects",     drops,   drops::effects),
         route(M::GET,    "/servers/default/drops/log",         players, drops::log),
         route(M::GET,    "/servers/default/drops/log.csv",     players, drops::export_log),
         route(M::GET,    "/servers/default/drops/settings",    Owner,   drops::settings),
@@ -217,6 +232,7 @@ pub(crate) fn routes() -> Vec<Route> {
         route(M::POST,   "/tools/duplicate-archetypes/fix",          change_tools, tools::fix),
         route(M::POST,   "/tools/duplicate-archetypes/undo",         change_tools, tools::undo),
         route(M::PUT,    "/tools/duplicate-archetypes/settings",     change_tools, tools::change_settings),
+        route(M::GET,    "/settings/observer",                       read_bootstrap, settings::observer),
         route(M::GET,    "/features",           read_features,   features::list),
         route(M::PUT,    "/features/{feature}", switch_features, features::switch),
         route(M::GET,    "/servers/default/backups",                      read_backups,     backups::view),

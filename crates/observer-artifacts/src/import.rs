@@ -326,12 +326,11 @@ mod tests {
             fs::write(server.join("citizen/scripting/lua/scheduler.lua"), b"--").unwrap();
             fs::create_dir_all(server.join("crashes")).unwrap();
             fs::write(server.join("crashes/dump.dmp"), [0; 64]).unwrap();
-            fs::create_dir_all(server.join("citizen/system_resources/observer")).unwrap();
-            fs::write(
-                server.join("citizen/system_resources/observer/fxmanifest.lua"),
-                b"--",
-            )
-            .unwrap();
+            for bridge in ["observer", "sys_k3jx7qmw2pza"] {
+                let folder = server.join("citizen/system_resources").join(bridge);
+                fs::create_dir_all(&folder).unwrap();
+                fs::write(folder.join("fxmanifest.lua"), b"--").unwrap();
+            }
             fs::write(server.join("server-tls.crt"), b"cert").unwrap();
             fs::write(server.join("server-tls.key"), b"key").unwrap();
             let installer = Installer::new(Http::new().unwrap(), dir.path().join("data/artifacts"));
@@ -389,6 +388,7 @@ mod tests {
         assert!(server.join("citizen/scripting/lua/scheduler.lua").is_file());
         assert!(!server.join("crashes").exists());
         assert!(!server.join("citizen/system_resources/observer").exists());
+        assert!(!server.join("citizen/system_resources/sys_k3jx7qmw2pza").exists());
         assert!(!server.join("server-tls.crt").exists());
         assert_eq!(
             fs::read_link(build.join("alpine/bin/kill")).unwrap(),

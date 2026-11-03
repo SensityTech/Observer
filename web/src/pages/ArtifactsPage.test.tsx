@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, cleanup, fireEvent, render, waitFor, within } from '@testing-library/react';
+import type { ReactNode } from 'react';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { catalogQuery, cleanupQuery } from '../api/artifacts';
@@ -18,6 +19,15 @@ import { ScheduleProvider } from '../schedule/context';
 import { ServerStatusProvider } from '../server/context';
 import { StatusBar } from '../shell/StatusBar';
 import { ArtifactsPage } from './ArtifactsPage';
+
+// The page links to its settings; no router runs here.
+vi.mock('@tanstack/react-router', () => ({
+    Link: ({ children, className }: { children: ReactNode; className?: string }) => (
+        <a href="/settings/builds" className={className}>
+            {children}
+        </a>
+    ),
+}));
 
 const settle = () => act(() => new Promise((resolve) => setTimeout(resolve, 0)));
 
@@ -404,18 +414,6 @@ describe('ArtifactsPage', () => {
         writeText.mockRejectedValueOnce(new Error('not a secure context'));
         fireEvent.click(button);
         await waitFor(() => within(row(BUILD.build)).getByText(en.artifacts.installed.copyBlocked(commit)));
-    });
-
-    it('should keep a count of builds whole before sending the settings', async () => {
-        const fetch = vi.fn(async () => Response.json(STATUS));
-        vi.stubGlobal('fetch', fetch);
-        const { getByLabelText, getByRole, getByText } = await page({ ...STATUS, job: null });
-
-        fireEvent.change(getByLabelText(en.artifacts.settings.keepBuilds), { target: { value: '2.5' } });
-        fireEvent.click(getByRole('button', { name: en.artifacts.settings.save }));
-
-        expect(getByText(en.artifacts.settings.problems.outOfRange)).toBeTruthy();
-        expect(fetch).not.toHaveBeenCalled();
     });
 
     it('should say beside a build in use why it cannot be deleted', async () => {

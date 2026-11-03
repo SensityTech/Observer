@@ -26,7 +26,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::watch;
 
 pub use confined::{Entry, EntryKind, FileId, InvalidName, RelativePath, TreeError};
-pub use sockets::{Protocol, Socket, SocketState, sockets};
+pub use sockets::{Listener, Protocol, Socket, SocketState, sockets, tcp_listeners};
 pub use stream::{Output, Stdin};
 pub use tree::{ProcessInfo, TreeChange, TreeChanges};
 #[cfg(unix)]
@@ -157,6 +157,19 @@ impl HeldFolder {
     /// Windows, where nobody can rename or remove it while it is held.
     pub fn path(&self) -> &Path {
         &self.path
+    }
+}
+
+/// The roots a person browses the host from: the fixed and removable drives on Windows, network
+/// drives left out since listing one may wait on the network; `/` elsewhere.
+pub fn local_roots() -> Vec<PathBuf> {
+    #[cfg(windows)]
+    {
+        windows::files::local_drives()
+    }
+    #[cfg(unix)]
+    {
+        vec![PathBuf::from("/")]
     }
 }
 

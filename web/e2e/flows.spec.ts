@@ -74,10 +74,16 @@ test.describe.serial('Observer in a browser', () => {
         await page.getByRole('button', { name: en.setup.submit }).click();
         await expect(page.getByRole('heading', { level: 1 })).toContainText(setup.title);
 
-        await page.getByRole('textbox', { name: setup.folder.label }).fill(env('E2E_SERVER_DATA'));
-        await page.getByRole('button', { name: setup.folder.check }).click();
+        // The search of the host comes first; a server it finds closes the field for another path.
+        await expect(page.getByText(/^Observer looked in the usual places/)).toBeVisible({ timeout: 30_000 });
+        const folder = page.getByRole('combobox', { name: setup.folder.label });
+        if (!(await folder.isVisible())) {
+            await page.getByText(setup.folder.elsewhere, { exact: true }).click();
+        }
+        await folder.fill(env('E2E_SERVER_DATA'));
+        await folder.press('Enter');
         await expect(page.getByText(setup.folder.accepted)).toBeVisible();
-        await page.getByRole('button', { name: setup.continue }).click();
+        await page.getByRole('button', { name: setup.continue, exact: true }).click();
 
         // Entering the step checks the cfg: without a licence key it warns, and nothing blocks.
         await expect(page.getByText(setup.cfg.kinds.licenceMissing())).toBeVisible();
@@ -196,6 +202,35 @@ test.describe.serial('Observer in a browser', () => {
 
         await expect(page.getByRole('heading', { level: 1 })).toContainText('Ada');
         await expect(page.getByText(en.players.online, { exact: true }).first()).toBeVisible();
+    });
+
+    test("a label the server's resources give shows online, finds the player and stays on their profile", async () => {
+        await page.getByRole('link', { name: en.nav.console, exact: true }).click();
+        const command = page.getByRole('textbox', { name: en.console.commandLabel });
+        await command.fill('fake_label 1 CHAR-1234 Mara Quinn');
+        await command.press('Enter');
+        await expect(page.getByText(en.console.sent('fake_label 1 CHAR-1234 Mara Quinn'))).toBeVisible();
+
+        await page.getByRole('link', { name: en.nav.players, exact: true }).click();
+        const online = page.getByRole('region', { name: en.players.now.title, exact: true });
+        const mara = online.getByRole('link', { name: 'Mara Quinn', exact: true });
+        await expect(mara).toBeVisible({ timeout: 15_000 });
+        await expect(online.getByText(en.players.label.fivem('Ada')).first()).toBeVisible();
+        // The search reads the database, where the players' flush writes the label within a second.
+        const list = page.getByRole('region', { name: en.players.list.title, exact: true });
+        await expect(async () => {
+            await page.reload();
+            await list.getByRole('searchbox', { name: en.players.list.search }).fill('char-1234');
+            await list.getByRole('button', { name: en.players.list.submit, exact: true }).click();
+            await expect(list.getByRole('link', { name: 'Mara Quinn', exact: true }).first()).toBeVisible({
+                timeout: 2_000,
+            });
+        }).toPass({ timeout: 15_000 });
+        await mara.click();
+
+        await expect(page.getByRole('heading', { level: 1 })).toContainText('Ada');
+        const labels = page.getByRole('region', { name: en.players.profile.labels.title, exact: true });
+        await expect(labels.getByRole('cell', { name: /CHAR-1234/ })).toBeVisible();
     });
 
     test('a player who crashes shows in the drop log, then with their crash signature', async () => {

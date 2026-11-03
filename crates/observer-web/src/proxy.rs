@@ -1,6 +1,7 @@
 //! What a reverse proxy that terminates TLS says of the requests it forwards. Only the proxies the
 //! owner listed are heard: any client could write the same headers.
 
+use std::fmt;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::str::FromStr;
 
@@ -68,6 +69,19 @@ impl TryFrom<String> for TrustedProxy {
 
     fn try_from(entry: String) -> Result<Self, InvalidProxy> {
         entry.parse()
+    }
+}
+
+/// As the owner would write it, a single address without its prefix, after the bits past the
+/// prefix were dropped.
+impl fmt::Display for TrustedProxy {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let bits = if self.network.is_ipv4() { 32 } else { 128 };
+        if self.prefix == bits {
+            write!(f, "{}", self.network)
+        } else {
+            write!(f, "{}/{}", self.network, self.prefix)
+        }
     }
 }
 
@@ -243,6 +257,23 @@ mod tests {
             assert_eq!(
                 error.to_string(),
                 format!("`{invalid}` is not an address or a CIDR block such as 10.0.0.0/8")
+            );
+        }
+    }
+
+    #[test]
+    fn an_entry_reads_back_as_written_once_its_host_bits_are_dropped() {
+        for (entry, shown) in [
+            ("127.0.0.1", "127.0.0.1"),
+            ("10.0.0.1/8", "10.0.0.0/8"),
+            ("fd00::/8", "fd00::/8"),
+            ("::1", "::1"),
+            ("::ffff:172.18.0.0/112", "172.18.0.0/16"),
+        ] {
+            assert_eq!(
+                entry.parse::<TrustedProxy>().unwrap().to_string(),
+                shown,
+                "{entry}"
             );
         }
     }

@@ -53,6 +53,7 @@ const player = (fields: Partial<OnlinePlayer> & Pick<OnlinePlayer, 'netId'>): On
     sessionMs: MINUTE,
     totalMs: null,
     ping: null,
+    label: null,
     ...fields,
 });
 

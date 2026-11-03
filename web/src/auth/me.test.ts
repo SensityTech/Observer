@@ -26,10 +26,10 @@ describe('landing', () => {
         expect(landing(me('1'))).toBe('/');
     });
 
-    it('should fall back to the first page the user may open, then to their account', () => {
-        expect(landing(me('180'))).toBe('/users');
+    it('should fall back to the first page the user may open, then to the settings and their account', () => {
+        expect(landing(me('180'))).toBe('/settings');
         expect(landing(me('100'))).toBe('/audit');
-        expect(landing(me('2'))).toBe('/account');
-        expect(landing(me('0'))).toBe('/account');
+        expect(landing(me('2'))).toBe('/settings');
+        expect(landing(me('0'))).toBe('/settings');
     });
 });

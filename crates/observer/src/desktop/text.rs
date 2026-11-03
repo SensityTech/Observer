@@ -59,7 +59,7 @@ pub const CONFIRM_QUIT_RUNNING: &str = "Quit and stop FXServer";
 pub const CONFIRM_QUIT: &str = "Quit Observer";
 
 pub const NOT_CONFIGURED: &str = "FXServer has no launch settings yet.";
-pub const INVALID: &str = "The launch settings need fixing on the Server page.";
+pub const INVALID: &str = "The launch settings need fixing in Settings, under Launch.";
 pub const NO_BUILD: &str = "No build is selected: install or import one on the Artifacts page.";
 pub const RUNNING: &str = "FXServer is already running.";
 pub const NOT_RUNNING: &str = "FXServer is not running.";
@@ -372,7 +372,7 @@ mod tests {
             ),
             (
                 ErrorCode::InvalidLaunchSettings,
-                "The launch settings need fixing on the Server page.",
+                "The launch settings need fixing in Settings, under Launch.",
             ),
             (
                 ErrorCode::LaunchFailed,

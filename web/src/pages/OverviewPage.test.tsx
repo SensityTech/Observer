@@ -32,19 +32,24 @@ import { OverviewPage } from './OverviewPage';
 vi.mock('@tanstack/react-router', () => ({
     Link: ({
         to,
+        params,
         hash,
         children,
         className,
     }: {
         to: string;
+        params?: Record<string, string>;
         hash?: string;
         children: ReactNode;
         className?: string;
-    }) => (
-        <a href={hash === undefined ? to : `${to}#${hash}`} className={className}>
-            {children}
-        </a>
-    ),
+    }) => {
+        const path = to.replace(/\$(\w+)/g, (_, name: string) => params?.[name] ?? '');
+        return (
+            <a href={hash === undefined ? path : `${path}#${hash}`} className={className}>
+                {children}
+            </a>
+        );
+    },
 }));
 
 const chart = vi.hoisted(() => ({ fails: false }));
@@ -402,8 +407,26 @@ describe('OverviewPage', () => {
             startedAt: NOW - 7200,
             from: NOW - 5400,
             to: NOW,
-            private: { perHour: 180 * 1024 ** 2, fit: 0.97, start: 9 * 1024 ** 3, points: 90, leak: true },
-            handles: { perHour: 12, fit: 0.2, start: 3200, points: 90, leak: false },
+            private: {
+                perHour: 180 * 1024 ** 2,
+                fit: 0.97,
+                start: 9 * 1024 ** 3,
+                points: 90,
+                leak: true,
+                residual: null,
+                slopeError: null,
+                center: 0,
+            },
+            handles: {
+                perHour: 12,
+                fit: 0.2,
+                start: 3200,
+                points: 90,
+                leak: false,
+                residual: null,
+                slopeError: null,
+                center: 0,
+            },
         };
         const { say, live } = await page(hour(), { growth });
         say({ type: 'snapshot', topic: 'metrics.live', data: { latest: SAMPLE } });
@@ -423,8 +446,26 @@ describe('OverviewPage', () => {
             startedAt: NOW - 7200,
             from: NOW - 5400,
             to: NOW,
-            private: { perHour: 0.3, fit: 0.01, start: 9 * 1024 ** 3, points: 90, leak: false },
-            handles: { perHour: -0.3, fit: 0.01, start: 3200, points: 90, leak: false },
+            private: {
+                perHour: 0.3,
+                fit: 0.01,
+                start: 9 * 1024 ** 3,
+                points: 90,
+                leak: false,
+                residual: null,
+                slopeError: null,
+                center: 0,
+            },
+            handles: {
+                perHour: -0.3,
+                fit: 0.01,
+                start: 3200,
+                points: 90,
+                leak: false,
+                residual: null,
+                slopeError: null,
+                center: 0,
+            },
         };
         const { say, live } = await page(hour(), { growth });
         say({ type: 'snapshot', topic: 'metrics.live', data: { latest: SAMPLE } });
@@ -439,8 +480,26 @@ describe('OverviewPage', () => {
             startedAt: NOW - 7200,
             from: NOW - 5400,
             to: NOW,
-            private: { perHour: 2 * 1024 ** 2, fit: 0.1, start: 9 * 1024 ** 3, points: 90, leak: false },
-            handles: { perHour: 300, fit: 0.9, start: 3200, points: 90, leak: true },
+            private: {
+                perHour: 2 * 1024 ** 2,
+                fit: 0.1,
+                start: 9 * 1024 ** 3,
+                points: 90,
+                leak: false,
+                residual: null,
+                slopeError: null,
+                center: 0,
+            },
+            handles: {
+                perHour: 300,
+                fit: 0.9,
+                start: 3200,
+                points: 90,
+                leak: true,
+                residual: null,
+                slopeError: null,
+                center: 0,
+            },
         };
         const { say, live } = await page(hour(), { growth });
         say({ type: 'snapshot', topic: 'metrics.live', data: { latest: SAMPLE } });
@@ -722,7 +781,7 @@ describe('OverviewPage', () => {
         getByText(en.server_state.hangNoHttp);
         getByText(en.server_state.hangAdvice(15));
         expect(getByRole('link', { name: en.server_state.openHang }).getAttribute('href')).toBe(
-            '/server#server-hang',
+            '/settings/launch#setting-hangDetection',
         );
         live.stop();
         vi.unstubAllGlobals();
@@ -763,7 +822,16 @@ describe('OverviewPage', () => {
             startedAt: NOW - 7200,
             from: NOW - 7200,
             to: NOW,
-            private: { perHour: 12 * 1024 ** 2, fit: 0.9, start: 9 * 1024 ** 3, points: 120, leak: false },
+            private: {
+                perHour: 12 * 1024 ** 2,
+                fit: 0.9,
+                start: 9 * 1024 ** 3,
+                points: 120,
+                leak: false,
+                residual: null,
+                slopeError: null,
+                center: 0,
+            },
             handles: null,
         };
         const { say, live } = await page(hour(), { growth, details: false });
@@ -801,7 +869,16 @@ describe('OverviewPage', () => {
             startedAt: NOW - 7200,
             from: NOW - 7200,
             to: NOW,
-            private: { perHour: 300 * 1024 ** 2, fit: 0.97, start: 6 * 1024 ** 3, points: 600, leak: true },
+            private: {
+                perHour: 300 * 1024 ** 2,
+                fit: 0.97,
+                start: 6 * 1024 ** 3,
+                points: 600,
+                leak: true,
+                residual: null,
+                slopeError: null,
+                center: 0,
+            },
             handles: null,
         };
         const { say, live } = await page(hour(), { growth, details: false });

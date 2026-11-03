@@ -13,7 +13,7 @@ export type CfgFinding = { kind: FindingKind,
  */
 severity: Severity, 
 /**
- * Relative to the data folder with `/`: the line's file, the resource folder for
- * `resourceNamedObserver`, the cfg for what the whole chain lacks.
+ * Relative to the data folder with `/`: the line's file, or the cfg for what the whole chain
+ * lacks.
  */
 file: string, line: number | null, params: FindingParams, };

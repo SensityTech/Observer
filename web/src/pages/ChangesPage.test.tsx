@@ -231,6 +231,12 @@ const starts = () => card(en.changes.starts.title).getAllByRole('listitem');
 const rows = () =>
     [...document.querySelectorAll('tbody tr td:first-child a')].map((link) => link.textContent);
 
+/** The way to the settings that sat at the bottom of the page, now in Data kept. */
+const settingsLink = () =>
+    [...document.querySelectorAll('a')].find((link) =>
+        link.textContent?.startsWith(en.settings.moved(en.settings.categories.data.name)),
+    );
+
 describe('ChangesPage', () => {
     beforeAll(() => {
         // jsdom has the element but not its modal methods.
@@ -372,23 +378,15 @@ describe('ChangesPage', () => {
         expect(start.queryByText(/added/)).toBeNull();
     });
 
-    it('should give the owner alone the settings, with the patterns that match no file', async () => {
+    it('should lead the owner alone to the settings, now on the Settings page', async () => {
         serve(SERVED);
         await panel('/changes', VIEWER);
-        expect(document.body.textContent).not.toContain(en.changes.settings.title);
+        expect(settingsLink()).toBeUndefined();
         cleanup();
 
         serve(SERVED);
         await panel('/changes', OWNER);
-        const settings = card(en.changes.settings.title);
-        expect(settings.getByText('*.secret', { selector: 'code' }).nextSibling?.textContent).toBe(
-            en.changes.settings.matchesNone,
-        );
-        expect(settings.getByText('cache', { selector: 'code' }).nextSibling?.textContent).toBe(
-            en.changes.settings.matchesNone,
-        );
-        expect(settings.getByText(en.changes.settings.matches(1))).not.toBeNull();
-        expect((settings.getByLabelText(en.changes.settings.budget) as HTMLInputElement).value).toBe('2');
+        expect(settingsLink()?.getAttribute('href')).toBe('/settings/data#setting-changesEnabled');
     });
 
     it('should count resources left unknown as checking, and let go of a change once none is listed', async () => {

@@ -1,11 +1,13 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, cleanup, fireEvent, render, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
-import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { catalogQuery } from '../api/artifacts';
 import type { ArtifactsStatus } from '../api/generated/ArtifactsStatus';
 import type { CfgReport } from '../api/generated/CfgReport';
+import type { Discovery } from '../api/generated/Discovery';
+import type { FolderListing } from '../api/generated/FolderListing';
 import type { FolderReport } from '../api/generated/FolderReport';
 import type { ServerStatus } from '../api/generated/ServerStatus';
 import type { StoredLaunch } from '../api/generated/StoredLaunch';
@@ -26,19 +28,24 @@ import { ServerSetupPage } from './ServerSetupPage';
 vi.mock('@tanstack/react-router', () => ({
     Link: ({
         to,
+        params,
         hash,
         children,
         className,
     }: {
         to: string;
+        params?: Record<string, string>;
         hash?: string;
         children: ReactNode;
         className?: string;
-    }) => (
-        <a href={hash === undefined ? to : `${to}#${hash}`} className={className}>
-            {children}
-        </a>
-    ),
+    }) => {
+        const path = to.replace(/\$(\w+)/g, (_, name: string) => params?.[name] ?? '');
+        return (
+            <a href={hash === undefined ? path : `${path}#${hash}`} className={className}>
+                {children}
+            </a>
+        );
+    },
 }));
 
 const settle = () => act(() => new Promise((resolve) => setTimeout(resolve, 0)));
@@ -89,7 +96,7 @@ const serve = (routes: Record<string, Answer | Answer[]>) => {
             const route = `${init.method ?? 'GET'} ${url.replace(/^\/api/, '')}`;
             const body: unknown = init.body === undefined ? undefined : JSON.parse(String(init.body));
             sent.push({ route, body });
-            const answers = routes[route];
+            const answers = routes[route] ?? (route === DISCOVER_ROUTE ? json(NOTHING_FOUND) : undefined);
             if (answers === undefined) {
                 return Response.json({ code: 'not_found' }, { status: 404 });
             }
@@ -109,6 +116,67 @@ const json = (value: unknown) => () => Response.json(value);
 const FOLDER_ROUTE = 'POST /servers/default/setup/folder';
 const CFG_ROUTE = 'POST /servers/default/setup/cfg';
 const SAVE_ROUTE = 'PUT /servers/default/setup';
+const DISCOVER_ROUTE = 'POST /servers/default/setup/discover';
+const FOLDERS_ROUTE = 'POST /servers/default/setup/folders';
+
+const PLACES: Discovery['places'] = [
+    { kind: 'drive', path: 'C:\\' },
+    { kind: 'drive', path: 'D:\\' },
+    { kind: 'home', path: 'C:\\Users\\Ada' },
+];
+/** What the search finds on a host without a server: the places to browse from alone. */
+const NOTHING_FOUND: Discovery = { places: PLACES, servers: [], truncated: false };
+const LIVE: Discovery['servers'][number] = {
+    path: DATA_PATH,
+    resources: 54,
+    resourcesTruncated: false,
+    cfg: 'server.cfg',
+    onesync: 'on',
+    txAdmin: true,
+    port: 30120,
+    portHolder: { program: 'FXServer.exe', fxServer: true },
+};
+const LAB: Discovery['servers'][number] = {
+    path: 'D:\\FiveM\\lab-server',
+    resources: 37,
+    resourcesTruncated: false,
+    cfg: 'server.cfg',
+    onesync: 'off',
+    txAdmin: false,
+    port: 30140,
+    portHolder: null,
+};
+
+/** The folders of `D:\FXServer`, as the listing gives them. */
+const FXSERVER_FOLDERS: FolderListing = {
+    path: 'D:\\FXServer\\',
+    parent: 'D:\\',
+    problem: null,
+    pathProblem: null,
+    entries: [
+        {
+            name: 'server-data',
+            path: DATA_PATH,
+            kind: 'server',
+            link: false,
+            resources: 54,
+            cfg: 'server.cfg',
+            folders: null,
+            inside: [],
+        },
+        {
+            name: 'build',
+            path: 'D:\\FXServer\\build',
+            kind: 'folder',
+            link: false,
+            resources: null,
+            cfg: null,
+            folders: 2,
+            inside: [],
+        },
+    ],
+    truncated: false,
+};
 
 /** The page over settings already read, for the owner, the builds and FXServer as the topics say. */
 const page = async ({
@@ -171,15 +239,19 @@ const page = async ({
         fireEvent.click(button(name));
         await settle();
     };
-    /** Through the folder step, with the folder accepted. */
+    const field = () => view.getByRole('combobox', { name: words.folder.label }) as HTMLInputElement;
+    /** Types a path in the folder field, then Enter checks it. */
+    const typeFolder = async (path: string) => {
+        fireEvent.change(field(), { target: { value: path } });
+        fireEvent.keyDown(field(), { key: 'Enter' });
+        await settle();
+    };
+    /** Through the folder step: Continue checks the path typed, and goes on once it passes. */
     const toCfg = async () => {
-        fireEvent.change(view.getByRole('textbox', { name: words.folder.label }), {
-            target: { value: DATA_PATH },
-        });
-        await press(words.folder.check);
+        fireEvent.change(field(), { target: { value: DATA_PATH } });
         await press(words.continue);
     };
-    return { ...view, client, say, button, press, toCfg };
+    return { ...view, client, say, button, press, field, typeFolder, toCfg };
 };
 
 describe('ServerSetupPage', () => {
@@ -191,6 +263,15 @@ describe('ServerSetupPage', () => {
         HTMLDialogElement.prototype.close ??= function (this: HTMLDialogElement) {
             this.open = false;
         };
+    });
+
+    beforeEach(() => {
+        // The iris behind the setup stays still, as under reduced motion: jsdom draws no canvas.
+        vi.stubGlobal('matchMedia', () => ({
+            matches: true,
+            addEventListener: () => {},
+            removeEventListener: () => {},
+        }));
     });
 
     afterEach(() => {
@@ -206,10 +287,9 @@ describe('ServerSetupPage', () => {
             detectedCfg: 'configs/live.cfg',
         };
         const api = serve({ [FOLDER_ROUTE]: json(live), [CFG_ROUTE]: json(CFG) });
-        const { button, getByText, getByRole, toCfg } = await page();
+        const { button, getByRole, toCfg } = await page();
 
         expect(button(words.continue).disabled).toBe(true);
-        getByText(words.folder.notChecked);
         await toCfg();
 
         expect(api.of(FOLDER_ROUTE)).toEqual([{ dataPath: DATA_PATH }]);
@@ -225,13 +305,10 @@ describe('ServerSetupPage', () => {
     it('should take the cfg detected in the folder checked last, not one detected before', async () => {
         const other: FolderReport = { ...FOLDER, cfgFiles: ['main.cfg'], detectedCfg: 'main.cfg' };
         const api = serve({ [FOLDER_ROUTE]: [json(other), json(FOLDER)], [CFG_ROUTE]: json(CFG) });
-        const { getByRole, press } = await page();
-        const field = getByRole('textbox', { name: words.folder.label });
+        const { press, typeFolder } = await page();
 
-        fireEvent.change(field, { target: { value: 'D:\\FXServer\\other-data' } });
-        await press(words.folder.check);
-        fireEvent.change(field, { target: { value: DATA_PATH } });
-        await press(words.folder.check);
+        await typeFolder('D:\\FXServer\\other-data');
+        await typeFolder(DATA_PATH);
         await press(words.continue);
 
         expect(api.of(CFG_ROUTE)).toEqual([{ dataPath: DATA_PATH, cfgFile: 'server.cfg', onesync: 'on' }]);
@@ -243,19 +320,16 @@ describe('ServerSetupPage', () => {
             resources: { resources: 1800, categories: 250, withoutManifest: [], truncated: true },
         };
         serve({ [FOLDER_ROUTE]: json(many) });
-        const { getByRole, getByText, press } = await page();
+        const { getByText, typeFolder } = await page();
 
-        fireEvent.change(getByRole('textbox', { name: words.folder.label }), {
-            target: { value: DATA_PATH },
-        });
-        await press(words.folder.check);
+        await typeFolder(DATA_PATH);
 
         getByText(
             'At least 1,800 resources in 250 categories: the count stopped at 250 categories or 5,000 files and folders.',
         );
     });
 
-    it('should say why a folder is refused and offer the one nearby that fits', async () => {
+    it('should say why a folder is refused, stay on it at Continue, and offer the one nearby that fits', async () => {
         const resources = `${DATA_PATH}\\resources`;
         const refused: FolderReport = {
             ...FOLDER,
@@ -265,25 +339,32 @@ describe('ServerSetupPage', () => {
             cfgFiles: [],
             detectedCfg: null,
         };
-        const api = serve({ [FOLDER_ROUTE]: [json(refused), json(FOLDER)] });
-        const { getByRole, button, press } = await page();
-        const field = getByRole('textbox', { name: words.folder.label }) as HTMLInputElement;
+        const api = serve({
+            [FOLDER_ROUTE]: [json(refused), json(refused), json(FOLDER)],
+            [CFG_ROUTE]: json(CFG),
+        });
+        const { getByRole, field, press, typeFolder } = await page();
 
-        fireEvent.change(field, { target: { value: resources } });
-        await press(words.folder.check);
+        await typeFolder(resources);
 
-        expect(field.getAttribute('aria-invalid')).toBe('true');
-        expect(field.getAttribute('aria-describedby')).toContain('error');
-        expect(document.getElementById(field.getAttribute('aria-describedby') ?? '')?.textContent).toBe(
-            words.folder.problems.isResources,
-        );
-        expect(button(words.continue).disabled).toBe(true);
+        expect(field().getAttribute('aria-invalid')).toBe('true');
+        expect(field().getAttribute('aria-describedby')).toContain('error');
+        expect(described(field())).toBe(words.folder.problems.isResources);
+
+        await press(words.continue);
+        expect(api.of(CFG_ROUTE)).toEqual([]);
+        getByRole('heading', { name: words.folder.question });
 
         await press(words.folder.useSuggestion);
+        expect(field().value).toBe(DATA_PATH);
+        await press(words.continue);
 
-        expect(field.value).toBe(DATA_PATH);
-        expect(api.of(FOLDER_ROUTE)).toEqual([{ dataPath: resources }, { dataPath: DATA_PATH }]);
-        expect(button(words.continue).disabled).toBe(false);
+        expect(api.of(FOLDER_ROUTE)).toEqual([
+            { dataPath: resources },
+            { dataPath: resources },
+            { dataPath: DATA_PATH },
+        ]);
+        expect(api.of(CFG_ROUTE)).toHaveLength(1);
     });
 
     it('should say a path is needed when a field is checked empty', async () => {
@@ -302,13 +383,12 @@ describe('ServerSetupPage', () => {
             ],
             [CFG_ROUTE]: [json(CFG), json(unread)],
         });
-        const { getByRole, press, toCfg } = await page();
+        const { getByRole, field, press, toCfg } = await page();
 
-        await press(words.folder.check);
+        fireEvent.keyDown(field(), { key: 'Enter' });
+        await settle();
         expect(api.of(FOLDER_ROUTE)).toEqual([{ dataPath: '' }]);
-        expect(described(getByRole('textbox', { name: words.folder.label }))).toBe(
-            en.server.problems.required,
-        );
+        expect(described(field())).toBe(en.server.problems.required);
 
         await toCfg();
         const cfg = getByRole('textbox', { name: words.cfg.label });
@@ -583,7 +663,7 @@ describe('ServerSetupPage', () => {
         getByText(en.server_state.hangNoHeartbeat);
         getByText(en.server_state.hangAdvice(6));
         expect(getByRole('link', { name: en.server_state.openHang }).getAttribute('href')).toBe(
-            '/server#server-hang',
+            '/settings/launch#setting-hangDetection',
         );
     });
 
@@ -671,7 +751,7 @@ describe('ServerSetupPage', () => {
             [SAVE_ROUTE]: () => Response.json({ code: 'conflict' }, { status: 409 }),
             'GET /servers/default/launch': json(stored(4)),
         });
-        const { getByText, press, toCfg } = await page({ saved: stored(3) });
+        const { getByRole, getByText, press, toCfg } = await page({ saved: stored(3) });
         await toCfg();
         await press(words.continue);
         await press(words.continue);
@@ -680,6 +760,57 @@ describe('ServerSetupPage', () => {
 
         await waitFor(() => getByText(words.changedElsewhere));
         await press(words.startAgain);
-        getByText(words.folder.notChecked);
+        expect(document.activeElement).toBe(getByRole('heading', { name: words.folder.question }));
+    });
+
+    it('should offer the servers found, the first one picked, and go on with it once its check passes', async () => {
+        const api = serve({
+            [DISCOVER_ROUTE]: json({ places: PLACES, servers: [LIVE, LAB], truncated: false }),
+            [FOLDER_ROUTE]: json(FOLDER),
+            [CFG_ROUTE]: json(CFG),
+        });
+        const { getByRole, getByText, press } = await page();
+
+        await waitFor(() => getByText(words.folder.found(2)));
+        const found = within(getByRole('list', { name: words.folder.servers }));
+        const live = found.getByRole('button', { name: /server-data/ });
+        expect(live.getAttribute('aria-pressed')).toBe('true');
+        within(live).getByText(words.folder.usedByTxAdmin);
+        within(live).getByText(words.folder.onesync.on);
+        getByText(words.folder.portTaken(30120, { program: 'FXServer.exe', fxServer: true }, true));
+
+        fireEvent.click(found.getByRole('button', { name: /lab-server/ }));
+        await settle();
+        expect(found.getByRole('button', { name: /lab-server/ }).getAttribute('aria-pressed')).toBe('true');
+        fireEvent.click(found.getByRole('button', { name: /server-data/ }));
+        await settle();
+        await press(words.folder.continueWith('server-data'));
+
+        expect(api.of(FOLDER_ROUTE)).toEqual([{ dataPath: DATA_PATH }]);
+        expect(api.of(CFG_ROUTE)).toEqual([{ dataPath: DATA_PATH, cfgFile: 'server.cfg', onesync: 'on' }]);
+        expect(document.activeElement).toBe(getByRole('heading', { name: words.stepNames.cfg }));
+    });
+
+    it('should browse to a folder, show what its check finds, and go on with it', async () => {
+        const api = serve({
+            [FOLDERS_ROUTE]: json(FXSERVER_FOLDERS),
+            [FOLDER_ROUTE]: json(FOLDER),
+            [CFG_ROUTE]: json(CFG),
+        });
+        const { getByRole, getByText, field, press } = await page();
+
+        fireEvent.change(field(), { target: { value: 'D:\\FXServer\\build' } });
+        await press(words.folder.browse);
+        const folders = within(
+            await waitFor(() => getByRole('list', { name: words.folder.browser.folders('FXServer') })),
+        );
+        fireEvent.click(folders.getByRole('button', { name: /^server-data/ }));
+
+        await waitFor(() => getByText(words.folder.browser.isServer));
+        expect(api.of(FOLDERS_ROUTE)).toEqual([{ path: 'D:\\FXServer\\', prefix: '' }]);
+        await press(words.folder.browser.use);
+
+        expect(api.of(FOLDER_ROUTE).at(-1)).toEqual({ dataPath: DATA_PATH });
+        expect(api.of(CFG_ROUTE)).toEqual([{ dataPath: DATA_PATH, cfgFile: 'server.cfg', onesync: 'on' }]);
     });
 });

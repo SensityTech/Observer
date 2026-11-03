@@ -55,9 +55,10 @@ const PLAYERS_WITHOUT_ONESYNC: u32 = 32;
 const TXADMIN_PORTS: RangeInclusive<u16> = 40120..=40150;
 const MONITOR_NAMES: [&str; 3] = ["monitor", "txadmin", "txadminclient"];
 /// The convars Observer sets on every launch, through argv or stdin.
-const OBSERVER_CONVARS: [&str; 5] = [
+const OBSERVER_CONVARS: [&str; 6] = [
     "onesync",
     "observer_txadmin_events",
+    bridge::NAME_CONVAR,
     "sv_prometheusBasicAuthUser",
     "sv_prometheusBasicAuthPassword",
     "sv_playersToken",
@@ -412,7 +413,6 @@ impl Scanner<'_> {
         // Each name is reported once, where it is first started.
         let missing = !self.resources.holds(&lower)
             && !self.system.contains(&lower)
-            && lower != bridge::NAME
             && self.missing.len() < MAX_MISSING_NAMES
             && self.missing.insert(lower);
         if missing {
@@ -644,14 +644,6 @@ impl Scanner<'_> {
         let max_clients = self.max_clients();
         let game = self.game();
         self.missing_more(cfg_file);
-        for folder in self.resources.named_observer() {
-            self.report(
-                FindingKind::ResourceNamedObserver,
-                folder,
-                None,
-                FindingParams::default(),
-            );
-        }
         let facts = CfgFacts {
             game,
             endpoints: self
@@ -1062,10 +1054,6 @@ mod tests {
                 }
                 (quiet(&starts), "server.cfg")
             }
-            FindingKind::ResourceNamedObserver => {
-                folder.resource("[local]/observer");
-                (QUIET.to_owned(), "resources/[local]/observer")
-            }
             FindingKind::ExecMissing => (quiet("exec missing.cfg\n"), "server.cfg:4"),
             FindingKind::ExecOutside => {
                 fs::write(folder.dir.path().join("shared.cfg"), "").unwrap();
@@ -1184,6 +1172,7 @@ restart spawnmanager
                 "txAdminServerMode true",
                 "monitorMode true",
                 "observer_txadmin_events 1",
+                "observer_bridge observer",
                 "sv_prometheusBasicAuthUser observer",
                 "sv_prometheusBasicAuthPassword secret",
                 "sv_playersToken abc",
@@ -1231,6 +1220,7 @@ restart spawnmanager
                     (FindingKind::SetsServerMode, None),
                     (FindingKind::SetsMonitorMode, None),
                     observer("observer_txadmin_events"),
+                    observer("observer_bridge"),
                     observer("sv_prometheusBasicAuthUser"),
                     observer("sv_prometheusBasicAuthPassword"),
                     observer("sv_playersToken"),
@@ -1831,11 +1821,21 @@ restart spawnmanager
             &context,
         );
 
+        let missing: Vec<_> = scan
+            .findings
+            .iter()
+            .filter(|finding| finding.kind == FindingKind::ResourceMissing)
+            .map(|finding| (finding.line, finding.params.name.as_deref()))
+            .collect();
+        // The bridge takes a name drawn for each start: `observer` is a resource like any other.
         assert_eq!(
-            places(&scan, FindingKind::ResourceMissing),
-            ["server.cfg:9", "server.cfg:11"]
+            missing,
+            [
+                (Some(8), Some("observer")),
+                (Some(9), Some("bank")),
+                (Some(11), Some("[gangs]"))
+            ]
         );
-        assert_eq!(scan.findings[0].params.name.as_deref(), Some("bank"));
     }
 
     #[test]

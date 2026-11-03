@@ -361,6 +361,8 @@ pub struct Status {
     pub name: Option<String>,
     /// The game port the probes reached, as of the last run.
     pub port: Option<u16>,
+    /// The bridge's resource name in the server that runs now, drawn for its start.
+    pub bridge: Option<String>,
 }
 
 /// What the probes read last of the server that runs now, for the statistics. It changes every
@@ -475,6 +477,7 @@ impl Supervisor {
             game_build: None,
             name: None,
             port: None,
+            bridge: None,
         };
         let (status_tx, status) = watch::channel(initial);
         let (readings_tx, readings) = watch::channel(Readings::default());
@@ -745,6 +748,8 @@ struct Run {
     build: Option<u32>,
     game_build: Option<u32>,
     layout: Layout,
+    /// The bridge's name in this run: only its reports are taken.
+    bridge: String,
     exit: ExitWatch,
     tree: Arc<ProcessTree>,
     stdin: StdinWriter,
@@ -781,6 +786,7 @@ impl Run {
 struct Ready {
     launch: Launch,
     layout: Layout,
+    bridge: String,
     warnings: Vec<CfgFinding>,
     endpoint: Option<SocketAddr>,
     /// The launch settings the spawn goes by, which the spawn's event reports.
@@ -792,6 +798,7 @@ impl Ready {
         let launch::Prepared {
             launch,
             layout,
+            bridge,
             warnings,
             endpoint,
             scan,
@@ -799,6 +806,7 @@ impl Ready {
         let ready = Self {
             launch,
             layout,
+            bridge,
             warnings,
             endpoint,
             settings,
@@ -1520,7 +1528,7 @@ impl Actor {
         let Some(run) = self.run.as_mut().filter(|run| run.generation == trace.generation) else {
             return;
         };
-        if let Some(kind) = PlayerReportKind::from_trace(&trace.kind) {
+        if let Some(kind) = PlayerReportKind::from_trace(&trace.kind, &run.bridge) {
             let _ = self.players.send(PlayerReport {
                 generation: trace.generation,
                 at_ms: now_ms(),
@@ -1529,7 +1537,7 @@ impl Actor {
             });
             return;
         }
-        let event = match Report::from_trace(&trace.kind) {
+        let event = match Report::from_trace(&trace.kind, &run.bridge) {
             Some(Report::Ready { .. } | Report::Heartbeat) => {
                 run.health.heartbeat(Instant::now());
                 run.bridge_ready = true;
@@ -1844,7 +1852,7 @@ impl Actor {
         taken: bool,
     ) -> Result<(Run, SocketAddr, Vec<CfgFinding>, LaunchSettings), SpawnError> {
         let layout = prepared.layout.clone();
-        self.install(&layout).await?;
+        self.install(&layout, &prepared.bridge).await?;
         let credentials = Credentials::generate().map_err(|error| {
             let message = format!("cannot generate the launch credentials: {error}");
             SpawnError::new(SpawnFailure::Spawn, message)
@@ -1924,6 +1932,7 @@ impl Actor {
             build: None,
             game_build: None,
             layout,
+            bridge: prepared.bridge,
             exit: spawned.exit,
             tree,
             stdin,
@@ -1940,17 +1949,18 @@ impl Actor {
         Ok((run, probe, prepared.warnings, prepared.settings))
     }
 
-    /// Writes the bridge into the build, and moves away the dumps of a run Observer did not see
-    /// end, such as before Observer itself crashed.
-    async fn install(&mut self, layout: &Layout) -> Result<(), SpawnError> {
+    /// Writes the bridge into the build as `bridge`, and moves away the dumps of a run Observer
+    /// did not see end, such as before Observer itself crashed.
+    async fn install(&mut self, layout: &Layout, bridge: &str) -> Result<(), SpawnError> {
         let installing = layout.clone();
+        let bridge = bridge.to_owned();
         let dumps = (
             layout.crashes(),
             self.settings.data_dir.join("crashes"),
             self.settings.dumps,
         );
         let (installed, moved) = tokio::task::spawn_blocking(move || {
-            let installed = bridge::install(&installing);
+            let installed = bridge::install(&installing, &bridge);
             (installed, crashes::collect(&dumps.0, &dumps.1, dumps.2))
         })
         .await
@@ -2169,6 +2179,7 @@ impl Actor {
             game_build: run.and_then(|run| run.game_build),
             name: self.name.clone(),
             port: self.port,
+            bridge: run.map(|run| run.bridge.clone()),
         });
     }
 
@@ -2213,9 +2224,16 @@ async fn pre_launch_of(work: &mut Option<PreLaunching>) -> Result<PreLaunchResul
     }
 }
 
-/// Prepares a launch off the runtime: the cfg's scan reads files and walks the resources.
+/// Prepares a launch off the runtime: the cfg's scan reads files and walks the resources. The
+/// bridge's name is drawn here, once for each start.
 async fn prepare(server: ServerLaunch, flavour: Flavour) -> Result<launch::Prepared, SpawnError> {
-    tokio::task::spawn_blocking(move || launch::prepare(&server, flavour))
+    let bridge = bridge::draw_name().map_err(|error| {
+        SpawnError::new(
+            SpawnFailure::Bridge,
+            format!("cannot draw the bridge's name: {error}"),
+        )
+    })?;
+    tokio::task::spawn_blocking(move || launch::prepare(&server, flavour, &bridge))
         .await
         .map_err(|error| SpawnError::new(SpawnFailure::Spawn, error.to_string()))?
         .map_err(SpawnError::from)

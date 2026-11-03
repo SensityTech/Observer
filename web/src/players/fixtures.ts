@@ -41,6 +41,7 @@ export const ONLINE: OnlinePlayers = {
             sessionMs: 2 * HOUR + 14 * 60_000,
             totalMs: 314 * HOUR,
             ping: 41,
+            label: null,
         },
         {
             netId: 12,
@@ -52,6 +53,7 @@ export const ONLINE: OnlinePlayers = {
             sessionMs: 5_000,
             totalMs: null,
             ping: null,
+            label: null,
         },
         {
             netId: 14,
@@ -63,6 +65,7 @@ export const ONLINE: OnlinePlayers = {
             sessionMs: 36 * 60_000,
             totalMs: null,
             ping: 212,
+            label: null,
         },
     ],
 };
@@ -94,6 +97,7 @@ export const PLAYERS: PlayerPage = {
             firstSeen: '2024-03-02T19:20:00Z',
             lastSeen: '2026-10-30T18:02:00Z',
             online: true,
+            label: null,
         },
     ],
     next: null,
@@ -121,6 +125,7 @@ export const PROFILE: PlayerProfile = {
     crashRate: 8.8,
     serverCrashRate: 2.1,
     names: [{ name: 'Ruby Vex', firstSeen: '2026-10-21T18:00:00Z', lastSeen: '2026-10-30T18:02:00Z' }],
+    labels: [],
     days: [
         { day: '2026-10-29', playMs: 3 * HOUR },
         { day: '2026-10-30', playMs: 2 * HOUR + 14 * 60_000 },

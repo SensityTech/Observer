@@ -149,6 +149,42 @@ impl TickReport {
     }
 }
 
+/// One thread's ticks between two reports, in each interval of its bounds.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Intervals {
+    /// Milliseconds, ascending, rounded to the microsecond: `0.07000000000000001` reads 70.
+    pub bounds: Vec<f64>,
+    /// One more than the bounds: under the first, between each two, beyond the last.
+    pub ticks: Vec<u64>,
+}
+
+impl TickReport {
+    /// `thread`'s ticks since `earlier`, interval by interval; `None` where [`Self::since`] leaves
+    /// the thread out.
+    pub fn intervals_since(&self, earlier: &Self, thread: Thread) -> Option<Intervals> {
+        let (now, before) = (self.thread(thread)?, earlier.thread(thread)?);
+        if !same_bounds(&now.bounds, &before.bounds) {
+            return None;
+        }
+        let mut ticks = Vec::with_capacity(now.bounds.len() + 1);
+        let mut under = 0;
+        for (now, before) in now.cumulative.iter().zip(&before.cumulative) {
+            let within = now.checked_sub(*before)?;
+            ticks.push(within.checked_sub(under)?);
+            under = within;
+        }
+        ticks.push(now.count.checked_sub(before.count)?.checked_sub(under)?);
+        Some(Intervals {
+            bounds: now
+                .bounds
+                .iter()
+                .map(|bound| (bound * 1e6).round() / 1e3)
+                .collect(),
+            ticks,
+        })
+    }
+}
+
 #[derive(Default)]
 struct Raw {
     buckets: Vec<(String, String)>,
@@ -410,6 +446,67 @@ tickTime_sum{{name=\"{name}\"}} {sum}
                 total_ms: 0,
                 over: Some(0)
             }
+        );
+    }
+
+    /// svMain's histogram from the ticks of each interval: under the first bound, between each
+    /// two, beyond the last.
+    fn main_from_intervals(intervals: &[u64]) -> TickReport {
+        use std::fmt::Write as _;
+        let count: u64 = intervals.iter().sum();
+        let mut text =
+            format!("tickTime_count{{name=\"svMain\"}} {count}\ntickTime_sum{{name=\"svMain\"}} 1\n");
+        let mut within = 0;
+        for (bound, ticks) in BOUNDS.iter().zip(intervals) {
+            within += ticks;
+            let _ = writeln!(text, "tickTime_bucket{{name=\"svMain\",le=\"{bound}\"}} {within}");
+        }
+        let _ = writeln!(text, "tickTime_bucket{{name=\"svMain\",le=\"+Inf\"}} {count}");
+        TickReport::parse(&text).unwrap()
+    }
+
+    #[test]
+    fn the_ticks_between_two_reports_are_counted_interval_by_interval() {
+        let mut before = [0; 15];
+        before[6] = 100;
+        let mut after = before;
+        // 90 ticks between 10 and 15 ms, 10 between 50 and 70, 2 beyond 250.
+        after[6] += 90;
+        after[10] += 10;
+        after[14] += 2;
+
+        let intervals = main_from_intervals(&after)
+            .intervals_since(&main_from_intervals(&before), Thread::Main)
+            .unwrap();
+
+        assert_eq!(intervals.bounds[0], 1.0);
+        assert_eq!(intervals.bounds[10], 70.0, "FXServer's 0.07000000000000001");
+        assert_eq!(intervals.ticks.len(), 15);
+        assert_eq!(intervals.ticks[6], 90);
+        assert_eq!(intervals.ticks[10], 10);
+        assert_eq!(intervals.ticks[14], 2);
+        assert_eq!(intervals.ticks.iter().sum::<u64>(), 102);
+    }
+
+    #[test]
+    fn intervals_are_unknown_after_a_reset_new_bounds_or_without_the_thread() {
+        let mut later = [0; 15];
+        later[3] = 50;
+        let mut reset = [0; 15];
+        reset[3] = 10;
+        let old = TickReport::parse(&thread("svMain", &OLD_BOUNDS, 30, 30.0)).unwrap();
+
+        assert_eq!(
+            main_from_intervals(&reset).intervals_since(&main_from_intervals(&later), Thread::Main),
+            None
+        );
+        assert_eq!(
+            main_from_intervals(&later).intervals_since(&old, Thread::Main),
+            None
+        );
+        assert_eq!(
+            main_from_intervals(&later).intervals_since(&main_from_intervals(&reset), Thread::Sync),
+            None
         );
     }
 

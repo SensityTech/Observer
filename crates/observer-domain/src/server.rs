@@ -136,7 +136,7 @@ pub enum LaunchReadiness {
     Ready,
     /// The owner has not saved any yet.
     NotConfigured,
-    /// Saved, but refused by the rules in force on this host: the owner fixes them on the Server page.
+    /// Saved, but refused by the rules in force on this host: the owner fixes them in the launch settings.
     Invalid,
     /// No build is selected: one is installed or imported on the Artifacts page.
     NoBuild,

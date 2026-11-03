@@ -604,3 +604,77 @@ fn the_sessions_kept_start_at_the_latest_cut_of_the_retention() {
 
     assert_eq!(kept_since(&conn).unwrap(), Some(START_MS + HOUR_MS));
 }
+
+#[test]
+fn crashes_with_a_signature_come_oldest_first_with_their_player() {
+    let mut conn = lab();
+    conn.execute(
+        "INSERT INTO crash_signature (id, signature, form, normaliser, first_seen_ms) VALUES (7, 'hash:kilo', 'hash', 1, 0)",
+        [],
+    )
+    .unwrap();
+    session(&mut conn, 1, 0, Some((12, DropCategory::Crash)));
+    session(&mut conn, 2, 0, Some((5, DropCategory::Crash)));
+    session(&mut conn, 3, 0, Some((8, DropCategory::Quit)));
+    session(&mut conn, 4, 0, Some((9, DropCategory::Crash)));
+    conn.execute("UPDATE player_session SET signature = 7 WHERE id IN (1, 2)", [])
+        .unwrap();
+    conn.execute("UPDATE player_session SET player = ?1 WHERE id = 1", [ADA])
+        .unwrap();
+
+    let found = crashes(&conn, START_MS, START_MS + 60 * MINUTE).unwrap();
+
+    assert_eq!(
+        found,
+        [
+            CrashRow {
+                session: 2,
+                ended_ms: START_MS + 5 * MINUTE,
+                signature: 7,
+                player: None,
+            },
+            CrashRow {
+                session: 1,
+                ended_ms: START_MS + 12 * MINUTE,
+                signature: 7,
+                player: Some(ADA),
+            },
+        ],
+        "a crash without a signature is no wave's"
+    );
+    assert_eq!(
+        crashes(&conn, START_MS + 13 * MINUTE, START_MS + 60 * MINUTE).unwrap(),
+        Vec::<CrashRow>::new()
+    );
+}
+
+#[test]
+fn sessions_started_in_a_window_keep_their_length_and_how_they_ended() {
+    let mut conn = lab();
+    session(&mut conn, 1, 0, Some((30, DropCategory::Quit)));
+    session(&mut conn, 2, 10, None);
+    session(&mut conn, 3, 70, Some((80, DropCategory::ServerStop)));
+
+    let mut found = started(&conn, START_MS, START_MS + 60 * MINUTE).unwrap();
+    found.sort_by_key(|session| session.joined_ms);
+
+    assert_eq!(
+        found,
+        [
+            StartedSession {
+                joined_ms: START_MS,
+                ended_ms: Some(START_MS + 30 * MINUTE),
+                length_ms: Some(30 * MINUTE),
+                category: Some(DropCategory::Quit),
+                kind: Some(DropKind::Exit),
+            },
+            StartedSession {
+                joined_ms: START_MS + 10 * MINUTE,
+                ended_ms: None,
+                length_ms: None,
+                category: None,
+                kind: None,
+            },
+        ]
+    );
+}
