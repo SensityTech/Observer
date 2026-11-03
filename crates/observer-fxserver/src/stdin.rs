@@ -142,6 +142,8 @@ pub struct UserCommand {
     line: String,
     server_control: bool,
     quits: bool,
+    /// The resources it stops, starts, restarts or ensures, as typed.
+    resources: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -178,17 +180,17 @@ impl UserCommand {
         }
         let mut server_control = false;
         let mut quits = false;
+        let mut resources = Vec::new();
         for words in commands.into_iter().map(command::words) {
             let name = words[0].to_ascii_lowercase();
-            let on_bridge = words
-                .get(1)
-                .is_some_and(|resource| resource.eq_ignore_ascii_case(crate::bridge::NAME));
             match name.as_str() {
                 "quit" => {
                     quits = true;
                     server_control = true;
                 }
-                "stop" | "start" | "restart" | "ensure" if on_bridge => server_control = true,
+                "stop" | "start" | "restart" | "ensure" if words.len() > 1 => {
+                    resources.push(words[1].clone());
+                }
                 // `_crash` ends the server with a dump; the others run commands Observer cannot
                 // see, a file's or a convar's value.
                 "_crash" | "exec" | "vstr" | "+vstr" | "-vstr" => server_control = true,
@@ -199,13 +201,20 @@ impl UserCommand {
             line: line.to_owned(),
             server_control,
             quits,
+            resources,
         })
     }
 
-    /// The command stops the server or its bridge, or runs commands Observer cannot read, so it
-    /// takes the right to control the server and not only to use the console.
-    pub fn needs_server_control(&self) -> bool {
+    /// The command stops the server or its bridge, named `bridge` in the server that runs now, or
+    /// runs commands Observer cannot read, so it takes the right to control the server and not
+    /// only to use the console.
+    pub fn needs_server_control(&self, bridge: Option<&str>) -> bool {
         self.server_control
+            || bridge.is_some_and(|bridge| {
+                self.resources
+                    .iter()
+                    .any(|resource| resource.eq_ignore_ascii_case(bridge))
+            })
     }
 
     /// The command quits the server, which then ends as a stop rather than a crash.
@@ -363,8 +372,12 @@ mod tests {
         UserCommand::parse(line).err()
     }
 
+    const BRIDGE: &str = "sys_k3jx7qmw2pza";
+
     fn needs_control(line: &str) -> bool {
-        UserCommand::parse(line).unwrap().needs_server_control()
+        UserCommand::parse(line)
+            .unwrap()
+            .needs_server_control(Some(BRIDGE))
     }
 
     #[test]
@@ -432,7 +445,7 @@ mod tests {
         let command = UserCommand::parse("  say \"hello; world\" ").unwrap();
 
         assert_eq!(command.as_str(), "say \"hello; world\"");
-        assert!(!command.needs_server_control());
+        assert!(!command.needs_server_control(Some(BRIDGE)));
         assert!(!command.quits());
     }
 
@@ -448,23 +461,35 @@ mod tests {
             "\u{e9}quit",
         ] {
             let command = UserCommand::parse(line).unwrap();
-            assert!(command.needs_server_control(), "{line:?}");
+            assert!(command.needs_server_control(None), "{line:?}");
             assert!(command.quits(), "{line:?}");
         }
     }
 
     #[test]
-    fn stopping_or_reloading_the_bridge_needs_server_control() {
+    fn stopping_or_reloading_the_bridge_of_this_start_needs_server_control() {
         for line in [
-            "stop observer",
-            "restart Observer",
-            "ensure observer",
-            "start observer",
-            "refresh; stop \"observer\"",
+            "stop sys_k3jx7qmw2pza",
+            "restart SYS_K3JX7QMW2PZA",
+            "ensure sys_k3jx7qmw2pza",
+            "start sys_k3jx7qmw2pza",
+            "refresh; stop \"sys_k3jx7qmw2pza\"",
         ] {
             assert!(needs_control(line), "{line:?}");
+            assert!(
+                !UserCommand::parse(line).unwrap().needs_server_control(None),
+                "no server runs: {line:?}"
+            );
         }
-        for line in ["stop chat", "ensure observer_extras", "say quit", "status"] {
+        for line in [
+            "stop chat",
+            "stop observer",
+            "ensure sys_k3jx7qmw2pza_extras",
+            "stop sys_aaaaaaaaaaaa",
+            "say stop sys_k3jx7qmw2pza",
+            "say quit",
+            "status",
+        ] {
             assert!(!needs_control(line), "{line:?}");
         }
     }
@@ -485,7 +510,7 @@ mod tests {
     fn crashing_the_server_needs_server_control() {
         let command = UserCommand::parse("_crash").unwrap();
 
-        assert!(command.needs_server_control());
+        assert!(command.needs_server_control(None));
         assert!(!command.quits());
     }
 

@@ -219,7 +219,6 @@ pub(super) fn console_note(finding: &CfgFinding) -> String {
             text(&params.name)
         ),
         FindingKind::ResourceMissingMore => format!("starts {count} more resources that are missing"),
-        FindingKind::ResourceNamedObserver => "takes the name of Observer's bridge resource".to_owned(),
         FindingKind::ExecMissing => format!("runs {}, which cannot be read", text(&params.target)),
         FindingKind::ExecOutside => format!("runs {}, outside the server folder", text(&params.target)),
         FindingKind::ExecResource => format!("runs {} from a resource", text(&params.target)),

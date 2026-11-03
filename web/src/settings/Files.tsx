@@ -24,6 +24,8 @@ import {
 import { errorMessage } from '../i18n/errors';
 import { useI18n } from '../i18n/I18nProvider';
 import { cn } from '../lib/cn';
+import { anchorOf } from './catalog';
+import { CategoryHead } from './Row';
 
 type Open =
     | { dialog: 'group'; group: FileGroup | null }
@@ -33,7 +35,8 @@ type Open =
     | { dialog: 'key'; created: CreatedServiceAccess }
     | { dialog: 'deleteService'; service: ServiceAccess };
 
-export function FilesPage() {
+/** Who reaches the server folder over SFTP, for whoever manages file access: what was the Files page. */
+export function FilesSettings() {
     const { t } = useI18n();
     const me = useMe();
     const queryClient = useQueryClient();
@@ -49,16 +52,12 @@ export function FilesPage() {
     const names = new Map((groups.data ?? []).map((group) => [group.id, group.name]));
 
     return (
-        <div className="flex flex-col gap-5 max-md:gap-4">
-            <div className="page-head">
-                <h1 className="page-title">
-                    {t.files.title} <span className="gloss">{t.files.gloss}</span>
-                </h1>
-            </div>
+        <>
+            <CategoryHead category="files" />
             <Notice tone="neutral">{t.files.intro}</Notice>
 
             <Card
-                id="file-groups"
+                id={anchorOf('fileGroups')}
                 icon={FolderLock}
                 title={t.files.groups}
                 aside={
@@ -143,7 +142,7 @@ export function FilesPage() {
                 )}
             </Card>
 
-            <Card id="file-people" icon={Users} title={t.files.people} flush>
+            <Card id={anchorOf('filePeople')} icon={Users} title={t.files.people} flush>
                 {accesses.isError && <Notice tone="danger">{errorMessage(t, accesses.error)}</Notice>}
                 {accesses.data && (
                     <div className={table.scroll}>
@@ -197,7 +196,7 @@ export function FilesPage() {
             </Card>
 
             <Card
-                id="file-pipelines"
+                id={anchorOf('filePipelines')}
                 icon={Workflow}
                 title={t.files.pipelines}
                 aside={
@@ -290,7 +289,7 @@ export function FilesPage() {
                     }}
                 />
             )}
-        </div>
+        </>
     );
 }
 

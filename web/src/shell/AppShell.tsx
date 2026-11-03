@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Link, Outlet } from '@tanstack/react-router';
 import {
     CalendarClock,
+    ChartLine,
     Contact,
     DatabaseBackup,
     FolderLock,
@@ -10,7 +11,7 @@ import {
     Menu as MenuIcon,
     Package,
     ScrollText,
-    Server,
+    Settings,
     SquareTerminal,
     Stethoscope,
     TriangleAlert,
@@ -45,6 +46,7 @@ import { UserMenu } from './UserMenu';
 type NavEntry = {
     to:
         | '/'
+        | '/statistics'
         | '/console'
         | '/schedule'
         | '/artifacts'
@@ -52,7 +54,7 @@ type NavEntry = {
         | '/players'
         | '/changes'
         | '/drops'
-        | '/server'
+        | '/settings'
         | '/tools'
         | '/backups'
         | '/users'
@@ -110,6 +112,7 @@ export function AppShell() {
 
     const main: NavEntry[] = [
         { to: '/', label: t.nav.overview, icon: LayoutDashboard, access: Permission.DashboardView },
+        { to: '/statistics', label: t.nav.statistics, icon: ChartLine, access: Permission.DashboardView },
         { to: '/console', label: t.nav.console, icon: SquareTerminal, access: Permission.ConsoleView },
     ];
     const operations: NavEntry[] = [
@@ -138,7 +141,7 @@ export function AppShell() {
         { to: '/drops', label: t.nav.drops, icon: Unplug, access: Permission.DropsView, nested: true },
     ];
     const administration: NavEntry[] = [
-        { to: '/server', label: t.nav.server, icon: Server, access: 'owner' },
+        { to: '/settings', label: t.nav.settings, icon: Settings, access: 'owner', nested: true },
         { to: '/tools', label: t.nav.tools, icon: Wrench, access: 'owner' },
         { to: '/backups', label: t.nav.backups, icon: DatabaseBackup, access: Permission.BackupsView },
         { to: '/users', label: t.nav.users, icon: Users, access: Permission.UsersManage },

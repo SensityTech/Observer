@@ -331,8 +331,8 @@ pub struct CfgFinding {
     /// The kind's, but for `noEndpoint`, a warning only when a file that was not read may hold the
     /// endpoints.
     pub severity: Severity,
-    /// Relative to the data folder with `/`: the line's file, the resource folder for
-    /// `resourceNamedObserver`, the cfg for what the whole chain lacks.
+    /// Relative to the data folder with `/`: the line's file, or the cfg for what the whole chain
+    /// lacks.
     pub file: String,
     pub line: Option<u32>,
     pub params: FindingParams,
@@ -414,8 +414,6 @@ pub enum FindingKind {
     ResourceMissing,
     /// More missing resources past the first 20: `count` of them.
     ResourceMissingMore,
-    /// A resource folder named `observer`, the name of Observer's bridge.
-    ResourceNamedObserver,
     ExecMissing,
     ExecOutside,
     ExecResource,
@@ -427,7 +425,7 @@ pub enum FindingKind {
 }
 
 impl FindingKind {
-    pub const ALL: [Self; 27] = [
+    pub const ALL: [Self; 26] = [
         Self::NoEndpoint,
         Self::EndpointInvalid,
         Self::EndpointOnPanel,
@@ -448,7 +446,6 @@ impl FindingKind {
         Self::GameTwice,
         Self::ResourceMissing,
         Self::ResourceMissingMore,
-        Self::ResourceNamedObserver,
         Self::ExecMissing,
         Self::ExecOutside,
         Self::ExecResource,
@@ -478,7 +475,6 @@ impl FindingKind {
             | Self::GameTwice
             | Self::ResourceMissing
             | Self::ResourceMissingMore
-            | Self::ResourceNamedObserver
             | Self::ExecMissing
             | Self::ExecRepeated => Severity::Warning,
             Self::SetsObserverConvar
@@ -527,7 +523,6 @@ mod tests {
                 (json!("gameTwice"), warning),
                 (json!("resourceMissing"), warning),
                 (json!("resourceMissingMore"), warning),
-                (json!("resourceNamedObserver"), warning),
                 (json!("execMissing"), warning),
                 (json!("execOutside"), note),
                 (json!("execResource"), note),

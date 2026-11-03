@@ -441,6 +441,162 @@ fn a_name_search_matches_the_start_of_a_name_literally() {
     assert_eq!(by_discord, []);
 }
 
+fn give_label(conn: &mut Connection, license: &str, name: Option<&str>, id: Option<&str>, when: &str) {
+    let tx = conn.transaction().unwrap();
+    let label = PlayerLabel {
+        name: name.map(str::to_owned),
+        id: id.map(str::to_owned),
+        resource: Some("characters".to_owned()),
+    };
+    record_label(&tx, license, &label, at(when)).unwrap();
+    tx.commit().unwrap();
+}
+
+#[test]
+fn a_label_given_again_keeps_when_it_was_first_given() {
+    let mut conn = memory();
+    let id = see(&mut conn, ADA, "Ada", &[], "2026-10-30T10:00:00Z").0;
+
+    give_label(
+        &mut conn,
+        ADA,
+        Some("John Doe"),
+        Some("CHAR-1234"),
+        "2026-10-30T10:05:00Z",
+    );
+    give_label(&mut conn, ADA, None, Some("CHAR-1"), "2026-10-30T11:00:00Z");
+    give_label(
+        &mut conn,
+        ADA,
+        Some("John Doe"),
+        Some("CHAR-1234"),
+        "2026-10-31T10:05:00Z",
+    );
+
+    let labels = labels(&conn, id).unwrap();
+    assert_eq!(labels.len(), 2);
+    assert_eq!(
+        (labels[0].name.as_deref(), labels[0].id.as_deref()),
+        (Some("John Doe"), Some("CHAR-1234"))
+    );
+    assert_eq!(labels[0].first_seen, at("2026-10-30T10:05:00Z"));
+    assert_eq!(labels[0].last_seen, at("2026-10-31T10:05:00Z"));
+    assert_eq!(
+        (labels[1].name.as_deref(), labels[1].id.as_deref()),
+        (None, Some("CHAR-1"))
+    );
+    assert_eq!(
+        latest_labels(&conn, &[id]).unwrap()[&id],
+        PlayerLabel {
+            name: Some("John Doe".to_owned()),
+            id: Some("CHAR-1234".to_owned()),
+            resource: Some("characters".to_owned()),
+        }
+    );
+    let profile = profile(&conn, id, "2026-10-01").unwrap().unwrap();
+    assert_eq!(profile.summary.name, "Ada", "a label never renames a player");
+}
+
+#[test]
+fn a_label_for_a_licence_without_a_profile_writes_nothing() {
+    let mut conn = memory();
+
+    give_label(&mut conn, ADA, Some("John Doe"), None, "2026-10-30T10:05:00Z");
+
+    let rows: i64 = conn
+        .query_row("SELECT count(*) FROM player_label", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(rows, 0);
+}
+
+#[test]
+fn only_the_fifty_latest_labels_are_kept() {
+    let mut conn = memory();
+    let id = see(&mut conn, ADA, "Ada", &[], "2026-10-30T10:00:00Z").0;
+
+    for second in 0..60 {
+        give_label(
+            &mut conn,
+            ADA,
+            None,
+            Some(&format!("CHAR-{second}")),
+            &format!("2026-10-30T10:01:{second:02}Z"),
+        );
+    }
+
+    let labels = labels(&conn, id).unwrap();
+    assert_eq!(labels.len(), 50);
+    assert_eq!(labels[0].id.as_deref(), Some("CHAR-59"));
+    assert_eq!(labels[49].id.as_deref(), Some("CHAR-10"));
+}
+
+#[test]
+fn a_search_finds_a_player_by_the_start_of_a_label_name_or_its_whole_id() {
+    let mut conn = memory();
+    see(&mut conn, ADA, "Ada", &[], "2026-10-31T10:00:00Z");
+    see(&mut conn, GRACE, "Grace", &[], "2026-10-31T10:00:00Z");
+    give_label(
+        &mut conn,
+        ADA,
+        Some("John Doe"),
+        Some("CHAR-1234"),
+        "2026-10-31T10:05:00Z",
+    );
+    let found = |text: &str| -> Vec<String> {
+        let query = PlayerQuery {
+            filter: PlayerFilter::Name(text.to_owned()),
+            sort: PlayerSort::LastSeen,
+            recent_from: "2026-10-02".to_owned(),
+            after: None,
+            limit: 10,
+        };
+        page(&conn, &query)
+            .unwrap()
+            .into_iter()
+            .map(|(row, _)| row.name)
+            .collect()
+    };
+
+    assert_eq!(found("john"), ["Ada"]);
+    assert_eq!(found("char-1234"), ["Ada"]);
+    assert_eq!(found("CHAR-12"), Vec::<String>::new(), "an id is matched whole");
+    assert_eq!(found("Gra"), ["Grace"]);
+    assert_eq!(
+        pseudonyms(&conn, &PlayerFilter::Name("CHAR-1234".to_owned()), 10)
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn labels_expire_with_the_names_and_go_with_a_forgotten_player() {
+    let mut conn = memory();
+    let ada = see(&mut conn, ADA, "Ada", &[], "2026-10-30T10:00:00Z").0;
+    give_label(&mut conn, ADA, Some("Old"), None, "2025-01-01T10:00:00Z");
+    give_label(&mut conn, ADA, Some("John Doe"), None, "2026-10-30T10:05:00Z");
+
+    let tx = conn.transaction().unwrap();
+    let expired = expire(
+        &tx,
+        at("2026-10-31T00:00:00Z"),
+        &PlayersSettings::default(),
+        "2025-09-26",
+    )
+    .unwrap();
+    tx.commit().unwrap();
+
+    assert_eq!(expired.labels, 1);
+    assert_eq!(labels(&conn, ada).unwrap().len(), 1);
+    let tx = conn.transaction().unwrap();
+    forget(&tx, ada, [3; 16], at("2026-10-31T12:00:00Z")).unwrap();
+    tx.commit().unwrap();
+    let rows: i64 = conn
+        .query_row("SELECT count(*) FROM player_label", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(rows, 0);
+}
+
 #[test]
 fn retention_settings_round_trip_with_a_profile_kept_for_good() {
     let mut conn = memory();

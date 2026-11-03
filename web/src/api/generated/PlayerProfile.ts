@@ -3,6 +3,7 @@ import type { LinkedLicence } from "./LinkedLicence";
 import type { PlayDay } from "./PlayDay";
 import type { PlayerDrop } from "./PlayerDrop";
 import type { PlayerName } from "./PlayerName";
+import type { SeenLabel } from "./SeenLabel";
 import type { ShownIdentifier } from "./ShownIdentifier";
 
 export type PlayerProfile = { id: number, name: string, license: string, firstSeen: string, lastSeen: string, 
@@ -26,6 +27,10 @@ crashRate: number | null,
  * The server's, over the sessions kept.
  */
 serverCrashRate: number | null, names: Array<PlayerName>, 
+/**
+ * The labels the server's resources gave, the latest first.
+ */
+labels: Array<SeenLabel>, 
 /**
  * The days of the last 90 with play, the session under way included.
  */

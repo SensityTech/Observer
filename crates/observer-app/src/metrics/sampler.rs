@@ -16,7 +16,7 @@ use observer_fxserver::supervisor::{Event, EventKind, RunReadings};
 use observer_platform::{
     CpuTimes, DiskCounters, HostUsage, Interface, Pressure, Space, ThreadUsage, TreeTotals, TreeUsage, Usage,
 };
-use observer_store::metrics::samples::{self, Sample};
+use observer_store::metrics::samples::{self, Frames, Sample};
 use observer_store::metrics::threads::{MOST_NAMES, SHOWN_FROM};
 use observer_store::metrics::{Column, Values, series};
 use tokio::sync::broadcast::error::RecvError;
@@ -130,6 +130,7 @@ impl Sampler {
                 values,
                 children,
                 threads,
+                frames,
             } = assembler.sample(Taken {
                 at: measured_at,
                 run,
@@ -142,6 +143,7 @@ impl Sampler {
                 state,
                 values,
                 threads,
+                frames,
             };
             // From the wake, not from the end of the write: a write that waits behind the upkeep
             // must not cost the next slot.
@@ -398,6 +400,8 @@ pub(super) struct Assembled {
     pub values: Values,
     pub children: Vec<ChildProcess>,
     pub threads: Vec<(String, f64)>,
+    /// svMain's ticks of the slot, interval by interval.
+    pub frames: Option<Frames>,
 }
 
 /// Turns each wake into a sample, keeping what the next one is measured against: rates and CPU
@@ -498,7 +502,7 @@ impl Assembler {
             values.set(Column::Slots, dynamic.value.max_clients.map(real));
         }
 
-        let main_ticks = self.ticks(&mut values, run, of_slot);
+        let (main_ticks, frames) = self.ticks(&mut values, run, of_slot);
         self.players(&mut values, run, of_slot, main_ticks);
 
         if (self.slot.run || run.is_some()) && !self.slot.lagged {
@@ -550,31 +554,43 @@ impl Assembler {
             values,
             children,
             threads,
+            frames,
         }
     }
 
-    /// Each thread's ticks since the run's previous reading, and svMain's count of them.
+    /// Each thread's ticks since the run's previous reading, svMain's count of them and their
+    /// histogram.
     fn ticks(
         &mut self,
         values: &mut Values,
         run: Option<&RunReadings>,
         of_slot: impl Fn(Instant) -> bool,
-    ) -> Option<u64> {
+    ) -> (Option<u64>, Option<Frames>) {
         let Some(run) = run else {
             self.perf = None;
-            return None;
+            return (None, None);
         };
         if self.perf.as_ref().is_some_and(|(of, _)| *of != run.generation) {
             self.perf = None;
         }
         // Without a reading the baseline stays, and the next delta spans both slots.
-        let reading = run.perf.as_ref().filter(|reading| of_slot(reading.at))?;
-        let deltas = self
-            .perf
-            .as_ref()
-            .map(|(_, baseline)| reading.value.since(baseline));
+        let Some(reading) = run.perf.as_ref().filter(|reading| of_slot(reading.at)) else {
+            return (None, None);
+        };
+        let compared = self.perf.as_ref().map(|(_, baseline)| {
+            (
+                reading.value.since(baseline),
+                reading.value.intervals_since(baseline, Thread::Main),
+            )
+        });
         self.perf = Some((run.generation, reading.value.clone()));
-        let deltas = deltas?;
+        let Some((deltas, intervals)) = compared else {
+            return (None, None);
+        };
+        let frames = intervals.map(|intervals| Frames {
+            bounds: intervals.bounds,
+            ticks: intervals.ticks,
+        });
         for (thread, [ticks, ms, over]) in TICK_COLUMNS {
             if let Some(delta) = deltas.get(&thread) {
                 values.set(ticks, Some(real(delta.ticks)));
@@ -582,7 +598,7 @@ impl Assembler {
                 values.set(over, delta.over.map(real));
             }
         }
-        deltas.get(&Thread::Main).map(|delta| delta.ticks)
+        (deltas.get(&Thread::Main).map(|delta| delta.ticks), frames)
     }
 
     /// Pings of the slot's player list, and who joined or left since the run's previous list.

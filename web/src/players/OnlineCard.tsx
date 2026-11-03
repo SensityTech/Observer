@@ -1,5 +1,4 @@
 import { useQuery } from '@tanstack/react-query';
-import { Link } from '@tanstack/react-router';
 import { Radio } from 'lucide-react';
 import type { ReactNode } from 'react';
 
@@ -11,7 +10,7 @@ import { Notice } from '../components/Notice';
 import { table } from '../components/table';
 import { useI18n } from '../i18n/I18nProvider';
 import { cn } from '../lib/cn';
-import { PlayerName } from './words';
+import { ShownName } from './words';
 
 /** Who is connected now: a confirmed player by name and licence, the others by their state only. */
 export function OnlineCard() {
@@ -82,25 +81,15 @@ export function OnlineCard() {
 }
 
 /**
- * A confirmed player by name, opening their profile once it is written (a first visit waits for
- * the next write); a player not confirmed by their state alone.
+ * A confirmed player by name, or by the label the server's resources gave them, opening their
+ * profile once it is written (a first visit waits for the next write); a player not confirmed by
+ * their state alone.
  */
 function Who({ player }: { player: OnlinePlayer }) {
     const { t } = useI18n();
     const words = t.players.now;
     if (player.confirmation === 'confirmed') {
-        const name = <PlayerName name={player.name ?? ''} />;
-        return player.player === null ? (
-            <span className="font-medium text-ink [overflow-wrap:anywhere]">{name}</span>
-        ) : (
-            <Link
-                to="/players/$id"
-                params={{ id: String(player.player) }}
-                className="font-medium text-ink underline-offset-2 [overflow-wrap:anywhere] hover:underline"
-            >
-                {name}
-            </Link>
-        );
+        return <ShownName name={player.name ?? ''} label={player.label} player={player.player} />;
     }
     const confirming = player.confirmation === 'confirming';
     return (

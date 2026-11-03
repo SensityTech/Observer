@@ -7,8 +7,8 @@ use std::fmt::Write as _;
 use jiff::Timestamp;
 use observer_domain::drops::DropsSettings;
 use observer_domain::players::{
-    IdentifierKind, Link, LinkedLicence, PlayDay, PlayerName, PlayerSort, PlayerSummary, PlayersSettings,
-    ShownIdentifier,
+    IdentifierKind, Link, LinkedLicence, PlayDay, PlayerLabel, PlayerName, PlayerSort, PlayerSummary,
+    PlayersSettings, SeenLabel, ShownIdentifier,
 };
 use rusqlite::{Connection, OptionalExtension, Row, ToSql, Transaction, params, params_from_iter};
 
@@ -18,6 +18,8 @@ use crate::time::Utc;
 
 /// Names kept per player, the most recent.
 const NAMES_KEPT: i64 = 20;
+/// Labels kept per player, the most recent: a resource can give a new one every second.
+const LABELS_KEPT: i64 = 50;
 /// An identifier seen with more licences than this links them only weakly: a shared PC, a café,
 /// a VPN.
 const STRONG_UP_TO: i64 = 3;
@@ -100,6 +102,39 @@ fn record_name(
              (SELECT name FROM player_name WHERE player = ?1 ORDER BY last_seen DESC, name LIMIT ?2)",
         params![player, NAMES_KEPT],
     )?;
+    Ok(())
+}
+
+/// Records that the server's resources gave the player of `license` this label at `at`. Nothing
+/// is written for a licence without a profile.
+pub fn record_label(
+    tx: &Transaction<'_>,
+    license: &str,
+    label: &PlayerLabel,
+    at: Timestamp,
+) -> Result<(), StoreError> {
+    let Some(player) = tx
+        .prepare_cached("SELECT id FROM player WHERE license = ?1")?
+        .query_row([license], |row| row.get::<_, i64>(0))
+        .optional()?
+    else {
+        return Ok(());
+    };
+    tx.prepare_cached(
+        "INSERT INTO player_label (player, name, label_id, resource, first_seen, last_seen)
+             VALUES (?1, coalesce(?2, ''), coalesce(?3, ''), ?4, ?5, ?5)
+         ON CONFLICT (player, name, label_id) DO UPDATE SET
+             first_seen = min(first_seen, excluded.first_seen),
+             resource = CASE WHEN excluded.last_seen >= last_seen THEN excluded.resource ELSE resource END,
+             last_seen = max(last_seen, excluded.last_seen)",
+    )?
+    .execute(params![player, label.name, label.id, label.resource, Utc(at)])?;
+    tx.prepare_cached(
+        "DELETE FROM player_label WHERE player = ?1 AND (name, label_id) NOT IN
+             (SELECT name, label_id FROM player_label WHERE player = ?1
+              ORDER BY last_seen DESC, name, label_id LIMIT ?2)",
+    )?
+    .execute(params![player, LABELS_KEPT])?;
     Ok(())
 }
 
@@ -210,7 +245,7 @@ pub struct PlayerQuery {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PlayerFilter {
     All,
-    /// The start of a name, any case.
+    /// The start of a name or of a label's name, or a label's whole id, any case.
     Name(String),
     License(String),
     Identifier(IdentifierKind, String),
@@ -223,7 +258,11 @@ pub fn page(conn: &Connection, query: &PlayerQuery) -> Result<Vec<(PlayerSummary
         PlayerFilter::All => String::new(),
         PlayerFilter::Name(start) => {
             values.push(Box::new(format!("{}%", like_escaped(start))));
-            " AND p.name LIKE ?2 ESCAPE '\\'".to_owned()
+            values.push(Box::new(start.clone()));
+            format!(
+                " AND (p.name LIKE ?2 ESCAPE '\\' OR p.id IN ({}))",
+                labelled(2, 3)
+            )
         }
         PlayerFilter::License(license) => {
             values.push(Box::new(license.clone()));
@@ -271,25 +310,38 @@ pub fn page(conn: &Connection, query: &PlayerQuery) -> Result<Vec<(PlayerSummary
     Ok(rows.collect::<Result<_, _>>()?)
 }
 
+/// The players a label matches by the start of its name, a `LIKE` pattern in parameter `pattern`,
+/// or by its whole id, in parameter `id`.
+fn labelled(pattern: usize, id: usize) -> String {
+    format!(
+        "SELECT l.player FROM player_label l
+         WHERE l.name LIKE ?{pattern} ESCAPE '\\' OR l.label_id = ?{id} COLLATE NOCASE"
+    )
+}
+
 /// The pseudonyms of the players a filter matches, at most `limit`: what the drop log looks for.
 pub fn pseudonyms(conn: &Connection, filter: &PlayerFilter, limit: u32) -> Result<Vec<[u8; 16]>, StoreError> {
-    let (clause, values): (&str, Vec<Box<dyn ToSql>>) = match filter {
-        PlayerFilter::All => ("1", Vec::new()),
+    let (clause, values): (String, Vec<Box<dyn ToSql>>) = match filter {
+        PlayerFilter::All => ("1".to_owned(), Vec::new()),
         PlayerFilter::Name(start) => (
-            "name LIKE ?1 ESCAPE '\\'",
-            vec![Box::new(format!("{}%", like_escaped(start)))],
+            format!("name LIKE ?1 ESCAPE '\\' OR id IN ({})", labelled(1, 2)),
+            vec![
+                Box::new(format!("{}%", like_escaped(start))),
+                Box::new(start.clone()),
+            ],
         ),
-        PlayerFilter::License(license) => ("license = ?1", vec![Box::new(license.clone())]),
+        PlayerFilter::License(license) => ("license = ?1".to_owned(), vec![Box::new(license.clone())]),
         PlayerFilter::Identifier(kind, value) => (
             "id IN (SELECT pi.player FROM player_identifier pi JOIN identifier i ON i.id = pi.identifier
-                    WHERE i.kind = ?1 AND i.value = ?2)",
+                    WHERE i.kind = ?1 AND i.value = ?2)"
+                .to_owned(),
             vec![Box::new(kind.as_str()), Box::new(value.clone())],
         ),
     };
     let mut values = values;
     values.push(Box::new(limit));
     let mut statement = conn.prepare(&format!(
-        "SELECT pseudonym FROM player WHERE {clause} ORDER BY id LIMIT ?{}",
+        "SELECT pseudonym FROM player WHERE ({clause}) ORDER BY id LIMIT ?{}",
         values.len()
     ))?;
     let rows = statement.query_map(params_from_iter(values), |row| row.get(0))?;
@@ -363,6 +415,7 @@ fn summary(row: &Row<'_>) -> rusqlite::Result<PlayerSummary> {
         last_seen: row.get::<_, Utc>(8)?.0,
         in_progress_ms: 0,
         online: false,
+        label: None,
     })
 }
 
@@ -416,6 +469,52 @@ pub fn by_license(conn: &Connection, licenses: &[String]) -> Result<HashMap<Stri
         }
     }
     Ok(found)
+}
+
+/// The latest label of each of these players that has one.
+pub fn latest_labels(conn: &Connection, players: &[i64]) -> Result<HashMap<i64, PlayerLabel>, StoreError> {
+    let mut statement = conn.prepare_cached(
+        "SELECT name, label_id, resource FROM player_label WHERE player = ?1
+         ORDER BY last_seen DESC, name, label_id LIMIT 1",
+    )?;
+    let mut found = HashMap::new();
+    for player in players {
+        if let Some(label) = statement.query_row([player], label).optional()? {
+            found.insert(*player, label);
+        }
+    }
+    Ok(found)
+}
+
+/// The labels the player was given, the latest first.
+pub fn labels(conn: &Connection, player: i64) -> Result<Vec<SeenLabel>, StoreError> {
+    let mut statement = conn.prepare(
+        "SELECT name, label_id, resource, first_seen, last_seen FROM player_label WHERE player = ?1
+         ORDER BY last_seen DESC, name, label_id",
+    )?;
+    let rows = statement.query_map([player], |row| {
+        let label = label(row)?;
+        Ok(SeenLabel {
+            name: label.name,
+            id: label.id,
+            resource: label.resource,
+            first_seen: row.get::<_, Utc>(3)?.0,
+            last_seen: row.get::<_, Utc>(4)?.0,
+        })
+    })?;
+    Ok(rows.collect::<Result<_, _>>()?)
+}
+
+/// A label from its name, id and resource, where '' is absent.
+fn label(row: &Row<'_>) -> rusqlite::Result<PlayerLabel> {
+    let text = |index| -> rusqlite::Result<Option<String>> {
+        Ok(Some(row.get::<_, String>(index)?).filter(|text| !text.is_empty()))
+    };
+    Ok(PlayerLabel {
+        name: text(0)?,
+        id: text(1)?,
+        resource: row.get(2)?,
+    })
 }
 
 pub fn names(conn: &Connection, player: i64) -> Result<Vec<PlayerName>, StoreError> {
@@ -702,6 +801,7 @@ pub fn fingerprint_key(tx: &Transaction<'_>, fresh: [u8; 32]) -> Result<[u8; 32]
 pub struct Expired {
     pub links: usize,
     pub names: usize,
+    pub labels: usize,
     pub days: usize,
     pub players: usize,
     pub identifiers: usize,
@@ -737,6 +837,10 @@ pub fn expire(
     };
     expired.names = tx.execute(
         "DELETE FROM player_name WHERE last_seen < ?1",
+        [before(retention.link_days)],
+    )?;
+    expired.labels = tx.execute(
+        "DELETE FROM player_label WHERE last_seen < ?1",
         [before(retention.link_days)],
     )?;
     expired.days = tx.execute("DELETE FROM player_day WHERE day < ?1", [day_cutoff])?;

@@ -5,10 +5,13 @@
 
 use std::collections::VecDeque;
 use std::ffi::OsString;
+use std::fs;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::time::{Duration, Instant};
 
+use observer_fxserver::bridge;
+use observer_fxserver::layout::{Flavour, Layout};
 use observer_fxserver::trace::{Trace, TraceDecoder, TraceKind};
 use observer_platform::{Exit, Launch, Output, Spawned, spawn};
 use serde_json::json;
@@ -30,42 +33,79 @@ const QUIT: Exit = Exit::Signal(11);
 
 struct Fake {
     spawned: Spawned,
+    /// The cfg's endpoint, on 127.0.0.1.
+    port: Option<u16>,
+    /// The name the bridge was installed and ensured under.
+    bridge: String,
     stdout: String,
     traces: VecDeque<Trace>,
     decoder: TraceDecoder,
     _generation: watch::Sender<u32>,
-    _data: TempDir,
+    _dir: TempDir,
 }
 
 impl Fake {
+    /// The fake with a build folder of its own, given as `citizen_dir`, which holds the bridge as
+    /// Observer writes it; the bridge is ensured before the cfg.
     fn start(port: Option<u16>, extra: &[&str]) -> Self {
-        let data = tempfile::tempdir().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let data = dir.path().join("data");
+        fs::create_dir_all(&data).unwrap();
         let endpoint = port
             .map(|port| format!("endpoint_add_tcp \"127.0.0.1:{port}\"\n"))
             .unwrap_or_default();
-        std::fs::write(
-            data.path().join("server.cfg"),
+        fs::write(
+            data.join("server.cfg"),
             format!("{endpoint}sv_hostname \"Observer test\"\nsv_maxclients 8\n"),
         )
         .unwrap();
-        let mut args: Vec<OsString> = ["+ensure", "observer", "+exec", "server.cfg"]
-            .map(OsString::from)
-            .into();
+        let layout = Layout::new(dir.path().join("build"), Flavour::HOST);
+        let bridge = bridge::draw_name().unwrap();
+        bridge::install(&layout, &bridge).unwrap();
+        let mut citizen = layout.citizen_root().join("citizen").into_os_string();
+        citizen.push("/");
+        let mut args: Vec<OsString> = vec![
+            "+set".into(),
+            "citizen_dir".into(),
+            citizen,
+            "+ensure".into(),
+            bridge.clone().into(),
+            "+exec".into(),
+            "server.cfg".into(),
+        ];
         args.extend(extra.iter().map(OsString::from));
         let spawned = spawn(&Launch {
             program: env!("CARGO_BIN_EXE_fake-fxserver").into(),
             args,
-            cwd: data.path().to_path_buf(),
+            cwd: data,
         })
         .unwrap();
         let (generation, current) = watch::channel(1);
         Self {
             spawned,
+            port,
+            bridge,
             stdout: String::new(),
             traces: VecDeque::new(),
             decoder: TraceDecoder::new(1, current),
             _generation: generation,
-            _data: data,
+            _dir: dir,
+        }
+    }
+
+    async fn bridge_started(&mut self) {
+        let started = format!("Started resource {}", self.bridge);
+        self.stdout_until(&started).await;
+    }
+
+    /// Waits for the endpoint to take connections. Like FXServer, the fake binds it once its whole
+    /// command line has run, after the bridge started.
+    async fn serving(&self) {
+        let port = self.port.expect("the fake was started without an endpoint");
+        let deadline = Instant::now() + WAIT;
+        while TcpStream::connect(("127.0.0.1", port)).is_err() {
+            assert!(Instant::now() < deadline, "nothing listens on {port}");
+            tokio::time::sleep(Duration::from_millis(20)).await;
         }
     }
 
@@ -158,13 +198,14 @@ fn main_ticks(port: u16, authorization: Option<&str>) -> u64 {
 async fn a_started_server_speaks_on_every_channel_then_quits() {
     let mut fake = Fake::start(Some(41920), &["+set", "fake_heartbeat_ms", "100"]);
 
-    fake.stdout_until("Started resource observer").await;
+    fake.bridge_started().await;
     assert_eq!(fake.trace(|_| true).await, TraceKind::Probe);
-    let ready = json!({ "type": "observer", "kind": "ready", "contractVersion": 1 });
+    let ready = json!({ "type": "observer", "kind": "ready", "contractVersion": 3 });
     fake.trace(|kind| matches!(kind, TraceKind::Script { payload, .. } if *payload == ready))
         .await;
+    let bridge = fake.bridge.clone();
     for _ in 0..3 {
-        fake.trace(|kind| matches!(kind, TraceKind::Script { resource, payload } if resource == "observer" && payload["kind"] == "hb"))
+        fake.trace(|kind| matches!(kind, TraceKind::Script { resource, payload } if *resource == bridge && payload["kind"] == "hb"))
             .await;
     }
     let (status, body) = get(41920, "/dynamic.json", None);
@@ -194,7 +235,7 @@ async fn unknown_commands_are_answered_like_fxserver_does() {
 #[tokio::test]
 async fn perf_requires_the_credentials_set_on_stdin() {
     let mut fake = Fake::start(Some(41922), &[]);
-    fake.stdout_until("Started resource observer").await;
+    fake.serving().await;
     assert_eq!(get(41922, "/perf/", None).0, 200);
 
     fake.send("set sv_prometheusBasicAuthUser observer").await;
@@ -216,7 +257,7 @@ async fn perf_requires_the_credentials_set_on_stdin() {
 #[tokio::test]
 async fn a_hung_main_loop_freezes_the_tick_count_while_http_still_answers() {
     let mut fake = Fake::start(Some(41921), &[]);
-    fake.stdout_until("Started resource observer").await;
+    fake.serving().await;
 
     fake.send("fake_hang").await;
     tokio::time::sleep(Duration::from_millis(300)).await;
@@ -284,7 +325,7 @@ async fn an_ignored_quit_leaves_the_tree_kill() {
             "50",
         ],
     );
-    fake.stdout_until("Started resource observer").await;
+    fake.bridge_started().await;
 
     fake.send("quit").await;
     tokio::time::sleep(Duration::from_millis(500)).await;
@@ -297,7 +338,7 @@ async fn an_ignored_quit_leaves_the_tree_kill() {
 #[tokio::test]
 async fn a_crash_is_reported_with_the_platform_code() {
     let mut fake = Fake::start(None, &[]);
-    fake.stdout_until("Started resource observer").await;
+    fake.bridge_started().await;
 
     fake.send("fake_crash").await;
 
@@ -328,7 +369,7 @@ async fn native_traces_come_on_demand() {
 #[tokio::test]
 async fn killing_the_tree_ends_a_child_that_still_holds_the_pipes() {
     let mut fake = Fake::start(None, &["+set", "fake_spawn_child", "1"]);
-    fake.stdout_until("Started resource observer").await;
+    fake.bridge_started().await;
 
     fake.send("fake_crash 3").await;
     assert_eq!(fake.exit().await, Exit::Code(3));

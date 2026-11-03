@@ -18,13 +18,16 @@ export const useMe = () => {
 /** Whether the user holds a permission. The owner's set holds them all. */
 export const allows = (me: Me, permission: bigint) => holds(parsePermissions(me.permissions), permission);
 
-/** The first page the user may open, for a landing that is not theirs. */
+/**
+ * The first page the user may open, for a landing that is not theirs. The settings open on the
+ * first category the user may see, the accounts for a manager of users, their own at worst.
+ */
 export const landing = (me: Me) => {
     if (allows(me, Permission.DashboardView)) {
         return '/';
     }
     if (allows(me, Permission.UsersManage)) {
-        return '/users';
+        return '/settings';
     }
-    return allows(me, Permission.AuditView) ? '/audit' : '/account';
+    return allows(me, Permission.AuditView) ? '/audit' : '/settings';
 };

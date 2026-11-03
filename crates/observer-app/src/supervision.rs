@@ -518,7 +518,8 @@ impl Supervision {
                     .into());
             }
         };
-        if command.needs_server_control() {
+        let bridge = inner.supervisor.status().borrow().bridge.clone();
+        if command.needs_server_control(bridge.as_deref()) {
             inner
                 .accounts
                 .authorize(caller, Permissions::SERVER_CONTROL, method, path)

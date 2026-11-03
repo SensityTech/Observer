@@ -39,8 +39,6 @@ const CFG_GUESSES: [&str; 5] = [
 pub struct Resources {
     names: HashSet<String>,
     categories: HashSet<String>,
-    /// Relative to the data folder with `/`.
-    named_observer: Vec<String>,
     /// Resources with their manifest.
     manifested: u32,
     pub summary: ResourceSummary,
@@ -51,11 +49,6 @@ impl Resources {
     pub fn holds(&self, name: &str) -> bool {
         let name = name.to_ascii_lowercase();
         self.names.contains(&name) || self.categories.contains(&name)
-    }
-
-    /// The resource folders named like Observer's bridge.
-    pub fn named_observer(&self) -> &[String] {
-        &self.named_observer
     }
 
     /// How many resources hold `fxmanifest.lua` or `__resource.lua`.
@@ -109,9 +102,6 @@ pub fn walk(data: &Path) -> Resources {
             }
             if !manifest && resources.summary.without_manifest.len() < MAX_UNMANIFESTED {
                 resources.summary.without_manifest.push(name.clone());
-            }
-            if lower == crate::bridge::NAME {
-                resources.named_observer.push(format!("{relative}/{name}"));
             }
             resources.names.insert(lower);
         }
@@ -429,7 +419,6 @@ mod tests {
         }
         assert!(!resources.holds("local"));
         assert!(!resources.holds("README.md"));
-        assert_eq!(resources.named_observer(), ["resources/[local]/observer"]);
     }
 
     #[test]

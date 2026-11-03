@@ -48,6 +48,32 @@ pub fn read(conn: &Connection, observer_started: i64, now: i64) -> Result<Option
     }))
 }
 
+/// A run's private bytes fitted from the end of its warm-up to `until` (its end, or now, in Unix
+/// seconds), and the most a minute of it averaged. Both `None` once its minutes are gone.
+pub fn of_run(
+    conn: &Connection,
+    started_ms: i64,
+    until: i64,
+) -> Result<(Option<Growth>, Option<f64>), StoreError> {
+    let started_at = started_ms.div_euclid(1000);
+    let warm = started_at + GROWTH_WARM_UP;
+    let from = warm + (60 - warm.rem_euclid(60)) % 60;
+    let whole = minutes(
+        conn,
+        Column::FxsPrivate,
+        started_at - started_at.rem_euclid(60),
+        until,
+    )?;
+    let peak = whole.iter().map(|&(_, average, _)| average).reduce(f64::max);
+    let fitted: Vec<(f64, f64, f64)> = whole
+        .iter()
+        .filter(|&&(ts, _, _)| ts >= from)
+        .map(|&(ts, average, samples)| (real(ts + 30 - from), average, f64::from(samples)))
+        .collect();
+    let to = whole.last().map_or(from, |&(ts, _, _)| ts + 60);
+    Ok((Growth::of(&fitted, to - from, PRIVATE_LEAK), peak))
+}
+
 /// The minutes from `from` that measured `column` and closed by `now`.
 fn minutes(
     conn: &Connection,

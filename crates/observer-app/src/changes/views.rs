@@ -553,6 +553,49 @@ fn environment(from: &Snapshot, to: &Snapshot, owner: bool) -> EnvironmentChange
     }
 }
 
+/// SFTP writes oldest first, cut where [`WRITES_GAP`] passed without one, each group with the
+/// resources its paths fall in and who wrote them.
+fn grouped_writes(entries: &[AuditEntry], paths: &[(String, String)]) -> Vec<RecordedWrites> {
+    let mut groups: Vec<RecordedWrites> = Vec::new();
+    let mut files: Vec<HashSet<&str>> = Vec::new();
+    for entry in entries {
+        let Some(target) = entry.target.as_deref() else {
+            continue;
+        };
+        let joined = groups
+            .last()
+            .is_some_and(|group| entry.at.duration_since(group.until) <= WRITES_GAP);
+        if !joined {
+            groups.push(RecordedWrites {
+                first: entry.id,
+                at: entry.at,
+                until: entry.at,
+                files: 0,
+                resources: Vec::new(),
+                by: Vec::new(),
+            });
+            files.push(HashSet::new());
+        }
+        let (Some(group), Some(written)) = (groups.last_mut(), files.last_mut()) else {
+            continue;
+        };
+        group.until = entry.at;
+        written.insert(target);
+        group.files = u32::try_from(written.len()).unwrap_or(u32::MAX);
+        if let Some((_, name)) = paths.iter().find(|(path, _)| target.starts_with(path.as_str()))
+            && !group.resources.contains(name)
+        {
+            group.resources.push(name.clone());
+        }
+        if let Some(by) = &entry.actor_name
+            && !group.by.contains(by)
+        {
+            group.by.push(by.clone());
+        }
+    }
+    groups
+}
+
 /// Who wrote each path over SFTP between two instants, the last write winning: a hint, since a
 /// copy keeps the time it likes.
 fn last_writers(entries: &[AuditEntry]) -> HashMap<String, (String, Timestamp)> {
@@ -566,7 +609,123 @@ fn last_writers(entries: &[AuditEntry]) -> HashMap<String, (String, Timestamp)> 
     writers
 }
 
+/// Starts, live changes and writes the statistics read at most over one window.
+const MAX_RECORDED: u32 = 1000;
+/// SFTP writes closer together than this are one change.
+const WRITES_GAP: SignedDuration = SignedDuration::from_mins(10);
+
+/// A start where something changed against the start before it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RecordedStart {
+    pub id: i64,
+    pub at: Timestamp,
+    pub counts: ChangeCounts,
+    pub build: Option<NumberChange>,
+    /// The resources that changed, ranked as the comparison ranks them.
+    pub resources: Vec<String>,
+}
+
+/// SFTP writes close together.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RecordedWrites {
+    /// The first write's audit entry.
+    pub first: i64,
+    pub at: Timestamp,
+    pub until: Timestamp,
+    pub files: u32,
+    pub resources: Vec<String>,
+    pub by: Vec<String>,
+}
+
+/// What changed on the server over a window, as the statistics read it.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Recorded {
+    pub starts: Vec<RecordedStart>,
+    /// Resources started, stopped or restarted while a run was up, with their ids.
+    pub live: Vec<(i64, live::LiveChange)>,
+    pub writes: Vec<RecordedWrites>,
+}
+
 impl Changes {
+    /// What changed from `from` to `to`: the starts that differ from the one before them, what
+    /// started and stopped while the server ran, and the SFTP writes grouped by the quiet between
+    /// them.
+    pub async fn recorded(&self, from: Timestamp, to: Timestamp) -> Result<Recorded, Error> {
+        let hidden_globs = self.settings().hidden;
+        let (starts, live, paths) = self
+            .inner
+            .shared
+            .store
+            .read(move |conn| -> Result<_, StoreError> {
+                let mut sides: HashMap<i64, Side> = HashMap::new();
+                let mut starts = Vec::new();
+                for snapshot in snapshots::starts_between(conn, SERVER, from, to, MAX_RECORDED)? {
+                    if snapshot.baseline || snapshot.listed_at.is_none() {
+                        continue;
+                    }
+                    let Some(earlier) = snapshots::reference(conn, SERVER, snapshot.id)? else {
+                        continue;
+                    };
+                    for side_of in [&earlier, &snapshot] {
+                        if let Entry::Vacant(vacant) = sides.entry(side_of.id) {
+                            vacant.insert(side(conn, side_of.clone())?);
+                        }
+                    }
+                    let compared = compared(
+                        conn,
+                        &sides[&earlier.id],
+                        &sides[&snapshot.id],
+                        &hidden_globs,
+                        false,
+                    )?;
+                    if !compared.counts.any() {
+                        continue;
+                    }
+                    starts.push(RecordedStart {
+                        id: snapshot.id,
+                        at: snapshot.taken_at,
+                        counts: compared.counts,
+                        build: (earlier.build != snapshot.build).then_some(NumberChange {
+                            from: earlier.build,
+                            to: snapshot.build,
+                        }),
+                        resources: compared
+                            .resources
+                            .into_iter()
+                            .map(|resource| resource.name)
+                            .collect(),
+                    });
+                    // Only the next pair needs this one again.
+                    sides.retain(|id, _| *id >= earlier.id);
+                }
+                let live = live::between(conn, from, to, MAX_RECORDED)?;
+                // Writes are placed by the resources of the newest start of the window.
+                let paths: Vec<(String, String)> =
+                    snapshots::starts_between(conn, SERVER, from, to, MAX_RECORDED)?
+                        .pop()
+                        .or(snapshots::ran_at(conn, SERVER, from)?)
+                        .map(|snapshot| resources::rows(conn, snapshot.holder()))
+                        .transpose()?
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(|row| (format!("{}/", row.path), row.name))
+                        .collect();
+                Ok((starts, live, paths))
+            })
+            .await?;
+        let entries = self
+            .inner
+            .shared
+            .db
+            .read(move |conn| audit::of_actions(conn, &WRITES, from, to, 10_000))
+            .await?;
+        Ok(Recorded {
+            starts,
+            live,
+            writes: grouped_writes(&entries, &paths),
+        })
+    }
+
     /// The starts, newest first, with what changed against the one before each, and the latest
     /// check of the disk.
     pub async fn starts(&self, before: Option<i64>) -> Result<StartList, Error> {
@@ -1337,7 +1496,57 @@ fn packages(before: Option<&ResourceRow>, after: Option<&ResourceRow>) -> Vec<Pa
 
 #[cfg(test)]
 mod tests {
+    use observer_domain::audit::{ActorKind, Outcome};
+
     use super::*;
+
+    fn written(id: i64, minute: i64, path: &str, by: &str) -> AuditEntry {
+        AuditEntry {
+            id,
+            at: Timestamp::from_second(1_761_900_000 + minute * 60).unwrap(),
+            actor_kind: ActorKind::User,
+            actor_id: Some(2),
+            actor_name: Some(by.to_owned()),
+            ip: None,
+            user_agent: None,
+            action: AuditAction::FileWritten,
+            target: Some(path.to_owned()),
+            outcome: Outcome::Success,
+            details: json!({}),
+        }
+    }
+
+    #[test]
+    fn sftp_writes_are_one_change_until_ten_minutes_pass_without_one() {
+        let paths = [
+            (
+                "resources/[cars]/sensity_garage/".to_owned(),
+                "sensity_garage".to_owned(),
+            ),
+            ("resources/chat/".to_owned(), "chat".to_owned()),
+        ];
+        let entries = [
+            written(10, 0, "resources/[cars]/sensity_garage/client.lua", "alice"),
+            written(11, 4, "resources/[cars]/sensity_garage/client.lua", "alice"),
+            written(12, 9, "resources/[cars]/sensity_garage/config.lua", "bob"),
+            written(13, 30, "resources/chat/fxmanifest.lua", "alice"),
+            written(14, 31, "server.cfg", "alice"),
+        ];
+
+        let groups = grouped_writes(&entries, &paths);
+
+        assert_eq!(groups.len(), 2);
+        assert_eq!(
+            (groups[0].first, groups[0].files),
+            (10, 2),
+            "the same file twice is one"
+        );
+        assert_eq!(groups[0].until, entries[2].at);
+        assert_eq!(groups[0].resources, ["sensity_garage"]);
+        assert_eq!(groups[0].by, ["alice", "bob"]);
+        assert_eq!((groups[1].first, groups[1].files), (13, 2));
+        assert_eq!(groups[1].resources, ["chat"], "the cfg is in no resource");
+    }
 
     #[test]
     fn others_than_the_owner_see_only_the_shown_launch_settings_in_an_attribution() {

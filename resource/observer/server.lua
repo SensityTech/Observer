@@ -2,11 +2,17 @@
 -- channel, and turns Observer's commands into server events for other resources to handle.
 -- It never shows anything to players.
 
--- Bumped only when a field is renamed or removed; new fields keep the version.
-local CONTRACT_VERSION = 1
+-- Bumped when a field is renamed or removed, when resources must find the bridge another way, and
+-- when the bridge gains an export, so that a resource can tell whether it is there; new fields keep
+-- the version.
+local CONTRACT_VERSION = 3
 local HEARTBEAT_MS = 3000
 local RESOURCES_SETTLE_MS = 500
+local LABELS_SETTLE_MS = 1000
 local PLAYERS_PAGE = 100
+-- In characters, after the spaces around them.
+local LABEL_NAME_MAX = 64
+local LABEL_ID_MAX = 32
 -- Starts and stops told in one report, past which they are only counted.
 local RESOURCE_EVENTS_MAX = 64
 
@@ -51,7 +57,7 @@ local function shown(id)
     }
 end
 
--- The players already connected when the bridge starts, after `restart observer` for one, in
+-- The players already connected when the bridge starts, after a restart of the bridge for one, in
 -- pages: one report for a full server would pass the size Observer reads.
 local function reportPlayers()
     local players = GetPlayers()
@@ -87,11 +93,100 @@ AddEventHandler('playerJoining', function()
     report('join', fields)
 end)
 
+-- The labels given or cleared since the last report, by player: the latest of each, with the
+-- resource that gave it.
+local labels = {}
+local labelsPending = false
+
+local function reportLabels()
+    labelsPending = false
+    local entries = {}
+    for id, change in pairs(labels) do
+        entries[#entries + 1] = { id = id, label = change.label or nil, resource = change.resource }
+    end
+    labels = {}
+    for first = 1, #entries, PLAYERS_PAGE do
+        report('labels', { labels = table.move(entries, first, math.min(first + PLAYERS_PAGE - 1, #entries), 1, {}) })
+    end
+end
+
+-- A resource that sets labels in a loop sends one report a second, never one per call.
+local function labelChanged(id, label, resource)
+    labels[id] = { label = label, resource = resource }
+    if not labelsPending then
+        labelsPending = true
+        SetTimeout(LABELS_SETTLE_MS, reportLabels)
+    end
+end
+
+-- A label's text: nil when absent or blank, or nil and why it is refused.
+local function labelText(value, max)
+    if value == nil then
+        return nil
+    end
+    if type(value) ~= 'string' then
+        return nil, 'invalid'
+    end
+    value = value:match('^%s*(.*%S)')
+    if not value then
+        return nil
+    end
+    local length = utf8.len(value)
+    if not length then
+        return nil, 'invalid'
+    end
+    if length > max then
+        return nil, 'tooLong'
+    end
+    return value
+end
+
+local function connected(player)
+    local id = tonumber(player)
+    if id and id > 0 and type(GetPlayerName(id)) == 'string' then
+        return id
+    end
+end
+
+-- What the panel shows for a player beside their FiveM name, as the server's resources call them.
+-- Display data: Observer checks it again and never takes it for the player's identity.
+exports('setPlayerLabel', function(player, label)
+    local id = connected(player)
+    if not id then
+        return false, 'notConnected'
+    end
+    if type(label) ~= 'table' then
+        return false, 'invalid'
+    end
+    local name, nameRefused = labelText(label.name, LABEL_NAME_MAX)
+    local labelId, idRefused = labelText(label.id, LABEL_ID_MAX)
+    local refused = nameRefused or idRefused
+    if refused then
+        return false, refused
+    end
+    if not name and not labelId then
+        return false, 'invalid'
+    end
+    labelChanged(id, { name = name, id = labelId }, GetInvokingResource())
+    return true
+end)
+
+exports('clearPlayerLabel', function(player)
+    local id = connected(player)
+    if not id then
+        return false, 'notConnected'
+    end
+    labelChanged(id, false, GetInvokingResource())
+    return true
+end)
+
 AddEventHandler('playerDropped', function(reason, resource, category)
     local id = tonumber(source)
     if not id or id <= 0 then
         return
     end
+    -- Its net id may be someone else's by the time the label would go out.
+    labels[id] = nil
     local ped
     -- With OneSync a player has a ped once they spawned: without one, they were still loading.
     if GetConvar('onesync', 'off') ~= 'off' then

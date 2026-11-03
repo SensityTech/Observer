@@ -11,7 +11,7 @@ use observer_app::{
     BeforeSpawn, Changes, ChangesSetup, Clock, DatabaseFiles, Diagnostics, DiagnosticsSetup, Drops,
     DropsSetup, Features, FeaturesSetup, Metrics, MetricsSetup, OwnPaths, PRE_LAUNCH_LIMIT, PasswordCost,
     Players, PlayersSetup, Running, Schedule, ScheduleSetup, ScheduleTask, Servers, Setup, Sources,
-    Supervision, Switched, Tools, ToolsHook, ToolsSetup,
+    Statistics, Supervision, Switched, Tools, ToolsHook, ToolsSetup,
 };
 use observer_artifacts::Http;
 use observer_artifacts::catalog::Catalog;
@@ -262,6 +262,13 @@ pub async fn run(config: Config, args: RunArgs) -> anyhow::Result<()> {
     let setup_token = setup::offer_link(&accounts, config.http.listen).await?;
 
     let stop = CancellationToken::new();
+    let statistics = Statistics::new(
+        features.clone(),
+        metrics.clone(),
+        drops.clone(),
+        changes.clone(),
+        clock.clone(),
+    );
     let services = observer_web::Services {
         accounts: accounts.clone(),
         audit: audit.clone(),
@@ -278,6 +285,7 @@ pub async fn run(config: Config, args: RunArgs) -> anyhow::Result<()> {
         drops,
         changes,
         backups,
+        statistics,
     };
     let state = observer_web::AppState::new(
         BUILD,
@@ -285,6 +293,11 @@ pub async fn run(config: Config, args: RunArgs) -> anyhow::Result<()> {
         &instance_id,
         &config.http.hosts,
         &config.http.trusted_proxies,
+        observer_web::Bootstrap {
+            // Observer may have been started from anywhere: the owner looks for the file itself.
+            config_file: std::path::absolute(&config.path).unwrap_or_else(|_| config.path.clone()),
+            listen: config.http.listen,
+        },
     );
     let live = state.live.clone();
     // Before FXServer starts with Observer, so that the first samples show its start.

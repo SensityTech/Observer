@@ -217,6 +217,23 @@ pub fn starts(
     Ok(rows.collect::<Result<_, _>>()?)
 }
 
+/// Starts of `server` taken from `from` to before `to`, oldest first, at most `limit`.
+pub fn starts_between(
+    conn: &Connection,
+    server: &str,
+    from: Timestamp,
+    to: Timestamp,
+    limit: u32,
+) -> Result<Vec<Snapshot>, StoreError> {
+    let mut statement = conn.prepare(&format!(
+        "SELECT {COLUMNS} FROM snapshot
+         WHERE server_id = ?1 AND kind = 'start' AND taken_at >= ?2 AND taken_at < ?3
+         ORDER BY id LIMIT ?4"
+    ))?;
+    let rows = statement.query_map(params![server, Utc(from), Utc(to), limit], read)?;
+    Ok(rows.collect::<Result<_, _>>()?)
+}
+
 /// The newest complete start before `before`, the one a new start's rows are compared with.
 pub fn previous_complete(
     conn: &Connection,

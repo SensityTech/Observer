@@ -7,11 +7,11 @@ import { useMe } from '../auth/me';
 import { Notice } from '../components/Notice';
 import { useI18n } from '../i18n/I18nProvider';
 import { CommunitySection } from '../players/CommunitySection';
-import { DataCard } from '../players/DataCard';
 import { OnlineCard } from '../players/OnlineCard';
 import { PlayersCard } from '../players/PlayersCard';
 import { ZoneNote } from '../players/words';
 import { useSchedule } from '../schedule/context';
+import { MovedSettings } from '../settings/Moved';
 
 export function PlayersPage() {
     const { t } = useI18n();
@@ -46,7 +46,7 @@ export function PlayersPage() {
             <OnlineCard />
             <CommunitySection />
             <PlayersCard />
-            {me.isOwner && <DataCard zone={zone} />}
+            {me.isOwner && <MovedSettings category="data" setting="linkDays" page="players" />}
         </div>
     );
 }

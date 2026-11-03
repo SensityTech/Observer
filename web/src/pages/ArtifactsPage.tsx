@@ -7,10 +7,8 @@ import {
     FolderInput,
     HardDrive,
     Package,
-    Plus,
     RefreshCw,
     Search,
-    Settings2,
     Trash2,
     X,
     type LucideIcon,
@@ -31,17 +29,13 @@ import {
     needsKvpConfirmation,
     protectionsOf,
     refreshCatalog,
-    saveArtifactSettings,
     secondsLeft,
     selectBuild,
-    settingsIssues,
     stepsOf,
 } from '../api/artifacts';
 import { ApiError } from '../api/client';
 import type { ApplyMode } from '../api/generated/ApplyMode';
 import type { ArtifactNotice } from '../api/generated/ArtifactNotice';
-import type { ArtifactSettings } from '../api/generated/ArtifactSettings';
-import type { ArtifactSettingsIssue } from '../api/generated/ArtifactSettingsIssue';
 import type { ArtifactsStatus } from '../api/generated/ArtifactsStatus';
 import type { CatalogEntry } from '../api/generated/CatalogEntry';
 import type { CatalogView } from '../api/generated/CatalogView';
@@ -59,7 +53,7 @@ import { Card } from '../components/Card';
 import { Checkbox } from '../components/Checkbox';
 import { Chip } from '../components/Chip';
 import { Dialog } from '../components/Dialog';
-import { FieldError, TextField, inputClass } from '../components/Field';
+import { TextField, inputClass } from '../components/Field';
 import { Notice } from '../components/Notice';
 import { Steps } from '../components/Steps';
 import { table } from '../components/table';
@@ -72,6 +66,7 @@ import { useNow } from '../lib/useNow';
 import { useSchedule } from '../schedule/context';
 import { useServerStatus } from '../server/context';
 import { isRunning } from '../server/state';
+import { MovedSettings } from '../settings/Moved';
 
 /**
  * `focus`: the control it answers goes away with it, so the keyboard moves to the notice. `until`:
@@ -226,7 +221,7 @@ export function ArtifactsPage() {
                         onInstall={(entry) => setOpen({ kind: 'install', entry })}
                         onOutcome={setOutcome}
                     />
-                    <SettingsCard status={status} />
+                    <MovedSettings category="builds" page="artifacts" />
                     {open?.kind === 'install' && (
                         <InstallDialog entry={open.entry} status={status} onClose={close} onDone={done} />
                     )}
@@ -1165,181 +1160,6 @@ function AvailableCard({
                 </div>
             )}
         </Card>
-    );
-}
-
-function SettingsCard({ status }: { status: ArtifactsStatus }) {
-    const { t } = useI18n();
-    const me = useMe();
-    const id = useId();
-    const words = t.artifacts.settings;
-    const canManage = allows(me, Permission.ArtifactsManage);
-    const [shown, setShown] = useState({ settings: status.settings, version: status.version });
-    const [draft, setDraft] = useState<ArtifactSettings>(status.settings);
-    const [branch, setBranch] = useState('');
-    const [issues, setIssues] = useState<ArtifactSettingsIssue[]>([]);
-    const [outcome, setOutcome] = useState<Outcome | null>(null);
-    const changes = (Object.keys(draft) as (keyof ArtifactSettings)[]).filter(
-        (key) => JSON.stringify(draft[key]) !== JSON.stringify(shown.settings[key]),
-    ).length;
-    const stale = status.version !== shown.version;
-    if (stale && changes === 0) {
-        setShown({ settings: status.settings, version: status.version });
-        setDraft(status.settings);
-    }
-    const save = useMutation({
-        mutationFn: () => saveArtifactSettings({ settings: draft, version: shown.version }),
-        onMutate: () => {
-            setOutcome(null);
-            setIssues([]);
-        },
-        onSuccess: (saved) => {
-            setShown({ settings: saved.settings, version: saved.version });
-            setDraft(saved.settings);
-            setOutcome({ tone: 'success', message: words.saved });
-        },
-        onError: (error) => {
-            if (error instanceof ApiError && error.code === 'invalid_artifact_settings') {
-                setIssues(settingsIssues(error.params));
-            }
-            setOutcome({ tone: 'danger', message: errorMessage(t, error) });
-        },
-    });
-    const issueOf = (field: ArtifactSettingsIssue['field'], index: number | null = null) => {
-        const found = issues.find((issue) => issue.field === field && issue.index === index);
-        return found === undefined ? undefined : words.problems[found.problem];
-    };
-    const addBranch = () => {
-        const name = branch.trim();
-        if (name !== '' && !draft.branches.includes(name)) {
-            setDraft({ ...draft, branches: [...draft.branches, name] });
-            setBranch('');
-        }
-    };
-    return (
-        <form
-            className="flex flex-col gap-3"
-            noValidate
-            onSubmit={(event) => {
-                event.preventDefault();
-                if (!canManage || save.isPending) {
-                    return;
-                }
-                // A count of builds is whole: 2.5 is out of range here, as Observer would find it.
-                if (!Number.isInteger(draft.keepBuilds) || draft.keepBuilds < 1 || draft.keepBuilds > 20) {
-                    setOutcome(null);
-                    setIssues([{ field: 'keepBuilds', index: null, problem: 'outOfRange' }]);
-                    return;
-                }
-                save.mutate();
-            }}
-        >
-            {stale && changes > 0 && <Notice tone="warning">{words.changedElsewhere}</Notice>}
-            {outcome !== null && <Notice tone={outcome.tone}>{outcome.message}</Notice>}
-            <Card id={id} icon={Settings2} title={words.title}>
-                <fieldset disabled={!canManage} className="flex max-w-2xl min-w-0 flex-col gap-5">
-                    {!canManage && <p className="text-small text-ink-3">{words.readOnly}</p>}
-                    <TextField
-                        label={words.keepBuilds}
-                        hint={words.keepBuildsHint}
-                        type="number"
-                        inputMode="numeric"
-                        min={1}
-                        max={20}
-                        className="max-w-48"
-                        value={String(draft.keepBuilds)}
-                        error={issueOf('keepBuilds')}
-                        onChange={(event) => setDraft({ ...draft, keepBuilds: Number(event.target.value) })}
-                    />
-                    <label
-                        htmlFor={`${id}-rollback`}
-                        className="-mx-2 flex cursor-pointer items-start gap-3 rounded-sm px-2 py-2 hover:bg-hover"
-                    >
-                        <Checkbox
-                            id={`${id}-rollback`}
-                            checked={draft.autoRollback}
-                            onChange={(event) => setDraft({ ...draft, autoRollback: event.target.checked })}
-                        />
-                        <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-                            <span className="text-body font-medium text-ink">{words.autoRollback}</span>
-                            <span className="text-small text-ink-2">{words.autoRollbackHint}</span>
-                        </span>
-                    </label>
-                    <div className="flex flex-col gap-2">
-                        <p className="text-ui font-medium text-ink">{words.branches}</p>
-                        <p className="text-small text-ink-3">{words.branchesHint}</p>
-                        <ul className="flex flex-wrap gap-1.5">
-                            {draft.branches.length === 0 && (
-                                <li className="text-small text-ink-3">{words.noBranch}</li>
-                            )}
-                            {draft.branches.map((name, index) => (
-                                <li key={name} className="flex flex-col gap-1">
-                                    <span className="inline-flex h-7 items-center gap-1 rounded-pill border border-line bg-surface-2 pr-1 pl-2.5 font-mono text-small text-ink-2">
-                                        {name}
-                                        <button
-                                            type="button"
-                                            className="grid size-5 place-items-center rounded-pill hover:bg-hover max-md:size-11"
-                                            aria-label={words.removeBranch(name)}
-                                            onClick={() =>
-                                                setDraft({
-                                                    ...draft,
-                                                    branches: draft.branches.filter((_, at) => at !== index),
-                                                })
-                                            }
-                                        >
-                                            <X size={12} strokeWidth={2} aria-hidden="true" />
-                                        </button>
-                                    </span>
-                                    {issueOf('branches', index) && (
-                                        <FieldError>{issueOf('branches', index)}</FieldError>
-                                    )}
-                                </li>
-                            ))}
-                        </ul>
-                        {issueOf('branches') && <FieldError>{issueOf('branches')}</FieldError>}
-                        <div className="flex max-w-md flex-wrap gap-2">
-                            <input
-                                aria-label={words.branchName}
-                                className={cn(inputClass, 'min-w-0 flex-1 font-mono text-ui')}
-                                value={branch}
-                                spellCheck={false}
-                                autoCapitalize="none"
-                                onChange={(event) => setBranch(event.target.value)}
-                                onKeyDown={(event) => {
-                                    if (event.key === 'Enter') {
-                                        event.preventDefault();
-                                        addBranch();
-                                    }
-                                }}
-                            />
-                            <Button icon={Plus} onClick={addBranch} disabled={draft.branches.length >= 10}>
-                                {words.addBranch}
-                            </Button>
-                        </div>
-                    </div>
-                </fieldset>
-            </Card>
-            {canManage && changes > 0 && (
-                <div className="sticky bottom-3 z-10 flex flex-wrap items-center gap-x-4 gap-y-2 rounded-box border border-line-strong bg-surface px-3.5 py-2.5 shadow-pop">
-                    <output className="mr-auto text-ui text-ink-2">{words.changes(changes)}</output>
-                    <Button
-                        tone="ghost"
-                        className="max-md:flex-1"
-                        onClick={() => {
-                            setShown({ settings: status.settings, version: status.version });
-                            setDraft(status.settings);
-                            setIssues([]);
-                            setOutcome({ tone: 'success', message: words.discarded });
-                        }}
-                    >
-                        {words.discard}
-                    </Button>
-                    <Button type="submit" tone="ink" pending={save.isPending} className="max-md:flex-1">
-                        {words.save}
-                    </Button>
-                </div>
-            )}
-        </form>
     );
 }
 

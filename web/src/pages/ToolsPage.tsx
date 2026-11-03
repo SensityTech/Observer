@@ -26,9 +26,9 @@ import { errorMessage } from '../i18n/errors';
 import { useI18n } from '../i18n/I18nProvider';
 import type { Messages } from '../i18n/en';
 import { useServerStatus } from '../server/context';
+import { MovedSettings } from '../settings/Moved';
 import { FilesCard, type Outcome } from '../tools/FilesCard';
 import { GroupsCard } from '../tools/GroupsCard';
-import { SettingsCard } from '../tools/SettingsCard';
 
 /** The states the tools write in, as Observer checks them: FXServer neither runs nor is about to. */
 const STOPPED: ReadonlySet<ServerState> = new Set(['stopped', 'crashLoop']);
@@ -84,7 +84,7 @@ export function ToolsPage() {
 
 /**
  * The tool: what it does, its last run, Scan now and Fix, the groups of the latest report, the
- * files it changed and its settings. Fix and Undo run only while FXServer is stopped.
+ * files it changed and the way to its settings. Fix and Undo run only while FXServer is stopped.
  */
 function DuplicateArchetypes({ view }: { view: ToolView }) {
     const { t } = useI18n();
@@ -286,7 +286,7 @@ function DuplicateArchetypes({ view }: { view: ToolView }) {
                 noticeRef={undoNoticeRef}
                 onUndo={(scope) => undo.mutate(scope)}
             />
-            <SettingsCard view={view} />
+            <MovedSettings category="tools" page="tools" />
         </>
     );
 }

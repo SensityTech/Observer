@@ -958,6 +958,28 @@ fn the_runtime_paths_of_both_crates_match() {
 }
 
 #[test]
+fn both_crates_tell_the_bridge_folders_alike() {
+    for _ in 0..64 {
+        let drawn = observer_fxserver::bridge::draw_name().unwrap();
+        assert!(observer_artifacts::is_bridge_folder(&drawn), "{drawn}");
+    }
+    for name in [
+        "observer",
+        "Observer",
+        "monitor",
+        "sys_",
+        "sys_abcdefghijk1",
+        "sys_abcdefghijklm",
+    ] {
+        assert_eq!(
+            observer_artifacts::is_bridge_folder(name),
+            observer_fxserver::bridge::is_folder(name),
+            "{name}"
+        );
+    }
+}
+
+#[test]
 fn settings_name_each_branch_they_refuse() {
     let settings = ArtifactSettings {
         keep_builds: 0,
