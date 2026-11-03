@@ -34,6 +34,8 @@ const status = (overrides: Partial<ServerStatus>): ServerStatus => ({
     players: null,
     restartAt: null,
     launch: 'ready',
+    name: null,
+    port: null,
     ...overrides,
 });
 

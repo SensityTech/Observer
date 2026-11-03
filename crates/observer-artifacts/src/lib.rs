@@ -25,4 +25,4 @@ pub use extract::Refusal;
 pub use folder::{Broken, Health, Scanned, inspect};
 pub use http::Http;
 pub use install::{InstallRequest, Installed, Installer, Progress};
-pub use layout::{Manifest, Origin, RUNTIME_PATHS};
+pub use layout::{Manifest, Origin, RUNTIME_PATHS, is_bridge_folder};

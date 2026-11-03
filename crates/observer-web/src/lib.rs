@@ -13,13 +13,15 @@ mod security;
 #[cfg(test)]
 mod tests;
 
+use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::extract::Request;
 use axum::{Router, middleware};
 use observer_app::{
     Accounts, Artifacts, AuditLog, Backups, Changes, Diagnostics, Drops, Error, Features, Files, Metrics,
-    Players, Schedule, Servers, Supervision, Tools,
+    Players, Schedule, Servers, Statistics, Supervision, Tools,
 };
 use observer_domain::about::Build;
 use observer_domain::features::Feature;
@@ -47,6 +49,7 @@ pub struct AppState {
     pub artifacts: Artifacts,
     pub files: Files,
     pub tools: Tools,
+    pub statistics: Statistics,
     pub features: Features,
     /// The services of the features Observer started without are absent. Their routes and topics
     /// are refused before anything reaches for them, through the accessors below.
@@ -63,6 +66,14 @@ pub struct AppState {
     /// The names the panel is reached by, besides addresses and `localhost`.
     hosts: Arc<[String]>,
     proxies: Arc<[TrustedProxy]>,
+    bootstrap: Arc<Bootstrap>,
+}
+
+/// What the owner reads of `observer.toml` on the Settings page besides the hosts and proxies,
+/// which the panel's requests are checked against.
+pub struct Bootstrap {
+    pub config_file: PathBuf,
+    pub listen: SocketAddr,
 }
 
 /// The services the API stands on.
@@ -75,6 +86,7 @@ pub struct Services {
     pub artifacts: Artifacts,
     pub files: Files,
     pub tools: Tools,
+    pub statistics: Statistics,
     pub features: Features,
     /// `None` for each feature that does not run at Observer's start.
     pub diagnostics: Option<Diagnostics>,
@@ -92,6 +104,7 @@ impl AppState {
         instance_id: &str,
         hosts: &[String],
         proxies: &[TrustedProxy],
+        bootstrap: Bootstrap,
     ) -> Self {
         let Services {
             accounts,
@@ -109,6 +122,7 @@ impl AppState {
             drops,
             changes,
             backups,
+            statistics,
         } = services;
         Self {
             build,
@@ -127,10 +141,12 @@ impl AppState {
             drops,
             changes,
             backups,
+            statistics,
             live: Live::new(),
             cookie: format!("observer_session_{instance_id}"),
             hosts: hosts.into(),
             proxies: proxies.into(),
+            bootstrap: Arc::new(bootstrap),
         }
     }
 }

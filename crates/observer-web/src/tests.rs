@@ -14,6 +14,7 @@ mod players;
 mod proxy;
 mod schedule;
 mod servers;
+mod settings;
 mod setup;
 mod tools;
 
@@ -30,8 +31,8 @@ use observer_app::{
     Accounts, Artifacts, ArtifactsSetup, ArtifactsTask, AuditLog, Backups, BackupsSetup, BackupsTask,
     Changes, ChangesSetup, ChangesTask, Clock, Diagnostics, DiagnosticsSetup, DiagnosticsTask, Drops,
     DropsSetup, DropsTask, Features, FeaturesSetup, Metrics, MetricsSetup, OwnPaths, PasswordCost, Players,
-    PlayersSetup, PlayersTask, Running, Schedule, ScheduleSetup, ScheduleTask, Servers, Setup, Supervision,
-    Tools, ToolsSetup,
+    PlayersSetup, PlayersTask, Running, Schedule, ScheduleSetup, ScheduleTask, Servers, Setup, Statistics,
+    Supervision, Tools, ToolsSetup,
 };
 use observer_artifacts::Http;
 use observer_artifacts::catalog::{Catalog, Listing};
@@ -44,7 +45,7 @@ use tower::ServiceExt;
 
 use crate::api::routes;
 use crate::gate::Gate;
-use crate::{AppState, Live, SESSION_KEY_HEADER, Services, TrustedProxy, router};
+use crate::{AppState, Bootstrap, Live, SESSION_KEY_HEADER, Services, TrustedProxy, router};
 
 const HOST: &str = "observer.test:40125";
 const ORIGIN: &str = "http://observer.test:40125";
@@ -264,6 +265,13 @@ impl Server {
         )
         .await
         .unwrap();
+        let statistics = Statistics::new(
+            features.clone(),
+            Some(metrics.clone()),
+            Some(drops.clone()),
+            Some(changes.clone()),
+            clock.clone(),
+        );
         let services = Services {
             accounts: accounts.clone(),
             audit: audit.clone(),
@@ -280,6 +288,7 @@ impl Server {
             drops: Some(drops),
             changes: Some(changes),
             backups,
+            statistics,
         };
         let state = AppState::new(
             BUILD,
@@ -287,6 +296,10 @@ impl Server {
             &instance_id,
             &["observer.test".to_owned()],
             proxies,
+            Bootstrap {
+                config_file: dir.path().join("observer.toml"),
+                listen: SocketAddr::from(([0, 0, 0, 0], 40125)),
+            },
         );
         let live = state.live.clone();
         let app = router(state).layer(MockConnectInfo(peer));

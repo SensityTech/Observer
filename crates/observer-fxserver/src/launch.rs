@@ -13,9 +13,8 @@ use observer_domain::server::SpawnFailure;
 use observer_domain::server_data::{CfgFinding, Severity};
 use observer_platform::Launch;
 
-use crate::cfg;
 use crate::layout::{Flavour, Layout};
-use crate::server_data;
+use crate::{bridge, cfg, server_data};
 
 /// What a spawn starts: a build folder, and how FXServer runs from it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -29,6 +28,8 @@ pub struct ServerLaunch {
 pub struct Prepared {
     pub launch: Launch,
     pub layout: Layout,
+    /// The name the bridge takes in this start, which the launch ensures.
+    pub bridge: String,
     /// What the cfg does that works against Observer, notes left out. The setup refused what
     /// blocks when it saved; a cfg edited since still starts, as FXServer will say.
     pub warnings: Vec<CfgFinding>,
@@ -100,9 +101,10 @@ fn describe(issues: &[LaunchIssue]) -> String {
         .join(", ")
 }
 
-/// Builds the launch: the flavour's program, then `+ensure observer`, `+exec <cfg>`, the extra
-/// arguments and Observer's convars last, so that they win over the cfg.
-pub fn prepare(launch: &ServerLaunch, flavour: Flavour) -> Result<Prepared, LaunchError> {
+/// Builds the launch: the flavour's program, then `+ensure <bridge>`, `+exec <cfg>`, the extra
+/// arguments and Observer's convars last, so that they win over the cfg. `bridge` is the name
+/// drawn for this start.
+pub fn prepare(launch: &ServerLaunch, flavour: Flavour, bridge: &str) -> Result<Prepared, LaunchError> {
     let platform = match flavour {
         Flavour::Windows => Platform::Windows,
         Flavour::Linux => Platform::Unix,
@@ -136,7 +138,7 @@ pub fn prepare(launch: &ServerLaunch, flavour: Flavour) -> Result<Prepared, Laun
         });
     }
 
-    args.extend(["+ensure".into(), "observer".into(), "+exec".into()]);
+    args.extend(["+ensure".into(), bridge.into(), "+exec".into()]);
     args.push(settings.cfg_file.clone().into());
     for argument in &settings.extra_arguments {
         args.extend([
@@ -152,6 +154,11 @@ pub fn prepare(launch: &ServerLaunch, flavour: Flavour) -> Result<Prepared, Laun
         "+set".into(),
         "observer_txadmin_events".into(),
         if settings.txadmin_events { "1" } else { "0" }.into(),
+        // FXServer applies the command line's `+set` before anything else: the cfg's resources
+        // can read it as they start.
+        "+set".into(),
+        bridge::NAME_CONVAR.into(),
+        bridge.into(),
     ]);
 
     // FXServer runs the whole cfg; the scan reads its first MiB, as it reads every file it runs.
@@ -187,6 +194,7 @@ pub fn prepare(launch: &ServerLaunch, flavour: Flavour) -> Result<Prepared, Laun
             cwd: data,
         },
         layout,
+        bridge: bridge.to_owned(),
         warnings,
         endpoint,
         scan,
@@ -215,6 +223,7 @@ mod tests {
     const QUIET: &str = "endpoint_add_tcp \"0.0.0.0:30140\"\n\
                          endpoint_add_udp \"0.0.0.0:30140\"\n\
                          sv_licenseKey cfxk_ObserverLabFixture_k3y\n";
+    const BRIDGE: &str = "sys_k3jx7qmw2pza";
 
     struct Fixture {
         dir: TempDir,
@@ -274,7 +283,7 @@ mod tests {
     }
 
     fn refused(launch: &ServerLaunch) -> Option<LaunchError> {
-        prepare(launch, Flavour::HOST).err()
+        prepare(launch, Flavour::HOST, BRIDGE).err()
     }
 
     fn with(fixture: &Fixture, settings: LaunchSettings) -> ServerLaunch {
@@ -297,13 +306,13 @@ mod tests {
             ..fixture.settings()
         };
 
-        let prepared = prepare(&with(&fixture, settings), Flavour::HOST).unwrap();
+        let prepared = prepare(&with(&fixture, settings), Flavour::HOST, BRIDGE).unwrap();
 
         assert_eq!(
             server_args(&prepared),
             [
                 "+ensure",
-                "observer",
+                BRIDGE,
                 "+exec",
                 "server.cfg",
                 "+set",
@@ -315,8 +324,12 @@ mod tests {
                 "+set",
                 "observer_txadmin_events",
                 "1",
+                "+set",
+                "observer_bridge",
+                BRIDGE,
             ]
         );
+        assert_eq!(prepared.bridge, BRIDGE);
         assert_eq!(prepared.launch.cwd, fixture.data());
         assert_eq!(prepared.launch.program, prepared.layout.program().0);
         assert_eq!(prepared.warnings, []);
@@ -432,7 +445,7 @@ mod tests {
         );
         fixture.file("license.cfg", "sv_playersToken abc\n# start monitor\n");
 
-        let prepared = prepare(&fixture.launch(), Flavour::HOST).unwrap();
+        let prepared = prepare(&fixture.launch(), Flavour::HOST, BRIDGE).unwrap();
 
         let warnings: Vec<_> = prepared
             .warnings
@@ -462,7 +475,7 @@ mod tests {
     fn a_cfg_that_execs_itself_is_read_once() {
         let fixture = Fixture::new(&format!("{QUIET}exec server.cfg\nstart monitor\n"));
 
-        let prepared = prepare(&fixture.launch(), Flavour::HOST).unwrap();
+        let prepared = prepare(&fixture.launch(), Flavour::HOST, BRIDGE).unwrap();
 
         let kinds: Vec<_> = prepared.warnings.iter().map(|finding| finding.kind).collect();
         assert_eq!(kinds, [FindingKind::ExecRepeated, FindingKind::StartsMonitor]);
@@ -477,7 +490,7 @@ mod tests {
         )
         .unwrap();
 
-        let prepared = prepare(&fixture.launch(), Flavour::HOST).unwrap();
+        let prepared = prepare(&fixture.launch(), Flavour::HOST, BRIDGE).unwrap();
 
         let kinds: Vec<_> = prepared.warnings.iter().map(|finding| finding.kind).collect();
         assert_eq!(kinds, [FindingKind::StartsMonitor]);
@@ -490,7 +503,7 @@ mod tests {
             "# padding\n".repeat(110_000)
         ));
 
-        let prepared = prepare(&fixture.launch(), Flavour::HOST).unwrap();
+        let prepared = prepare(&fixture.launch(), Flavour::HOST, BRIDGE).unwrap();
 
         assert_eq!(prepared.warnings, []);
         assert_eq!(prepared.endpoint, Some(SocketAddr::from(([127, 0, 0, 1], 30140))));
@@ -504,7 +517,7 @@ mod tests {
              endpoint_add_tcp \"127.0.0.1:30149\"\n",
         );
 
-        let prepared = prepare(&fixture.launch(), Flavour::HOST).unwrap();
+        let prepared = prepare(&fixture.launch(), Flavour::HOST, BRIDGE).unwrap();
 
         assert_eq!(prepared.endpoint, Some(SocketAddr::from(([127, 0, 0, 1], 30140))));
     }
@@ -518,7 +531,7 @@ mod tests {
         )
         .unwrap();
 
-        let prepared = prepare(&fixture.launch(), Flavour::HOST).unwrap();
+        let prepared = prepare(&fixture.launch(), Flavour::HOST, BRIDGE).unwrap();
 
         let warnings: Vec<_> = prepared
             .warnings

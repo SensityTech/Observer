@@ -21,7 +21,9 @@ use observer_domain::drops::{
 use observer_domain::error::{ApiError, ErrorCode};
 use observer_domain::permissions::Permissions;
 use observer_domain::schedule::ScheduleStatus;
+use observer_domain::statistics::{SessionSurvival, StabilityEffects, TimelineEvent};
 use observer_store::metrics::drops::{self as stored, LogFilter, LogRow};
+use observer_store::metrics::links;
 use observer_store::players as stored_players;
 use observer_store::{Database, MetricsDatabase, StoreError};
 use serde_json::json;
@@ -31,6 +33,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
 pub use self::compute::DayRates;
+pub(crate) use self::compute::insights::{EffectChange, Wave};
 use crate::audit::Record;
 use crate::{Caller, Clock, Error, Metrics, Players, Servers};
 
@@ -302,6 +305,101 @@ impl Drops {
             )
             .await?;
         Ok((*uptime).clone())
+    }
+
+    /// How long players stay: the sessions that started in the range against those of the 4
+    /// weeks before.
+    pub async fn sessions(&self, range: DropsRange) -> Result<SessionSurvival, Error> {
+        let survival = self
+            .cached(
+                &format!("sessions:{}", range.name()),
+                move |conn, now, _, kept| compute::insights::sessions(conn, range, now, kept),
+            )
+            .await?;
+        Ok((*survival).clone())
+    }
+
+    /// The crash waves that reach into `from_ms` to `to_ms`, and the bursts of drops in it.
+    pub(crate) async fn waves(
+        &self,
+        from_ms: i64,
+        to_ms: i64,
+    ) -> Result<Arc<(Vec<Wave>, Vec<TimelineEvent>)>, Error> {
+        self.cached(&format!("waves:{from_ms}:{to_ms}"), move |conn, now, _, _| {
+            compute::insights::waves(conn, from_ms, to_ms, now.as_millisecond())
+        })
+        .await
+    }
+
+    /// Whether `signature` had no crash in the weeks before `at_ms`.
+    pub(crate) async fn quiet_before(&self, signature: i64, at_ms: i64) -> Result<bool, Error> {
+        let now_ms = self.inner.clock.now().as_millisecond();
+        Ok(self
+            .inner
+            .metrics
+            .read(move |conn| compute::insights::quiet_before(conn, signature, at_ms, now_ms))
+            .await?)
+    }
+
+    /// What each change of the last 90 days did to stability: the builds of the runs, and
+    /// `recorded` when `with_changes`.
+    pub(crate) async fn effects(
+        &self,
+        recorded: Vec<EffectChange>,
+        with_changes: bool,
+    ) -> Result<StabilityEffects, Error> {
+        let key = format!(
+            "effects:{with_changes}:{}:{}",
+            recorded.len(),
+            recorded.last().map_or(0, |change| change.at_ms)
+        );
+        let effects = self
+            .cached(&key, move |conn, now, zone, _| {
+                compute::insights::effects(conn, now, zone, recorded, with_changes)
+            })
+            .await?;
+        Ok((*effects).clone())
+    }
+
+    /// The links someone said are not related.
+    pub(crate) async fn dismissed_links(&self) -> Result<std::collections::HashSet<String>, Error> {
+        Ok(self.inner.metrics.read(links::dismissed).await?)
+    }
+
+    /// Records that the caller says the link is not related, or takes that back, audited.
+    pub(crate) async fn dismiss_link(
+        &self,
+        caller: &Caller,
+        link: String,
+        dismissed: bool,
+    ) -> Result<(), Error> {
+        let action = if dismissed {
+            AuditAction::StatisticsLinkDismissed
+        } else {
+            AuditAction::StatisticsLinkRestored
+        };
+        let record = Record::by(caller, action).target(&link);
+        let now = self.inner.clock.now();
+        let by = caller.username.clone();
+        let changed = self
+            .inner
+            .metrics
+            .write(move |tx| -> Result<bool, StoreError> {
+                if dismissed {
+                    links::dismiss(tx, &link, &by, now.as_millisecond())?;
+                    Ok(true)
+                } else {
+                    links::restore(tx, &link)
+                }
+            })
+            .await?;
+        if changed {
+            self.inner
+                .db
+                .write(move |tx| -> Result<(), StoreError> { record.write(tx, now) })
+                .await?;
+        }
+        Ok(())
     }
 
     /// A page of the drop log, newest first. Needs `PLAYERS_VIEW`, which the route checks; a

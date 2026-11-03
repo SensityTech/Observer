@@ -19,7 +19,7 @@ const MAX_WALKED: usize = 5000;
 /// Resources without a manifest named in a summary.
 const MAX_UNMANIFESTED: usize = 20;
 /// Folders FXServer's walk passes over, as txAdmin's does.
-const SKIPPED: [&str; 6] = ["cache", "db", "node_modules", ".git", ".idea", ".vscode"];
+pub(crate) const SKIPPED: [&str; 6] = ["cache", "db", "node_modules", ".git", ".idea", ".vscode"];
 const MANIFESTS: [&str; 2] = ["fxmanifest.lua", "__resource.lua"];
 /// Entries read from one folder when looking around a refused folder or for cfg files.
 const MAX_ENTRIES: usize = 200;
@@ -39,8 +39,8 @@ const CFG_GUESSES: [&str; 5] = [
 pub struct Resources {
     names: HashSet<String>,
     categories: HashSet<String>,
-    /// Relative to the data folder with `/`.
-    named_observer: Vec<String>,
+    /// Resources with their manifest.
+    manifested: u32,
     pub summary: ResourceSummary,
 }
 
@@ -51,9 +51,9 @@ impl Resources {
         self.names.contains(&name) || self.categories.contains(&name)
     }
 
-    /// The resource folders named like Observer's bridge.
-    pub fn named_observer(&self) -> &[String] {
-        &self.named_observer
+    /// How many resources hold `fxmanifest.lua` or `__resource.lua`.
+    pub fn manifested(&self) -> u32 {
+        self.manifested
     }
 }
 
@@ -97,11 +97,11 @@ pub fn walk(data: &Path) -> Resources {
             }
             resources.summary.resources += 1;
             let manifest = MANIFESTS.iter().any(|manifest| path.join(manifest).is_file());
+            if manifest {
+                resources.manifested += 1;
+            }
             if !manifest && resources.summary.without_manifest.len() < MAX_UNMANIFESTED {
                 resources.summary.without_manifest.push(name.clone());
-            }
-            if lower == crate::bridge::NAME {
-                resources.named_observer.push(format!("{relative}/{name}"));
             }
             resources.names.insert(lower);
         }
@@ -192,7 +192,7 @@ pub fn check_cfg(data_path: &str, cfg_file: &str, observer: &Path, context: &Con
 
 /// The first problem of a folder whose path the rules accept, in the order they are checked, or
 /// else the resources it holds.
-fn inspect(folder: &Path, observer: Option<&Path>) -> Result<Resources, FolderProblem> {
+pub(crate) fn inspect(folder: &Path, observer: Option<&Path>) -> Result<Resources, FolderProblem> {
     let metadata = fs::metadata(folder).map_err(|error| match error.kind() {
         io::ErrorKind::NotFound => FolderProblem::Missing,
         _ => FolderProblem::Unreadable,
@@ -222,8 +222,9 @@ fn inspect(folder: &Path, observer: Option<&Path>) -> Result<Resources, FolderPr
     Ok(resources)
 }
 
-/// A folder near a refused one that passes every check: its parent, the parent's other children,
-/// the path cut before a `resources` component, then its own children.
+/// A folder near a refused one that passes every check and holds a server, a resource with its
+/// manifest and a cfg: its parent, the parent's other children, the path cut before a `resources`
+/// component, then its own children. A web app's `resources` folder is no server.
 fn suggest(folder: &Path, observer: Option<&Path>) -> Option<String> {
     let parent = folder.parent().filter(|parent| parent.file_name().is_some());
     let siblings = parent
@@ -238,8 +239,10 @@ fn suggest(folder: &Path, observer: Option<&Path>) -> Option<String> {
         .chain(children(folder))
         .filter_map(|candidate| candidate.to_str().map(str::to_owned))
         .find(|candidate| {
+            let folder = Path::new(candidate);
             launch::folder_problem(candidate, Platform::host()).is_none()
-                && inspect(Path::new(candidate), observer).is_ok()
+                && inspect(folder, observer).is_ok_and(|resources| resources.manifested() > 0)
+                && !cfg_files(folder).0.is_empty()
         })
 }
 
@@ -280,7 +283,7 @@ fn is_resources(name: &OsStr) -> bool {
 
 /// The cfg files of a server folder, at its root and one folder down, with txAdmin's guesses at
 /// the root, and the one detected: the first guess that is a file, else the only cfg at the root.
-fn cfg_files(folder: &Path) -> (Vec<String>, Option<String>) {
+pub(crate) fn cfg_files(folder: &Path) -> (Vec<String>, Option<String>) {
     let fits = |name: &str| launch::cfg_problem(name, Platform::host()).is_none();
     let mut root = Vec::new();
     let mut nested = Vec::new();
@@ -402,6 +405,7 @@ mod tests {
         assert_eq!(resources.summary.resources, 6);
         assert_eq!(resources.summary.categories, 3);
         assert_eq!(resources.summary.without_manifest, ["garage"]);
+        assert_eq!(resources.manifested(), 5);
         assert!(!resources.summary.truncated);
         for name in [
             "chat",
@@ -415,7 +419,6 @@ mod tests {
         }
         assert!(!resources.holds("local"));
         assert!(!resources.holds("README.md"));
-        assert_eq!(resources.named_observer(), ["resources/[local]/observer"]);
     }
 
     #[test]
@@ -656,6 +659,8 @@ mod tests {
         fs::create_dir_all(path(root, &["child", "fxserver", "build"])).unwrap();
         fs::create_dir_all(path(root, &["none", "empty", "resources"])).unwrap();
         fs::create_dir_all(path(root, &["none", "bare"])).unwrap();
+        // A web app's resources: FXServer would walk them, but nothing there is a server.
+        fs::create_dir_all(path(root, &["none", "webapp", "resources", "views"])).unwrap();
         server(&observer.join("server-data"));
 
         assert_eq!(

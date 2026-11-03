@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { ArrowRight } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { ApiError } from '../api/client';
 import type { CfgCheck } from '../api/generated/CfgCheck';
@@ -17,7 +17,6 @@ import { restartServer, startServer } from '../api/server';
 import { checkCfg, checkFolder, saveSetup } from '../api/serverSetup';
 import { Button } from '../components/Button';
 import { Notice } from '../components/Notice';
-import { Steps } from '../components/Steps';
 import { errorMessage } from '../i18n/errors';
 import { useI18n } from '../i18n/I18nProvider';
 import { useServerStatus } from '../server/context';
@@ -25,15 +24,18 @@ import { BuildStep } from '../setup/BuildStep';
 import { CfgStep } from '../setup/CfgStep';
 import { FirstLaunch } from '../setup/FirstLaunch';
 import { FolderStep } from '../setup/FolderStep';
+import { SetupStage } from '../setup/SetupStage';
 import { StartStep, type AfterSave } from '../setup/StartStep';
 import {
     SETUP_STEPS,
     cfgAfterFolder,
     cfgCheckOf,
+    folderPasses,
     preselectedOnesync,
     type Checked,
     type SetupStep,
 } from '../setup/state';
+import { StepRail } from '../setup/StepRail';
 
 /** The settings the setup keeps as saved, and does not show. */
 const ARGUMENT_FIELDS = new Set<LaunchField>(['extraArguments', 'argumentName', 'argumentValue']);
@@ -51,7 +53,7 @@ export function ServerSetupPage() {
     const launch = useQuery(launchQuery);
 
     return (
-        <div className="flex flex-col gap-5 max-md:gap-4">
+        <SetupStage>
             <div className="page-head">
                 <h1 className="page-title">
                     {t.serverSetup.title} <span className="gloss">{t.serverSetup.gloss}</span>
@@ -71,7 +73,7 @@ export function ServerSetupPage() {
                 </Notice>
             )}
             {launch.data !== undefined && <Setup saved={launch.data} />}
-        </div>
+        </SetupStage>
     );
 }
 
@@ -111,21 +113,33 @@ function Setup({ saved }: { saved: StoredLaunch | null }) {
         setDraft((current) => ({ ...current, ...change }));
         setOutcome(null);
     };
+    const onPath = useCallback((dataPath: string) => {
+        setDraft((current) => ({ ...current, dataPath }));
+        setOutcome(null);
+    }, []);
 
+    // With `goOn`, a folder that passes takes the setup to its cfg: Continue on a folder not checked.
     const folderCheck = useMutation({
-        mutationFn: checkFolder,
-        onSuccess: (report, request) => {
+        mutationFn: ({ request }: { request: FolderCheck; goOn: boolean }) => checkFolder(request),
+        onSuccess: (report, { request, goOn }) => {
             setFolder({ request, report });
-            if (report.problem === null) {
-                const cfgFile = cfgAfterFolder(report, draft.cfgFile, taken.current);
-                if (cfgFile !== draft.cfgFile) {
-                    taken.current = cfgFile;
-                }
-                setDraft((current) => ({ ...current, cfgFile }));
+            if (report.problem !== null) {
+                return;
+            }
+            const cfgFile = cfgAfterFolder(report, draft.cfgFile, taken.current);
+            if (cfgFile !== draft.cfgFile) {
+                taken.current = cfgFile;
+            }
+            setDraft((current) => ({ ...current, cfgFile }));
+            // A path typed while it was checked is another folder, which waits for its own check.
+            if (goOn && request.dataPath === draft.dataPath.trim()) {
+                enterCfg({ ...draft, cfgFile });
             }
         },
         onError: (error) => setOutcome({ tone: 'danger', message: errorMessage(t, error) }),
     });
+    const checkThisFolder = (dataPath: string, goOn: boolean) =>
+        folderCheck.mutate({ request: { dataPath: dataPath.trim() }, goOn });
 
     // Checks sent one after the other may be answered in any order: only the last one sent counts.
     const lastCfgCheck = useRef<CfgCheck | null>(null);
@@ -158,9 +172,16 @@ function Setup({ saved }: { saved: StoredLaunch | null }) {
             }
         },
     });
-    const enterCfg = () => {
+    const enterCfg = (settings: LaunchSettings = draft) => {
         go('cfg');
-        cfgCheck.mutate(cfgCheckOf(draft));
+        cfgCheck.mutate(cfgCheckOf(settings));
+    };
+    const continueFromFolder = () => {
+        if (folderPasses(folder, draft)) {
+            enterCfg();
+        } else {
+            checkThisFolder(draft.dataPath, true);
+        }
     };
 
     const save = useMutation({
@@ -219,7 +240,7 @@ function Setup({ saved }: { saved: StoredLaunch | null }) {
             if (error instanceof ApiError && error.code === 'setup_blocked') {
                 if (typeof error.params.folder === 'string') {
                     go('folder');
-                    folderCheck.mutate({ dataPath: draft.dataPath.trim() });
+                    checkThisFolder(draft.dataPath, false);
                 } else {
                     enterCfg();
                 }
@@ -240,95 +261,91 @@ function Setup({ saved }: { saved: StoredLaunch | null }) {
     };
 
     const index = SETUP_STEPS.indexOf(step);
-    const names = t.serverSetup.stepNames;
     const folderReport =
         folder !== null && folder.request.dataPath === draft.dataPath.trim() ? folder.report : null;
 
     return (
-        <>
-            <Steps
-                label={t.serverSetup.steps}
-                steps={SETUP_STEPS.map((key, at) => ({
-                    key,
-                    label: names[key],
-                    passed: at < index,
-                    failed: false,
-                }))}
-                current={index}
-                busy={false}
-                numbered
-                said={t.serverSetup.said}
-                compact={t.serverSetup.stepOf(index + 1, SETUP_STEPS.length, names[step])}
-            />
-            {outcome !== null && (
-                <Notice tone={outcome.tone}>
-                    <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-                        <span className="min-w-0 flex-1">{outcome.message}</span>
-                        {outcome.startAgain && (
-                            <Button size="sm" className="max-md:w-full" onClick={startAgain}>
-                                {t.serverSetup.startAgain}
-                            </Button>
-                        )}
-                        {outcome.toServer && (
-                            <Link
-                                to="/server"
-                                className="inline-flex items-center gap-1.5 font-medium text-ink underline-offset-2 hover:underline max-md:min-h-11"
-                            >
-                                {t.serverSetup.start.openServer}
-                                <ArrowRight size={14} strokeWidth={1.5} aria-hidden="true" />
-                            </Link>
-                        )}
-                    </div>
-                </Notice>
-            )}
-            {step === 'folder' && (
-                <FolderStep
-                    titleRef={title}
-                    draft={draft}
-                    checked={folder}
-                    checking={folderCheck.isPending}
-                    onPath={(dataPath) => edit({ dataPath })}
-                    onCheck={(dataPath) => folderCheck.mutate({ dataPath })}
-                    onContinue={enterCfg}
-                />
-            )}
-            {step === 'cfg' && (
-                <CfgStep
-                    titleRef={title}
-                    draft={draft}
-                    folder={folderReport}
-                    checked={cfg}
-                    checking={cfgCheck.isPending}
-                    onCfg={(cfgFile) => edit({ cfgFile })}
-                    onCheck={(cfgFile) => cfgCheck.mutate({ ...cfgCheckOf(draft), cfgFile })}
-                    onBack={() => go('folder')}
-                    onContinue={() => go('build')}
-                />
-            )}
-            {step === 'build' && (
-                <BuildStep titleRef={title} onBack={enterCfg} onContinue={() => go('start')} />
-            )}
-            {step === 'start' && (
-                <>
-                    <StartStep
-                        titleRef={title}
-                        draft={draft}
-                        report={cfg?.report ?? null}
-                        saving={save.isPending ? save.variables.after : undefined}
-                        onChange={(change) => {
-                            if (change.onesync !== undefined) {
-                                setOnesyncPicked(true);
-                                // The summary counts what the cfg allows with it, players included.
-                                cfgCheck.mutate(cfgCheckOf({ ...draft, onesync: change.onesync }));
-                            }
-                            edit(change);
-                        }}
-                        onSave={(after) => save.mutate({ after, before: status })}
-                        onBack={() => go('build')}
-                    />
-                    {launched !== null && <FirstLaunch before={launched.before} />}
-                </>
-            )}
-        </>
+        <div className="max-w-300 @container">
+            <div className="flex flex-col gap-5 @min-[50rem]:flex-row @min-[50rem]:items-start @min-[50rem]:gap-7">
+                <div className="@min-[50rem]:sticky @min-[50rem]:top-6 @min-[50rem]:w-55 @min-[50rem]:flex-none">
+                    <StepRail current={index} />
+                </div>
+                <div className="flex min-w-0 flex-1 flex-col gap-5 max-md:gap-4">
+                    {outcome !== null && (
+                        <Notice tone={outcome.tone}>
+                            <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+                                <span className="min-w-0 flex-1">{outcome.message}</span>
+                                {outcome.startAgain && (
+                                    <Button size="sm" className="max-md:w-full" onClick={startAgain}>
+                                        {t.serverSetup.startAgain}
+                                    </Button>
+                                )}
+                                {outcome.toServer && (
+                                    <Link
+                                        to="/server"
+                                        className="inline-flex items-center gap-1.5 font-medium text-ink underline-offset-2 hover:underline max-md:min-h-11"
+                                    >
+                                        {t.serverSetup.start.openServer}
+                                        <ArrowRight size={14} strokeWidth={1.5} aria-hidden="true" />
+                                    </Link>
+                                )}
+                            </div>
+                        </Notice>
+                    )}
+                    {step === 'folder' && (
+                        <FolderStep
+                            titleRef={title}
+                            draft={draft}
+                            checked={folder}
+                            checking={folderCheck.isPending}
+                            onPath={onPath}
+                            onCheck={checkThisFolder}
+                            onContinue={continueFromFolder}
+                        />
+                    )}
+                    {step === 'cfg' && (
+                        <CfgStep
+                            titleRef={title}
+                            draft={draft}
+                            folder={folderReport}
+                            checked={cfg}
+                            checking={cfgCheck.isPending}
+                            onCfg={(cfgFile) => edit({ cfgFile })}
+                            onCheck={(cfgFile) => cfgCheck.mutate({ ...cfgCheckOf(draft), cfgFile })}
+                            onBack={() => go('folder')}
+                            onContinue={() => go('build')}
+                        />
+                    )}
+                    {step === 'build' && (
+                        <BuildStep
+                            titleRef={title}
+                            onBack={() => enterCfg()}
+                            onContinue={() => go('start')}
+                        />
+                    )}
+                    {step === 'start' && (
+                        <>
+                            <StartStep
+                                titleRef={title}
+                                draft={draft}
+                                report={cfg?.report ?? null}
+                                saving={save.isPending ? save.variables.after : undefined}
+                                onChange={(change) => {
+                                    if (change.onesync !== undefined) {
+                                        setOnesyncPicked(true);
+                                        // The summary counts what the cfg allows with it, players included.
+                                        cfgCheck.mutate(cfgCheckOf({ ...draft, onesync: change.onesync }));
+                                    }
+                                    edit(change);
+                                }}
+                                onSave={(after) => save.mutate({ after, before: status })}
+                                onBack={() => go('build')}
+                            />
+                            {launched !== null && <FirstLaunch before={launched.before} />}
+                        </>
+                    )}
+                </div>
+            </div>
+        </div>
     );
 }

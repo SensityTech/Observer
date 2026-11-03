@@ -30,10 +30,25 @@ vi.mock('./shell/AppShell', async () => {
 });
 vi.mock('./pages/OverviewPage', () => ({ OverviewPage: () => <h1>Overview</h1> }));
 vi.mock('./pages/ServerSetupPage', () => ({ ServerSetupPage: () => <h1>Server setup</h1> }));
+vi.mock('./pages/SettingsPage', async () => {
+    const { Outlet } = await import('@tanstack/react-router');
+    return { SettingsPage: () => <Outlet /> };
+});
+vi.mock('./settings/Category', async () => {
+    const { useParams } = await import('@tanstack/react-router');
+    return {
+        SettingsCategory: () => {
+            const { category } = useParams({ strict: false });
+            return <h1>Settings {category}</h1>;
+        },
+    };
+});
 
 const OWNER: Me = { id: 1, username: 'ada', isOwner: true, permissions: 'fff', mustChangePassword: false };
 /** A moderator who views the dashboard and nothing else. */
 const VIEWER: Me = { id: 2, username: 'kenji', isOwner: false, permissions: '1', mustChangePassword: false };
+/** An account that holds no permission: its own settings are all it opens. */
+const NOBODY: Me = { id: 3, username: 'lin', isOwner: false, permissions: '0', mustChangePassword: false };
 
 const SAVED: StoredLaunch = {
     settings: { ...DEFAULT_LAUNCH, dataPath: 'D:\\FXServer\\server-data' },
@@ -99,6 +114,41 @@ describe('the panel router', () => {
 
         await findByRole('heading', { name: 'Overview' });
         expect(fetch).not.toHaveBeenCalled();
+    });
+
+    it.each([
+        ['/server', 'launch', ''],
+        ['/server#setting-hangDetection', 'launch', 'setting-hangDetection'],
+        ['/users', 'users', ''],
+        ['/files', 'files', ''],
+        ['/account', 'account', ''],
+    ])(
+        'should take %s, a page that became settings, to its category, its hash kept',
+        async (path, category, hash) => {
+            const { findByRole, router } = panel(path, [[meQuery.queryKey, OWNER]]);
+
+            await findByRole('heading', { name: `Settings ${category}` });
+            expect(router.state.location.pathname).toBe(`/settings/${category}`);
+            expect(router.state.location.hash).toBe(hash);
+        },
+    );
+
+    it.each([
+        [OWNER, 'launch'],
+        [VIEWER, 'restarts'],
+        [NOBODY, 'account'],
+    ] as const)('should open the settings of %o on the first category it may see', async (me, category) => {
+        const { findByRole, router } = panel('/settings', [[meQuery.queryKey, me]]);
+
+        await findByRole('heading', { name: `Settings ${category}` });
+        expect(router.state.location.pathname).toBe(`/settings/${category}`);
+    });
+
+    it('should say a category of the settings that does not exist is not found', async () => {
+        const { findByText, queryByRole } = panel('/settings/everything', [[meQuery.queryKey, OWNER]]);
+
+        await findByText(en.notFound.title);
+        expect(queryByRole('heading', { name: /^Settings/ })).toBeNull();
     });
 
     it('should take the new owner from the account setup to the server setup', async () => {

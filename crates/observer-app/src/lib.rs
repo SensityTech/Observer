@@ -23,6 +23,7 @@ mod secrets;
 mod servers;
 mod sessions;
 mod setup;
+mod statistics;
 mod supervision;
 #[cfg(test)]
 mod tests;
@@ -53,5 +54,6 @@ pub use schedule::{Schedule, ScheduleSetup, ScheduleTask, ScheduleTimings};
 pub use servers::Servers;
 pub use sessions::{Caller, Client, SignedIn};
 pub use setup::SetupToken;
+pub use statistics::Statistics;
 pub use supervision::{ConsoleLines, LinesMissed, Running, Setup, Supervision};
 pub use tools::{ReportError, RunResult, Target, Tools, ToolsHook, ToolsSetup, outcome_text, report};

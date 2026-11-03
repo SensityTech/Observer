@@ -14,6 +14,8 @@ use crate::gate::Gate;
 
 const FOLDER: &str = "/api/servers/default/setup/folder";
 const CFG: &str = "/api/servers/default/setup/cfg";
+const FOLDERS: &str = "/api/servers/default/setup/folders";
+const DISCOVER: &str = "/api/servers/default/setup/discover";
 const SETUP: &str = "/api/servers/default/setup";
 /// A test fixture, not a real key.
 const KEY: &str = "sv_licenseKey cfxk_ObserverLabFixture_k3y";
@@ -111,6 +113,70 @@ async fn a_folder_is_reported_on_whether_or_not_fxserver_can_run_from_it() {
     assert_eq!(relative.json()["pathProblem"], "notAbsolute");
     assert_eq!(resources.json()["problem"], "isResources");
     assert_eq!(resources.json()["suggestion"], live);
+    assert_eq!(unknown.code(), "invalid_request");
+}
+
+#[tokio::test]
+async fn a_folders_folders_are_listed_with_what_each_is() {
+    let server = Server::new().await;
+    let owner = server.owner().await;
+    let live = server.server_folder("live", &endpoints(&free_address()));
+    fs::create_dir_all(server.dir.path().join("lab")).unwrap();
+    let root = format!(
+        "{}{}",
+        server.dir.path().to_str().unwrap(),
+        std::path::MAIN_SEPARATOR
+    );
+
+    let listed = server
+        .call(
+            Method::POST,
+            FOLDERS,
+            Some(&owner),
+            Some(json!({ "path": root, "prefix": "LI" })),
+        )
+        .await;
+    let network = server
+        .call(
+            Method::POST,
+            FOLDERS,
+            Some(&owner),
+            Some(json!({ "path": "//lab-host/share/", "prefix": "" })),
+        )
+        .await;
+    let unknown = server
+        .call(
+            Method::POST,
+            FOLDERS,
+            Some(&owner),
+            Some(json!({ "path": root, "depth": 2 })),
+        )
+        .await;
+
+    assert_eq!(listed.status, StatusCode::OK, "{}", listed.text);
+    assert_eq!(
+        listed.json(),
+        json!({
+            "path": root,
+            "parent": server.dir.path().parent().and_then(|parent| parent.to_str()),
+            "problem": null,
+            "pathProblem": null,
+            "entries": [{
+                "name": "live",
+                "path": live,
+                "kind": "server",
+                "link": false,
+                "resources": 1,
+                "cfg": "server.cfg",
+                "folders": null,
+                "inside": [],
+            }],
+            "truncated": false,
+        })
+    );
+    // Linux refuses a leading `//` as Windows does: POSIX leaves it to the system.
+    assert_eq!(network.json()["problem"], "invalidPath");
+    assert_eq!(network.json()["pathProblem"], "networkPath");
     assert_eq!(unknown.code(), "invalid_request");
 }
 
@@ -277,6 +343,8 @@ async fn only_the_owner_checks_and_saves_and_the_save_takes_the_password_again()
     for (method, path, body) in [
         (Method::POST, FOLDER, folder.clone()),
         (Method::POST, CFG, cfg),
+        (Method::POST, FOLDERS, json!({ "path": live, "prefix": "" })),
+        (Method::POST, DISCOVER, json!({})),
         (Method::PUT, SETUP, change(&live, None)),
     ] {
         let reply = server.call(method.clone(), path, Some(&grace), Some(body)).await;
@@ -316,6 +384,8 @@ async fn only_the_owner_checks_and_saves_and_the_save_takes_the_password_again()
         denied,
         [
             format!("PUT {SETUP}"),
+            format!("POST {DISCOVER}"),
+            format!("POST {FOLDERS}"),
             format!("POST {CFG}"),
             format!("POST {FOLDER}")
         ]
@@ -339,6 +409,8 @@ fn the_route_table_declares_the_setup_routes_owner_only() {
         [
             (Method::POST, "/servers/default/setup/folder", Gate::Owner),
             (Method::POST, "/servers/default/setup/cfg", Gate::Owner),
+            (Method::POST, "/servers/default/setup/folders", Gate::Owner),
+            (Method::POST, "/servers/default/setup/discover", Gate::Owner),
             (Method::PUT, "/servers/default/setup", Gate::ReauthenticatedOwner),
         ]
     );

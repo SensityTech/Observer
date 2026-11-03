@@ -20,9 +20,10 @@ const SEND = { start: startServer, stop: stopServer, restart: restartServer } sa
 >;
 
 /**
- * Start, Stop and Restart beside the status bar. A button that cannot act now stays in the tab order,
- * marked disabled; pressed, it says why below, since a touch screen or the keyboard never shows its
- * title. Stop and Restart ask first, since players are disconnected.
+ * Restart and Stop at the end of the status card, Start in Restart's place while no process runs.
+ * A button that cannot act now stays in the tab order, marked disabled; pressed, it says why below,
+ * since a touch screen or the keyboard never shows its title. Stop and Restart ask first, since
+ * players are disconnected.
  */
 export function ServerControls() {
     const { t } = useI18n();
@@ -70,6 +71,7 @@ export function ServerControls() {
         const reason = blocked(t, action, status, permitted);
         return (
             <Button
+                size="sm"
                 tone={tone}
                 icon={icon}
                 aria-disabled={reason !== null || undefined}
@@ -92,9 +94,7 @@ export function ServerControls() {
         <>
             <fieldset className="controls">
                 <legend className="sr-only">{t.controls.label}</legend>
-                {/* One ink button: the action that fits the state. */}
-                {button('start', Play, running ? 'secondary' : 'ink')}
-                {button('restart', RotateCw, running ? 'ink' : 'secondary')}
+                {running ? button('restart', RotateCw, 'secondary') : button('start', Play, 'ink')}
                 {button('stop', Square, 'secondary')}
             </fieldset>
             {failure && (

@@ -13,13 +13,13 @@ import { EnvironmentCard } from '../changes/EnvironmentCard';
 import { refreshMoved, useChangesLive } from '../changes/live';
 import { ResourcesCard } from '../changes/ResourcesCard';
 import type { ChangesSearch } from '../changes/search';
-import { SettingsCard } from '../changes/SettingsCard';
 import { StartsCard } from '../changes/StartsCard';
 import { SummaryBand } from '../changes/SummaryBand';
 import { isBusy } from '../changes/words';
 import { errorMessage } from '../i18n/errors';
 import { useI18n } from '../i18n/I18nProvider';
 import { cn } from '../lib/cn';
+import { MovedSettings } from '../settings/Moved';
 
 /** `/changes?from=&to=`, its search checked by the route. */
 export function ChangesPage() {
@@ -113,7 +113,7 @@ export function ChangesPage() {
                     onPick={(start) => compare({ to: start.id })}
                 />
             )}
-            {me.isOwner && <SettingsCard />}
+            {me.isOwner && <MovedSettings category="data" setting="changesEnabled" page="changes" />}
         </>
     );
 }

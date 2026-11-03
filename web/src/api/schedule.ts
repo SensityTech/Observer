@@ -58,8 +58,12 @@ const isIssue = (value: unknown): value is ScheduleIssue =>
 export const scheduleIssues = (params: Record<string, unknown>): ScheduleIssue[] =>
     Array.isArray(params.issues) ? params.issues.filter(isIssue) : [];
 
-/** How many settings differ, each list counting as one. */
-export const countChanges = (saved: ScheduleSettings, draft: ScheduleSettings) =>
+/** The settings that differ, each list counting as one. */
+export const changedSettings = (saved: ScheduleSettings, draft: ScheduleSettings) =>
     (Object.keys(draft) as (keyof ScheduleSettings)[]).filter(
         (key) => JSON.stringify(saved[key]) !== JSON.stringify(draft[key]),
-    ).length;
+    );
+
+/** How many settings differ, each list counting as one. */
+export const countChanges = (saved: ScheduleSettings, draft: ScheduleSettings) =>
+    changedSettings(saved, draft).length;

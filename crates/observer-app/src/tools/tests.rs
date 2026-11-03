@@ -89,6 +89,8 @@ impl Lab {
             players: None,
             restart_at: None,
             launch: LaunchReadiness::Ready,
+            name: None,
+            port: None,
         });
         let tools = Tools::new(ToolsSetup {
             db: db.clone(),

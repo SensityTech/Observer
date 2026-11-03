@@ -1,6 +1,7 @@
 use std::time::{Duration, Instant};
 
 use observer_fxserver::health::Listed;
+use observer_fxserver::players::GivenLabel;
 
 use super::*;
 
@@ -236,6 +237,41 @@ fn a_forged_drop_cannot_claim_more_than_observer_measured() {
 
     assert_eq!(bench.closes()[0].3, Some(61_000));
     assert_eq!(bench.sessions.counts.clamped, 1);
+}
+
+#[test]
+fn a_session_carries_the_ping_of_the_latest_list_that_shows_it() {
+    let mut bench = Bench::new();
+    bench.join(10, 7, LICENSE, "Ada");
+    bench.join(10, 8, OTHER, "Grace");
+    let pings = |bench: &Bench| {
+        let mut pings: Vec<_> = bench
+            .sessions
+            .open()
+            .map(|open| (open.net_id, open.ping))
+            .collect();
+        pings.sort_unstable();
+        pings
+    };
+    let before = pings(&bench);
+
+    let (list_ms, at) = bench.at(20);
+    let list = PlayerList {
+        players: vec![(7, Some(62)), (8, None)],
+        shown: [(7, LICENSE, "Ada"), (8, OTHER, "Grace")]
+            .into_iter()
+            .map(|(id, license, name)| Listed {
+                id,
+                identifiers: vec![license.to_owned()],
+                name: Some(name.to_owned()),
+            })
+            .collect(),
+        anonymous: false,
+    };
+    bench.sessions.listed(1, &list, list_ms, at);
+
+    assert_eq!(before, [(7, None), (8, None)]);
+    assert_eq!(pings(&bench), [(7, Some(62)), (8, None)]);
 }
 
 #[test]
@@ -734,4 +770,116 @@ fn a_crash_keeps_its_redacted_text() {
         Some(r"Recursive error in C:\Users\[user]\FiveM\cars.meta")
     );
     assert_eq!(closure.reason_text, None);
+}
+
+impl Bench {
+    fn label(&mut self, second: u64, net_id: u32, label: Option<(&str, &str)>) {
+        self.send(
+            second,
+            PlayerReportKind::Labels(vec![LabelChange {
+                net_id,
+                label: label.map(|(name, id)| GivenLabel {
+                    name: Some(name.to_owned()),
+                    id: Some(id.to_owned()),
+                }),
+                resource: Some("characters".to_owned()),
+            }]),
+        );
+    }
+
+    fn label_of(&self, net_id: u32) -> Option<PlayerLabel> {
+        self.sessions
+            .open()
+            .find(|open| open.net_id == net_id)
+            .and_then(|open| open.label.clone())
+            .map(|(label, _)| label)
+    }
+}
+
+fn john() -> PlayerLabel {
+    PlayerLabel {
+        name: Some("John Doe".to_owned()),
+        id: Some("CHAR-1234".to_owned()),
+        resource: Some("characters".to_owned()),
+    }
+}
+
+#[test]
+fn a_label_given_before_the_list_agrees_is_kept_with_the_identity() {
+    let mut bench = Bench::new();
+    bench.join(10, 7, LICENSE, "Ada");
+
+    bench.label(11, 7, Some(("John\u{202E} Doe", "CHAR-1234")));
+    assert_eq!(bench.sessions.take_writes().labels, []);
+    bench.list(15, &[(7, LICENSE, "Ada")]);
+
+    let writes = bench.sessions.take_writes();
+    assert_eq!(writes.identities[0].name.as_deref(), Some("Ada"));
+    assert_eq!(
+        writes.labels,
+        [LabelWrite {
+            license: LICENSE.to_owned(),
+            label: john(),
+            at_ms: START_MS + 11_000,
+        }]
+    );
+    assert_eq!(bench.label_of(7), Some(john()));
+}
+
+#[test]
+fn each_label_a_confirmed_player_is_given_is_kept_and_a_clear_keeps_nothing() {
+    let mut bench = Bench::new();
+    bench.join(10, 7, LICENSE, "Ada");
+    bench.list(15, &[(7, LICENSE, "Ada")]);
+    bench.sessions.take_writes();
+
+    bench.label(20, 7, Some(("John Doe", "CHAR-1234")));
+    bench.label(21, 7, Some(("Jane Roe", "CHAR-99")));
+    bench.label(22, 7, None);
+
+    let labels = bench.sessions.take_writes().labels;
+    let given: Vec<Option<&str>> = labels.iter().map(|write| write.label.id.as_deref()).collect();
+    assert_eq!(given, [Some("CHAR-1234"), Some("CHAR-99")]);
+    assert_eq!(bench.label_of(7), None);
+}
+
+#[test]
+fn a_label_of_a_session_the_list_contradicts_is_never_kept() {
+    let mut bench = Bench::new();
+    bench.join(10, 7, LICENSE, "Ada");
+    bench.label(11, 7, Some(("John Doe", "CHAR-1234")));
+
+    bench.list(20, &[(7, OTHER, "Ada")]);
+    bench.label(21, 7, Some(("John Doe", "CHAR-1234")));
+
+    let writes = bench.sessions.take_writes();
+    assert_eq!(writes.identities, []);
+    assert_eq!(writes.labels, []);
+}
+
+#[test]
+fn a_label_for_a_net_id_without_a_session_is_only_counted() {
+    let mut bench = Bench::new();
+    bench.join(10, 7, LICENSE, "Ada");
+    bench.list(15, &[(7, LICENSE, "Ada")]);
+    bench.drop(20, 7, Some(20_000), 2, "Exiting");
+
+    bench.label(21, 7, Some(("John Doe", "CHAR-1234")));
+
+    assert_eq!(bench.sessions.take_writes().labels, []);
+    assert_eq!(bench.sessions.counts.unmatched_labels, 1);
+}
+
+#[test]
+fn a_forgotten_player_loses_their_label_and_its_pending_write() {
+    let mut bench = Bench::new();
+    bench.join(10, 7, LICENSE, "Ada");
+    bench.list(15, &[(7, LICENSE, "Ada")]);
+    bench.label(16, 7, Some(("John Doe", "CHAR-1234")));
+
+    bench.sessions.forget(LICENSE);
+    assert_eq!(bench.label_of(7), None);
+    bench.label(17, 7, Some(("John Doe", "CHAR-1234")));
+
+    assert_eq!(bench.sessions.take_writes().labels, []);
 }

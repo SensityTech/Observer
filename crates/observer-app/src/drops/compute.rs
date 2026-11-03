@@ -1151,5 +1151,6 @@ pub(super) fn day_rates(
     Ok(days)
 }
 
+pub(super) mod insights;
 #[cfg(test)]
 mod tests;

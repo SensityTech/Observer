@@ -35,7 +35,7 @@ use observer_store::artifacts::{self as stored_artifacts, ArtifactState};
 use observer_store::launch;
 use serde_json::json;
 use tokio::sync::broadcast::error::{RecvError, TryRecvError};
-use tokio::sync::{Mutex as AsyncMutex, broadcast, watch};
+use tokio::sync::{Mutex as AsyncMutex, Semaphore, broadcast, watch};
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
@@ -54,6 +54,8 @@ const SCHEDULE: &str = "schedule";
 /// Commands one user may send within a window.
 const COMMANDS_PER_WINDOW: usize = 10;
 const COMMAND_WINDOW: SignedDuration = SignedDuration::from_secs(10);
+/// The setup's folder reads that may run at once; the next ones wait their turn.
+const FOLDER_READS: usize = 3;
 /// The most lines a console snapshot holds, which is what the panel keeps.
 const SNAPSHOT_LINES: usize = 5000;
 /// New lines go out together, at most this often, rather than one message each.
@@ -99,6 +101,9 @@ struct Inner {
     status: watch::Receiver<ServerStatus>,
     /// When each user sent their latest commands, within the window.
     commands: Mutex<HashMap<i64, VecDeque<Timestamp>>>,
+    /// The setup's reads of the host's folders under way: each holds a blocking thread, which a
+    /// drive that stops answering keeps.
+    folder_reads: Semaphore,
 }
 
 /// The supervisor's task and the one that follows it for the panel. Once the supervisor has
@@ -276,6 +281,7 @@ impl Supervision {
                 console_logs: setup.console_logs,
                 status,
                 commands: Mutex::default(),
+                folder_reads: Semaphore::new(FOLDER_READS),
             }),
         };
         let running = Running {
@@ -512,7 +518,8 @@ impl Supervision {
                     .into());
             }
         };
-        if command.needs_server_control() {
+        let bridge = inner.supervisor.status().borrow().bridge.clone();
+        if command.needs_server_control(bridge.as_deref()) {
             inner
                 .accounts
                 .authorize(caller, Permissions::SERVER_CONTROL, method, path)
@@ -830,6 +837,8 @@ fn server_status(
         }),
         restart_at,
         launch,
+        name: status.name.clone(),
+        port: status.port,
     }
 }
 

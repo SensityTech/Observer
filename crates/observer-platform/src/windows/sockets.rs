@@ -13,18 +13,53 @@ use windows_sys::Win32::NetworkManagement::IpHelper::{
 };
 use windows_sys::Win32::Networking::WinSock::{AF_INET, AF_INET6};
 
-use crate::sockets::{Protocol, Socket, SocketState};
+use super::processes::image;
+use crate::sockets::{Listener, Protocol, Socket, SocketState};
 
 /// A table can grow between the call that sizes it and the one that fills it.
 const TRIES: usize = 4;
 
+fn tcp(buffer: *mut c_void, size: *mut u32, family: u16) -> u32 {
+    // SAFETY: `buffer` is null or `size` bytes long, as the caller sizes it.
+    unsafe { GetExtendedTcpTable(buffer, size, FALSE, u32::from(family), TCP_TABLE_OWNER_PID_ALL, 0) }
+}
+
+pub(crate) fn tcp_listeners(wanted: u16) -> io::Result<Vec<Listener>> {
+    let listens = |state: u32, local: u32| {
+        tcp_state(state.cast_signed()) == SocketState::Listen && port(local) == wanted
+    };
+    let v4 = rows::<MIB_TCPROW_OWNER_PID>(
+        |buffer, size| tcp(buffer, size, AF_INET),
+        offset_of!(MIB_TCPTABLE_OWNER_PID, table),
+    )?;
+    let v6 = rows::<MIB_TCP6ROW_OWNER_PID>(
+        |buffer, size| tcp(buffer, size, AF_INET6),
+        offset_of!(MIB_TCP6TABLE_OWNER_PID, table),
+    )?;
+    let mut pids: Vec<u32> = v4
+        .iter()
+        .filter(|row| listens(row.dwState, row.dwLocalPort))
+        .map(|row| row.dwOwningPid)
+        .chain(
+            v6.iter()
+                .filter(|row| listens(row.dwState, row.dwLocalPort))
+                .map(|row| row.dwOwningPid),
+        )
+        .collect();
+    pids.sort_unstable();
+    pids.dedup();
+    Ok(pids
+        .into_iter()
+        .map(|pid| Listener {
+            pid: Some(pid),
+            executable: image(pid),
+        })
+        .collect())
+}
+
 pub(crate) fn sockets(pids: &[u32]) -> io::Result<Vec<Socket>> {
     let mut sockets = Vec::new();
     let ours = |pid: u32| pids.contains(&pid);
-    let tcp = |buffer: *mut c_void, size: *mut u32, family: u16| {
-        // SAFETY: `buffer` is null or `size` bytes long, as the caller sizes it.
-        unsafe { GetExtendedTcpTable(buffer, size, FALSE, u32::from(family), TCP_TABLE_OWNER_PID_ALL, 0) }
-    };
     let udp = |buffer: *mut c_void, size: *mut u32, family: u16| {
         // SAFETY: as for TCP.
         unsafe { GetExtendedUdpTable(buffer, size, FALSE, u32::from(family), UDP_TABLE_OWNER_PID, 0) }

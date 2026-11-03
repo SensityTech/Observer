@@ -231,7 +231,9 @@ async fn a_command_that_stops_the_server_also_takes_server_control() {
     let reader = server.member(&owner, "kenji", "2").await;
 
     let plain = server.command(&console, "status").await;
-    let refused: Vec<_> = ["quit", "stop observer", "exec other.cfg; status", "_crash"]
+    // The bridge's name is drawn at each start: `observer` names no bridge.
+    let old_bridge_name = server.command(&console, "stop observer").await;
+    let refused: Vec<_> = ["quit", "exec other.cfg; status", "_crash"]
         .into_iter()
         .map(|line| (line, server.command(&console, line)))
         .collect();
@@ -243,6 +245,7 @@ async fn a_command_that_stops_the_server_also_takes_server_control() {
         (StatusCode::CONFLICT, json!("server_not_running")),
         "a plain command passes every check, then finds no server"
     );
+    assert_eq!(old_bridge_name.code(), "server_not_running");
     for (line, reply) in refused {
         let reply = reply.await;
         assert_eq!(reply.status, StatusCode::FORBIDDEN, "{line}");

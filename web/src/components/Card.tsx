@@ -1,5 +1,8 @@
 import type { LucideIcon } from 'lucide-react';
-import type { ReactNode, Ref } from 'react';
+import { createContext, createElement, use, type ReactNode, type Ref } from 'react';
+
+/** The level of card titles: one below a page's own sections, as in a category of the settings. */
+export const CardHeading = createContext<'h2' | 'h3'>('h2');
 
 /** The panel's card: a head with its icon box and title, named by it, then the body. */
 export function Card({
@@ -24,20 +27,23 @@ export function Card({
     flush?: boolean;
     children: ReactNode;
 }) {
+    const heading = use(CardHeading);
     return (
         <section className="card" aria-labelledby={id}>
             <div className="card-head">
                 <span className="grid size-6 place-items-center rounded-[6px] border border-line bg-surface-2 text-ink-2">
                     <Icon size={14} strokeWidth={1.5} aria-hidden="true" />
                 </span>
-                <h2
-                    id={id}
-                    ref={titleRef}
-                    tabIndex={titleRef === undefined ? undefined : -1}
-                    className="text-card text-ink"
-                >
-                    {title}
-                </h2>
+                {createElement(
+                    heading,
+                    {
+                        id,
+                        ref: titleRef,
+                        tabIndex: titleRef === undefined ? undefined : -1,
+                        className: 'text-card text-ink',
+                    },
+                    title,
+                )}
                 {meta !== undefined && <p className="text-meta text-ink-3">{meta}</p>}
                 {aside !== undefined && (
                     <div className="ml-auto flex flex-wrap items-center gap-2">{aside}</div>

@@ -1,9 +1,12 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { act, cleanup, render, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { backupsQuery } from '../api/backups';
 import { ApiError } from '../api/client';
+import type { BackupRun } from '../api/generated/BackupRun';
+import type { BackupsView } from '../api/generated/BackupsView';
 import type { LiveSample } from '../api/generated/LiveSample';
 import type { Me } from '../api/generated/Me';
 import type { ServerStatus } from '../api/generated/ServerStatus';
@@ -16,9 +19,11 @@ import { DEFAULT_LAUNCH, launchQuery } from '../api/launch';
 import { MeContext } from '../auth/me';
 import { growthQuery, seriesQuery, threadsQuery } from '../api/metrics';
 import { en } from '../i18n/en';
+import { formatClock } from '../i18n/format';
 import { I18nProvider } from '../i18n/I18nProvider';
 import { LiveContext } from '../live/context';
 import { Realtime, type SocketEvents } from '../live/realtime';
+import { DAY } from '../overview/Summary';
 import { TILE_SERIES } from '../overview/Tiles';
 import { ServerStatusProvider } from '../server/context';
 import { OverviewPage } from './OverviewPage';
@@ -27,19 +32,24 @@ import { OverviewPage } from './OverviewPage';
 vi.mock('@tanstack/react-router', () => ({
     Link: ({
         to,
+        params,
         hash,
         children,
         className,
     }: {
         to: string;
+        params?: Record<string, string>;
         hash?: string;
         children: ReactNode;
         className?: string;
-    }) => (
-        <a href={hash === undefined ? to : `${to}#${hash}`} className={className}>
-            {children}
-        </a>
-    ),
+    }) => {
+        const path = to.replace(/\$(\w+)/g, (_, name: string) => params?.[name] ?? '');
+        return (
+            <a href={hash === undefined ? path : `${path}#${hash}`} className={className}>
+                {children}
+            </a>
+        );
+    },
 }));
 
 const chart = vi.hoisted(() => ({ fails: false }));
@@ -154,7 +164,34 @@ const shares = (process: number, threads: [string, number][]): ThreadShares => (
     threads: threads.map(([name, cpu]) => ({ name, group: name === '' ? 'other' : 'main', cpu })),
 });
 
-/** The page with Observer's health and the last hour already read, and a socket the test speaks for. */
+const DAY_STEP = 300;
+const DAY_FROM = NOW - 86_400 + DAY_STEP;
+
+/** A day of players peaking at 112 in bucket 100, with a crash in bucket 150 back 45 s later. */
+const day = (): MetricsSeries => ({
+    range: '24h',
+    step: DAY_STEP,
+    from: DAY_FROM,
+    buckets: 288,
+    last: NOW - 5,
+    series: [
+        {
+            series: 'players',
+            values: Array.from({ length: 288 }, (_, index) => {
+                if (index === 100) return 112;
+                return index > 90 ? 80 : null;
+            }),
+        },
+    ],
+    markers: [{ at: DAY_FROM + 150 * DAY_STEP, kind: 'crash', backOnlineAt: DAY_FROM + 150 * DAY_STEP + 45 }],
+    observed: Array.from({ length: 288 }, (_, index) => Number(index > 90)),
+    online: Array.from({ length: 288 }, (_, index) => Number(index > 90)),
+});
+
+/**
+ * The page with Observer's health, the last hour and the last day already read, and a socket the
+ * test speaks for; its Details open, as most tests read the measures there.
+ */
 const page = async (
     lastHour: MetricsSeries = hour(),
     {
@@ -162,12 +199,16 @@ const page = async (
         started = null,
         threads = null,
         me = null,
+        details = true,
+        backups = null,
     }: {
         growth?: RunGrowth | null;
         started?: number | null;
         threads?: ThreadShares | null;
         /** Signed in, with the server's state followed: the state card shows it. */
         me?: Me | null;
+        details?: boolean;
+        backups?: BackupsView | null;
     } = {},
 ) => {
     const client = new QueryClient({
@@ -176,6 +217,10 @@ const page = async (
     client.setQueryData(healthQuery.queryKey, { status: 'ok', version: '0.1.0' });
     client.setQueryData(seriesQuery('1h', TILE_SERIES).queryKey, lastHour);
     client.setQueryData(seriesQuery('1h', ['treeStarted']).queryKey, startedHour(started));
+    client.setQueryData(DAY.queryKey, day());
+    if (backups !== null) {
+        client.setQueryData(backupsQuery.queryKey, backups);
+    }
     client.setQueryData(growthQuery.queryKey, growth);
     client.setQueryData(
         threadsQuery.queryKey,
@@ -213,6 +258,10 @@ const page = async (
             </I18nProvider>
         </QueryClientProvider>,
     );
+    // Opened before the link is up, so that its tiles follow their topics from the first snapshot.
+    if (details) {
+        fireEvent.click(view.getByRole('button', { name: new RegExp(`^${en.overview.details}`) }));
+    }
     live.start();
     await settle();
     const say = (message: unknown) => act(() => socket?.message(JSON.stringify(message)));
@@ -225,11 +274,20 @@ const page = async (
     return { ...view, client, live, say, drop: () => act(() => socket?.close(1006)) };
 };
 
-/** The tile's figure with its unit, as it reads. */
-const figure = (label: string) => document.querySelector(`section[aria-label="${label}"] p`)?.textContent;
+const DETAILS = `section[aria-label="${en.overview.details}"]`;
+
+/** The figure of a tile under Details, with its unit, as it reads. */
+const figure = (label: string) =>
+    document.querySelector(`${DETAILS} section[aria-label="${label}"] p`)?.textContent;
+
+/** One of the four figures above the chart: its value with its unit, then its line. */
+const summary = (label: string) =>
+    [...document.querySelectorAll(`section[aria-label="${label}"]`)]
+        .filter((section) => section.closest(DETAILS) === null)
+        .flatMap((section) => [...section.querySelectorAll('p')].map((line) => line.textContent));
 
 const tile = (label: string) => {
-    const section = document.querySelector<HTMLElement>(`section[aria-label="${label}"]`);
+    const section = document.querySelector<HTMLElement>(`${DETAILS} section[aria-label="${label}"]`);
     if (section === null) {
         throw new Error(`no ${label} tile`);
     }
@@ -270,6 +328,8 @@ const hungFor = async (me: Me) => {
             players: null,
             restartAt: null,
             launch: 'ready',
+            name: null,
+            port: null,
         } satisfies ServerStatus,
     });
     return view;
@@ -347,8 +407,26 @@ describe('OverviewPage', () => {
             startedAt: NOW - 7200,
             from: NOW - 5400,
             to: NOW,
-            private: { perHour: 180 * 1024 ** 2, fit: 0.97, start: 9 * 1024 ** 3, points: 90, leak: true },
-            handles: { perHour: 12, fit: 0.2, start: 3200, points: 90, leak: false },
+            private: {
+                perHour: 180 * 1024 ** 2,
+                fit: 0.97,
+                start: 9 * 1024 ** 3,
+                points: 90,
+                leak: true,
+                residual: null,
+                slopeError: null,
+                center: 0,
+            },
+            handles: {
+                perHour: 12,
+                fit: 0.2,
+                start: 3200,
+                points: 90,
+                leak: false,
+                residual: null,
+                slopeError: null,
+                center: 0,
+            },
         };
         const { say, live } = await page(hour(), { growth });
         say({ type: 'snapshot', topic: 'metrics.live', data: { latest: SAMPLE } });
@@ -368,8 +446,26 @@ describe('OverviewPage', () => {
             startedAt: NOW - 7200,
             from: NOW - 5400,
             to: NOW,
-            private: { perHour: 0.3, fit: 0.01, start: 9 * 1024 ** 3, points: 90, leak: false },
-            handles: { perHour: -0.3, fit: 0.01, start: 3200, points: 90, leak: false },
+            private: {
+                perHour: 0.3,
+                fit: 0.01,
+                start: 9 * 1024 ** 3,
+                points: 90,
+                leak: false,
+                residual: null,
+                slopeError: null,
+                center: 0,
+            },
+            handles: {
+                perHour: -0.3,
+                fit: 0.01,
+                start: 3200,
+                points: 90,
+                leak: false,
+                residual: null,
+                slopeError: null,
+                center: 0,
+            },
         };
         const { say, live } = await page(hour(), { growth });
         say({ type: 'snapshot', topic: 'metrics.live', data: { latest: SAMPLE } });
@@ -384,8 +480,26 @@ describe('OverviewPage', () => {
             startedAt: NOW - 7200,
             from: NOW - 5400,
             to: NOW,
-            private: { perHour: 2 * 1024 ** 2, fit: 0.1, start: 9 * 1024 ** 3, points: 90, leak: false },
-            handles: { perHour: 300, fit: 0.9, start: 3200, points: 90, leak: true },
+            private: {
+                perHour: 2 * 1024 ** 2,
+                fit: 0.1,
+                start: 9 * 1024 ** 3,
+                points: 90,
+                leak: false,
+                residual: null,
+                slopeError: null,
+                center: 0,
+            },
+            handles: {
+                perHour: 300,
+                fit: 0.9,
+                start: 3200,
+                points: 90,
+                leak: true,
+                residual: null,
+                slopeError: null,
+                center: 0,
+            },
         };
         const { say, live } = await page(hour(), { growth });
         say({ type: 'snapshot', topic: 'metrics.live', data: { latest: SAMPLE } });
@@ -667,7 +781,7 @@ describe('OverviewPage', () => {
         getByText(en.server_state.hangNoHttp);
         getByText(en.server_state.hangAdvice(15));
         expect(getByRole('link', { name: en.server_state.openHang }).getAttribute('href')).toBe(
-            '/server#server-hang',
+            '/settings/launch#setting-hangDetection',
         );
         live.stop();
         vi.unstubAllGlobals();
@@ -701,5 +815,177 @@ describe('OverviewPage', () => {
         expect(observer.queryByText(en.tiles.observer.unreachable)).not.toBeNull();
         expect(observer.queryByText(en.tiles.observer.running)).toBeNull();
         live.stop();
+    });
+
+    it('should sum the server up in four figures, each with its line', async () => {
+        const growth: RunGrowth = {
+            startedAt: NOW - 7200,
+            from: NOW - 7200,
+            to: NOW,
+            private: {
+                perHour: 12 * 1024 ** 2,
+                fit: 0.9,
+                start: 9 * 1024 ** 3,
+                points: 120,
+                leak: false,
+                residual: null,
+                slopeError: null,
+                center: 0,
+            },
+            handles: null,
+        };
+        const { say, live } = await page(hour(), { growth, details: false });
+        say({ type: 'snapshot', topic: 'metrics.live', data: { latest: SAMPLE } });
+
+        expect(summary(en.overview.tiles.players)).toEqual([
+            `187${en.overview.tiles.of('256')}`,
+            en.overview.tiles.peak('187', formatClock('en', NOW * 1000, 'UTC')),
+        ]);
+        expect(summary(en.overview.tiles.tick)).toEqual([
+            '6.8ms',
+            en.overview.tiles.overBudget('0.4%', '50 ms'),
+        ]);
+        expect(summary(en.overview.tiles.cpu)).toEqual(['11.4%', en.overview.tiles.ofCores(16)]);
+        expect(summary(en.overview.tiles.memory)).toEqual(['9.4GB', en.overview.tiles.growing('+12 MB')]);
+        live.stop();
+    });
+
+    it("should take the players' peak from the day, unless the latest sample beats it", async () => {
+        const { say, live } = await page(hour(), { details: false });
+        say({
+            type: 'snapshot',
+            topic: 'metrics.live',
+            data: { latest: { ...SAMPLE, values: { ...SAMPLE.values, players: 90 } } },
+        });
+
+        expect(summary(en.overview.tiles.players)[1]).toBe(
+            en.overview.tiles.peak('112', formatClock('en', (DAY_FROM + 100 * DAY_STEP) * 1000, 'UTC')),
+        );
+        live.stop();
+    });
+
+    it('should word a growing memory as a possible leak, with an icon and not by colour alone', async () => {
+        const growth: RunGrowth = {
+            startedAt: NOW - 7200,
+            from: NOW - 7200,
+            to: NOW,
+            private: {
+                perHour: 300 * 1024 ** 2,
+                fit: 0.97,
+                start: 6 * 1024 ** 3,
+                points: 600,
+                leak: true,
+                residual: null,
+                slopeError: null,
+                center: 0,
+            },
+            handles: null,
+        };
+        const { say, live } = await page(hour(), { growth, details: false });
+        say({ type: 'snapshot', topic: 'metrics.live', data: { latest: SAMPLE } });
+
+        const memory = document.querySelector(`section[aria-label="${en.overview.tiles.memory}"]`);
+        expect(summary(en.overview.tiles.memory)[1]).toBe(en.overview.tiles.possibleLeak('+300 MB'));
+        expect(memory?.querySelector('svg')).not.toBeNull();
+        live.stop();
+    });
+
+    it('should keep every measure folded under Details, and read them only once it opens', async () => {
+        const { getByRole, queryByRole, client, live } = await page(hour(), { details: false });
+        const read = () =>
+            client.getQueryCache().find({ queryKey: threadsQuery.queryKey })?.getObserversCount();
+
+        const folded = queryByRole('region', { name: en.overview.details });
+        const readFolded = read();
+        fireEvent.click(getByRole('button', { name: new RegExp(`^${en.overview.details}`) }));
+
+        expect(folded).toBeNull();
+        expect(readFolded).toBe(0);
+        expect(
+            within(getByRole('region', { name: en.overview.details })).getByText(en.tiles.tick.label),
+        ).not.toBeNull();
+        expect(read()).toBe(1);
+        live.stop();
+    });
+
+    it("should list the day's earlier runs in Recent, a crash with how long it took to come back", async () => {
+        const { live } = await page(hour(), { details: false });
+
+        const recent = card(en.overview.recent.title);
+        expect(recent.getByText(en.overview.recent.crash)).not.toBeNull();
+        expect(recent.getByText(en.overview.recent.backOnline('45 s'))).not.toBeNull();
+        live.stop();
+    });
+
+    it('should say everything is fine, or count what needs a look, in the title', async () => {
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(async () => Response.json({ code: 'not_found' }, { status: 404 })),
+        );
+        const { say, live, getByRole } = await page(hour(), { me: OWNER, details: false });
+        const title = () => getByRole('heading', { level: 1 }).textContent;
+        const unknown = title();
+        const online = {
+            state: 'online',
+            cause: { kind: 'ready' },
+            since: new Date().toISOString(),
+            startedAt: new Date(Date.now() - 600_000).toISOString(),
+            generation: 1,
+            problems: [],
+            build: 35245,
+            players: { online: 3, max: 8 },
+            restartAt: null,
+            launch: 'ready',
+            name: null,
+            port: null,
+        } satisfies ServerStatus;
+
+        say({ type: 'snapshot', topic: 'server.status', data: online });
+        const fine = title();
+        say({
+            type: 'event',
+            topic: 'server.status',
+            data: { ...online, state: 'degraded', launch: 'invalid' },
+        });
+
+        expect(unknown).toBe(`${en.overview.title} · ${en.overview.verdict.unknown}`);
+        expect(fine).toBe(`${en.overview.title} · ${en.overview.verdict.fine}`);
+        expect(title()).toBe(`${en.overview.title} · ${en.overview.verdict.look(2)}`);
+        live.stop();
+        vi.unstubAllGlobals();
+    });
+
+    it('should list the next timed backup in Coming up, and the latest one with its copies in Recent', async () => {
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(async () => Response.json({ code: 'not_found' }, { status: 404 })),
+        );
+        const stored = { storedAt: new Date(Date.now() - 3_600_000).toISOString() };
+        const latest = {
+            id: 4,
+            startedAt: new Date(Date.now() - 3_700_000).toISOString(),
+            finishedAt: new Date(Date.now() - 3_600_000).toISOString(),
+            outcome: 'succeeded',
+            fileBytes: 412 * 1024 ** 2,
+            copies: [stored, stored],
+        } as BackupRun;
+        // Only what the Overview reads of the backups: the next timed run and the latest runs.
+        const backups = {
+            nextAt: new Date(Date.now() + 3 * 3_600_000).toISOString(),
+            nextRestartAt: null,
+            recent: [latest],
+        } as unknown as BackupsView;
+        const { live } = await page(hour(), {
+            me: { ...OWNER, permissions: 'fffff' },
+            details: false,
+            backups,
+        });
+
+        expect(card(en.overview.comingUp.title).getByText(en.overview.comingUp.backup)).not.toBeNull();
+        const recent = card(en.overview.recent.title);
+        expect(recent.getByText(en.overview.recent.backup('412 MB'))).not.toBeNull();
+        expect(recent.getByText(en.overview.recent.copies(2, 2))).not.toBeNull();
+        live.stop();
+        vi.unstubAllGlobals();
     });
 });

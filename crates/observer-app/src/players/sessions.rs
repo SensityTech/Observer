@@ -7,9 +7,11 @@ use std::mem;
 use std::time::{Duration, Instant};
 
 use observer_domain::drops::{DropCategory, DropKind, ReportedDrop, classify};
-use observer_domain::players::IdentifierKind;
+use observer_domain::players::{IdentifierKind, PlayerLabel};
 use observer_fxserver::health::{Listed, PlayerList};
-use observer_fxserver::players::{Dropped, Joined, PlayerReport, PlayerReportKind, RosterPage, Shown};
+use observer_fxserver::players::{
+    Dropped, Joined, LabelChange, PlayerReport, PlayerReportKind, RosterPage, Shown,
+};
 use observer_store::metrics::runs::RunKey;
 use observer_store::metrics::sessions::{Closure, NewSession};
 
@@ -43,10 +45,15 @@ pub(super) struct Open {
     /// When Observer saw it start, or first saw it.
     pub(super) seen_ms: i64,
     pub(super) identity: Identity,
+    /// What the server's resources call the player now, and when they said so. Shown and kept
+    /// only once the identity is confirmed.
+    pub(super) label: Option<(PlayerLabel, i64)>,
     timer_ms: Option<i64>,
     received: Instant,
     absent: u8,
     last_listed_ms: Option<i64>,
+    /// What FXServer's latest list gave, unknown for a client it has no network peer for.
+    pub(super) ping: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -67,13 +74,22 @@ pub(super) enum Identity {
     Anonymous,
 }
 
-/// What a flush writes: identities and credits in the state database first, then the sessions in
-/// the metrics database, in the order they were decided, so that the session a reused net id
-/// closes is closed before the next one opens.
+/// What a flush writes: identities, then labels, and credits in the state database first, then the
+/// sessions in the metrics database, in the order they were decided, so that the session a reused
+/// net id closes is closed before the next one opens.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub(super) struct Writes {
     pub(super) identities: Vec<IdentityWrite>,
+    pub(super) labels: Vec<LabelWrite>,
     pub(super) sessions: Vec<SessionWrite>,
+}
+
+/// A label given to a confirmed player, for their profile.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct LabelWrite {
+    pub(super) license: String,
+    pub(super) label: PlayerLabel,
+    pub(super) at_ms: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -108,6 +124,8 @@ pub(super) struct Counts {
     pub(super) rosters_given_up: usize,
     /// Players FXServer listed that Observer had no session for.
     pub(super) untracked: usize,
+    /// Labels for a net id without a session.
+    pub(super) unmatched_labels: usize,
 }
 
 struct Run {
@@ -269,6 +287,36 @@ impl Sessions {
             _ if run.ended => {}
             PlayerReportKind::Join(joined) => self.join(joined, report, fingerprints),
             PlayerReportKind::Roster(page) => self.roster(page, report, fingerprints),
+            PlayerReportKind::Labels(changes) => self.labelled(changes, report.at_ms),
+        }
+    }
+
+    /// The server's resources gave or cleared labels. A label is display data: it never touches the
+    /// identity, and is kept only for a player whose identity is confirmed.
+    fn labelled(&mut self, changes: &[LabelChange], at_ms: i64) {
+        let Some(run) = self.run.as_mut() else {
+            return;
+        };
+        for change in changes {
+            let Some(open) = run.open.get_mut(&change.net_id) else {
+                self.counts.unmatched_labels += 1;
+                continue;
+            };
+            let label = change.label.as_ref().and_then(|given| {
+                PlayerLabel::clean(
+                    given.name.as_deref(),
+                    given.id.as_deref(),
+                    change.resource.as_deref(),
+                )
+            });
+            if let (Identity::Confirmed { license, .. }, Some(label)) = (&open.identity, &label) {
+                self.writes.labels.push(LabelWrite {
+                    license: license.clone(),
+                    label: label.clone(),
+                    at_ms,
+                });
+            }
+            open.label = label.map(|label| (label, at_ms));
         }
     }
 
@@ -340,10 +388,12 @@ impl Sessions {
                 net_id,
                 seen_ms,
                 identity,
+                label: None,
                 timer_ms,
                 received,
                 absent: 0,
                 last_listed_ms: None,
+                ping: None,
             },
         );
     }
@@ -529,6 +579,7 @@ impl Sessions {
         run.ended_at
             .retain(|_, ended| at.duration_since(*ended) < LIST_LAG * 2);
         let shown: HashMap<u32, _> = list.shown.iter().map(|listed| (listed.id, listed)).collect();
+        let pings: HashMap<u32, Option<u32>> = list.players.iter().copied().collect();
         let mut gone = Vec::new();
         let mut unconfirmed = 0;
         let mut keys = Vec::new();
@@ -538,6 +589,7 @@ impl Sessions {
                 Some(listed) => {
                     open.absent = 0;
                     open.last_listed_ms = Some(list_ms);
+                    open.ping = pings.get(&open.net_id).copied().flatten();
                     if let Identity::Confirming(claim) = &open.identity
                         && (settled || claim.matches(listed))
                     {
@@ -608,6 +660,14 @@ impl Sessions {
             seen_ms: open.seen_ms,
             credit,
         });
+        // A label given before the list agreed waited for it.
+        if let Some((label, at_ms)) = &open.label {
+            self.writes.labels.push(LabelWrite {
+                license: claim.license.clone(),
+                label: label.clone(),
+                at_ms: *at_ms,
+            });
+        }
         open.identity = Identity::Confirmed {
             license: claim.license,
             name: claim.name,
@@ -717,6 +777,7 @@ impl Sessions {
             };
             if theirs {
                 open.identity = Identity::Anonymous;
+                open.label = None;
                 theirs_ids.insert(open.id);
             }
         }
@@ -726,6 +787,7 @@ impl Sessions {
         self.writes
             .identities
             .retain(|identity| identity.license != license);
+        self.writes.labels.retain(|label| label.license != license);
         for write in &mut self.writes.sessions {
             if let SessionWrite::Close { credit, .. } = write
                 && credit.is_some_and(|credit| keys.contains(&credit))

@@ -1,9 +1,10 @@
 -- Listens to the server events of Observer's integration contract (resource/CONTRACT.md) and prints
--- each one with its fields. It shows nothing to players: the comments mark where your own
--- notifications, cancellation notices and saves would go.
+-- each one with its fields, and gives players labels for Observer's panel from the console. It
+-- shows nothing to players: the comments mark where your own notifications, cancellation notices,
+-- saves and labels would go.
 
 -- The contract this resource was written for.
-local CONTRACT_VERSION = 1
+local CONTRACT_VERSION = 3
 
 local function log(text)
     print(('[observer_example] %s'):format(text))
@@ -26,11 +27,13 @@ local function fields(payload, names)
 end
 
 CreateThread(function()
-    if GetResourceState('observer') ~= 'started' then
+    -- The bridge's name changes with every start of FXServer: Observer gives it in this convar.
+    local bridge = GetConvar('observer_bridge', '')
+    if bridge == '' or GetResourceState(bridge) ~= 'started' then
         log('^3the observer bridge is not running: is this server started by Observer?^7')
         return
     end
-    local version = exports.observer:getContractVersion()
+    local version = exports[bridge]:getContractVersion()
     if version ~= CONTRACT_VERSION then
         log(('^3Observer speaks contract %s, this resource was written for %d^7'):format(
             show(version), CONTRACT_VERSION))
@@ -69,3 +72,25 @@ AddEventHandler('observer:startChanges', function(payload)
     end
     -- Your changelog goes here: post what changed since the previous start to your staff's channel.
 end)
+
+-- Your framework gives the label where it knows the player's character, once they picked it for
+-- instance, and clears it when they go back to the character menu. To try it from the server
+-- console: `observer_example_label 1 CHAR-1234 John Doe` labels player 1, `observer_example_label 1`
+-- clears the label.
+RegisterCommand('observer_example_label', function(source, args)
+    if source ~= 0 then
+        return
+    end
+    local bridge = GetConvar('observer_bridge', '')
+    local ok, refused
+    if args[2] then
+        ok, refused = exports[bridge]:setPlayerLabel(args[1], { id = args[2], name = table.concat(args, ' ', 3) })
+    else
+        ok, refused = exports[bridge]:clearPlayerLabel(args[1])
+    end
+    if ok then
+        log('label sent to Observer')
+    else
+        log('label refused: ' .. tostring(refused))
+    end
+end, true)

@@ -87,12 +87,27 @@ describe('ServerControls', () => {
 
     afterEach(cleanup);
 
+    it('should offer Restart while the server runs, and Start in its place while it does not', async () => {
+        const { queryByRole, live, state } = await controls('online');
+        const offered = () =>
+            [en.controls.start, en.controls.restart, en.controls.stop].filter(
+                (name) => queryByRole('button', { name }) !== null,
+            );
+        const running = offered();
+
+        state('stopped');
+
+        expect(running).toEqual([en.controls.restart, en.controls.stop]);
+        expect(offered()).toEqual([en.controls.start, en.controls.stop]);
+        live.stop();
+    });
+
     it('should say why a control does nothing once it is pressed', async () => {
-        const { getByRole, getByText, live } = await controls('online');
+        const { getByRole, getByText, live } = await controls('stopped');
 
-        fireEvent.click(getByRole('button', { name: en.controls.start }));
+        fireEvent.click(getByRole('button', { name: en.controls.stop }));
 
-        expect(getByText(en.controls.unavailable(en.controls.start, en.controls.running))).not.toBeNull();
+        expect(getByText(en.controls.unavailable(en.controls.stop, en.controls.notRunning))).not.toBeNull();
         live.stop();
     });
 
@@ -108,24 +123,24 @@ describe('ServerControls', () => {
     });
 
     it('should drop why a control did nothing once the state it was pressed in is gone', async () => {
-        const { getByRole, queryByText, live, state } = await controls('online');
-        fireEvent.click(getByRole('button', { name: en.controls.start }));
+        const { getByRole, queryByText, live, state } = await controls('stopped');
+        fireEvent.click(getByRole('button', { name: en.controls.stop }));
 
-        state('stopped');
+        state('starting');
 
-        expect(queryByText(en.controls.unavailable(en.controls.start, en.controls.running))).toBeNull();
+        expect(queryByText(en.controls.unavailable(en.controls.stop, en.controls.notRunning))).toBeNull();
         live.stop();
     });
 
     it('should not bring back why a control did nothing when the server returns to that state', async () => {
-        const { getByRole, queryByText, live, state } = await controls('online');
-        fireEvent.click(getByRole('button', { name: en.controls.start }));
+        const { getByRole, queryByText, live, state } = await controls('stopped');
+        fireEvent.click(getByRole('button', { name: en.controls.stop }));
 
-        state('stopped');
         state('starting');
         state('online');
+        state('stopped');
 
-        expect(queryByText(en.controls.unavailable(en.controls.start, en.controls.running))).toBeNull();
+        expect(queryByText(en.controls.unavailable(en.controls.stop, en.controls.notRunning))).toBeNull();
         live.stop();
     });
 

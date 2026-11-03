@@ -445,6 +445,8 @@ mod tests {
             }),
             restart_at: None,
             launch: observer_domain::server::LaunchReadiness::Ready,
+            name: None,
+            port: None,
         };
 
         assert_eq!(status_line(&status), "FXServer online · 12 / 64 players");
