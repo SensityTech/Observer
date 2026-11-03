@@ -5,7 +5,6 @@ import {
     ChartLine,
     Contact,
     DatabaseBackup,
-    FolderLock,
     GitCompare,
     LayoutDashboard,
     Menu as MenuIcon,
@@ -17,7 +16,6 @@ import {
     Stethoscope,
     TriangleAlert,
     Unplug,
-    Users,
     Wrench,
     X,
     type LucideIcon,
@@ -59,13 +57,14 @@ type NavEntry = {
         | '/settings'
         | '/tools'
         | '/backups'
-        | '/users'
-        | '/files'
         | '/audit';
     label: string;
     icon: LucideIcon;
-    /** A permission, any one of a list, or the owner alone for what no permission grants. */
-    access: bigint | bigint[] | 'owner';
+    /**
+     * A permission, any one of a list, the owner alone for what no permission grants, or every
+     * account.
+     */
+    access: bigint | bigint[] | 'owner' | 'everyone';
     /** Shows how many alerts are live. */
     alerts?: boolean;
     /**
@@ -123,7 +122,6 @@ export function AppShell() {
 
     const main: NavEntry[] = [
         { to: '/', label: t.nav.overview, icon: LayoutDashboard, access: Permission.DashboardView },
-        { to: '/statistics', label: t.nav.statistics, icon: ChartLine, access: Permission.DashboardView },
         { to: '/console', label: t.nav.console, icon: SquareTerminal, access: Permission.ConsoleView },
     ];
     const operations: NavEntry[] = [
@@ -134,6 +132,7 @@ export function AppShell() {
             access: [Permission.DashboardView, Permission.ScheduleManage, Permission.ServerControl],
         },
         { to: '/players', label: t.nav.players, icon: Contact, access: Permission.PlayersView, nested: true },
+        { to: '/statistics', label: t.nav.statistics, icon: ChartLine, access: Permission.DashboardView },
         {
             to: '/diagnostics',
             label: t.nav.diagnostics,
@@ -156,10 +155,10 @@ export function AppShell() {
         { to: '/tools', label: t.nav.tools, icon: Wrench, access: 'owner' },
         { to: '/audit', label: t.nav.audit, icon: ScrollText, access: Permission.AuditView },
     ];
+    // At the foot, beside the account: every account opens its own settings, and the categories
+    // its permissions open, the users and the file access among them.
     const settings: NavEntry[] = [
-        { to: '/settings', label: t.nav.settings, icon: Settings, access: 'owner', nested: true },
-        { to: '/users', label: t.nav.users, icon: Users, access: Permission.UsersManage },
-        { to: '/files', label: t.nav.files, icon: FolderLock, access: Permission.FilesManage },
+        { to: '/settings', label: t.nav.settings, icon: Settings, access: 'everyone', nested: true },
     ];
 
     return (
@@ -208,14 +207,9 @@ export function AppShell() {
                                                 group={t.nav.maintenance}
                                                 onNavigate={closeMenu}
                                             />
-                                            <NavEntries
-                                                me={me}
-                                                entries={settings}
-                                                group={t.nav.settings}
-                                                onNavigate={closeMenu}
-                                            />
                                         </nav>
                                         <div className="rail-foot">
+                                            <NavEntries me={me} entries={settings} onNavigate={closeMenu} />
                                             <UserMenu me={me} onNavigate={closeMenu} />
                                         </div>
                                     </div>
@@ -321,9 +315,11 @@ function NavEntries({
     onNavigate: () => void;
 }) {
     const allowed = entries.filter(({ access }) =>
-        access === 'owner'
-            ? me.isOwner
-            : (Array.isArray(access) ? access : [access]).some((permission) => allows(me, permission)),
+        access === 'everyone'
+            ? true
+            : access === 'owner'
+              ? me.isOwner
+              : (Array.isArray(access) ? access : [access]).some((permission) => allows(me, permission)),
     );
     if (allowed.length === 0) {
         return null;

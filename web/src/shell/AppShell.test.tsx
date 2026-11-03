@@ -13,6 +13,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { meQuery } from '../api/auth';
 import { onlineQuery } from '../api/players';
 import type { Me } from '../api/generated/Me';
+import { Permission } from '../api/generated/Permission';
+import { formatPermissions } from '../auth/permissions';
 import { en } from '../i18n/en';
 import { I18nProvider } from '../i18n/I18nProvider';
 import { LiveContext } from '../live/context';
@@ -86,5 +88,47 @@ describe('AppShell', () => {
 
         expect(hidden).toBeNull();
         expect(moderator.getByRole('button', { name: en.online.show('0') })).not.toBeNull();
+    });
+
+    it('should list the sections in their groups, the statistics after the players', async () => {
+        const every = Object.values(Permission).reduce((mask, permission) => mask | permission, 0n);
+        const { findByRole, getByRole } = shell({ ...OWNER, permissions: formatPermissions(every) });
+        await findByRole('heading', { name: 'Overview' });
+
+        const sections = within(getByRole('navigation', { name: en.nav.sections }));
+        expect(sections.getAllByRole('link').map((link) => link.textContent)).toEqual([
+            en.nav.overview,
+            en.nav.console,
+            en.nav.schedule,
+            en.nav.players,
+            en.nav.statistics,
+            en.nav.diagnostics,
+            en.nav.changes,
+            en.nav.drops,
+            en.nav.artifacts,
+            en.nav.backups,
+            en.nav.tools,
+            en.nav.audit,
+        ]);
+    });
+
+    it('should keep the settings at the foot of the rail, for every account', async () => {
+        const { findByRole, getByRole } = shell({
+            ...OWNER,
+            id: 2,
+            username: 'grace',
+            isOwner: false,
+            permissions: '1',
+        });
+        await findByRole('heading', { name: 'Overview' });
+
+        const rail = within(getByRole('complementary', { name: en.nav.label }));
+        const settings = rail.getByRole('link', { name: en.nav.settings });
+        expect(settings.getAttribute('href')).toBe('/settings');
+        expect(
+            within(getByRole('navigation', { name: en.nav.sections })).queryByRole('link', {
+                name: en.nav.settings,
+            }),
+        ).toBeNull();
     });
 });
