@@ -157,6 +157,12 @@ const asked = (fetch: ReturnType<typeof api>, route: string) =>
         .filter((url) => url.pathname === `${DROPS}/${route}`)
         .map((url) => url.search);
 
+/** The way to the settings that sat at the bottom of the page, now in Data kept. */
+const settingsLink = () =>
+    [...document.querySelectorAll('a')].find((link) =>
+        link.textContent?.startsWith(en.settings.moved(en.settings.categories.data.name)),
+    );
+
 describe('DropsPage', () => {
     beforeEach(() => {
         vi.stubGlobal('OffscreenCanvas', TestCanvas);
@@ -393,13 +399,13 @@ describe('DropsPage', () => {
         ).not.toHaveLength(0);
     });
 
-    it('should give the owner the retention, and nobody else', async () => {
+    it('should lead the owner to the retention, now on the Settings page, and nobody else', async () => {
         await open('/drops', OWNER);
-        expect(card('drops-settings').getByLabelText(en.drops.settings.sessionDays)).not.toBeNull();
+        expect(settingsLink()?.getAttribute('href')).toBe('/settings/data#setting-sessionDays');
         cleanup();
 
         await open('/drops', MODERATOR);
-        expect(document.querySelector('section[aria-labelledby="drops-settings"]')).toBeNull();
+        expect(settingsLink()).toBeUndefined();
     });
 
     it('should keep the keyboard on Apply, and a draft through a change of range', async () => {

@@ -14,6 +14,7 @@ mod players;
 mod proxy;
 mod schedule;
 mod servers;
+mod settings;
 mod setup;
 mod tools;
 
@@ -44,7 +45,7 @@ use tower::ServiceExt;
 
 use crate::api::routes;
 use crate::gate::Gate;
-use crate::{AppState, Live, SESSION_KEY_HEADER, Services, TrustedProxy, router};
+use crate::{AppState, Bootstrap, Live, SESSION_KEY_HEADER, Services, TrustedProxy, router};
 
 const HOST: &str = "observer.test:40125";
 const ORIGIN: &str = "http://observer.test:40125";
@@ -295,6 +296,10 @@ impl Server {
             &instance_id,
             &["observer.test".to_owned()],
             proxies,
+            Bootstrap {
+                config_file: dir.path().join("observer.toml"),
+                listen: SocketAddr::from(([0, 0, 0, 0], 40125)),
+            },
         );
         let live = state.live.clone();
         let app = router(state).layer(MockConnectInfo(peer));

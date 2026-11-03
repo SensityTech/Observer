@@ -26,19 +26,24 @@ import { ServerSetupPage } from './ServerSetupPage';
 vi.mock('@tanstack/react-router', () => ({
     Link: ({
         to,
+        params,
         hash,
         children,
         className,
     }: {
         to: string;
+        params?: Record<string, string>;
         hash?: string;
         children: ReactNode;
         className?: string;
-    }) => (
-        <a href={hash === undefined ? to : `${to}#${hash}`} className={className}>
-            {children}
-        </a>
-    ),
+    }) => {
+        const path = to.replace(/\$(\w+)/g, (_, name: string) => params?.[name] ?? '');
+        return (
+            <a href={hash === undefined ? path : `${path}#${hash}`} className={className}>
+                {children}
+            </a>
+        );
+    },
 }));
 
 const settle = () => act(() => new Promise((resolve) => setTimeout(resolve, 0)));
@@ -581,7 +586,7 @@ describe('ServerSetupPage', () => {
         getByText(en.server_state.hangNoHeartbeat);
         getByText(en.server_state.hangAdvice(6));
         expect(getByRole('link', { name: en.server_state.openHang }).getAttribute('href')).toBe(
-            '/server#server-hang',
+            '/settings/launch#setting-hangDetection',
         );
     });
 

@@ -3,6 +3,7 @@ import {
     createRootRouteWithContext,
     createRoute,
     createRouter,
+    notFound,
     Outlet,
     redirect,
 } from '@tanstack/react-router';
@@ -16,19 +17,19 @@ import { changesSearch, resourceSearch } from './changes/search';
 import { parseDropsSearch, type DropsSearch } from './drops/search';
 import { parseStatisticsSearch, type StatisticsSearch } from './statistics/search';
 import { lazyCode } from './lib/lazyCode';
-import { AccountPage } from './pages/AccountPage';
 import { LoginPage } from './pages/LoginPage';
 import { NotFoundPage } from './pages/NotFoundPage';
 import { OverviewPage } from './pages/OverviewPage';
 import { PasswordChangePage } from './pages/PasswordChangePage';
 import { RouteError } from './pages/RouteError';
 import { SetupPage } from './pages/SetupPage';
+import { firstCategory, isCategory, type CategoryId } from './settings/catalog';
 import { AppShell } from './shell/AppShell';
 
 // Pages beyond the Overview load when someone opens them: the statistics and their charts, the
-// console's virtual list and colour parser, the restart schedule, the diagnostics, the players and their drops, the changes and their
-// diffs, the owner's launch settings, server setup and server tools, the accounts and the audit log
-// are no one's landing page.
+// console's virtual list and colour parser, the restart schedule, the diagnostics, the players and
+// their drops, the changes and their diffs, server setup and server tools, the settings and the
+// audit log are no one's landing page.
 const ConsolePage = lazyCode(() =>
     import('./pages/ConsolePage').then((page) => ({ default: page.ConsolePage })),
 );
@@ -38,9 +39,6 @@ const SchedulePage = lazyCode(() =>
 const ArtifactsPage = lazyCode(() =>
     import('./pages/ArtifactsPage').then((page) => ({ default: page.ArtifactsPage })),
 );
-const ServerPage = lazyCode(() =>
-    import('./pages/ServerPage').then((page) => ({ default: page.ServerPage })),
-);
 const ServerSetupPage = lazyCode(() =>
     import('./pages/ServerSetupPage').then((page) => ({ default: page.ServerSetupPage })),
 );
@@ -48,8 +46,6 @@ const ToolsPage = lazyCode(() => import('./pages/ToolsPage').then((page) => ({ d
 const BackupsPage = lazyCode(() =>
     import('./pages/BackupsPage').then((page) => ({ default: page.BackupsPage })),
 );
-const UsersPage = lazyCode(() => import('./pages/UsersPage').then((page) => ({ default: page.UsersPage })));
-const FilesPage = lazyCode(() => import('./pages/FilesPage').then((page) => ({ default: page.FilesPage })));
 const AuditPage = lazyCode(() => import('./pages/AuditPage').then((page) => ({ default: page.AuditPage })));
 const AboutPage = lazyCode(() => import('./pages/AboutPage').then((page) => ({ default: page.AboutPage })));
 const DiagnosticsPage = lazyCode(() =>
@@ -70,6 +66,12 @@ const ChangesResourcePage = lazyCode(() =>
 const DropsPage = lazyCode(() => import('./pages/DropsPage').then((page) => ({ default: page.DropsPage })));
 const StatisticsPage = lazyCode(() =>
     import('./pages/StatisticsPage').then((page) => ({ default: page.StatisticsPage })),
+);
+const SettingsPage = lazyCode(() =>
+    import('./pages/SettingsPage').then((page) => ({ default: page.SettingsPage })),
+);
+const SettingsCategory = lazyCode(() =>
+    import('./settings/Category').then((page) => ({ default: page.SettingsCategory })),
 );
 
 type RouterContext = { queryClient: QueryClient };
@@ -270,16 +272,6 @@ const changesResourceRoute = createRoute({
     ),
 });
 
-const serverRoute = createRoute({
-    getParentRoute: () => panelRoute,
-    path: '/server',
-    component: () => (
-        <RequireOwner>
-            <ServerPage />
-        </RequireOwner>
-    ),
-});
-
 const serverSetupRoute = createRoute({
     getParentRoute: () => panelRoute,
     path: '/server/setup',
@@ -311,26 +303,6 @@ const backupsRoute = createRoute({
     ),
 });
 
-const usersRoute = createRoute({
-    getParentRoute: () => panelRoute,
-    path: '/users',
-    component: () => (
-        <RequirePermission name="UsersManage">
-            <UsersPage />
-        </RequirePermission>
-    ),
-});
-
-const filesRoute = createRoute({
-    getParentRoute: () => panelRoute,
-    path: '/files',
-    component: () => (
-        <RequirePermission name="FilesManage">
-            <FilesPage />
-        </RequirePermission>
-    ),
-});
-
 const auditRoute = createRoute({
     getParentRoute: () => panelRoute,
     path: '/audit',
@@ -341,11 +313,51 @@ const auditRoute = createRoute({
     ),
 });
 
-const accountRoute = createRoute({
+// Every category guards itself, as the pages it took in did: the API refuses the rest anyway.
+const settingsRoute = createRoute({
     getParentRoute: () => panelRoute,
-    path: '/account',
-    component: AccountPage,
+    path: '/settings',
+    component: SettingsPage,
 });
+
+const settingsIndexRoute = createRoute({
+    getParentRoute: () => settingsRoute,
+    path: '/',
+    beforeLoad: ({ context: { me } }) => {
+        throw redirect({ to: '/settings/$category', params: { category: firstCategory(me) }, replace: true });
+    },
+});
+
+const settingsCategoryRoute = createRoute({
+    getParentRoute: () => settingsRoute,
+    path: '$category',
+    beforeLoad: ({ params }) => {
+        if (!isCategory(params.category)) {
+            throw notFound();
+        }
+    },
+    component: SettingsCategory,
+});
+
+/** A page that became a category of the settings: its address, bookmarked or linked, leads there. */
+const moved = <Path extends string>(path: Path, category: CategoryId) =>
+    createRoute({
+        getParentRoute: () => panelRoute,
+        path,
+        beforeLoad: ({ location }) => {
+            throw redirect({
+                to: '/settings/$category',
+                params: { category },
+                hash: location.hash === '' ? undefined : location.hash,
+                replace: true,
+            });
+        },
+    });
+
+const serverRoute = moved('/server', 'launch');
+const usersRoute = moved('/users', 'users');
+const filesRoute = moved('/files', 'files');
+const accountRoute = moved('/account', 'account');
 
 // Any signed-in account may read it: only strangers are kept from the list of what Observer runs.
 const aboutRoute = createRoute({
@@ -377,6 +389,7 @@ const routeTree = rootRoute.addChildren([
         usersRoute,
         filesRoute,
         auditRoute,
+        settingsRoute.addChildren([settingsIndexRoute, settingsCategoryRoute]),
         accountRoute,
         aboutRoute,
     ]),

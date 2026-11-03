@@ -25,5 +25,6 @@ pub mod players;
 pub mod schedule;
 pub mod server;
 pub mod server_data;
+pub mod settings;
 pub mod statistics;
 pub mod tools;

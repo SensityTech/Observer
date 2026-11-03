@@ -11,8 +11,6 @@ import { act, cleanup, fireEvent, render, screen, within } from '@testing-librar
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { Me } from '../api/generated/Me';
-import type { PlayersImport } from '../api/generated/PlayersImport';
-import { importQuery } from '../api/players';
 import { MeContext } from '../auth/me';
 import { en } from '../i18n/en';
 import { I18nProvider } from '../i18n/I18nProvider';
@@ -129,18 +127,11 @@ const card = (id: string) => {
 /** Tables and their phone cards are both in the document, as CSS alone tells them apart: the table. */
 const rows = (id: string) => card(id).getAllByRole('row').slice(1);
 
-const writing: PlayersImport = {
-    state: 'writing',
-    startedAt: '2026-10-30T20:00:00Z',
-    finishedAt: null,
-    bytes: 3_145_728,
-    read: 5_000,
-    written: 1_200,
-    imported: 0,
-    updated: 0,
-    forgotten: 0,
-    invalid: 0,
-};
+/** The way to the settings that sat at the bottom of the page, now in Data kept. */
+const settingsLink = () =>
+    [...document.querySelectorAll('a')].find((link) =>
+        link.textContent?.startsWith(en.settings.moved(en.settings.categories.data.name)),
+    );
 
 describe('PlayersPage', () => {
     beforeAll(() => {
@@ -339,62 +330,13 @@ describe('PlayersPage', () => {
         );
     });
 
-    it('should show the import while it writes, then what it took in, and read the players again', async () => {
-        let current = writing;
-        const { client, fetch } = await open(
-            '/players',
-            OWNER,
-            api((url) => (url.pathname === `${PLAYERS_PATH}/import` ? json(current) : undefined)),
-        );
-
-        const data = card('players-data');
-        const listReads = () => fetch.mock.calls.filter(([input]) => String(input) === PLAYERS_PATH).length;
-        const before = listReads();
-        expect(data.getByText(en.players.data.writing(1_200, 5_000))).not.toBeNull();
-        expect(data.getByRole('progressbar', { name: en.players.data.progress }).getAttribute('value')).toBe(
-            '1200',
-        );
-        expect(data.getByRole('button', { name: en.players.data.start }).hasAttribute('disabled')).toBe(true);
-
-        current = {
-            ...writing,
-            state: 'finished',
-            finishedAt: '2026-10-30T20:01:00Z',
-            written: 5_000,
-            imported: 4_700,
-            updated: 280,
-            forgotten: 12,
-            invalid: 8,
-        };
-        await act(() => client.refetchQueries({ queryKey: importQuery.queryKey }));
-        await settle();
-
-        expect(
-            data.getByText(en.players.data.finished('2026-10-30 21:01', 4_700, 280, 12, 8)),
-        ).not.toBeNull();
-        expect(data.queryByRole('progressbar')).toBeNull();
-        await settle();
-        expect(listReads()).toBe(before + 1);
-    });
-
-    it('should keep an emptied retention empty, and refuse it as out of range', async () => {
+    it('should lead the owner alone to the retention and the import, now on the Settings page', async () => {
         await open('/players', OWNER);
-        const data = card('players-data');
-        const links = data.getByLabelText(en.players.data.linkDays);
-        expect(links.getAttribute('min')).toBe('30');
+        expect(settingsLink()?.getAttribute('href')).toBe('/settings/data#setting-linkDays');
+        cleanup();
 
-        fireEvent.change(links, { target: { value: '' } });
-        expect((links as HTMLInputElement).value).toBe('');
-        fireEvent.click(data.getByRole('button', { name: en.players.data.save }));
-        await settle();
-
-        expect(data.getByText(en.players.data.outOfRange(en.players.data.ranges.linkDays))).not.toBeNull();
-    });
-
-    it('should keep the retention and the import to the owner', async () => {
         const { fetch } = await open('/players', MODERATOR);
-
-        expect(document.querySelector('section[aria-labelledby="players-data"]')).toBeNull();
+        expect(settingsLink()).toBeUndefined();
         expect(fetch).not.toHaveBeenCalledWith(`${PLAYERS_PATH}/settings`, expect.anything());
     });
 });

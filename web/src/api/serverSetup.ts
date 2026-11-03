@@ -13,7 +13,7 @@ export const checkFolder = (check: FolderCheck) => send<FolderReport>('POST', `$
 export const checkCfg = (check: CfgCheck) => send<CfgReport>('POST', `${PATH}/cfg`, check);
 
 /**
- * Checks the folder and the cfg again, whatever the reports said, then saves as the Server page
- * does: refused with `setup_blocked` when something blocks, with `conflict` on a stale version.
+ * Checks the folder and the cfg again, whatever the reports said, then saves as the launch settings
+ * do: refused with `setup_blocked` when something blocks, with `conflict` on a stale version.
  */
 export const saveSetup = (change: LaunchChange) => send<StoredLaunch>('PUT', PATH, change);

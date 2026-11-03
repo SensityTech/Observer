@@ -14,23 +14,22 @@ import { errorMessage, problemMessage } from '../i18n/errors';
 import { FilesCard } from '../files/FilesCard';
 import { useI18n } from '../i18n/I18nProvider';
 import { cn } from '../lib/cn';
+import { anchorOf } from './catalog';
+import { CategoryHead } from './Row';
 
-export function AccountPage() {
-    const { t } = useI18n();
-
+/** The signed-in user's own password, sessions and SSH keys: what was the My account page. */
+export function AccountSettings() {
     return (
-        <div className="flex flex-col gap-5 max-md:gap-4">
-            <div className="page-head">
-                <h1 className="page-title">
-                    {t.myAccount.title} <span className="gloss">{t.myAccount.gloss}</span>
-                </h1>
-            </div>
+        <>
+            <CategoryHead category="account" />
             <div className="flex flex-col gap-3">
                 <PasswordCard />
                 <SessionsCard />
-                <FilesCard />
+                <div id={anchorOf('sshKeys')}>
+                    <FilesCard />
+                </div>
             </div>
-        </div>
+        </>
     );
 }
 
@@ -89,14 +88,14 @@ function PasswordCard() {
         problem ? problemMessage(t, problem) : undefined;
 
     return (
-        <section className="card" aria-labelledby="account-password">
+        <section id={anchorOf('password')} className="card" aria-labelledby="account-password">
             <div className="card-head">
                 <span className="grid size-6 place-items-center rounded-[6px] border border-line bg-surface-2 text-ink-2">
                     <KeyRound size={14} strokeWidth={1.5} aria-hidden="true" />
                 </span>
-                <h2 id="account-password" className="text-card text-ink">
+                <h3 id="account-password" className="text-card text-ink">
                     {t.myAccount.password.title}
-                </h2>
+                </h3>
             </div>
             <form className="flex max-w-md flex-col gap-4 p-5 max-md:p-4" onSubmit={submit} noValidate>
                 {outcome && <Notice tone={outcome.tone}>{outcome.message}</Notice>}
@@ -158,14 +157,14 @@ function SessionsCard() {
     });
 
     return (
-        <section className="card flex flex-col" aria-labelledby="account-sessions">
+        <section id={anchorOf('sessions')} className="card flex flex-col" aria-labelledby="account-sessions">
             <div className="card-head wrap-push">
                 <span className="grid size-6 place-items-center rounded-[6px] border border-line bg-surface-2 text-ink-2">
                     <MonitorSmartphone size={14} strokeWidth={1.5} aria-hidden="true" />
                 </span>
-                <h2 id="account-sessions" className="text-card text-ink">
+                <h3 id="account-sessions" className="text-card text-ink">
                     {t.myAccount.sessions.title}
-                </h2>
+                </h3>
                 <span className="text-meta text-ink-3" data-push>
                     {t.myAccount.sessions.meta}
                 </span>
