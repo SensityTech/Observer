@@ -1,6 +1,7 @@
 //! Project tasks, run with `cargo xtask <task>`.
 
 mod compress;
+mod convars;
 mod dist;
 mod icons;
 mod licences;
@@ -20,6 +21,7 @@ tasks:
   web       build the panel into web/dist, the licence list into web/private, and precompress them
   bindings  regenerate the TypeScript types and permission constants in web/src/api/generated
   check     run every check CI runs: formatting, lints, tests, types, panel build
+  convars   read FXServer's convars from citizenfx/fivem at the pinned commit into crates/observer-domain/convars.json
   dist      the release archive of a target, its checksum and its checks (--target, --max-glibc)
   e2e       the browser tests: the panel, the debug binaries, Chromium, then Playwright
   icons     draw the executable's icons from the mark (--check: fail if they differ)
@@ -34,6 +36,7 @@ fn main() -> ExitCode {
         Some("web") => web(),
         Some("bindings") => bindings(),
         Some("check") => check(),
+        Some("convars") => convars::run(&root(), &args[1..]),
         Some("dist") => target(&args).and_then(|target| dist::dist(&target, value(&args, "--max-glibc"))),
         Some("e2e") => e2e(),
         Some("icons") => icons::run(&root(), args.iter().any(|arg| arg == "--check")),

@@ -132,10 +132,14 @@ configured, and again from **Server → Run the setup**. It has four steps:
    and the **First launch** checklist follows it: started, port open, licence accepted, Observer bridge
    connected, server ready. Without a build, **Save only** keeps the settings for later.
 
-The **Server** page holds the same settings, [hang detection](#hang-detection), and extra arguments
-that go on the command line as `+set <name> <value>` after the cfg. It refuses secrets there, since
-anyone on the host can read a command line: `sv_licenseKey`, passwords and connection strings belong in
-the cfg.
+The **Server** page holds the same settings, [hang detection](#hang-detection), and convars that go on
+the command line as `+set <name> <value>`. A name field suggests the convars FXServer declares, from a
+catalog read in its sources, and a convar picked there starts at its default; one the catalog does not
+know is passed as typed. FXServer applies every `+set` before it runs the cfg, wherever it stands on the
+command line, so a convar the cfg sets too keeps the cfg's value, OneSync's included: the page says
+where the cfg sets it and which value applies, and lists what only the cfg sets. It refuses secrets on
+the command line, since anyone on the host can read it: `sv_licenseKey`, passwords and connection
+strings belong in the cfg.
 
 Builds go to `data/artifacts/<build>/`. The **Artifacts** page lists the catalog, installs and imports
 builds, chooses the one FXServer runs, and cleans up old ones. A new build is on probation: until it has
@@ -809,6 +813,11 @@ with hot reload and forwards `/api` to a running Observer (`OBSERVER_URL` names 
 `cargo xtask e2e` runs the browser tests against a debug Observer built with a test catalog, from which
 the flows install a build; a release never has that catalog, and `cargo xtask dist` refuses a binary
 that does.
+`cargo xtask convars` rewrites `crates/observer-domain/convars.json`, the catalog of FXServer's convars:
+it fetches the sources of citizenfx/fivem at a pinned commit with git (a shallow, sparse checkout under
+`target/fivem/`) and reads every convar the server components declare, with its type, default, values
+and flags. What the sources do not say stays empty. `--commit <sha> --build <n>` reads another build,
+`--source <checkout>` a checkout already there.
 
 ## Known limits
 

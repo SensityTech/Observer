@@ -456,6 +456,7 @@ async fn the_work_before_a_spawn_backs_up_from_the_cfg_that_spawn_read() {
             probe_ports: false,
             system_resources: None,
             follow_outside: false,
+            convars: None,
         },
     );
     // Edited after the spawn read it: the backup goes by what FXServer is about to run.

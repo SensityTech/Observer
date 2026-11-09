@@ -50,7 +50,8 @@
 //! The main loop runs in a thread named `UV loop: svMain`, as FXServer's does.
 //!
 //! The bridge's `observer_cmd <hex>` prints the event it decodes, which the real bridge does not, so
-//! that tests can see it arrive. Unknown commands get FXServer's `No such command <name>.`
+//! that tests can see it arrive. A convar typed alone gets the first line FXServer prints for it,
+//! ` "name" is "value"`; unknown commands get FXServer's `No such command <name>.`
 
 mod console;
 mod dump;
@@ -97,11 +98,12 @@ pub struct Server {
 }
 
 impl Server {
+    /// FXServer reads convar names without regard to case.
     pub fn convar(&self, name: &str) -> Option<String> {
         self.convars
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .get(name)
+            .get(&name.to_ascii_lowercase())
             .cloned()
     }
 
@@ -109,7 +111,7 @@ impl Server {
         self.convars
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .insert(name.to_owned(), value.to_owned());
+            .insert(name.to_ascii_lowercase(), value.to_owned());
     }
 
     fn number(&self, name: &str) -> Option<u64> {
@@ -230,7 +232,8 @@ fn main() {
 
 impl Fake {
     fn boot(&mut self, commands: &[Vec<String>]) {
-        // FXServer applies every `+set` of its command line before it runs anything else.
+        // FXServer applies every `+set` of its command line before it runs anything else, the cfg
+        // included, wherever it stands: a convar the cfg sets too keeps the cfg's value.
         for command in commands.iter().filter(|command| is_set(command)) {
             self.execute(command);
         }
@@ -385,9 +388,19 @@ impl Fake {
             ("fake_label", Some(id)) => self.label(id, &args[1..]),
             ("fake_drop_before_join", Some(id)) => self.drop_before_join(id),
             ("observer_cmd", Some(hex)) if self.bridge.is_some() => self.bridge_command(hex),
-            // Typing a convar's name with a value sets it.
-            (convar, Some(value)) if convar.starts_with("sv_") || convar.starts_with("fake_") => {
+            // A convar's name followed by a value sets it, as FXServer's console does for a convar
+            // that exists: `sv_` ones are declared, any other once something set it.
+            (convar, Some(value))
+                if convar.starts_with("sv_")
+                    || convar.starts_with("fake_")
+                    || self.server.convar(convar).is_some() =>
+            {
                 self.server.set(name, value);
+            }
+            // Alone, it prints the first line FXServer prints for it (`Console.Variables.h`).
+            (convar, None) if self.server.convar(convar).is_some() => {
+                let value = self.server.convar(convar).unwrap_or_default();
+                console::line(CMD, &format!(" \"{name}\" is \"{value}\""));
             }
             _ => console::line(CMD, &format!("No such command {name}.")),
         }
@@ -835,10 +848,10 @@ fn build_cfg() -> Vec<Vec<String>> {
         .unwrap_or_default()
 }
 
+/// Only `+set` itself, so spelled, goes before the rest (`OptionTokenizer.h`): `+setr`, `+sets` and
+/// `+SET` run in their place, as any other command.
 fn is_set(command: &[String]) -> bool {
-    command
-        .first()
-        .is_some_and(|name| matches!(name.as_str(), "set" | "sets" | "setr" | "seta"))
+    command.first().is_some_and(|name| name == "set")
 }
 
 /// FXServer's command line: each `+name` starts a command whose arguments run up to the next
@@ -931,6 +944,30 @@ mod tests {
                 &["ensure", "sys_k3jx7qmw2pza"]
             ])
         );
+    }
+
+    #[test]
+    fn only_plus_set_itself_runs_before_the_rest_of_the_command_line() {
+        let args = [
+            "+set",
+            "a",
+            "1",
+            "+setr",
+            "b",
+            "2",
+            "+SET",
+            "c",
+            "3",
+            "+exec",
+            "server.cfg",
+        ];
+
+        let early: Vec<bool> = command_line(args.into_iter().map(String::from))
+            .iter()
+            .map(|command| is_set(command))
+            .collect();
+
+        assert_eq!(early, [true, false, false, false]);
     }
 
     #[test]

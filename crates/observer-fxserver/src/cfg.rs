@@ -9,12 +9,14 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpListener, UdpSocket};
 use std::ops::RangeInclusive;
 use std::path::{Component, Path, PathBuf, Prefix};
 
+use observer_domain::convars::{self, CfgConvar, CfgSetCommand};
 use observer_domain::launch::{MAX_TEXT_CHARS, OneSync};
 use observer_domain::server_data::{
     CfgFacts, CfgFile, CfgFileState, CfgFinding, Endpoint, EndpointProtocol, FindingKind, FindingParams,
     Game, LicenceState, Severity,
 };
 
+use crate::console::mask;
 use crate::server_data::Resources;
 use crate::{bridge, command};
 
@@ -40,6 +42,9 @@ const MAX_MISSING_NAMES: usize = 5000;
 const MAX_HOSTNAME_CHARS: usize = 128;
 /// The longest word of the cfg a finding quotes.
 const MAX_WORD_CHARS: usize = 64;
+/// The most convar settings one scan lists, and the longest name it keeps.
+const MAX_CONVARS: usize = 1000;
+const MAX_CONVAR_NAME_CHARS: usize = 255;
 /// Entries of the build's `system_resources` read.
 const MAX_SYSTEM_RESOURCES: usize = 200;
 /// The most memory the resource commands of one scan take, names and files included: a few
@@ -84,6 +89,10 @@ pub struct Context {
     /// where they may add the endpoint health is probed on. The setup's checks leave them unread:
     /// the folder they check comes from a request.
     pub follow_outside: bool,
+    /// Lists what the chain sets when given: every `set` and its kin, and a convar's name alone
+    /// followed by a value when the name is in the catalog or among these, which the command line
+    /// creates before the cfg runs. FXServer reads any other such line as a command.
+    pub convars: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -104,6 +113,11 @@ pub struct Scan {
     pub resource_commands_complete: bool,
     /// The `mysql_connection_string` the chain sets last, which the backups dump.
     pub database: Option<ConnectionString>,
+    /// What the chain sets, in the order FXServer runs it, when the context asks for it.
+    pub convars: Vec<CfgConvar>,
+    /// Whether `convars` holds every setting: false when a file FXServer may run was left unread,
+    /// or past `MAX_CONVARS`.
+    pub convars_complete: bool,
 }
 
 /// The value of `mysql_connection_string`. It holds the database's password, so it prints as
@@ -217,6 +231,8 @@ pub fn scan(data: &Path, cfg_file: &str, text: &str, resources: &Resources, cont
         resource_command_bytes: 0,
         resource_commands_cut: false,
         database: None,
+        convars: Vec::new(),
+        convars_cut: false,
     };
     if let Ok(resolved) = fs::canonicalize(data.join(cfg_file)) {
         scanner.read.insert(resolved);
@@ -290,6 +306,9 @@ struct Scanner<'a> {
     /// A resource command was left out, past the memory the list may take.
     resource_commands_cut: bool,
     database: Option<ConnectionString>,
+    convars: Vec<CfgConvar>,
+    /// A setting was left out, past `MAX_CONVARS`.
+    convars_cut: bool,
 }
 
 impl Scanner<'_> {
@@ -347,6 +366,7 @@ impl Scanner<'_> {
         };
         if let Some((convar, value)) = set {
             self.convar(place, convar, value);
+            self.collect(place, &command, convar, value);
         }
     }
 
@@ -391,6 +411,39 @@ impl Scanner<'_> {
             };
             self.report_at(FindingKind::SetsObserverConvar, place, params);
         }
+    }
+
+    /// Lists a setting when the context asks for it. The value of a secret never leaves the scan.
+    fn collect(&mut self, place: &Place, command: &str, convar: &str, value: &str) {
+        let Some(known) = &self.context.convars else {
+            return;
+        };
+        let command = match command {
+            "set" => CfgSetCommand::Set,
+            "sets" => CfgSetCommand::Sets,
+            "setr" => CfgSetCommand::Setr,
+            "seta" => CfgSetCommand::Seta,
+            _ => CfgSetCommand::Bare,
+        };
+        let bare_convar = known.iter().any(|name| name.eq_ignore_ascii_case(convar))
+            || convars::catalog().find(convar).is_some();
+        if command == CfgSetCommand::Bare && !bare_convar {
+            return;
+        }
+        if convar.is_empty() || convar.chars().nth(MAX_CONVAR_NAME_CHARS).is_some() {
+            return;
+        }
+        if self.convars.len() >= MAX_CONVARS {
+            self.convars_cut = true;
+            return;
+        }
+        self.convars.push(CfgConvar {
+            name: quote(convar, MAX_CONVAR_NAME_CHARS),
+            value: mask::convar_value(convar, value).map(|value| quote(&value, MAX_TEXT_CHARS)),
+            command,
+            file: place.file.clone(),
+            line: place.line,
+        });
     }
 
     fn start(&mut self, place: &Place, resource: &str) {
@@ -670,6 +723,8 @@ impl Scanner<'_> {
             resource_commands: self.resource_commands,
             resource_commands_complete: !self.unchecked && !self.resource_commands_cut,
             database: self.database,
+            convars_complete: !self.unchecked && !self.convars_cut,
+            convars: self.convars,
         }
     }
 
@@ -956,6 +1011,7 @@ mod tests {
             probe_ports: false,
             system_resources: None,
             follow_outside: false,
+            convars: None,
         }
     }
 
@@ -1257,6 +1313,131 @@ restart spawnmanager
         assert_eq!(scan.facts.licence, LicenceState::Set);
         assert_eq!(scan.facts.onesync, Some(OneSync::On));
         assert_eq!(places(&scan, FindingKind::LicenceUnusable), Vec::<String>::new());
+    }
+
+    fn listing(launch: &[&str]) -> Context {
+        Context {
+            convars: Some(launch.iter().map(|name| (*name).to_owned()).collect()),
+            ..context()
+        }
+    }
+
+    fn settings(scan: &Scan) -> Vec<(String, Option<String>, CfgSetCommand, String, u32)> {
+        scan.convars
+            .iter()
+            .map(|set| {
+                (
+                    set.name.clone(),
+                    set.value.clone(),
+                    set.command,
+                    set.file.clone(),
+                    set.line,
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_convars_the_chain_sets_are_listed_in_the_order_fxserver_runs_them() {
+        let folder = Folder::new();
+        folder.file("configs/more.cfg", "setr game_locale fr\nsv_maxclients 64\n");
+
+        let scan = folder.scan_with(
+            &format!(
+                "{QUIET}set sv_hostname \"Observer lab\"; sets tags \"rp, fr\"\n\
+                 exec configs/more.cfg\n\
+                 seta observer_lab 1\n\
+                 ensure chat\n\
+                 add_ace group.admin command allow\n\
+                 lab_convar 12\n\
+                 sv_pureLevel 1\n\
+                 set onesync legacy\n\
+                 set lonely\n"
+            ),
+            &listing(&["LAB_CONVAR"]),
+        );
+
+        let at = |name: &str, value: &str, command, file: &str, line| {
+            (
+                name.to_owned(),
+                Some(value.to_owned()),
+                command,
+                file.to_owned(),
+                line,
+            )
+        };
+        assert_eq!(
+            settings(&scan),
+            [
+                // The key `QUIET` sets by its name alone: a secret, listed without its value.
+                (
+                    "sv_licenseKey".to_owned(),
+                    None,
+                    CfgSetCommand::Bare,
+                    "server.cfg".to_owned(),
+                    3
+                ),
+                at("sv_hostname", "Observer lab", CfgSetCommand::Set, "server.cfg", 4),
+                at("tags", "rp, fr", CfgSetCommand::Sets, "server.cfg", 4),
+                at("game_locale", "fr", CfgSetCommand::Setr, "configs/more.cfg", 1),
+                at("sv_maxclients", "64", CfgSetCommand::Bare, "configs/more.cfg", 2),
+                at("observer_lab", "1", CfgSetCommand::Seta, "server.cfg", 6),
+                at("lab_convar", "12", CfgSetCommand::Bare, "server.cfg", 9),
+                at("sv_pureLevel", "1", CfgSetCommand::Bare, "server.cfg", 10),
+                at("onesync", "legacy", CfgSetCommand::Set, "server.cfg", 11),
+            ]
+        );
+        assert!(scan.convars_complete);
+    }
+
+    #[test]
+    fn the_value_of_a_secret_never_leaves_the_list() {
+        let folder = Folder::new();
+
+        let scan = folder.scan_with(
+            "set rcon_password hunter2\n\
+             set mysql_connection_string \"mysql://observer:pass@localhost/lab\"\n\
+             set my_api_key abc\n\
+             set lab_webhook \"https://discord.com/api/webhooks/1/s3cret\"\n\
+             set sv_projectName Lab\n",
+            &listing(&[]),
+        );
+
+        let values: Vec<_> = scan
+            .convars
+            .iter()
+            .map(|set| (set.name.as_str(), set.value.as_deref()))
+            .collect();
+        assert_eq!(
+            values,
+            [
+                ("rcon_password", None),
+                ("mysql_connection_string", None),
+                ("my_api_key", None),
+                ("lab_webhook", Some("https://discord.com/api/webhooks/[REDACTED]")),
+                ("sv_projectName", Some("Lab")),
+            ]
+        );
+        assert!(!format!("{:?}", scan.convars).contains("hunter2"));
+    }
+
+    #[test]
+    fn a_file_left_unread_or_too_many_settings_leave_the_list_incomplete() {
+        let folder = Folder::new();
+        // It exists, so FXServer runs it, but it is outside the data folder.
+        fs::write(folder.dir.path().join("outside.cfg"), "set b 2\n").unwrap();
+        let unread = folder.scan_with("exec ../outside.cfg\nset a 1\n", &listing(&[]));
+        let mut many = String::new();
+        for index in 0..=MAX_CONVARS {
+            writeln!(many, "set lab_{index} 1").unwrap();
+        }
+        let crowded = folder.scan_with(&many, &listing(&[]));
+        let quiet = folder.scan(&many);
+
+        assert!(!unread.convars_complete);
+        assert_eq!(crowded.convars.len(), MAX_CONVARS);
+        assert!(!crowded.convars_complete);
+        assert_eq!(quiet.convars, []);
     }
 
     #[test]

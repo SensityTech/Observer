@@ -4,6 +4,9 @@ import { ArrowRight, ChevronDown, FolderSearch, Plus, X } from 'lucide-react';
 import { useEffect, useId, useRef, useState, type Ref } from 'react';
 
 import { ApiError } from '../api/client';
+import { cfgConvarsQuery, cfgSetting, findConvar, suggestedValues } from '../api/convars';
+import type { CfgConvar } from '../api/generated/CfgConvar';
+import type { Convar } from '../api/generated/Convar';
 import type { LaunchField } from '../api/generated/LaunchField';
 import type { LaunchIssue } from '../api/generated/LaunchIssue';
 import type { LaunchSettings as Settings } from '../api/generated/LaunchSettings';
@@ -28,6 +31,7 @@ import { errorMessage } from '../i18n/errors';
 import { useI18n } from '../i18n/I18nProvider';
 import { cn } from '../lib/cn';
 import { anchorOf, type SettingId } from './catalog';
+import { CfgConflict, CfgOnly, ConvarFacts, ConvarNames, ConvarValues, useConvars } from './Convars';
 import { keyboardLeft, SettingsForm, useSection } from './Form';
 import { CategoryHead, SettingRow, SettingsGroup, type RowIds } from './Row';
 
@@ -137,6 +141,8 @@ function LaunchForm({ saved }: { saved: StoredLaunch | null }) {
     const form = useRef<HTMLDivElement>(null);
     const showFirstIssue = useRef(false);
     const argumentsId = useId();
+    const namesId = useId();
+    const { catalog, cfg } = useConvars();
     // A search for the extra arguments, or a problem with one, opens them.
     const sought = useLocation({ select: (location) => location.hash === anchorOf('extraArguments') });
     const [advanced, setAdvanced] = useState(sought);
@@ -185,6 +191,8 @@ function LaunchForm({ saved }: { saved: StoredLaunch | null }) {
             saveLaunch({ settings, version: shown?.version ?? null }),
         onSuccess: (stored, { settings, before }) => {
             queryClient.setQueryData(launchQuery.queryKey, stored);
+            // The folder or the cfg may have changed, and with them what the cfg sets.
+            void queryClient.invalidateQueries({ queryKey: cfgConvarsQuery.queryKey });
             startFrom(stored);
             setIssues([]);
             setOutcome({ tone: 'success', message: savedMessage(t, before, settings) });
@@ -355,11 +363,14 @@ function LaunchForm({ saved }: { saved: StoredLaunch | null }) {
             <SettingsGroup title={words.groups.game}>
                 <SettingRow id="onesync" changed={is('onesync')}>
                     {(ids) => (
-                        <OneSyncChoice
-                            ids={ids}
-                            value={fields.onesync}
-                            onChange={(mode) => edit('onesync', mode)}
-                        />
+                        <div className="flex flex-col gap-3">
+                            <OneSyncChoice
+                                ids={ids}
+                                value={fields.onesync}
+                                onChange={(mode) => edit('onesync', mode)}
+                            />
+                            <CfgConflict set={cfgSetting(cfg, 'onesync')} value={fields.onesync} />
+                        </div>
                     )}
                 </SettingRow>
                 {switchRow('autoStart')}
@@ -425,11 +436,19 @@ function LaunchForm({ saved }: { saved: StoredLaunch | null }) {
                     <SettingRow id="extraArguments" changed={is('extraArguments')}>
                         {(ids) => (
                             <fieldset aria-labelledby={ids.label} className="min-w-0 flex flex-col gap-3">
+                                {catalog !== null && (
+                                    <>
+                                        <p className="text-small text-ink-3">
+                                            {words.convars.catalog(String(catalog.build))}
+                                        </p>
+                                        <ConvarNames id={namesId} catalog={catalog} />
+                                    </>
+                                )}
                                 {rows.length === 0 ? (
                                     <p className="text-ui text-ink-3">{t.server.noArguments}</p>
                                 ) : (
                                     <div
-                                        className="grid grid-cols-[auto_minmax(0,12rem)_minmax(0,1fr)_auto] gap-x-2 text-small font-medium text-ink-3 max-md:hidden"
+                                        className="grid grid-cols-[auto_minmax(0,16rem)_minmax(0,1fr)_auto] gap-x-2 text-small font-medium text-ink-3 max-md:hidden"
                                         aria-hidden="true"
                                     >
                                         <span className="w-9" />
@@ -443,6 +462,12 @@ function LaunchForm({ saved }: { saved: StoredLaunch | null }) {
                                         key={row.id}
                                         row={row}
                                         position={index + 1}
+                                        namesId={catalog === null ? undefined : namesId}
+                                        convar={findConvar(catalog, row.name)}
+                                        build={catalog?.build ?? null}
+                                        cfgSet={
+                                            row.name.trim() === '' ? undefined : cfgSetting(cfg, row.name)
+                                        }
                                         nameError={issue('argumentName', index)}
                                         valueError={issue('argumentValue', index)}
                                         nameRef={(input) => {
@@ -454,7 +479,12 @@ function LaunchForm({ saved }: { saved: StoredLaunch | null }) {
                                             };
                                         }}
                                         onChange={(change) => {
-                                            editRow(row.id, change);
+                                            // A convar picked from the catalog starts at its default.
+                                            const picked =
+                                                change.name === undefined || row.value !== ''
+                                                    ? undefined
+                                                    : findConvar(catalog, change.name)?.default;
+                                            editRow(row.id, picked ? { ...change, value: picked } : change);
                                             forget(
                                                 change.name === undefined ? 'argumentValue' : 'argumentName',
                                                 index,
@@ -490,6 +520,8 @@ function LaunchForm({ saved }: { saved: StoredLaunch | null }) {
                                 >
                                     {t.server.addArgument}
                                 </Button>
+                                {/* OneSync has its own row, which says what the cfg sets. */}
+                                <CfgOnly cfg={cfg} names={['onesync', ...rows.map(({ name }) => name)]} />
                             </fieldset>
                         )}
                     </SettingRow>
@@ -583,6 +615,10 @@ function SelectedBuild() {
 function ArgumentRow({
     row,
     position,
+    namesId,
+    convar,
+    build,
+    cfgSet,
     nameError,
     valueError,
     nameRef,
@@ -591,6 +627,13 @@ function ArgumentRow({
 }: {
     row: Row;
     position: number;
+    /** The catalog's names, suggested as the name is typed. */
+    namesId: string | undefined;
+    /** The catalog's convar of that name. */
+    convar: Convar | undefined;
+    build: number | null;
+    /** The cfg's own setting of that name, which applies. */
+    cfgSet: CfgConvar | undefined;
     nameError: string | undefined;
     valueError: string | undefined;
     nameRef: Ref<HTMLInputElement>;
@@ -599,6 +642,7 @@ function ArgumentRow({
 }) {
     const { t } = useI18n();
     const id = useId();
+    const suggested = convar !== undefined && suggestedValues(convar).length > 0;
 
     // The elements come in the order they read on screen, so the keyboard follows the eye: the
     // name, its message, the value, its message, then the button, beside the value on phones and
@@ -606,7 +650,7 @@ function ArgumentRow({
     return (
         <fieldset className="min-w-0">
             <legend className="sr-only">{t.server.argument(position)}</legend>
-            <div className="grid grid-flow-row-dense grid-cols-[minmax(0,1fr)_auto] items-center gap-2 md:grid-cols-[auto_minmax(0,12rem)_minmax(0,1fr)_auto]">
+            <div className="grid grid-flow-row-dense grid-cols-[minmax(0,1fr)_auto] items-center gap-2 md:grid-cols-[auto_minmax(0,16rem)_minmax(0,1fr)_auto]">
                 <span
                     className="hidden w-9 font-mono text-ui text-ink-3 md:col-start-1 md:row-start-1 md:block"
                     aria-hidden="true"
@@ -623,6 +667,7 @@ function ArgumentRow({
                     aria-invalid={nameError ? true : undefined}
                     aria-describedby={nameError ? `${id}-name-error` : undefined}
                     value={row.name}
+                    list={namesId}
                     spellCheck={false}
                     autoCapitalize="none"
                     autoComplete="off"
@@ -639,6 +684,7 @@ function ArgumentRow({
                     aria-invalid={valueError ? true : undefined}
                     aria-describedby={valueError ? `${id}-value-error` : undefined}
                     value={row.value}
+                    list={suggested ? `${id}-values` : undefined}
                     spellCheck={false}
                     autoCapitalize="none"
                     autoComplete="off"
@@ -647,6 +693,13 @@ function ArgumentRow({
                 {valueError && (
                     <div className="col-span-2 md:col-span-1 md:col-start-3 md:row-start-2">
                         <FieldError id={`${id}-value-error`}>{valueError}</FieldError>
+                    </div>
+                )}
+                {suggested && <ConvarValues id={`${id}-values`} convar={convar} />}
+                {row.name.trim() !== '' && (
+                    <div className="col-span-2 flex min-w-0 flex-col gap-2 md:col-start-2">
+                        <ConvarFacts convar={convar} build={build} />
+                        <CfgConflict set={cfgSet} value={row.value} />
                     </div>
                 )}
                 <button

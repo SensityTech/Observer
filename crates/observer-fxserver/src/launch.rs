@@ -102,8 +102,9 @@ fn describe(issues: &[LaunchIssue]) -> String {
 }
 
 /// Builds the launch: the flavour's program, then `+ensure <bridge>`, `+exec <cfg>`, the extra
-/// arguments and Observer's convars last, so that they win over the cfg. `bridge` is the name
-/// drawn for this start.
+/// arguments and Observer's convars. FXServer applies every `+set` before it runs the cfg, wherever
+/// it stands (`OptionTokenizer.h`, `ServerInstance.cpp`): a convar the cfg sets too keeps the cfg's
+/// value, Observer's own included. `bridge` is the name drawn for this start.
 pub fn prepare(launch: &ServerLaunch, flavour: Flavour, bridge: &str) -> Result<Prepared, LaunchError> {
     let platform = match flavour {
         Flavour::Windows => Platform::Windows,
@@ -176,6 +177,7 @@ pub fn prepare(launch: &ServerLaunch, flavour: Flavour, bridge: &str) -> Result<
         probe_ports: false,
         system_resources: Some(layout.system_resources()),
         follow_outside: true,
+        convars: None,
     };
     let resources = server_data::walk(&data);
     let scan = cfg::scan(&data, &settings.cfg_file, &text, &resources, &context);

@@ -384,3 +384,21 @@ async fn killing_the_tree_ends_a_child_that_still_holds_the_pipes() {
     fake.kill().await;
     assert!(timeout(WAIT, drain(&mut fake.spawned.stdout)).await.is_ok());
 }
+
+/// Measured on FXServer 38220: every `+set` runs before the cfg, which keeps its own value for a
+/// convar it sets too, its name alone followed by the value included.
+#[tokio::test]
+async fn the_cfg_wins_over_the_command_line_set_and_a_convar_typed_alone_prints_its_value() {
+    let mut fake = Fake::start(
+        None,
+        &["+set", "sv_hostname", "from_cli", "+set", "lab_cli_only", "cli"],
+    );
+
+    fake.send("sv_hostname").await;
+    fake.stdout_until(" \"sv_hostname\" is \"Observer test\"").await;
+    fake.send("LAB_CLI_ONLY").await;
+    fake.stdout_until(" \"LAB_CLI_ONLY\" is \"cli\"").await;
+    fake.send("lab_never_set").await;
+    fake.stdout_until("No such command lab_never_set.").await;
+    fake.kill().await;
+}

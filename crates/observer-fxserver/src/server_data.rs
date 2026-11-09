@@ -8,7 +8,8 @@ use std::fs;
 use std::io;
 use std::path::{Component, Path, PathBuf};
 
-use observer_domain::launch::{self, Platform};
+use observer_domain::convars::CfgConvars;
+use observer_domain::launch::{self, LaunchSettings, Platform};
 use observer_domain::server_data::{CfgFileProblem, CfgReport, FolderProblem, FolderReport, ResourceSummary};
 
 use crate::cfg::{self, Context, ReadError};
@@ -174,12 +175,7 @@ pub fn check_cfg(data_path: &str, cfg_file: &str, observer: &Path, context: &Con
     let text = match cfg::read(&data.join(cfg_file)) {
         Ok(text) => text,
         Err(error) => {
-            report.problem = Some(match error {
-                ReadError::Io(error) if error.kind() == io::ErrorKind::NotFound => CfgFileProblem::Missing,
-                ReadError::Io(_) => CfgFileProblem::Unreadable,
-                ReadError::NotAFile => CfgFileProblem::NotAFile,
-                ReadError::TooLarge => CfgFileProblem::TooLarge,
-            });
+            report.problem = Some(read_problem(&error));
             return report;
         }
     };
@@ -188,6 +184,59 @@ pub fn check_cfg(data_path: &str, cfg_file: &str, observer: &Path, context: &Con
     report.facts = Some(scan.facts);
     report.findings = scan.findings;
     report
+}
+
+/// What the launch's cfg and the files it runs set, for the launch settings. Only files inside the
+/// data folder are read, as the setup reads them; a setting in another one is not listed.
+pub fn cfg_convars(settings: &LaunchSettings) -> CfgConvars {
+    let platform = Platform::host();
+    let mut convars = CfgConvars {
+        cfg_file: settings.cfg_file.clone(),
+        problem: None,
+        convars: Vec::new(),
+        complete: false,
+    };
+    let refused = launch::folder_problem(&settings.data_path, platform).is_some()
+        || launch::cfg_problem(&settings.cfg_file, platform).is_some();
+    if refused {
+        convars.problem = Some(CfgFileProblem::InvalidPath);
+        return convars;
+    }
+    let data = Path::new(&settings.data_path);
+    let text = match cfg::read(&data.join(&settings.cfg_file)) {
+        Ok(text) => text,
+        Err(error) => {
+            convars.problem = Some(read_problem(&error));
+            return convars;
+        }
+    };
+    let context = Context {
+        panel: None,
+        onesync: settings.onesync,
+        probe_ports: false,
+        system_resources: None,
+        follow_outside: false,
+        convars: Some(
+            settings
+                .extra_arguments
+                .iter()
+                .map(|argument| argument.name.clone())
+                .collect(),
+        ),
+    };
+    let scan = cfg::scan(data, &settings.cfg_file, &text, &Resources::default(), &context);
+    convars.convars = scan.convars;
+    convars.complete = scan.convars_complete;
+    convars
+}
+
+fn read_problem(error: &ReadError) -> CfgFileProblem {
+    match error {
+        ReadError::Io(error) if error.kind() == io::ErrorKind::NotFound => CfgFileProblem::Missing,
+        ReadError::Io(_) => CfgFileProblem::Unreadable,
+        ReadError::NotAFile => CfgFileProblem::NotAFile,
+        ReadError::TooLarge => CfgFileProblem::TooLarge,
+    }
 }
 
 /// The first problem of a folder whose path the rules accept, in the order they are checked, or
@@ -513,6 +562,7 @@ mod tests {
             probe_ports: false,
             system_resources: None,
             follow_outside: false,
+            convars: None,
         }
     }
 
@@ -735,5 +785,60 @@ mod tests {
                 observer_domain::server_data::FindingKind::LicenceMissing,
             ]
         );
+    }
+
+    #[test]
+    fn the_convars_of_the_launch_cfg_are_read_inside_the_data_folder_with_the_launch_names() {
+        let dir = tempfile::tempdir().unwrap();
+        let data = dir.path().join("data");
+        fs::create_dir_all(&data).unwrap();
+        fs::write(
+            data.join("server.cfg"),
+            "set sv_hostname Lab
+lab_convar 2
+other_word 3
+exec ../shared.cfg
+",
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("shared.cfg"),
+            "set sv_maxclients 64
+",
+        )
+        .unwrap();
+        let settings = LaunchSettings {
+            data_path: data.to_str().unwrap().to_owned(),
+            cfg_file: "server.cfg".to_owned(),
+            onesync: launch::OneSync::On,
+            auto_start: false,
+            txadmin_events: false,
+            extra_arguments: vec![launch::ExtraArgument {
+                name: "lab_convar".to_owned(),
+                value: "1".to_owned(),
+            }],
+            hang_detection: true,
+            hang_timeout_seconds: launch::DEFAULT_HANG_TIMEOUT_SECONDS,
+        };
+
+        let read = cfg_convars(&settings);
+        let missing = cfg_convars(&LaunchSettings {
+            cfg_file: "missing.cfg".to_owned(),
+            ..settings.clone()
+        });
+
+        let names: Vec<_> = read
+            .convars
+            .iter()
+            .map(|set| (set.name.as_str(), set.line))
+            .collect();
+        assert_eq!(names, [("sv_hostname", 1), ("lab_convar", 2)]);
+        assert_eq!(read.problem, None);
+        assert!(
+            !read.complete,
+            "shared.cfg, outside the data folder, was not read"
+        );
+        assert_eq!(missing.problem, Some(CfgFileProblem::Missing));
+        assert_eq!(missing.convars, []);
     }
 }

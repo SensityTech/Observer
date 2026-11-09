@@ -1,0 +1,2735 @@
+{
+  "repository": "https://github.com/citizenfx/fivem",
+  "commit": "5c3065c261fb3ba82032fee6803f247198fec221",
+  "build": 38435,
+  "convars": [
+    {
+      "name": "buildNumber",
+      "kind": "int",
+      "cppType": "int",
+      "default": null,
+      "defaultExpression": "versionBuildNo",
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [
+        "internal"
+      ],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/src/InfoHttpHandler.cpp",
+          "line": 161
+        }
+      ]
+    },
+    {
+      "name": "citizen_dir",
+      "kind": "string",
+      "cppType": "std::string",
+      "default": null,
+      "defaultExpression": "ToNarrow(MakeRelativeCitPath(L\"citizen\"))",
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/src/ServerResources.cpp",
+          "line": 339
+        }
+      ]
+    },
+    {
+      "name": "con_disableNonTTYReads",
+      "kind": "bool",
+      "cppType": "bool",
+      "default": "false",
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/src/TerminalInput.cpp",
+          "line": 94
+        }
+      ]
+    },
+    {
+      "name": "developer",
+      "kind": "int",
+      "cppType": "int",
+      "default": "0",
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [
+        "archive",
+        "userPref"
+      ],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/client/citicore/console/Console.Base.cpp",
+          "line": 393
+        }
+      ]
+    },
+    {
+      "name": "gamename",
+      "kind": "enum",
+      "cppType": "GameName",
+      "default": "gta5",
+      "defaultExpression": null,
+      "values": [
+        {
+          "value": "gta4",
+          "aliases": []
+        },
+        {
+          "value": "gta5",
+          "aliases": []
+        },
+        {
+          "value": "rdr3",
+          "aliases": []
+        }
+      ],
+      "open": false,
+      "range": null,
+      "flags": [
+        "serverInfo"
+      ],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/include/state/StateGuard.h",
+          "line": 14
+        },
+        {
+          "file": "code/components/citizen-server-impl/src/GameServer.cpp",
+          "line": 88
+        }
+      ]
+    },
+    {
+      "name": "gametype",
+      "kind": null,
+      "cppType": null,
+      "default": null,
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": null,
+      "platform": null,
+      "declared": false,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/include/outofbandhandlers/GetInfoOutOfBand.h",
+          "line": 43
+        },
+        {
+          "file": "code/components/citizen-server-impl/src/InfoHttpHandler.cpp",
+          "line": 556
+        }
+      ]
+    },
+    {
+      "name": "mapname",
+      "kind": null,
+      "cppType": null,
+      "default": null,
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": null,
+      "platform": null,
+      "declared": false,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/include/outofbandhandlers/GetInfoOutOfBand.h",
+          "line": 43
+        },
+        {
+          "file": "code/components/citizen-server-impl/src/InfoHttpHandler.cpp",
+          "line": 557
+        }
+      ]
+    },
+    {
+      "name": "monitorMode",
+      "kind": null,
+      "cppType": null,
+      "default": null,
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": null,
+      "platform": null,
+      "declared": false,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/src/ResourceHttpHandler.cpp",
+          "line": 266
+        },
+        {
+          "file": "code/components/citizen-server-impl/src/ServerResources.cpp",
+          "line": 1030
+        }
+      ]
+    },
+    {
+      "name": "mono_enableMemoryUsageTracking",
+      "kind": "bool",
+      "cppType": "bool",
+      "default": "true",
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-scripting-mono/src/MonoComponentHostShared.cpp",
+          "line": 74
+        }
+      ]
+    },
+    {
+      "name": "moo",
+      "kind": "int",
+      "cppType": "int",
+      "default": "0",
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [
+        "userPref"
+      ],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/pool-sizes-state/src/PoolSizesState.cpp",
+          "line": 124
+        }
+      ]
+    },
+    {
+      "name": "mumble_adminPass",
+      "kind": "string",
+      "cppType": "std::string",
+      "default": "",
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/voip-server-mumble/src/conf.cpp",
+          "line": 255
+        }
+      ]
+    },
+    {
+      "name": "mumble_allowExternalConnections",
+      "kind": "bool",
+      "cppType": "bool",
+      "default": "false",
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/voip-server-mumble/src/server.cpp",
+          "line": 372
+        }
+      ]
+    },
+    {
+      "name": "mumble_disableServer",
+      "kind": "bool",
+      "cppType": "bool",
+      "default": "false",
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/voip-server-mumble/src/server.cpp",
+          "line": 370
+        }
+      ]
+    },
+    {
+      "name": "mumble_logLevel",
+      "kind": "int",
+      "cppType": "int",
+      "default": "0",
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/voip-server-mumble/src/log.cpp",
+          "line": 191
+        }
+      ]
+    },
+    {
+      "name": "mumble_maxClientsPerIP",
+      "kind": "int",
+      "cppType": "int",
+      "default": "32",
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/voip-server-mumble/src/server.cpp",
+          "line": 371
+        }
+      ]
+    },
+    {
+      "name": "net_tcpConnLimit",
+      "kind": "int",
+      "cppType": "int",
+      "default": null,
+      "defaultExpression": "m_tcpLimit",
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-net/src/TcpListenManager.cpp",
+          "line": 166
+        }
+      ]
+    },
+    {
+      "name": "netlib",
+      "kind": "string",
+      "cppType": "std::string",
+      "default": "enet",
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/src/GameServer.cpp",
+          "line": 1216
+        }
+      ]
+    },
+    {
+      "name": "netPort",
+      "kind": "int",
+      "cppType": "int",
+      "default": null,
+      "defaultExpression": "m_primaryPort",
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-net/src/TcpListenManager.cpp",
+          "line": 164
+        }
+      ]
+    },
+    {
+      "name": "onesync",
+      "kind": "enum",
+      "cppType": "fx::OneSyncState",
+      "default": "on",
+      "defaultExpression": null,
+      "values": [
+        {
+          "value": "on",
+          "aliases": [
+            "true"
+          ]
+        },
+        {
+          "value": "legacy",
+          "aliases": []
+        },
+        {
+          "value": "off",
+          "aliases": [
+            "false"
+          ]
+        }
+      ],
+      "open": false,
+      "range": null,
+      "flags": [
+        "internal"
+      ],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/src/state/ServerGameState.cpp",
+          "line": 7991
+        }
+      ]
+    },
+    {
+      "name": "onesync_automaticResend",
+      "kind": "bool",
+      "cppType": "bool",
+      "default": "false",
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/src/state/ServerGameState.cpp",
+          "line": 7993
+        }
+      ]
+    },
+    {
+      "name": "onesync_distanceCulling",
+      "kind": "bool",
+      "cppType": "bool",
+      "default": "true",
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/src/state/ServerGameState.cpp",
+          "line": 8044
+        }
+      ]
+    },
+    {
+      "name": "onesync_distanceCullVehicles",
+      "kind": "bool",
+      "cppType": "bool",
+      "default": "false",
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/src/state/ServerGameState.cpp",
+          "line": 8045
+        }
+      ]
+    },
+    {
+      "name": "onesync_enableBeyond",
+      "kind": "bool",
+      "cppType": "bool",
+      "default": "true",
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [
+        "internal"
+      ],
+      "platform": null,
+      "declared": true,
+      "description": "or maybe, beyond?",
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/src/state/ServerGameState.cpp",
+          "line": 7999
+        }
+      ]
+    },
+    {
+      "name": "onesync_enabled",
+      "kind": "bool",
+      "cppType": "bool",
+      "default": "false",
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [
+        "serverInfo",
+        "internal"
+      ],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/src/state/ServerGameState.cpp",
+          "line": 8043
+        }
+      ]
+    },
+    {
+      "name": "onesync_enableInfinity",
+      "kind": "bool",
+      "cppType": "bool",
+      "default": "true",
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [
+        "internal"
+      ],
+      "platform": null,
+      "declared": true,
+      "description": ".. to infinity?",
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/src/state/ServerGameState.cpp",
+          "line": 7996
+        }
+      ]
+    },
+    {
+      "name": "onesync_forceMigration",
+      "kind": "bool",
+      "cppType": "bool",
+      "default": "true",
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/src/state/ServerGameState.cpp",
+          "line": 8046
+        }
+      ]
+    },
+    {
+      "name": "onesync_logFile",
+      "kind": "string",
+      "cppType": "std::string",
+      "default": "",
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/src/state/ServerGameState.cpp",
+          "line": 8048
+        }
+      ]
+    },
+    {
+      "name": "onesync_population",
+      "kind": "bool",
+      "cppType": "bool",
+      "default": "true",
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [
+        "readOnly"
+      ],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/src/state/ServerGameState.cpp",
+          "line": 7992
+        }
+      ]
+    },
+    {
+      "name": "onesync_radiusFrequency",
+      "kind": "bool",
+      "cppType": "bool",
+      "default": "true",
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/src/state/ServerGameState.cpp",
+          "line": 8047
+        }
+      ]
+    },
+    {
+      "name": "onesync_workaround763185",
+      "kind": "bool",
+      "cppType": "bool",
+      "default": "false",
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/src/state/ServerGameState.cpp",
+          "line": 8049
+        }
+      ]
+    },
+    {
+      "name": "rateLimiter_arrayUpdate_burst",
+      "kind": "float",
+      "cppType": "float",
+      "default": "125.000000",
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/src/packethandlers/ArrayUpdatePacketHandler.cpp",
+          "line": 17
+        }
+      ]
+    },
+    {
+      "name": "rateLimiter_arrayUpdate_rate",
+      "kind": "float",
+      "cppType": "float",
+      "default": "75.000000",
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/src/packethandlers/ArrayUpdatePacketHandler.cpp",
+          "line": 17
+        }
+      ]
+    },
+    {
+      "name": "rateLimiter_getinfo_burst",
+      "kind": "float",
+      "cppType": "float",
+      "default": "10.000000",
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/include/outofbandhandlers/GetInfoOutOfBand.h",
+          "line": 27
+        }
+      ]
+    },
+    {
+      "name": "rateLimiter_getinfo_rate",
+      "kind": "float",
+      "cppType": "float",
+      "default": "2.000000",
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/include/outofbandhandlers/GetInfoOutOfBand.h",
+          "line": 27
+        }
+      ]
+    },
+    {
+      "name": "rateLimiter_getstatus_burst",
+      "kind": "float",
+      "cppType": "float",
+      "default": "5.000000",
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/include/outofbandhandlers/GetStatusOutOfBand.h",
+          "line": 31
+        }
+      ]
+    },
+    {
+      "name": "rateLimiter_getstatus_rate",
+      "kind": "float",
+      "cppType": "float",
+      "default": "1.000000",
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/include/outofbandhandlers/GetStatusOutOfBand.h",
+          "line": 31
+        }
+      ]
+    },
+    {
+      "name": "rateLimiter_http_info_burst",
+      "kind": "float",
+      "cppType": "float",
+      "default": "10.000000",
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/src/InfoHttpHandler.cpp",
+          "line": 307
+        }
+      ]
+    },
+    {
+      "name": "rateLimiter_http_info_rate",
+      "kind": "float",
+      "cppType": "float",
+      "default": "4.000000",
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/src/InfoHttpHandler.cpp",
+          "line": 307
+        }
+      ]
+    },
+    {
+      "name": "rateLimiter_http_perf_burst",
+      "kind": "float",
+      "cppType": "float",
+      "default": "5.000000",
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/src/PerfHttpHandler.cpp",
+          "line": 85
+        }
+      ]
+    },
+    {
+      "name": "rateLimiter_http_perf_rate",
+      "kind": "float",
+      "cppType": "float",
+      "default": "2.000000",
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/src/PerfHttpHandler.cpp",
+          "line": 85
+        }
+      ]
+    },
+    {
+      "name": "rateLimiter_http_players_burst",
+      "kind": "float",
+      "cppType": "float",
+      "default": "10.000000",
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/src/InfoHttpHandler.cpp",
+          "line": 362
+        }
+      ]
+    },
+    {
+      "name": "rateLimiter_http_players_rate",
+      "kind": "float",
+      "cppType": "float",
+      "default": "4.000000",
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/src/InfoHttpHandler.cpp",
+          "line": 362
+        }
+      ]
+    },
+    {
+      "name": "rateLimiter_latentEventAckAbuse_burst",
+      "kind": "float",
+      "cppType": "float",
+      "default": "200.000000",
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/src/packethandlers/ReassembledEventPacketHandler.cpp",
+          "line": 141
+        }
+      ]
+    },
+    {
+      "name": "rateLimiter_latentEventAckAbuse_rate",
+      "kind": "float",
+      "cppType": "float",
+      "default": "100.000000",
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/src/packethandlers/ReassembledEventPacketHandler.cpp",
+          "line": 141
+        }
+      ]
+    },
+    {
+      "name": "rateLimiter_latentEventAckAbuseFlood_burst",
+      "kind": "float",
+      "cppType": "float",
+      "default": "1000.000000",
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/src/packethandlers/ReassembledEventPacketHandler.cpp",
+          "line": 143
+        }
+      ]
+    },
+    {
+      "name": "rateLimiter_latentEventAckAbuseFlood_rate",
+      "kind": "float",
+      "cppType": "float",
+      "default": "500.000000",
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/src/packethandlers/ReassembledEventPacketHandler.cpp",
+          "line": 143
+        }
+      ]
+    },
+    {
+      "name": "rateLimiter_netCommand_burst",
+      "kind": "float",
+      "cppType": "float",
+      "default": "14.000000",
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/src/packethandlers/ServerCommandPacketHandler.cpp",
+          "line": 66
+        }
+      ]
+    },
+    {
+      "name": "rateLimiter_netCommand_rate",
+      "kind": "float",
+      "cppType": "float",
+      "default": "7.000000",
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/src/packethandlers/ServerCommandPacketHandler.cpp",
+          "line": 66
+        }
+      ]
+    },
+    {
+      "name": "rateLimiter_netCommandFlood_burst",
+      "kind": "float",
+      "cppType": "float",
+      "default": "45.000000",
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/src/packethandlers/ServerCommandPacketHandler.cpp",
+          "line": 68
+        }
+      ]
+    },
+    {
+      "name": "rateLimiter_netCommandFlood_rate",
+      "kind": "float",
+      "cppType": "float",
+      "default": "25.000000",
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/src/packethandlers/ServerCommandPacketHandler.cpp",
+          "line": 68
+        }
+      ]
+    },
+    {
+      "name": "rateLimiter_netEvent_burst",
+      "kind": "float",
+      "cppType": "float",
+      "default": "200.000000",
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/src/ServerResources.cpp",
+          "line": 301
+        },
+        {
+          "file": "code/components/citizen-server-impl/src/packethandlers/ServerEventPacketHandler.cpp",
+          "line": 23
+        }
+      ]
+    },
+    {
+      "name": "rateLimiter_netEvent_rate",
+      "kind": "float",
+      "cppType": "float",
+      "default": "50.000000",
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/src/ServerResources.cpp",
+          "line": 301
+        },
+        {
+          "file": "code/components/citizen-server-impl/src/packethandlers/ServerEventPacketHandler.cpp",
+          "line": 23
+        }
+      ]
+    },
+    {
+      "name": "rateLimiter_netEventFlood_burst",
+      "kind": "float",
+      "cppType": "float",
+      "default": "300.000000",
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/src/ServerResources.cpp",
+          "line": 302
+        },
+        {
+          "file": "code/components/citizen-server-impl/src/packethandlers/ServerEventPacketHandler.cpp",
+          "line": 25
+        }
+      ]
+    },
+    {
+      "name": "rateLimiter_netEventFlood_rate",
+      "kind": "float",
+      "cppType": "float",
+      "default": "75.000000",
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/src/ServerResources.cpp",
+          "line": 302
+        },
+        {
+          "file": "code/components/citizen-server-impl/src/packethandlers/ServerEventPacketHandler.cpp",
+          "line": 25
+        }
+      ]
+    },
+    {
+      "name": "rateLimiter_netGameEvent_burst",
+      "kind": "float",
+      "cppType": "float",
+      "default": "300.000000",
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/src/packethandlers/NetGameEventPacketHandler.cpp",
+          "line": 57
+        }
+      ]
+    },
+    {
+      "name": "rateLimiter_netGameEvent_rate",
+      "kind": "float",
+      "cppType": "float",
+      "default": "200.000000",
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/src/packethandlers/NetGameEventPacketHandler.cpp",
+          "line": 57
+        }
+      ]
+    },
+    {
+      "name": "rateLimiter_rcon_burst",
+      "kind": "float",
+      "cppType": "float",
+      "default": "5.000000",
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/include/outofbandhandlers/RconOutOfBand.h",
+          "line": 22
+        }
+      ]
+    },
+    {
+      "name": "rateLimiter_rcon_rate",
+      "kind": "float",
+      "cppType": "float",
+      "default": "0.200000",
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/include/outofbandhandlers/RconOutOfBand.h",
+          "line": 22
+        }
+      ]
+    },
+    {
+      "name": "rcon_password",
+      "kind": "string",
+      "cppType": "std::string",
+      "default": "",
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [
+        "readOnly"
+      ],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/src/GameServer.cpp",
+          "line": 116
+        }
+      ]
+    },
+    {
+      "name": "resmon",
+      "kind": "bool",
+      "cppType": "bool",
+      "default": "false",
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [
+        "archive",
+        "userPref"
+      ],
+      "platform": "windows",
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-devtools/src/ResourceTimeWarnings.cpp",
+          "line": 427
+        }
+      ]
+    },
+    {
+      "name": "resources_useSystemChat",
+      "kind": "bool",
+      "cppType": "bool",
+      "default": "true",
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [],
+      "platform": null,
+      "declared": true,
+      "description": "TEMPORARY convar for chat build swaparound",
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/src/ServerResourceList.cpp",
+          "line": 39
+        }
+      ]
+    },
+    {
+      "name": "se_debug",
+      "kind": "bool",
+      "cppType": "bool",
+      "default": "false",
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/client/citicore/se/Security.cpp",
+          "line": 310
+        }
+      ]
+    },
+    {
+      "name": "sv_authMaxVariance",
+      "kind": "int",
+      "cppType": "int",
+      "default": "5",
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": {
+        "min": 1,
+        "max": 5
+      },
+      "flags": [],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/src/InitConnectMethod.cpp",
+          "line": 396
+        }
+      ]
+    },
+    {
+      "name": "sv_authMinTrust",
+      "kind": "int",
+      "cppType": "int",
+      "default": "1",
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": {
+        "min": 1,
+        "max": 5
+      },
+      "flags": [],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/src/InitConnectMethod.cpp",
+          "line": 393
+        }
+      ]
+    },
+    {
+      "name": "sv_debugLatentEventAcks",
+      "kind": "bool",
+      "cppType": "bool",
+      "default": "false",
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/src/packethandlers/ReassembledEventPacketHandler.cpp",
+          "line": 117
+        }
+      ]
+    },
+    {
+      "name": "sv_defaultGameBuild",
+      "kind": "string",
+      "cppType": "std::string",
+      "default": null,
+      "defaultExpression": "xbr::GetMandatedDefaultGTA5BuildString()",
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [
+        "serverInfo",
+        "internal"
+      ],
+      "platform": null,
+      "declared": true,
+      "description": "sv_defaultGameBuild mandates the default game executable build that clients must use.\nThis allows the server to control which executable clients run without requiring all clients to update simultaneously.",
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/src/InitConnectMethod.cpp",
+          "line": 413
+        }
+      ]
+    },
+    {
+      "name": "sv_enableGetStatus",
+      "kind": "bool",
+      "cppType": "bool",
+      "default": "false",
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/include/outofbandhandlers/GetStatusOutOfBand.h",
+          "line": 19
+        }
+      ]
+    },
+    {
+      "name": "sv_enableNetEventReassembly",
+      "kind": "bool",
+      "cppType": "bool",
+      "default": "true",
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/src/ServerResources.cpp",
+          "line": 442
+        },
+        {
+          "file": "code/components/citizen-server-impl/src/packethandlers/ReassembledEventPacketHandler.cpp",
+          "line": 121
+        },
+        {
+          "file": "code/components/citizen-server-impl/src/packethandlers/ReassembledEventPacketHandler.cpp",
+          "line": 196
+        }
+      ]
+    },
+    {
+      "name": "sv_enableNetworkedPhoneExplosions",
+      "kind": "bool",
+      "cppType": "bool",
+      "default": "false",
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/src/state/ServerGameState.cpp",
+          "line": 7977
+        }
+      ]
+    },
+    {
+      "name": "sv_enableNetworkedScriptEntityStates",
+      "kind": "bool",
+      "cppType": "bool",
+      "default": "true",
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/src/state/ServerGameState.cpp",
+          "line": 7981
+        }
+      ]
+    },
+    {
+      "name": "sv_enableNetworkedSounds",
+      "kind": "bool",
+      "cppType": "bool",
+      "default": "true",
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/src/state/ServerGameState.cpp",
+          "line": 7975
+        }
+      ]
+    },
+    {
+      "name": "sv_endpointPrivacy",
+      "kind": "bool",
+      "cppType": "bool",
+      "default": "false",
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/src/InfoHttpHandler.cpp",
+          "line": 169
+        }
+      ]
+    },
+    {
+      "name": "sv_endpoints",
+      "kind": "string",
+      "cppType": "std::string",
+      "default": "",
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [],
+      "platform": null,
+      "declared": true,
+      "description": "list of space-separated endpoints that can but don't have to include a port\nfor example: sv_endpoints \"123.123.123.123 124.124.124.124\"",
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/src/InitConnectMethod.cpp",
+          "line": 405
+        }
+      ]
+    },
+    {
+      "name": "sv_enforceGameBuild",
+      "kind": "enum",
+      "cppType": "fx::GameBuild",
+      "default": null,
+      "defaultExpression": "xbr::GetMandatedDefaultGTA5BuildString()",
+      "values": [
+        {
+          "value": "1604",
+          "aliases": [
+            "mpchristmas2018"
+          ]
+        },
+        {
+          "value": "2060",
+          "aliases": [
+            "mpsum"
+          ]
+        },
+        {
+          "value": "2189",
+          "aliases": [
+            "mpheist4"
+          ]
+        },
+        {
+          "value": "2372",
+          "aliases": [
+            "mptuner"
+          ]
+        },
+        {
+          "value": "2545",
+          "aliases": [
+            "mpsecurity"
+          ]
+        },
+        {
+          "value": "2612",
+          "aliases": [
+            "mpg9ec"
+          ]
+        },
+        {
+          "value": "2699",
+          "aliases": [
+            "mpsum2"
+          ]
+        },
+        {
+          "value": "2802",
+          "aliases": [
+            "mpchristmas3"
+          ]
+        },
+        {
+          "value": "2944",
+          "aliases": [
+            "mp2023_01"
+          ]
+        },
+        {
+          "value": "3095",
+          "aliases": [
+            "mp2023_02"
+          ]
+        },
+        {
+          "value": "3258",
+          "aliases": [
+            "mp2024_01"
+          ]
+        },
+        {
+          "value": "3407",
+          "aliases": [
+            "mp2024_02"
+          ]
+        },
+        {
+          "value": "3570",
+          "aliases": [
+            "mp2025_01"
+          ]
+        },
+        {
+          "value": "3751",
+          "aliases": [
+            "mp2025_02"
+          ]
+        },
+        {
+          "value": "3788",
+          "aliases": [
+            "mp2026_patch_01"
+          ]
+        },
+        {
+          "value": "3889",
+          "aliases": [
+            "mp2026_01"
+          ]
+        }
+      ],
+      "open": true,
+      "range": null,
+      "flags": [
+        "serverInfo",
+        "readOnly"
+      ],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/src/InitConnectMethod.cpp",
+          "line": 409
+        }
+      ]
+    },
+    {
+      "name": "sv_enforceSteamAuth",
+      "kind": "bool",
+      "cppType": "bool",
+      "default": "false",
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [
+        "serverInfo"
+      ],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/src/InitConnectMethod.cpp",
+          "line": 391
+        }
+      ]
+    },
+    {
+      "name": "sv_enhancedHostSupport",
+      "kind": "bool",
+      "cppType": "bool",
+      "default": "false",
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [
+        "serverInfo"
+      ],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/src/InitConnectMethod.cpp",
+          "line": 401
+        }
+      ]
+    },
+    {
+      "name": "sv_entityLockdown",
+      "kind": "enum",
+      "cppType": "fx::EntityLockdownMode",
+      "default": null,
+      "defaultExpression": "m_entityLockdownMode",
+      "values": [
+        {
+          "value": "strict",
+          "aliases": []
+        },
+        {
+          "value": "no_dummy",
+          "aliases": []
+        },
+        {
+          "value": "relaxed",
+          "aliases": []
+        },
+        {
+          "value": "inactive",
+          "aliases": [
+            "false",
+            "off"
+          ]
+        }
+      ],
+      "open": false,
+      "range": null,
+      "flags": [],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/src/state/ServerGameState.cpp",
+          "line": 4709
+        }
+      ]
+    },
+    {
+      "name": "sv_exposePlayerIdentifiersInHttpEndpoint",
+      "kind": "bool",
+      "cppType": "bool",
+      "default": "false",
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/src/InfoHttpHandler.cpp",
+          "line": 170
+        }
+      ]
+    },
+    {
+      "name": "sv_filterRequestControl",
+      "kind": "int",
+      "cppType": "int",
+      "default": null,
+      "defaultExpression": "(int)RequestControlFilterMode::NoFilter",
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/src/state/ServerGameState.cpp",
+          "line": 7983
+        }
+      ]
+    },
+    {
+      "name": "sv_filterRequestControlSettleTimer",
+      "kind": "int",
+      "cppType": "int",
+      "default": "30000",
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/src/state/ServerGameState.cpp",
+          "line": 7984
+        }
+      ]
+    },
+    {
+      "name": "sv_forceIndirectListing",
+      "kind": "bool",
+      "cppType": "bool",
+      "default": "false",
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [],
+      "platform": null,
+      "declared": true,
+      "description": "sv_forceIndirectListing will break listings if the proxy host can not be reached",
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/src/GameServer.cpp",
+          "line": 127
+        }
+      ]
+    },
+    {
+      "name": "sv_hostname",
+      "kind": "string",
+      "cppType": "std::string",
+      "default": "default FXServer",
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [
+        "serverInfo"
+      ],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/src/GameServer.cpp",
+          "line": 119
+        }
+      ]
+    },
+    {
+      "name": "sv_httpFileServerProxyOnly",
+      "kind": "bool",
+      "cppType": "bool",
+      "default": "false",
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/src/FilesHttpHandler.cpp",
+          "line": 367
+        }
+      ]
+    },
+    {
+      "name": "sv_httpHandlerConnectionTimeoutSeconds",
+      "kind": "int",
+      "cppType": "uint16_t",
+      "default": "300",
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-net/src/HttpServerManager.cpp",
+          "line": 209
+        }
+      ]
+    },
+    {
+      "name": "sv_icon",
+      "kind": "string",
+      "cppType": "std::string",
+      "default": "",
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [
+        "internal"
+      ],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/src/InfoHttpHandler.cpp",
+          "line": 157
+        }
+      ]
+    },
+    {
+      "name": "sv_infoVersion",
+      "kind": "int",
+      "cppType": "int",
+      "default": "0",
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [
+        "serverInfo"
+      ],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/src/InfoHttpHandler.cpp",
+          "line": 155
+        }
+      ]
+    },
+    {
+      "name": "sv_kvsName",
+      "kind": "string",
+      "cppType": "std::string",
+      "default": "default",
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/src/ServerKVScriptFunctions.cpp",
+          "line": 22
+        }
+      ]
+    },
+    {
+      "name": "sv_lan",
+      "kind": "bool",
+      "cppType": "bool",
+      "default": "false",
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [
+        "serverInfo"
+      ],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/src/InitConnectMethod.cpp",
+          "line": 406
+        }
+      ]
+    },
+    {
+      "name": "sv_licenseKey",
+      "kind": null,
+      "cppType": null,
+      "default": null,
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": null,
+      "platform": null,
+      "declared": false,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-main/src/ServerInstance.cpp",
+          "line": 39
+        }
+      ]
+    },
+    {
+      "name": "sv_licenseKeyToken",
+      "kind": null,
+      "cppType": null,
+      "default": null,
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": null,
+      "platform": null,
+      "declared": false,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/src/GameServer.cpp",
+          "line": 971
+        },
+        {
+          "file": "code/components/citizen-server-impl/src/ServerNucleusMock.cpp",
+          "line": 71
+        }
+      ]
+    },
+    {
+      "name": "sv_listingHostOverride",
+      "kind": "string",
+      "cppType": "std::string",
+      "default": "",
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [],
+      "platform": null,
+      "declared": true,
+      "description": "sv_listingHostOverride specifies a host to use as reverse proxy endpoint instead of the default\nreverse TCP server",
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/src/GameServer.cpp",
+          "line": 131
+        }
+      ]
+    },
+    {
+      "name": "sv_listingIpOverride",
+      "kind": "string",
+      "cppType": "std::string",
+      "default": "",
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/src/GameServer.cpp",
+          "line": 123
+        }
+      ]
+    },
+    {
+      "name": "sv_master1",
+      "kind": "string",
+      "cppType": "std::string",
+      "default": null,
+      "defaultExpression": "kDefaultServerList",
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/src/GameServer.cpp",
+          "line": 120
+        }
+      ]
+    },
+    {
+      "name": "sv_master2",
+      "kind": "string",
+      "cppType": "std::string",
+      "default": "",
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/src/GameServer.cpp",
+          "line": 121
+        }
+      ]
+    },
+    {
+      "name": "sv_master3",
+      "kind": "string",
+      "cppType": "std::string",
+      "default": "",
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/src/GameServer.cpp",
+          "line": 122
+        }
+      ]
+    },
+    {
+      "name": "sv_maxClientEndpointRequestSize",
+      "kind": "int",
+      "cppType": "int",
+      "default": null,
+      "defaultExpression": "1024 * 100",
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/src/ClientHttpHandler.cpp",
+          "line": 143
+        }
+      ]
+    },
+    {
+      "name": "sv_maxClients",
+      "kind": "int",
+      "cppType": "int",
+      "default": "30",
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [
+        "serverInfo"
+      ],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/src/InfoHttpHandler.cpp",
+          "line": 156
+        }
+      ]
+    },
+    {
+      "name": "sv_netEventReassemblyMaxPendingEvents",
+      "kind": "int",
+      "cppType": "uint16_t",
+      "default": "100",
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/src/ServerResources.cpp",
+          "line": 443
+        }
+      ]
+    },
+    {
+      "name": "sv_netEventReassemblyUnlimitedPendingEvents",
+      "kind": "bool",
+      "cppType": "bool",
+      "default": "false",
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/src/ServerResources.cpp",
+          "line": 444
+        }
+      ]
+    },
+    {
+      "name": "sv_netHttp2",
+      "kind": "bool",
+      "cppType": "bool",
+      "default": "false",
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-net/src/HttpServerManager.cpp",
+          "line": 95
+        }
+      ]
+    },
+    {
+      "name": "sv_playersToken",
+      "kind": "string",
+      "cppType": "std::string",
+      "default": "",
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/src/GameServer.cpp",
+          "line": 117
+        }
+      ]
+    },
+    {
+      "name": "sv_poolSizesIncrease",
+      "kind": "string",
+      "cppType": "std::string",
+      "default": "",
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [
+        "serverInfo",
+        "internal"
+      ],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/src/InitConnectMethod.cpp",
+          "line": 418
+        }
+      ]
+    },
+    {
+      "name": "sv_profileDataToken",
+      "kind": "string",
+      "cppType": "std::string",
+      "default": "",
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/src/GameServer.cpp",
+          "line": 118
+        }
+      ]
+    },
+    {
+      "name": "sv_prometheusBasicAuthPassword",
+      "kind": "string",
+      "cppType": "std::string",
+      "default": "",
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/src/PerfHttpHandler.cpp",
+          "line": 62
+        }
+      ]
+    },
+    {
+      "name": "sv_prometheusBasicAuthUser",
+      "kind": "string",
+      "cppType": "std::string",
+      "default": "",
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/src/PerfHttpHandler.cpp",
+          "line": 61
+        }
+      ]
+    },
+    {
+      "name": "sv_protectServerEntities",
+      "kind": "bool",
+      "cppType": "bool",
+      "default": "false",
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [
+        "replicated"
+      ],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/src/state/ServerGameState.cpp",
+          "line": 7979
+        }
+      ]
+    },
+    {
+      "name": "sv_proxyIPRanges",
+      "kind": null,
+      "cppType": "NetworkList",
+      "default": null,
+      "defaultExpression": "NetworkList{ \"10.0.0.0/8 127.0.0.0/8 192.168.0.0/16 172.16.0.0/12\" }",
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-net/src/ProxyAddressList.cpp",
+          "line": 197
+        }
+      ]
+    },
+    {
+      "name": "sv_pureLevel",
+      "kind": "int",
+      "cppType": "int",
+      "default": "0",
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [
+        "serverInfo"
+      ],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/src/InitConnectMethod.cpp",
+          "line": 399
+        }
+      ]
+    },
+    {
+      "name": "sv_registerMulticastDns",
+      "kind": "bool",
+      "cppType": "bool",
+      "default": "true",
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-net/src/TcpListenManager.cpp",
+          "line": 168
+        }
+      ]
+    },
+    {
+      "name": "sv_replaceExeToSwitchBuilds",
+      "kind": "bool",
+      "cppType": "bool",
+      "default": "false",
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [
+        "serverInfo",
+        "internal"
+      ],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/src/InitConnectMethod.cpp",
+          "line": 415
+        }
+      ]
+    },
+    {
+      "name": "sv_requestParanoia",
+      "kind": "int",
+      "cppType": "int",
+      "default": "0",
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/src/InfoHttpHandler.cpp",
+          "line": 167
+        }
+      ]
+    },
+    {
+      "name": "sv_returnClientsListInGetStatus",
+      "kind": "bool",
+      "cppType": "bool",
+      "default": "true",
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/include/outofbandhandlers/GetStatusOutOfBand.h",
+          "line": 18
+        }
+      ]
+    },
+    {
+      "name": "sv_scriptHookAllowed",
+      "kind": "bool",
+      "cppType": "bool",
+      "default": "false",
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [
+        "serverInfo"
+      ],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/src/InitConnectMethod.cpp",
+          "line": 400
+        }
+      ]
+    },
+    {
+      "name": "sv_serverId",
+      "kind": null,
+      "cppType": null,
+      "default": null,
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": null,
+      "platform": null,
+      "declared": false,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/src/InitConnectMethod.cpp",
+          "line": 778
+        }
+      ]
+    },
+    {
+      "name": "sv_stateBagStrictMode",
+      "kind": "bool",
+      "cppType": "bool",
+      "default": null,
+      "defaultExpression": "m_stateBagStrictMode",
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/src/state/ServerGameState.cpp",
+          "line": 4710
+        }
+      ]
+    },
+    {
+      "name": "sv_tcpConnectionTimeoutSeconds",
+      "kind": "int",
+      "cppType": "uint16_t",
+      "default": "5",
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-net/src/TcpListenManager.cpp",
+          "line": 170
+        }
+      ]
+    },
+    {
+      "name": "sv_tebexSecret",
+      "kind": "string",
+      "cppType": "std::string",
+      "default": "",
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/src/ServerExtCommerce.cpp",
+          "line": 592
+        }
+      ]
+    },
+    {
+      "name": "sv_threadedClientHttp",
+      "kind": "bool",
+      "cppType": "bool",
+      "default": "true",
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/src/ClientHttpHandler.cpp",
+          "line": 142
+        }
+      ]
+    },
+    {
+      "name": "sv_useAccurateSends",
+      "kind": "bool",
+      "cppType": "bool",
+      "default": "true",
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/src/GameServer.cpp",
+          "line": 124
+        }
+      ]
+    },
+    {
+      "name": "svgui_disable",
+      "kind": "bool",
+      "cppType": "bool",
+      "default": "true",
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [],
+      "platform": "windows",
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-gui/src/ServerGui.cpp",
+          "line": 94
+        }
+      ]
+    },
+    {
+      "name": "txAdminServerMode",
+      "kind": null,
+      "cppType": null,
+      "default": null,
+      "defaultExpression": null,
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": null,
+      "platform": null,
+      "declared": false,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-main/src/ServerInstance.cpp",
+          "line": 236
+        },
+        {
+          "file": "code/components/citizen-server-impl/src/GameServer.cpp",
+          "line": 174
+        },
+        {
+          "file": "code/components/citizen-server-impl/src/GameServer.cpp",
+          "line": 180
+        },
+        {
+          "file": "code/components/citizen-server-gui/src/ServerGui.cpp",
+          "line": 197
+        }
+      ]
+    },
+    {
+      "name": "version",
+      "kind": "string",
+      "cppType": "std::string",
+      "default": null,
+      "defaultExpression": "\"FXServer-\" GIT_DESCRIPTION",
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [
+        "internal"
+      ],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/src/InfoHttpHandler.cpp",
+          "line": 158
+        }
+      ]
+    },
+    {
+      "name": "web_baseUrl",
+      "kind": "string",
+      "cppType": "std::string",
+      "default": null,
+      "defaultExpression": "host",
+      "values": [],
+      "open": false,
+      "range": null,
+      "flags": [],
+      "platform": null,
+      "declared": true,
+      "description": null,
+      "sources": [
+        {
+          "file": "code/components/citizen-server-impl/src/ServerNucleusMock.cpp",
+          "line": 147
+        }
+      ]
+    }
+  ]
+}
