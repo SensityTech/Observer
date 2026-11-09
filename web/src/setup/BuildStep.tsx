@@ -1,18 +1,18 @@
 import { useQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
-import { ArrowRight, Download, FolderInput, Package } from 'lucide-react';
-import { useEffect, useId, useRef, useState, type Ref } from 'react';
+import { ArrowRight, Download, FolderInput } from 'lucide-react';
+import { useEffect, useRef, useState, type ReactNode, type Ref } from 'react';
 
 import { catalogQuery } from '../api/artifacts';
 import type { CatalogEntry } from '../api/generated/CatalogEntry';
 import { useArtifacts } from '../artifacts/context';
 import { Button } from '../components/Button';
-import { Card } from '../components/Card';
 import { Notice } from '../components/Notice';
 import { useI18n } from '../i18n/I18nProvider';
 import { useLinkState } from '../live/context';
 import { ImportDialog, InstallDialog, JobCard, UseDialog, type Outcome } from '../pages/ArtifactsPage';
 import { StepActions } from './StepActions';
+import { StepPage } from './StepPage';
 
 type Open = { kind: 'install'; entry: CatalogEntry } | { kind: 'import' } | { kind: 'use'; build: number };
 
@@ -22,15 +22,16 @@ type Open = { kind: 'install'; entry: CatalogEntry } | { kind: 'import' } | { ki
  */
 export function BuildStep({
     titleRef,
+    banner,
     onBack,
     onContinue,
 }: {
     titleRef: Ref<HTMLHeadingElement>;
+    banner?: ReactNode;
     onBack: () => void;
     onContinue: () => void;
 }) {
     const { t } = useI18n();
-    const id = useId();
     const words = t.serverSetup.build;
     const link = useLinkState();
     const { status } = useArtifacts();
@@ -76,9 +77,26 @@ export function BuildStep({
 
     return (
         <>
-            <Card id={id} icon={Package} title={t.serverSetup.stepNames.build} titleRef={titleRef}>
-                <div className="flex flex-col gap-5">
-                    <p className="max-w-2xl text-body text-ink-2">{words.lead}</p>
+            <StepPage
+                step="build"
+                titleRef={titleRef}
+                title={t.serverSetup.headings.build}
+                lead={words.lead}
+                banner={banner}
+                actions={
+                    <StepActions onBack={onBack}>
+                        {selected === null && (
+                            <Button tone="ghost" onClick={onContinue}>
+                                {words.skip}
+                            </Button>
+                        )}
+                        <Button tone="ink" disabled={selected === null} onClick={onContinue}>
+                            {t.serverSetup.continue}
+                        </Button>
+                    </StepActions>
+                }
+            >
+                <div className="flex max-w-200 flex-col gap-5">
                     {outcome !== null && (
                         <Notice ref={notice} tabIndex={-1} tone={outcome.tone}>
                             {outcome.message}
@@ -154,32 +172,22 @@ export function BuildStep({
                             </Link>
                         </div>
                     )}
-                    <StepActions onBack={onBack}>
-                        {selected === null && (
-                            <Button tone="ghost" onClick={onContinue}>
-                                {words.skip}
-                            </Button>
-                        )}
-                        <Button tone="ink" disabled={selected === null} onClick={onContinue}>
-                            {t.serverSetup.continue}
-                        </Button>
-                    </StepActions>
+                    {job !== null && job.id !== earlierJob && (
+                        <JobCard
+                            job={job}
+                            startsNext={selected === job.build && status?.pending === null}
+                            onOutcome={setOutcome}
+                            onUse={(build) => setOpen({ kind: 'use', build })}
+                            onRetry={(build) => {
+                                const entry = catalog.data?.builds.find((each) => each.build === build);
+                                if (entry !== undefined) {
+                                    setOpen({ kind: 'install', entry });
+                                }
+                            }}
+                        />
+                    )}
                 </div>
-            </Card>
-            {job !== null && job.id !== earlierJob && (
-                <JobCard
-                    job={job}
-                    startsNext={selected === job.build && status?.pending === null}
-                    onOutcome={setOutcome}
-                    onUse={(build) => setOpen({ kind: 'use', build })}
-                    onRetry={(build) => {
-                        const entry = catalog.data?.builds.find((each) => each.build === build);
-                        if (entry !== undefined) {
-                            setOpen({ kind: 'install', entry });
-                        }
-                    }}
-                />
-            )}
+            </StepPage>
             {status !== null && open?.kind === 'install' && (
                 <InstallDialog entry={open.entry} status={status} onClose={close} onDone={done} />
             )}

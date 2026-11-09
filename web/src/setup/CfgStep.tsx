@@ -1,5 +1,5 @@
-import { CircleCheck, FileCog, Info, OctagonX, RefreshCw, TriangleAlert } from 'lucide-react';
-import { useId, type Ref } from 'react';
+import { CircleCheck, HardDrive, Info, OctagonX, RefreshCw, Search, TriangleAlert } from 'lucide-react';
+import { useState, type ReactNode, type Ref } from 'react';
 
 import type { CfgCheck } from '../api/generated/CfgCheck';
 import type { CfgFacts } from '../api/generated/CfgFacts';
@@ -9,15 +9,17 @@ import type { FolderReport } from '../api/generated/FolderReport';
 import type { LaunchSettings } from '../api/generated/LaunchSettings';
 import type { Severity } from '../api/generated/Severity';
 import { Button } from '../components/Button';
-import { Card } from '../components/Card';
 import { Chip } from '../components/Chip';
 import { Notice } from '../components/Notice';
 import { PathField } from '../components/PathField';
+import { Switch } from '../components/Switch';
 import { useI18n } from '../i18n/I18nProvider';
 import { cn } from '../lib/cn';
+import { CfgPreview, FileTree, foldersOf } from './CfgBrowser';
 import { Fact } from './Fact';
 import { cfgPasses, groupFindings, type Checked } from './state';
 import { StepActions } from './StepActions';
+import { StepPage } from './StepPage';
 
 const SEVERITY = {
     blocking: { tone: 'danger', icon: OctagonX },
@@ -31,6 +33,7 @@ const SEVERITY = {
  */
 export function CfgStep({
     titleRef,
+    banner,
     draft,
     folder,
     checked,
@@ -41,6 +44,7 @@ export function CfgStep({
     onContinue,
 }: {
     titleRef: Ref<HTMLHeadingElement>;
+    banner?: ReactNode;
     draft: LaunchSettings;
     /** The accepted folder's report, which lists the cfg files found in it. */
     folder: FolderReport | null;
@@ -52,7 +56,6 @@ export function CfgStep({
     onContinue: () => void;
 }) {
     const { t } = useI18n();
-    const id = useId();
     const words = t.serverSetup.cfg;
     const current =
         checked !== null &&
@@ -80,74 +83,45 @@ export function CfgStep({
             ? words.blocked
             : null;
 
+    const browser = words.browser;
+    const dataPath = draft.dataPath.trim();
+    const chosen = draft.cfgFile.trim();
+    const [previewed, setPreviewed] = useState(chosen);
+    const [focus, setFocus] = useState<number | null>(null);
+    const [onlyCfg, setOnlyCfg] = useState(true);
+    const [filter, setFilter] = useState('');
+    // The tree opens on the folders that hold the cfg files the folder check found.
+    const [expanded, setExpanded] = useState(() => foldersOf([...(folder?.cfgFiles ?? []), chosen]));
+    const toggle = (path: string) =>
+        setExpanded((open) => {
+            const next = new Set(open);
+            if (!next.delete(path)) {
+                next.add(path);
+            }
+            return next;
+        });
+    // A file the chosen cfg runs is only shown: FXServer starts from the first file of the chain.
+    const runByChosen = (path: string) =>
+        path !== chosen &&
+        (report?.files.some((file) => file.path === path && file.state === 'read') ?? false);
+    const open = (path: string) => {
+        setPreviewed(path);
+        setFocus(null);
+        if (!runByChosen(path)) {
+            onCfg(path);
+            check(path);
+        }
+    };
+    const runBy = previewed !== '' && runByChosen(previewed);
+
     return (
-        <Card id={id} icon={FileCog} title={t.serverSetup.stepNames.cfg} titleRef={titleRef}>
-            <div className="flex flex-col gap-5">
-                <form
-                    className="flex max-w-2xl flex-col gap-4"
-                    noValidate
-                    onSubmit={(event) => {
-                        event.preventDefault();
-                        check(draft.cfgFile);
-                    }}
-                >
-                    <p className="text-body text-ink-2">{words.lead}</p>
-                    {folder !== null && folder.cfgFiles.length > 0 && (
-                        <fieldset className="flex min-w-0 flex-col gap-0.5">
-                            <legend className="mb-1.5 text-ui font-medium text-ink">{words.found}</legend>
-                            {folder.cfgFiles.map((file) => (
-                                <label
-                                    key={file}
-                                    className="-mx-2 flex cursor-pointer items-center gap-2.5 rounded-sm px-2 py-1.5 hover:bg-hover max-md:min-h-11"
-                                >
-                                    <input
-                                        type="radio"
-                                        name="cfg"
-                                        value={file}
-                                        className="flex-none accent-[var(--btn-bg)]"
-                                        checked={draft.cfgFile.trim() === file}
-                                        onChange={() => {
-                                            onCfg(file);
-                                            check(file);
-                                        }}
-                                    />
-                                    <span className="min-w-0 font-mono text-ui text-ink [overflow-wrap:anywhere]">
-                                        {file}
-                                    </span>
-                                    {file === folder.detectedCfg && <Chip>{words.detected}</Chip>}
-                                </label>
-                            ))}
-                        </fieldset>
-                    )}
-                    <PathField
-                        label={words.label}
-                        hint={words.hint}
-                        value={draft.cfgFile}
-                        error={error}
-                        onChange={onCfg}
-                    />
-                </form>
-                {report !== null && (
-                    <div
-                        className={cn('flex flex-col gap-5', checking && 'opacity-50')}
-                        aria-busy={checking || undefined}
-                    >
-                        {report.folder !== null && (
-                            <Notice tone="danger">
-                                {words.folderRefused} {t.serverSetup.folder.problems[report.folder]}
-                            </Notice>
-                        )}
-                        {report.problem === null && report.folder === null && <Report report={report} />}
-                    </div>
-                )}
-                {report === null && checking && (
-                    <div className="flex flex-col gap-3" aria-busy="true">
-                        <span className="sr-only">{words.checking}</span>
-                        <span className="skeleton w-1/2" />
-                        <span className="skeleton w-2/3" />
-                        <span className="skeleton w-1/3" />
-                    </div>
-                )}
+        <StepPage
+            step="cfg"
+            titleRef={titleRef}
+            title={t.serverSetup.headings.cfg}
+            lead={words.lead}
+            banner={banner}
+            actions={
                 <StepActions onBack={onBack} note={note}>
                     <Button icon={RefreshCw} pending={checking} onClick={() => check(draft.cfgFile)}>
                         {words.checkAgain}
@@ -156,12 +130,151 @@ export function CfgStep({
                         {t.serverSetup.continue}
                     </Button>
                 </StepActions>
-            </div>
-        </Card>
+            }
+        >
+            <section aria-label={browser.label} className="card flex flex-col overflow-hidden">
+                <div className="flex flex-wrap items-center gap-2.5 border-b border-line px-3.5 py-3">
+                    <span className="flex min-w-0 items-center gap-1.5 font-mono text-small text-ink-3">
+                        <HardDrive size={14} strokeWidth={1.75} className="flex-none" aria-hidden="true" />
+                        <span className="truncate" title={dataPath}>
+                            {dataPath}
+                        </span>
+                    </span>
+                    <span className="flex-1" />
+                    <label className="flex h-8 w-56 items-center gap-2 rounded-sm border border-line-strong bg-bg-subtle px-2.5 max-md:w-full">
+                        <Search
+                            size={14}
+                            strokeWidth={1.75}
+                            className="flex-none text-ink-3"
+                            aria-hidden="true"
+                        />
+                        <span className="sr-only">{browser.filter}</span>
+                        <input
+                            type="search"
+                            placeholder={browser.filter}
+                            className="min-w-0 flex-1 bg-transparent text-ui text-ink outline-none placeholder:text-ink-3"
+                            value={filter}
+                            onChange={(event) => setFilter(event.target.value)}
+                        />
+                    </label>
+                    <label className="flex h-8 cursor-pointer items-center gap-2 text-ui text-ink-2">
+                        <Switch checked={onlyCfg} onChange={(event) => setOnlyCfg(event.target.checked)} />
+                        {browser.onlyCfg}
+                    </label>
+                </div>
+                <div className="flex min-h-130 flex-wrap items-stretch">
+                    <nav
+                        aria-label={browser.tree}
+                        className="max-h-160 min-w-0 flex-[1_1_220px] overflow-auto border-r border-line bg-bg-subtle p-2 max-md:max-h-80 max-md:border-r-0 max-md:border-b lg:max-w-75"
+                    >
+                        <FileTree
+                            dataPath={dataPath}
+                            chosen={chosen}
+                            previewed={previewed}
+                            expanded={expanded}
+                            onlyCfg={onlyCfg}
+                            filter={filter}
+                            onToggle={toggle}
+                            onOpen={open}
+                        />
+                    </nav>
+                    <div className="flex min-w-0 flex-[999_1_380px] flex-col">
+                        {previewed === '' ? (
+                            <p className="m-auto p-10 text-center text-body text-ink-3">{browser.pick}</p>
+                        ) : (
+                            <CfgPreview
+                                dataPath={dataPath}
+                                path={previewed}
+                                findings={report?.findings ?? []}
+                                focus={focus}
+                            />
+                        )}
+                    </div>
+                    <aside
+                        aria-label={browser.side}
+                        className={cn(
+                            'flex min-w-0 flex-[1_1_260px] flex-col gap-5 border-l border-line p-4 max-md:border-t max-md:border-l-0 lg:max-w-80',
+                            checking && 'opacity-50',
+                        )}
+                        aria-busy={checking || undefined}
+                    >
+                        {runBy && (
+                            <Notice tone="neutral" live={false}>
+                                <span className="flex flex-col items-start gap-2">
+                                    {browser.runBy(chosen)}
+                                    <Button size="sm" onClick={() => setPreviewed(chosen)}>
+                                        {browser.openMain(chosen)}
+                                    </Button>
+                                </span>
+                            </Notice>
+                        )}
+                        {report === null && checking && (
+                            <div className="flex flex-col gap-2.5" aria-busy="true">
+                                <span className="sr-only">{words.checking}</span>
+                                <span className="skeleton w-1/2" />
+                                <span className="skeleton w-2/3" />
+                                <span className="skeleton w-1/3" />
+                            </div>
+                        )}
+                        {report?.folder != null && (
+                            <Notice tone="danger">
+                                {words.folderRefused} {t.serverSetup.folder.problems[report.folder]}
+                            </Notice>
+                        )}
+                        {report !== null && report.folder === null && error !== undefined && (
+                            <Notice tone="danger">{error}</Notice>
+                        )}
+                        {report !== null && report.problem === null && report.folder === null && (
+                            <SidePanel
+                                report={report}
+                                onFile={(file) => {
+                                    setPreviewed(file);
+                                    setFocus(null);
+                                }}
+                                onFinding={(finding) => {
+                                    setPreviewed(finding.file);
+                                    setFocus(finding.line);
+                                }}
+                            />
+                        )}
+                    </aside>
+                </div>
+            </section>
+            <details className="group self-start">
+                <summary className="cursor-pointer list-none text-small font-medium text-ink-2 underline-offset-2 hover:underline [&::-webkit-details-marker]:hidden">
+                    {browser.typeInstead}
+                </summary>
+                <form
+                    className="mt-3 flex max-w-2xl flex-col gap-3"
+                    noValidate
+                    onSubmit={(event) => {
+                        event.preventDefault();
+                        open(draft.cfgFile.trim());
+                    }}
+                >
+                    <PathField
+                        label={words.label}
+                        hint={words.hint}
+                        value={draft.cfgFile}
+                        error={error}
+                        onChange={onCfg}
+                    />
+                </form>
+            </details>
+        </StepPage>
     );
 }
 
-function Report({ report }: { report: CfgReport }) {
+/** What the chosen cfg runs, sets and gets wrong, beside the tree; each file and finding opens in the preview. */
+function SidePanel({
+    report,
+    onFile,
+    onFinding,
+}: {
+    report: CfgReport;
+    onFile: (file: string) => void;
+    onFinding: (finding: CfgFinding) => void;
+}) {
     const { t } = useI18n();
     const words = t.serverSetup.cfg;
     // A file exec'd again each time is said once: run again.
@@ -172,53 +285,77 @@ function Report({ report }: { report: CfgReport }) {
     );
     return (
         <>
-            <div className="grid gap-5 lg:grid-cols-2">
-                {report.facts !== null && (
-                    <section className="flex min-w-0 flex-col gap-1.5">
-                        <h3 className="text-ui font-medium text-ink">{words.facts}</h3>
-                        <dl className="flex flex-col">
-                            <FactRows facts={report.facts} />
-                            <Fact label={words.onesync}>
-                                {report.facts.onesync === null
-                                    ? words.notSet
-                                    : t.server.onesyncModes[report.facts.onesync]}
-                            </Fact>
-                        </dl>
-                    </section>
-                )}
-                <section className="flex min-w-0 flex-col gap-1.5">
-                    <h3 className="text-ui font-medium text-ink">{words.files}</h3>
-                    <ul className="flex flex-col">
-                        {files.map((file) => (
-                            <li
-                                key={`${file.state}:${file.path}`}
-                                className="flex flex-wrap items-baseline justify-between gap-x-4 border-b border-line py-1.5 last:border-b-0"
-                            >
-                                <span className="min-w-0 font-mono text-small text-ink [overflow-wrap:anywhere]">
-                                    {file.path}
+            <section className="flex flex-col gap-2">
+                <h2 className="font-mono text-eyebrow tracking-[0.08em] text-ink-3 uppercase">
+                    {words.browser.chain}
+                </h2>
+                <ol className="flex flex-col gap-1">
+                    {files.map((file) => (
+                        <li key={`${file.state}:${file.path}`}>
+                            {file.state === 'read' ? (
+                                <button
+                                    type="button"
+                                    className="flex w-full items-center gap-2 rounded-xs py-0.5 text-left font-mono text-small text-ink-2 hover:text-ink"
+                                    onClick={() => onFile(file.path)}
+                                >
+                                    <CircleCheck
+                                        size={13}
+                                        strokeWidth={2}
+                                        className="flex-none text-success"
+                                        aria-hidden="true"
+                                    />
+                                    <span className="min-w-0 [overflow-wrap:anywhere]">{file.path}</span>
+                                </button>
+                            ) : (
+                                <span className="flex items-center gap-2 py-0.5 font-mono text-small text-ink-3">
+                                    <Info
+                                        size={13}
+                                        strokeWidth={2}
+                                        className="flex-none"
+                                        aria-hidden="true"
+                                    />
+                                    <span className="min-w-0 [overflow-wrap:anywhere]">
+                                        {file.path} · {words.fileStates[file.state]}
+                                    </span>
                                 </span>
-                                <span className="text-small text-ink-3">{words.fileStates[file.state]}</span>
-                            </li>
-                        ))}
-                    </ul>
+                            )}
+                        </li>
+                    ))}
+                </ol>
+            </section>
+            {report.facts !== null && (
+                <section className="flex flex-col gap-1">
+                    <h2 className="font-mono text-eyebrow tracking-[0.08em] text-ink-3 uppercase">
+                        {words.facts}
+                    </h2>
+                    <dl className="flex flex-col">
+                        <FactRows facts={report.facts} compact />
+                        <Fact compact label={words.onesync}>
+                            {report.facts.onesync === null
+                                ? words.notSet
+                                : t.server.onesyncModes[report.facts.onesync]}
+                        </Fact>
+                    </dl>
                 </section>
-            </div>
-            <Findings findings={report.findings} />
+            )}
+            <Findings findings={report.findings} onOpen={onFinding} />
         </>
     );
 }
 
 /** What the cfg sets, but its OneSync, which the start step's summary repeats. */
-export function FactRows({ facts }: { facts: CfgFacts }) {
+export function FactRows({ facts, compact = false }: { facts: CfgFacts; compact?: boolean }) {
     const { t, format } = useI18n();
     const words = t.serverSetup.cfg;
     return (
         <>
-            <Fact label={words.game}>
+            <Fact compact={compact} label={words.game}>
                 {facts.game === null ? words.defaultGame : words.games[facts.game]}
             </Fact>
-            <Fact label={words.hostname}>{facts.hostname ?? words.notSet}</Fact>
-            <Fact label={words.endpoints}>
+            <Fact compact={compact} label={words.hostname}>
+                {facts.hostname ?? words.notSet}
+            </Fact>
+            <Fact compact={compact} label={words.endpoints}>
                 {facts.endpoints.length === 0 ? (
                     words.none
                 ) : (
@@ -231,10 +368,12 @@ export function FactRows({ facts }: { facts: CfgFacts }) {
                     </span>
                 )}
             </Fact>
-            <Fact label={words.slots}>
+            <Fact compact={compact} label={words.slots}>
                 {facts.maxClients === null ? words.notSet : format.number(facts.maxClients)}
             </Fact>
-            <Fact label={words.licence}>{words.licences[facts.licence]}</Fact>
+            <Fact compact={compact} label={words.licence}>
+                {words.licences[facts.licence]}
+            </Fact>
         </>
     );
 }
@@ -251,7 +390,7 @@ const keyed = (findings: CfgFinding[]) => {
 };
 
 /** The findings grouped blocking, warning, note: each its severity, its sentence and where it is written. */
-function Findings({ findings }: { findings: CfgFinding[] }) {
+function Findings({ findings, onOpen }: { findings: CfgFinding[]; onOpen: (finding: CfgFinding) => void }) {
     const { t, format } = useI18n();
     const words = t.serverSetup.cfg;
     const groups = groupFindings(findings);
@@ -267,24 +406,30 @@ function Findings({ findings }: { findings: CfgFinding[] }) {
         <div className="flex flex-col gap-4">
             {groups.map(({ severity, findings: group }) => (
                 <section key={severity} className="flex flex-col gap-1.5">
-                    <h3 className="text-ui font-medium text-ink">{words.groups[severity](group.length)}</h3>
-                    <ul className="flex flex-col">
+                    <h3 className="font-mono text-eyebrow tracking-[0.08em] text-ink-3 uppercase">
+                        {words.groups[severity](group.length)}
+                    </h3>
+                    <ul className="flex flex-col gap-2">
                         {keyed(group).map(({ finding, key }) => (
                             <li
                                 key={key}
-                                className="flex flex-wrap items-baseline gap-x-3 gap-y-1 border-b border-line py-2 last:border-b-0"
+                                className="flex flex-col items-start gap-1.5 rounded-box border border-line bg-bg-subtle p-3"
                             >
                                 <Chip tone={SEVERITY[severity].tone} icon={SEVERITY[severity].icon}>
                                     {words.severities[severity]}
                                 </Chip>
-                                <span className="min-w-60 flex-1 text-body text-ink max-md:min-w-0 max-md:basis-full">
+                                <span className="text-small text-ink">
                                     {words.kinds[finding.kind](finding.params)}
                                 </span>
-                                <span className="font-mono text-small text-ink-3 [overflow-wrap:anywhere]">
+                                <button
+                                    type="button"
+                                    className="font-mono text-meta text-ink-3 underline-offset-2 [overflow-wrap:anywhere] hover:text-ink-2 hover:underline"
+                                    onClick={() => onOpen(finding)}
+                                >
                                     {finding.line === null
                                         ? finding.file
                                         : `${finding.file}:${format.number(finding.line, { useGrouping: false })}`}
-                                </span>
+                                </button>
                             </li>
                         ))}
                     </ul>

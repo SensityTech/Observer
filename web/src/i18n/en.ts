@@ -878,7 +878,7 @@ export const en = {
             kept: (build: string) => `FXServer runs build ${build} already: it starts next again.`,
             done: {
                 now: (build: string) => `FXServer is restarting on build ${build}.`,
-                nextStart: (build: string) => `Build ${build} starts at the next start.`,
+                nextStart: (build: string) => `Build ${build} runs from the next start of FXServer.`,
                 scheduledRestart: (build: string) =>
                     `Build ${build} is applied at the next scheduled restart.`,
             } satisfies Record<ApplyMode, (build: string) => string>,
@@ -3544,7 +3544,6 @@ export const en = {
     },
     serverSetup: {
         title: 'Server setup',
-        gloss: 'Point Observer at your server.',
         steps: 'Setup steps',
         stepNames: {
             folder: 'Server folder',
@@ -3560,6 +3559,17 @@ export const en = {
         } satisfies Record<SetupStep, string>,
         stepOf: (step: number, total: number, name: string) =>
             `Step ${formatNumber('en', step)} of ${formatNumber('en', total)} · ${name}`,
+        stepCount: (step: string, total: string) => `Step ${step} of ${total}`,
+        headings: {
+            folder: 'Which server should Observer run?',
+            cfg: 'Choose the config file',
+            build: 'Pick the FXServer build',
+            start: 'Review and start',
+        } satisfies Record<SetupStep, string>,
+        later: 'Set up later',
+        leave: 'Back to the panel',
+        promise:
+            'Observer runs your server where it is. It copies nothing into the folder and never changes your cfg.',
         said: { passed: 'done', failed: 'failed' },
         back: 'Back',
         continue: 'Continue',
@@ -3567,7 +3577,6 @@ export const en = {
             'The launch settings were changed in another session since the setup opened. Start again from them, then make your changes again.',
         startAgain: 'Start again from the saved settings',
         folder: {
-            question: 'Which server should Observer run?',
             searching:
                 'Observer is looking in the usual places on this machine: your home folder and the root of each drive.',
             found: (servers: number) =>
@@ -3577,7 +3586,6 @@ export const en = {
             searchStopped:
                 'The search stopped before it looked everywhere: if yours is missing, browse to it or type its path.',
             searchFailed: (reason: string) => `Observer could not search this machine. ${reason}`,
-            lead: 'FXServer runs from the folder in place: Observer copies nothing into it, and writes there only what people upload over SFTP and the fixes of the server tools you run or turn on.',
             servers: 'Servers found',
             selected: 'Selected',
             resourceCount: (resources: number, truncated: boolean) =>
@@ -3679,9 +3687,33 @@ export const en = {
             noCfgFile: 'No cfg was found at the root or one folder down: name yours in the next step.',
         },
         cfg: {
-            lead: 'The cfg FXServer runs, and the files it runs in turn. Observer only reads them: fix what it finds in your files, then check again.',
-            found: 'Found in the folder',
-            detected: 'detected',
+            lead: 'FXServer starts from one cfg, which runs the others. Open a file to see what it sets: Observer only reads it, and fixes are made in your files.',
+            browser: {
+                label: 'Files of the server folder',
+                tree: 'Folders and files',
+                side: 'What the chosen cfg runs and sets',
+                filter: 'Filter files',
+                onlyCfg: 'Only config files',
+                empty: 'This folder is empty.',
+                noMatch: 'No file matches.',
+                truncated: 'Only the first 500 entries are listed.',
+                cannotOpen: 'Observer does not open this folder.',
+                neverRead: 'never read',
+                withheld: 'It holds secrets or belongs to FXServer or Observer: Observer never opens it.',
+                link: 'A link, which Observer does not follow',
+                runs: 'Runs',
+                pick: 'Open a config file in the tree.',
+                lines: (lines: number) => count(lines, { one: 'line', other: 'lines' }),
+                hidden: 'Secrets hidden',
+                secret: 'a secret, hidden by Observer',
+                text: (file: string) => `${file}, as Observer reads it`,
+                longFile: 'Only the first 2,000 lines are shown.',
+                runBy: (file: string) =>
+                    `${file} runs this file. FXServer starts from the first file of the chain.`,
+                openMain: (file: string) => `Open ${file}`,
+                chain: 'Runs, in order',
+                typeInstead: 'Type the path instead',
+            },
             label: 'Config file',
             hint: 'Relative to the server folder, such as server.cfg or configs/live.cfg.',
             checkAgain: 'Check again',
@@ -3760,6 +3792,7 @@ export const en = {
             openArtifacts: 'Open the Artifacts page',
         },
         start: {
+            how: 'How FXServer starts',
             lead: 'How FXServer starts, then what it starts from.',
             summary: 'Summary',
             folder: 'Server folder',
@@ -3783,7 +3816,6 @@ export const en = {
             saved: 'Saved. FXServer uses these settings from its next start, a restart after a crash included.',
             withoutBuild:
                 'No build is selected, so FXServer cannot start yet: save now, then start it once a build is selected.',
-            starting: 'Saved. FXServer is starting: its first launch is followed below.',
             startFailed: (reason: string) => `Saved, but FXServer did not start. ${reason}`,
             argumentsRefused:
                 'This host refuses the extra arguments saved with the launch settings, which the setup keeps as they are. Fix them in Settings, under Launch, then save here again.',
@@ -3802,6 +3834,21 @@ export const en = {
             unknown: 'The state of FXServer is not known while the live link is down.',
             console: "The console shows FXServer's output, and what Observer found in the cfg as it started.",
             openConsole: 'Open the console',
+            starting: 'Starting FXServer',
+            online: (name: string | null) => `${name ?? 'Your server'} is online`,
+            failed: 'FXServer did not start',
+            following: 'Observer follows its first launch: each step ticks as it passes.',
+            checked: 'What Observer checks',
+            consoleTitle: 'Console',
+            next: 'What most owners do next',
+            nextRestarts: 'Schedule restarts',
+            nextRestartsAbout: 'Fixed times or an interval, announced to your resources first.',
+            nextStaff: 'Add your staff',
+            nextStaffAbout: 'An account each, with only the permissions they need.',
+            nextBackups: 'Back up the database',
+            nextBackupsAbout: 'Before each restart, to a folder, SFTP or S3.',
+            backToSettings: 'Back to the launch settings',
+            overview: 'Go to the Overview',
         },
     },
     files: {

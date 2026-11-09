@@ -296,7 +296,7 @@ describe('ServerSetupPage', () => {
         expect(api.of(CFG_ROUTE)).toEqual([
             { dataPath: DATA_PATH, cfgFile: 'configs/live.cfg', onesync: 'on' },
         ]);
-        expect(document.activeElement).toBe(getByRole('heading', { name: words.stepNames.cfg }));
+        expect(document.activeElement).toBe(getByRole('heading', { name: words.headings.cfg }));
         const steps = within(getByRole('list', { name: words.steps })).getAllByRole('listitem');
         expect(steps[1]?.getAttribute('aria-current')).toBe('step');
         expect(steps[0]?.textContent).toContain(words.said.passed);
@@ -353,7 +353,7 @@ describe('ServerSetupPage', () => {
 
         await press(words.continue);
         expect(api.of(CFG_ROUTE)).toEqual([]);
-        getByRole('heading', { name: words.folder.question });
+        getByRole('heading', { name: words.headings.folder });
 
         await press(words.folder.useSuggestion);
         expect(field().value).toBe(DATA_PATH);
@@ -567,7 +567,7 @@ describe('ServerSetupPage', () => {
         await press(words.continue);
         await press(words.continue);
         await press(words.start.saveAndStart);
-        await waitFor(() => getByText(words.start.starting));
+        await waitFor(() => getByRole('heading', { name: words.launch.starting }));
 
         expect(api.sent.map((each) => each.route).slice(-2)).toEqual([
             SAVE_ROUTE,
@@ -591,6 +591,8 @@ describe('ServerSetupPage', () => {
         });
         expect(launch().every((step) => step.textContent?.includes(words.said.passed))).toBe(true);
         getByText(words.launch.ready);
+        getByRole('heading', { name: words.launch.online(STOPPED.name) });
+        getByRole('link', { name: words.launch.overview });
     });
 
     it('should name the step that failed, and keep it once FXServer is restarted after the crash', async () => {
@@ -605,7 +607,7 @@ describe('ServerSetupPage', () => {
         await press(words.continue);
         await press(words.continue);
         await press(words.start.saveAndStart);
-        await waitFor(() => getByText(words.start.starting));
+        await waitFor(() => getByRole('heading', { name: words.launch.starting }));
 
         const run = { ...STOPPED, generation: 1, since: '2026-10-30T14:00:05Z' };
         say({
@@ -636,7 +638,7 @@ describe('ServerSetupPage', () => {
         await press(words.continue);
         await press(words.continue);
         await press(words.start.saveAndStart);
-        await waitFor(() => getByText(words.start.starting));
+        await waitFor(() => getByRole('heading', { name: words.launch.starting }));
 
         const run = { ...STOPPED, generation: 1, since: '2026-10-30T14:00:05Z' };
         say({
@@ -715,12 +717,12 @@ describe('ServerSetupPage', () => {
         await press(words.start.saveAndStart);
 
         await waitFor(() => getByText(en.errors.setup_blocked({ findings: ['noEndpoint'] })));
-        expect(document.activeElement).toBe(getByRole('heading', { name: words.stepNames.cfg }));
+        expect(document.activeElement).toBe(getByRole('heading', { name: words.headings.cfg }));
         expect(api.of(CFG_ROUTE)).toHaveLength(2);
         expect(api.of('POST /servers/default/start')).toEqual([]);
     });
 
-    it('should send the owner to the Server page when the saved extra arguments are refused', async () => {
+    it('should send the owner to the launch settings when the saved extra arguments are refused', async () => {
         serve({
             [FOLDER_ROUTE]: json(FOLDER),
             [CFG_ROUTE]: json(CFG),
@@ -741,7 +743,9 @@ describe('ServerSetupPage', () => {
         await press(words.start.saveAndStart);
 
         await waitFor(() => getByText(words.start.argumentsRefused));
-        expect(getByRole('link', { name: words.start.openServer }).getAttribute('href')).toBe('/server');
+        expect(getByRole('link', { name: words.start.openServer }).getAttribute('href')).toBe(
+            '/settings/launch',
+        );
     });
 
     it('should start again from the settings saved elsewhere when its version is stale', async () => {
@@ -760,7 +764,7 @@ describe('ServerSetupPage', () => {
 
         await waitFor(() => getByText(words.changedElsewhere));
         await press(words.startAgain);
-        expect(document.activeElement).toBe(getByRole('heading', { name: words.folder.question }));
+        expect(document.activeElement).toBe(getByRole('heading', { name: words.headings.folder }));
     });
 
     it('should offer the servers found, the first one picked, and go on with it once its check passes', async () => {
@@ -788,7 +792,7 @@ describe('ServerSetupPage', () => {
 
         expect(api.of(FOLDER_ROUTE)).toEqual([{ dataPath: DATA_PATH }]);
         expect(api.of(CFG_ROUTE)).toEqual([{ dataPath: DATA_PATH, cfgFile: 'server.cfg', onesync: 'on' }]);
-        expect(document.activeElement).toBe(getByRole('heading', { name: words.stepNames.cfg }));
+        expect(document.activeElement).toBe(getByRole('heading', { name: words.headings.cfg }));
     });
 
     it('should browse to a folder, show what its check finds, and go on with it', async () => {

@@ -28,6 +28,22 @@ vi.mock('./shell/AppShell', async () => {
         },
     };
 });
+vi.mock('./shell/FocusShell', async () => {
+    const { Outlet } = await import('@tanstack/react-router');
+    const { useQuery } = await import('@tanstack/react-query');
+    const { MeContext } = await import('./auth/me');
+    const auth = await import('./api/auth');
+    return {
+        FocusShell: () => {
+            const { data: me } = useQuery(auth.meQuery);
+            return me ? (
+                <MeContext value={me}>
+                    <Outlet />
+                </MeContext>
+            ) : null;
+        },
+    };
+});
 vi.mock('./pages/OverviewPage', () => ({ OverviewPage: () => <h1>Overview</h1> }));
 vi.mock('./pages/ServerSetupPage', () => ({ ServerSetupPage: () => <h1>Server setup</h1> }));
 vi.mock('./pages/SettingsPage', async () => {
@@ -84,6 +100,13 @@ describe('the panel router', () => {
         cleanup();
         vi.unstubAllGlobals();
         localStorage.clear();
+    });
+
+    it('should send another account from the server setup to where it lands', async () => {
+        const { findByRole, router } = panel('/server/setup', [[meQuery.queryKey, VIEWER]]);
+
+        await findByRole('heading', { name: 'Overview' });
+        expect(router.state.location.pathname).toBe('/');
     });
 
     it('should send the owner from the Overview to the server setup while nothing is saved', async () => {

@@ -19,15 +19,15 @@ import { Button } from '../components/Button';
 import { Notice } from '../components/Notice';
 import { errorMessage } from '../i18n/errors';
 import { useI18n } from '../i18n/I18nProvider';
+import { useArtifacts } from '../artifacts/context';
 import { useServerStatus } from '../server/context';
 import { BuildStep } from '../setup/BuildStep';
 import { CfgStep } from '../setup/CfgStep';
 import { FirstLaunch } from '../setup/FirstLaunch';
 import { FolderStep } from '../setup/FolderStep';
-import { SetupStage } from '../setup/SetupStage';
+import { SetupLayout } from '../setup/SetupLayout';
 import { StartStep, type AfterSave } from '../setup/StartStep';
 import {
-    SETUP_STEPS,
     cfgAfterFolder,
     cfgCheckOf,
     folderPasses,
@@ -35,7 +35,6 @@ import {
     type Checked,
     type SetupStep,
 } from '../setup/state';
-import { StepRail } from '../setup/StepRail';
 
 /** The settings the setup keeps as saved, and does not show. */
 const ARGUMENT_FIELDS = new Set<LaunchField>(['extraArguments', 'argumentName', 'argumentValue']);
@@ -52,28 +51,27 @@ export function ServerSetupPage() {
     const { t } = useI18n();
     const launch = useQuery(launchQuery);
 
+    if (launch.data !== undefined) {
+        return <Setup saved={launch.data} />;
+    }
     return (
-        <SetupStage>
-            <div className="page-head">
-                <h1 className="page-title">
-                    {t.serverSetup.title} <span className="gloss">{t.serverSetup.gloss}</span>
-                </h1>
+        <SetupLayout current="folder" chosen={{}} saved={false}>
+            <div className="flex flex-col gap-3 px-12 pt-10 max-md:px-4 max-md:pt-6">
+                {launch.isPending && (
+                    <div className="flex max-w-200 flex-col gap-3" aria-busy="true">
+                        <span className="sr-only">{t.common.loading}</span>
+                        <span className="skeleton h-8 w-2/3" />
+                        <span className="skeleton w-1/2" />
+                        <span className="skeleton h-40 w-full rounded-card" />
+                    </div>
+                )}
+                {launch.isError && (
+                    <Notice tone="danger">
+                        {t.server.loadFailed} {errorMessage(t, launch.error)}
+                    </Notice>
+                )}
             </div>
-            {launch.isPending && (
-                <div className="card flex flex-col gap-3 p-5">
-                    <span className="sr-only">{t.common.loading}</span>
-                    <span className="skeleton w-3/4" />
-                    <span className="skeleton w-2/3" />
-                    <span className="skeleton w-1/2" />
-                </div>
-            )}
-            {launch.isError && (
-                <Notice tone="danger">
-                    {t.server.loadFailed} {errorMessage(t, launch.error)}
-                </Notice>
-            )}
-            {launch.data !== undefined && <Setup saved={launch.data} />}
-        </SetupStage>
+        </SetupLayout>
     );
 }
 
@@ -81,6 +79,7 @@ function Setup({ saved }: { saved: StoredLaunch | null }) {
     const { t } = useI18n();
     const queryClient = useQueryClient();
     const { status } = useServerStatus();
+    const { status: builds } = useArtifacts();
     // What the setup started from: the settings as stored then, and the version its save names.
     const [shown, setShown] = useState(saved);
     const [draft, setDraft] = useState<LaunchSettings>(saved?.settings ?? DEFAULT_LAUNCH);
@@ -216,7 +215,6 @@ function Setup({ saved }: { saved: StoredLaunch | null }) {
                     setLaunched({ before });
                 }
             } else {
-                setOutcome({ tone: 'success', message: t.serverSetup.start.starting });
                 setLaunched({ before });
             }
         },
@@ -260,92 +258,92 @@ function Setup({ saved }: { saved: StoredLaunch | null }) {
         go('folder');
     };
 
-    const index = SETUP_STEPS.indexOf(step);
     const folderReport =
         folder !== null && folder.request.dataPath === draft.dataPath.trim() ? folder.report : null;
+    const chosen = {
+        folder: draft.dataPath.trim(),
+        cfg: draft.cfgFile.trim(),
+        build: builds?.selected == null ? t.serverSetup.start.noBuild : String(builds.selected),
+    };
+    const banner = outcome !== null && (
+        <Notice tone={outcome.tone}>
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+                <span className="min-w-0 flex-1">{outcome.message}</span>
+                {outcome.startAgain && (
+                    <Button size="sm" className="max-md:w-full" onClick={startAgain}>
+                        {t.serverSetup.startAgain}
+                    </Button>
+                )}
+                {outcome.toServer && (
+                    <Link
+                        to="/settings/$category"
+                        params={{ category: 'launch' }}
+                        className="inline-flex items-center gap-1.5 font-medium text-ink underline-offset-2 hover:underline max-md:min-h-11"
+                    >
+                        {t.serverSetup.start.openServer}
+                        <ArrowRight size={14} strokeWidth={1.5} aria-hidden="true" />
+                    </Link>
+                )}
+            </div>
+        </Notice>
+    );
 
     return (
-        <div className="max-w-300 @container">
-            <div className="flex flex-col gap-5 @min-[50rem]:flex-row @min-[50rem]:items-start @min-[50rem]:gap-7">
-                <div className="@min-[50rem]:sticky @min-[50rem]:top-6 @min-[50rem]:w-55 @min-[50rem]:flex-none">
-                    <StepRail current={index} />
-                </div>
-                <div className="flex min-w-0 flex-1 flex-col gap-5 max-md:gap-4">
-                    {outcome !== null && (
-                        <Notice tone={outcome.tone}>
-                            <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-                                <span className="min-w-0 flex-1">{outcome.message}</span>
-                                {outcome.startAgain && (
-                                    <Button size="sm" className="max-md:w-full" onClick={startAgain}>
-                                        {t.serverSetup.startAgain}
-                                    </Button>
-                                )}
-                                {outcome.toServer && (
-                                    <Link
-                                        to="/server"
-                                        className="inline-flex items-center gap-1.5 font-medium text-ink underline-offset-2 hover:underline max-md:min-h-11"
-                                    >
-                                        {t.serverSetup.start.openServer}
-                                        <ArrowRight size={14} strokeWidth={1.5} aria-hidden="true" />
-                                    </Link>
-                                )}
-                            </div>
-                        </Notice>
-                    )}
-                    {step === 'folder' && (
-                        <FolderStep
-                            titleRef={title}
-                            draft={draft}
-                            checked={folder}
-                            checking={folderCheck.isPending}
-                            onPath={onPath}
-                            onCheck={checkThisFolder}
-                            onContinue={continueFromFolder}
-                        />
-                    )}
-                    {step === 'cfg' && (
-                        <CfgStep
-                            titleRef={title}
-                            draft={draft}
-                            folder={folderReport}
-                            checked={cfg}
-                            checking={cfgCheck.isPending}
-                            onCfg={(cfgFile) => edit({ cfgFile })}
-                            onCheck={(cfgFile) => cfgCheck.mutate({ ...cfgCheckOf(draft), cfgFile })}
-                            onBack={() => go('folder')}
-                            onContinue={() => go('build')}
-                        />
-                    )}
-                    {step === 'build' && (
-                        <BuildStep
-                            titleRef={title}
-                            onBack={() => enterCfg()}
-                            onContinue={() => go('start')}
-                        />
-                    )}
-                    {step === 'start' && (
-                        <>
-                            <StartStep
-                                titleRef={title}
-                                draft={draft}
-                                report={cfg?.report ?? null}
-                                saving={save.isPending ? save.variables.after : undefined}
-                                onChange={(change) => {
-                                    if (change.onesync !== undefined) {
-                                        setOnesyncPicked(true);
-                                        // The summary counts what the cfg allows with it, players included.
-                                        cfgCheck.mutate(cfgCheckOf({ ...draft, onesync: change.onesync }));
-                                    }
-                                    edit(change);
-                                }}
-                                onSave={(after) => save.mutate({ after, before: status })}
-                                onBack={() => go('build')}
-                            />
-                            {launched !== null && <FirstLaunch before={launched.before} />}
-                        </>
-                    )}
-                </div>
-            </div>
-        </div>
+        <SetupLayout current={launched === null ? step : 'launch'} chosen={chosen} saved={shown !== null}>
+            {launched !== null && <FirstLaunch before={launched.before} onBack={() => setLaunched(null)} />}
+            {launched === null && step === 'folder' && (
+                <FolderStep
+                    titleRef={title}
+                    banner={banner}
+                    draft={draft}
+                    checked={folder}
+                    checking={folderCheck.isPending}
+                    onPath={onPath}
+                    onCheck={checkThisFolder}
+                    onContinue={continueFromFolder}
+                />
+            )}
+            {launched === null && step === 'cfg' && (
+                <CfgStep
+                    titleRef={title}
+                    banner={banner}
+                    draft={draft}
+                    folder={folderReport}
+                    checked={cfg}
+                    checking={cfgCheck.isPending}
+                    onCfg={(cfgFile) => edit({ cfgFile })}
+                    onCheck={(cfgFile) => cfgCheck.mutate({ ...cfgCheckOf(draft), cfgFile })}
+                    onBack={() => go('folder')}
+                    onContinue={() => go('build')}
+                />
+            )}
+            {launched === null && step === 'build' && (
+                <BuildStep
+                    titleRef={title}
+                    banner={banner}
+                    onBack={() => enterCfg()}
+                    onContinue={() => go('start')}
+                />
+            )}
+            {launched === null && step === 'start' && (
+                <StartStep
+                    titleRef={title}
+                    banner={banner}
+                    draft={draft}
+                    report={cfg?.report ?? null}
+                    saving={save.isPending ? save.variables.after : undefined}
+                    onChange={(change) => {
+                        if (change.onesync !== undefined) {
+                            setOnesyncPicked(true);
+                            // The summary counts what the cfg allows with it, players included.
+                            cfgCheck.mutate(cfgCheckOf({ ...draft, onesync: change.onesync }));
+                        }
+                        edit(change);
+                    }}
+                    onSave={(after) => save.mutate({ after, before: status })}
+                    onBack={() => go('build')}
+                />
+            )}
+        </SetupLayout>
     );
 }

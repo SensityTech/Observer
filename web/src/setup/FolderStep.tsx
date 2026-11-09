@@ -10,7 +10,7 @@ import {
     Server,
     TriangleAlert,
 } from 'lucide-react';
-import { useEffect, useId, useRef, useState, type Ref } from 'react';
+import { useEffect, useRef, useState, type ReactNode, type Ref } from 'react';
 
 import type { FolderCheck } from '../api/generated/FolderCheck';
 import type { FolderReport } from '../api/generated/FolderReport';
@@ -28,6 +28,7 @@ import { FolderField } from './FolderField';
 import { crumbs, folderName } from './paths';
 import type { Checked } from './state';
 import { StepActions } from './StepActions';
+import { StepPage } from './StepPage';
 
 /**
  * The server folder: one of those Observer found on the host, a path typed with the host's folders
@@ -35,6 +36,7 @@ import { StepActions } from './StepActions';
  */
 export function FolderStep({
     titleRef,
+    banner,
     draft,
     checked,
     checking,
@@ -43,6 +45,7 @@ export function FolderStep({
     onContinue,
 }: {
     titleRef: Ref<HTMLHeadingElement>;
+    banner?: ReactNode;
     draft: LaunchSettings;
     checked: Checked<FolderCheck, FolderReport> | null;
     checking: boolean;
@@ -53,7 +56,6 @@ export function FolderStep({
 }) {
     const { t } = useI18n();
     const words = t.serverSetup.folder;
-    const headingId = useId();
     const discovery = useQuery(discoveryQuery);
     const servers = discovery.data?.servers ?? [];
     const path = draft.dataPath.trim();
@@ -98,34 +100,46 @@ export function FolderStep({
               '/');
 
     return (
-        <section aria-labelledby={headingId} className="flex flex-col gap-4.5">
-            <div className="flex flex-wrap items-start justify-between gap-3">
-                <div className="flex min-w-0 flex-[1_1_320px] flex-col gap-1.5">
-                    <h2
-                        id={headingId}
-                        ref={titleRef}
-                        tabIndex={-1}
-                        className="text-state text-ink outline-none"
-                    >
-                        {words.question}
-                    </h2>
-                    <output className="text-body text-ink-2">{lead}</output>
-                </div>
-                {browsing && (
-                    <Button
-                        size="sm"
-                        tone="ghost"
-                        icon={ArrowLeft}
-                        onClick={() => {
-                            setBrowsing(false);
-                            setElsewhere(true);
-                        }}
-                    >
-                        {words.browser.typeInstead}
-                    </Button>
-                )}
-            </div>
-
+        <StepPage
+            step="folder"
+            titleRef={titleRef}
+            title={t.serverSetup.headings.folder}
+            lead={<output>{lead}</output>}
+            banner={banner}
+            actions={
+                browsing ? (
+                    // The browser's own button takes the folder it shows.
+                    <StepActions>
+                        <Button
+                            tone="ghost"
+                            icon={ArrowLeft}
+                            onClick={() => {
+                                setBrowsing(false);
+                                setElsewhere(true);
+                            }}
+                        >
+                            {words.browser.typeInstead}
+                        </Button>
+                    </StepActions>
+                ) : (
+                    <StepActions>
+                        <Button
+                            tone="ghost"
+                            icon={RotateCw}
+                            pending={discovery.isFetching}
+                            onClick={() => void discovery.refetch()}
+                        >
+                            {words.rescan}
+                        </Button>
+                        <Button tone="ink" disabled={path === ''} pending={checking} onClick={onContinue}>
+                            {picked === null
+                                ? t.serverSetup.continue
+                                : words.continueWith(folderName(picked.path))}
+                        </Button>
+                    </StepActions>
+                )
+            }
+        >
             {browsing ? (
                 <FolderBrowser
                     start={start}
@@ -223,26 +237,7 @@ export function FolderStep({
                     </details>
                 </>
             )}
-
-            {/* The browser's own button takes the folder it shows. */}
-            {!browsing && (
-                <StepActions note={words.lead}>
-                    <Button
-                        tone="ghost"
-                        icon={RotateCw}
-                        pending={discovery.isFetching}
-                        onClick={() => void discovery.refetch()}
-                    >
-                        {words.rescan}
-                    </Button>
-                    <Button tone="ink" disabled={path === ''} pending={checking} onClick={onContinue}>
-                        {picked === null
-                            ? t.serverSetup.continue
-                            : words.continueWith(folderName(picked.path))}
-                    </Button>
-                </StepActions>
-            )}
-        </section>
+        </StepPage>
     );
 }
 

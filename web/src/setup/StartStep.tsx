@@ -1,11 +1,10 @@
-import { Play, Power, RotateCw } from 'lucide-react';
-import { useId, useState, type Ref } from 'react';
+import { Play, RotateCw } from 'lucide-react';
+import { useState, type ReactNode, type Ref } from 'react';
 
 import type { CfgReport } from '../api/generated/CfgReport';
 import type { LaunchSettings } from '../api/generated/LaunchSettings';
 import { useArtifacts } from '../artifacts/context';
 import { Button } from '../components/Button';
-import { Card } from '../components/Card';
 import { CheckRow } from '../components/CheckRow';
 import { Dialog } from '../components/Dialog';
 import { OneSyncChoice } from '../components/OneSyncChoice';
@@ -15,6 +14,7 @@ import { FactRows } from './CfgStep';
 import { Fact } from './Fact';
 import { startAction } from './state';
 import { StepActions } from './StepActions';
+import { StepPage } from './StepPage';
 
 /** What follows the save: a start, a restart, or nothing. */
 export type AfterSave = 'start' | 'restart' | null;
@@ -25,6 +25,7 @@ export type AfterSave = 'start' | 'restart' | null;
  */
 export function StartStep({
     titleRef,
+    banner,
     draft,
     report,
     saving,
@@ -33,6 +34,7 @@ export function StartStep({
     onBack,
 }: {
     titleRef: Ref<HTMLHeadingElement>;
+    banner?: ReactNode;
     draft: LaunchSettings;
     /** The cfg's last report, for the summary. */
     report: CfgReport | null;
@@ -43,7 +45,6 @@ export function StartStep({
     onBack: () => void;
 }) {
     const { t } = useI18n();
-    const id = useId();
     const words = t.serverSetup.start;
     const { status: builds } = useArtifacts();
     const { status } = useServerStatus();
@@ -55,48 +56,13 @@ export function StartStep({
     const selected = builds?.selected ?? null;
 
     return (
-        <Card id={id} icon={Power} title={t.serverSetup.stepNames.start} titleRef={titleRef}>
-            <div className="flex flex-col gap-5">
-                <p className="max-w-2xl text-body text-ink-2">{words.lead}</p>
-                <div className="flex max-w-2xl flex-col gap-5">
-                    <OneSyncChoice value={draft.onesync} onChange={(onesync) => onChange({ onesync })} />
-                    <div className="-mx-2 flex flex-col gap-1">
-                        <CheckRow
-                            label={t.server.autoStart}
-                            description={t.server.autoStartHint}
-                            checked={draft.autoStart}
-                            onChange={(autoStart) => onChange({ autoStart })}
-                        />
-                        <CheckRow
-                            label={t.server.txadminEvents}
-                            description={t.server.txadminEventsHint}
-                            checked={draft.txadminEvents}
-                            onChange={(txadminEvents) => onChange({ txadminEvents })}
-                        />
-                    </div>
-                </div>
-                <section className="flex max-w-2xl flex-col gap-1.5">
-                    <h3 className="text-ui font-medium text-ink">{words.summary}</h3>
-                    <dl className="flex flex-col">
-                        <Fact label={words.folder}>
-                            <span className="font-mono text-ui">{draft.dataPath.trim()}</span>
-                        </Fact>
-                        <Fact label={words.cfg}>
-                            <span className="font-mono text-ui">{draft.cfgFile.trim()}</span>
-                        </Fact>
-                        <Fact label={words.build}>
-                            {selected === null ? (
-                                words.noBuild
-                            ) : (
-                                <span className="font-mono text-ui">{selected}</span>
-                            )}
-                        </Fact>
-                        {report?.facts != null && <FactRows facts={report.facts} />}
-                        <Fact label={words.findings}>
-                            {words.findingCount(count('warning'), count('note'))}
-                        </Fact>
-                    </dl>
-                </section>
+        <StepPage
+            step="start"
+            titleRef={titleRef}
+            title={t.serverSetup.headings.start}
+            lead={words.lead}
+            banner={banner}
+            actions={
                 <StepActions onBack={onBack} note={action === null ? words.withoutBuild : null}>
                     {action === null ? (
                         <Button tone="ink" pending={saving !== undefined} onClick={() => onSave(null)}>
@@ -123,6 +89,48 @@ export function StartStep({
                         </>
                     )}
                 </StepActions>
+            }
+        >
+            <div className="grid max-w-250 grid-cols-1 gap-4 xl:grid-cols-2">
+                <section aria-label={words.how} className="card flex flex-col gap-5 p-5 max-md:p-4">
+                    <OneSyncChoice value={draft.onesync} onChange={(onesync) => onChange({ onesync })} />
+                    <div className="-mx-2 flex flex-col gap-1">
+                        <CheckRow
+                            label={t.server.autoStart}
+                            description={t.server.autoStartHint}
+                            checked={draft.autoStart}
+                            onChange={(autoStart) => onChange({ autoStart })}
+                        />
+                        <CheckRow
+                            label={t.server.txadminEvents}
+                            description={t.server.txadminEventsHint}
+                            checked={draft.txadminEvents}
+                            onChange={(txadminEvents) => onChange({ txadminEvents })}
+                        />
+                    </div>
+                </section>
+                <section className="card flex flex-col gap-1.5 p-5 max-md:p-4">
+                    <h2 className="text-ui font-medium text-ink">{words.summary}</h2>
+                    <dl className="flex flex-col">
+                        <Fact label={words.folder}>
+                            <span className="font-mono text-ui">{draft.dataPath.trim()}</span>
+                        </Fact>
+                        <Fact label={words.cfg}>
+                            <span className="font-mono text-ui">{draft.cfgFile.trim()}</span>
+                        </Fact>
+                        <Fact label={words.build}>
+                            {selected === null ? (
+                                words.noBuild
+                            ) : (
+                                <span className="font-mono text-ui">{selected}</span>
+                            )}
+                        </Fact>
+                        {report?.facts != null && <FactRows facts={report.facts} />}
+                        <Fact label={words.findings}>
+                            {words.findingCount(count('warning'), count('note'))}
+                        </Fact>
+                    </dl>
+                </section>
             </div>
             {confirming && (
                 <Dialog
@@ -151,6 +159,6 @@ export function StartStep({
                     <p>{t.controls.noticeFirst}</p>
                 </Dialog>
             )}
-        </Card>
+        </StepPage>
     );
 }
