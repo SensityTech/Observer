@@ -8,6 +8,7 @@ import {
     DatabaseBackup,
     GitCompare,
     LayoutDashboard,
+    Map as MapIcon,
     Menu as MenuIcon,
     Package,
     ScrollText,
@@ -53,6 +54,7 @@ type NavEntry = {
         | '/artifacts'
         | '/diagnostics'
         | '/players'
+        | '/map'
         | '/bans'
         | '/changes'
         | '/drops'
@@ -134,6 +136,7 @@ export function AppShell() {
             access: [Permission.DashboardView, Permission.ScheduleManage, Permission.ServerControl],
         },
         { to: '/players', label: t.nav.players, icon: Contact, access: Permission.PlayersView, nested: true },
+        { to: '/map', label: t.nav.map, icon: MapIcon, access: Permission.PlayersMap },
         { to: '/bans', label: t.nav.bans, icon: Ban, access: Permission.BansView },
         { to: '/statistics', label: t.nav.statistics, icon: ChartLine, access: Permission.DashboardView },
         {

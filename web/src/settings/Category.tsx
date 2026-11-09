@@ -12,6 +12,7 @@ import { BansSettings } from './Bans';
 import { BuildSettings } from './Builds';
 import { CATEGORIES, opens, type Category, type CategoryId } from './catalog';
 import { DataSettings } from './Data';
+import { LiveMapSettings } from './LiveMap';
 import { FeatureSettings } from './Features';
 import { FilesSettings } from './Files';
 import { LaunchSettings } from './Launch';
@@ -27,6 +28,7 @@ const CONTENT = {
     builds: BuildSettings,
     backups: BackupsSettings,
     bans: BansSettings,
+    map: LiveMapSettings,
     features: FeatureSettings,
     data: DataSettings,
     tools: ToolSettings,
