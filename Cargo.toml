@@ -34,7 +34,7 @@ futures-util = { version = "0.3.34", default-features = false }
 getrandom = "0.4.3"
 hmac = "0.13.0"
 jiff = { version = "0.2.38", features = ["serde"] }
-lzma-rust2 = { version = "0.24.0", default-features = false, features = ["std", "xz", "optimization"] }
+lzma-rust2 = { version = "0.25.0", default-features = false, features = ["std", "xz", "optimization"] }
 memchr = "2.8.3"
 minidump = "0.27.0"
 minidump-synth = "0.27.0"
