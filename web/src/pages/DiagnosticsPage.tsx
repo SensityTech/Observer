@@ -40,6 +40,8 @@ import { useI18n } from '../i18n/I18nProvider';
 import { useLinkState, useTopic } from '../live/context';
 import { cn } from '../lib/cn';
 import { useNow } from '../lib/useNow';
+import { useServerStatus } from '../server/context';
+import { isRunning } from '../server/state';
 
 const DAY = 24 * 60 * 60 * 1000;
 /**
@@ -781,7 +783,9 @@ function ConnectionsCard({
 }) {
     const { t, format } = useI18n();
     const now = useNow(60_000);
+    const { status } = useServerStatus();
     const words = t.diagnostics.connections;
+    const running = status !== null && isRunning(status.state);
     return (
         <Card
             id="diagnostics-connections"
@@ -871,7 +875,9 @@ function ConnectionsCard({
                 {words.listening}
             </h3>
             {listeners.length === 0 ? (
-                <p className="px-5 pb-4 text-ui text-ink-3 max-md:px-4">{words.noListener}</p>
+                <p className="px-5 pb-4 text-ui text-ink-3 max-md:px-4">
+                    {running ? words.noListenerSeen : words.noListener}
+                </p>
             ) : (
                 <div className={cn(table.scroll, 'rounded-none border-t border-line')}>
                     <table className={table.table}>

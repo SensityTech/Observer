@@ -407,37 +407,48 @@ function CommandLine({ onSent }: { onSent: (command: string, masked: boolean) =>
     const [command, setCommand] = useState('');
     const [history, setHistory] = useState(() => readHistory(me.username));
     const [position, setPosition] = useState<Position>(START);
-    const [sending, setSending] = useState(false);
+    const [sending, setSending] = useState(0);
     const [feedback, setFeedback] = useState<Feedback | null>(null);
+    // Commands typed while one is on its way go out after it, in the order they were typed.
+    const queue = useRef<Promise<void>>(Promise.resolve());
 
     if (!allows(me, Permission.ConsoleWrite)) {
         return <p className="cmd-note">{t.console.readOnly}</p>;
     }
     const { open, note } = commandLine(t, status);
 
-    const submit = async (event: FormEvent) => {
-        event.preventDefault();
-        const line = command.trim();
-        if (line === '' || sending) {
-            return;
-        }
-        setSending(true);
+    const send = async (line: string) => {
+        // A refused line comes back to the field, unless something else was typed there since.
+        const giveBack = () => setCommand((typed) => (typed === '' ? line : typed));
         try {
             const { delivery, masked } = await sendCommand(line);
             if (delivery === 'busy') {
                 setFeedback({ tone: 'danger', text: t.console.busy });
+                giveBack();
                 return;
             }
-            setHistory(remember(me.username, history, line, masked));
-            setPosition(START);
-            setCommand('');
+            setHistory((current) => remember(me.username, current, line, masked));
             setFeedback(delivery === 'pending' ? { tone: 'warning', text: t.console.pending } : null);
             onSent(line, masked);
         } catch (error) {
             setFeedback({ tone: 'danger', text: errorMessage(t, error) });
+            giveBack();
         } finally {
-            setSending(false);
+            setSending((count) => count - 1);
         }
+    };
+
+    const submit = (event: FormEvent) => {
+        event.preventDefault();
+        const line = command.trim();
+        if (line === '') {
+            return;
+        }
+        setCommand('');
+        setPosition(START);
+        setFeedback(null);
+        setSending((count) => count + 1);
+        queue.current = queue.current.then(() => send(line));
     };
 
     const onKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
@@ -454,7 +465,7 @@ function CommandLine({ onSent }: { onSent: (command: string, masked: boolean) =>
 
     return (
         <>
-            <form className="cmd" onSubmit={(event) => void submit(event)}>
+            <form className="cmd" onSubmit={submit}>
                 <label className="cmd-field">
                     <span className="cmd-prompt" aria-hidden="true">
                         &gt;
@@ -469,7 +480,7 @@ function CommandLine({ onSent }: { onSent: (command: string, masked: boolean) =>
                         spellCheck={false}
                         disabled={!open}
                         placeholder={note ?? undefined}
-                        aria-busy={sending || undefined}
+                        aria-busy={sending > 0 || undefined}
                         value={command}
                         onChange={(event) => {
                             setCommand(event.target.value);

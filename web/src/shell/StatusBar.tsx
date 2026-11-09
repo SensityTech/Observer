@@ -30,9 +30,11 @@ export function StatusBar() {
     const { status: builds } = useArtifacts();
     const now = useNow();
     const complement =
-        builds === null || builds.running === null
+        builds === null
             ? null
-            : builds.probation !== null && builds.probation.build === builds.running
+            : builds.running !== null &&
+                builds.probation !== null &&
+                builds.probation.build === builds.running
               ? t.status.probation
               : builds.selected !== null && builds.selected !== builds.running
                 ? t.status.nextBuild(String(builds.selected))
@@ -70,9 +72,13 @@ export function StatusBar() {
             <div className="status-cell">
                 <dt>{t.status.build}</dt>
                 <dd>
-                    <span className="font-mono text-[12.5px]">
-                        {status?.build == null ? unknown : String(status.build)}
-                    </span>
+                    {status === null ? (
+                        unknown
+                    ) : status.build === null ? (
+                        <span className="font-normal text-ink-3">{t.status.none}</span>
+                    ) : (
+                        <span className="font-mono text-[12.5px]">{String(status.build)}</span>
+                    )}
                     {complement !== null && <span className="font-normal text-ink-3"> · {complement}</span>}
                 </dd>
             </div>

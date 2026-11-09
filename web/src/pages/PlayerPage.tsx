@@ -153,7 +153,7 @@ function Profile({ profile }: { profile: PlayerProfile }) {
             </section>
             <Tiles profile={profile} />
             <ActivityCard profile={profile} />
-            <div className="grid grid-cols-1 gap-5 max-md:gap-4 2xl:grid-cols-2">
+            <div className="grid grid-cols-1 gap-5 max-md:gap-4">
                 <NamesCard profile={profile} />
                 {profile.labels.length > 0 && <LabelsCard profile={profile} />}
                 <DropsCard profile={profile} />

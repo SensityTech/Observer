@@ -240,13 +240,7 @@ export function AuditPage() {
                                             {t.audit.action}
                                         </th>
                                         <th scope="col" className={table.th}>
-                                            {t.audit.target}
-                                        </th>
-                                        <th scope="col" className={table.th}>
                                             {t.audit.outcome}
-                                        </th>
-                                        <th scope="col" className={table.th}>
-                                            {t.audit.address}
                                         </th>
                                         <th scope="col" className={table.th}>
                                             {t.audit.details}
@@ -295,18 +289,29 @@ function EntryRow({ entry }: { entry: AuditEntry }) {
                 {entry.actorKind !== 'user' && entry.actorName !== null && (
                     <div className={table.sub}>{t.audit.actors[entry.actorKind]}</div>
                 )}
+                {entry.ip !== null && (
+                    <div className={cn(table.sub, 'font-mono')}>
+                        <span className="sr-only">{t.audit.address}: </span>
+                        {entry.ip}
+                    </div>
+                )}
             </td>
-            <td className={cn(table.td, 'whitespace-nowrap')}>{t.audit.actions[entry.action]}</td>
-            <td className={cn(table.td, table.mono)}>
-                {entry.target ??
-                    (entry.action === 'login_failed' && (
-                        <span className="font-sans text-ink-3">{t.audit.unknownUsername}</span>
-                    ))}
+            <td className={table.td}>
+                <span className="whitespace-nowrap">{t.audit.actions[entry.action]}</span>
+                {(entry.target !== null || entry.action === 'login_failed') && (
+                    <div className={table.sub}>
+                        <span className="sr-only">{t.audit.target}: </span>
+                        {entry.target === null ? (
+                            t.audit.unknownUsername
+                        ) : (
+                            <span className="font-mono">{entry.target}</span>
+                        )}
+                    </div>
+                )}
             </td>
             <td className={table.td}>
                 <Chip tone={OUTCOME_TONE[entry.outcome]}>{t.audit.outcomes[entry.outcome]}</Chip>
             </td>
-            <td className={cn(table.td, table.mono)}>{entry.ip ?? ''}</td>
             <td className={cn(table.td, 'min-w-60 font-mono text-meta text-ink-3 [overflow-wrap:anywhere]')}>
                 {auditDetails(t, format, entry.details, entry.action)}
             </td>

@@ -1399,7 +1399,8 @@ export const en = {
         countsFromStart: 'Counts from the next start of FXServer.',
         emptyTitle: 'No scheduled restart',
         emptyBody:
-            'Add a fixed time or an interval below. Your resources hear of each restart before it comes.',
+            'Choose fixed times or an interval in the restart settings. Your resources hear of each restart before it comes.',
+        setUp: 'Set up restarts',
         actions: 'Restart actions',
         skip: 'Skip',
         restore: 'Restore',
@@ -1651,6 +1652,7 @@ export const en = {
             protocols: { tcp: 'TCP', udp: 'UDP' },
             none: 'No connection in the last 24 hours.',
             noListener: 'Nothing listens while FXServer is stopped.',
+            noListenerSeen: "No socket of FXServer's tree listens right now.",
             footer: 'Connections shorter than 2 s may not show. Windows lists UDP sockets without their remote end.',
         },
         exceptions: {
@@ -1812,7 +1814,6 @@ export const en = {
                 today: (time: string) => `Today, so far: ${time}.`,
                 tooltip: (time: string) => `${time} played`,
                 todaySoFar: 'today, so far',
-                hours: (hours: string) => `${hours}h`,
             },
             names: {
                 title: 'Names',

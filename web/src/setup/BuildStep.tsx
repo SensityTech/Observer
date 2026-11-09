@@ -93,9 +93,11 @@ export function BuildStep({
                         </p>
                     ) : (
                         <div className="flex flex-col gap-4">
-                            <p className="text-body font-medium text-ink">
-                                {selected === null ? words.none : words.selected(String(selected))}
-                            </p>
+                            {(selected === null || outcome === null) && (
+                                <p className="text-body font-medium text-ink">
+                                    {selected === null ? words.none : words.selected(String(selected))}
+                                </p>
+                            )}
                             {selected === null && (
                                 <>
                                     <div className="flex flex-col gap-2">
