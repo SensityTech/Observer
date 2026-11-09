@@ -137,6 +137,20 @@ pub enum AuditAction {
     /// The drop log went out as CSV. The details hold the kinds of its filters, never their
     /// values, and the row count.
     PlayerDropsExported,
+    /// A player, or identifiers typed by hand, were banned. The target is the ban's code;
+    /// `details` hold the profile's id, the licence, the reason, `minutes` (absent when
+    /// permanent), the counts of identifiers and tokens held, and `dropped` when a connected
+    /// player was dropped.
+    PlayerBanned,
+    /// The target is the ban's code; `details` hold the reason given, if any.
+    BanLifted,
+    /// `details` hold each changed setting with its value before and after.
+    BansSettingsChanged,
+    /// The owner added the live map's image, or removed it. `details` hold its size, never the path
+    /// it came from, or `removed`.
+    MapImageChanged,
+    /// `details` hold the live map's settings before and after.
+    MapSettingsChanged,
     /// The daily drop rates went out as CSV.
     DropRatesExported,
     /// How long players' sessions and their texts are kept changed.
@@ -196,7 +210,7 @@ pub enum AuditAction {
 }
 
 impl AuditAction {
-    pub const ALL: [Self; 96] = [
+    pub const ALL: [Self; 101] = [
         Self::SetupCompleted,
         Self::SetupLinkCreated,
         Self::LoginSucceeded,
@@ -271,6 +285,11 @@ impl AuditAction {
         Self::PlayersImported,
         Self::PlayersRetentionChanged,
         Self::PlayerDropsExported,
+        Self::PlayerBanned,
+        Self::BanLifted,
+        Self::BansSettingsChanged,
+        Self::MapImageChanged,
+        Self::MapSettingsChanged,
         Self::DropRatesExported,
         Self::DropsRetentionChanged,
         Self::ChangeContentsViewed,
@@ -295,6 +314,7 @@ impl AuditAction {
         Self::StatisticsLinkRestored,
     ];
 
+    #[expect(clippy::too_many_lines, reason = "one arm per action, read best as one list")]
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::SetupCompleted => "setup_completed",
@@ -371,6 +391,11 @@ impl AuditAction {
             Self::PlayersImported => "players_imported",
             Self::PlayersRetentionChanged => "players_retention_changed",
             Self::PlayerDropsExported => "player_drops_exported",
+            Self::PlayerBanned => "player_banned",
+            Self::BanLifted => "ban_lifted",
+            Self::BansSettingsChanged => "bans_settings_changed",
+            Self::MapImageChanged => "map_image_changed",
+            Self::MapSettingsChanged => "map_settings_changed",
             Self::DropRatesExported => "drop_rates_exported",
             Self::DropsRetentionChanged => "drops_retention_changed",
             Self::ChangeContentsViewed => "change_contents_viewed",

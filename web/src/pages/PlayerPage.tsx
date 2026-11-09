@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from '@tanstack/react-router';
 import {
     ArrowLeft,
     ArrowRight,
+    Ban as BanIcon,
     ChartColumn,
     Clock,
     Fingerprint,
@@ -17,6 +18,7 @@ import { useState, type ReactNode } from 'react';
 
 import { ApiError } from '../api/client';
 import type { LinkedLicence } from '../api/generated/LinkedLicence';
+import { Permission } from '../api/generated/Permission';
 import type { PlayerDrop } from '../api/generated/PlayerDrop';
 import type { PlayerProfile } from '../api/generated/PlayerProfile';
 import type { SeenLabel } from '../api/generated/SeenLabel';
@@ -30,7 +32,9 @@ import {
     shortToken,
     totalOf,
 } from '../api/players';
-import { useMe } from '../auth/me';
+import { allows, useMe } from '../auth/me';
+import { BanDialog } from '../bans/dialogs';
+import { PlayerBans } from '../bans/PlayerBans';
 import { ActivityChart } from '../charts/ActivityChart';
 import { ATTRIBUTION } from '../charts/PlayersChart';
 import { Button, buttonVariants } from '../components/Button';
@@ -100,6 +104,8 @@ function Profile({ profile }: { profile: PlayerProfile }) {
     const me = useMe();
     const visit = useVisit(profile.zone);
     const [forgetting, setForgetting] = useState(false);
+    const [banning, setBanning] = useState(false);
+    const [banned, setBanned] = useState<string | null>(null);
     const label = profile.labels[0];
     return (
         <>
@@ -109,6 +115,11 @@ function Profile({ profile }: { profile: PlayerProfile }) {
                 </h1>
                 <div className="flex flex-wrap items-center gap-3 max-md:w-full">
                     <ZoneNote zone={profile.zone} />
+                    {allows(me, Permission.PlayersBan) && (
+                        <Button icon={BanIcon} className="max-md:flex-1" onClick={() => setBanning(true)}>
+                            {t.bans.profile.ban}
+                        </Button>
+                    )}
                     {me.isOwner && (
                         <Button icon={UserX} className="max-md:flex-1" onClick={() => setForgetting(true)}>
                             {words.forget.button}
@@ -116,6 +127,8 @@ function Profile({ profile }: { profile: PlayerProfile }) {
                     )}
                 </div>
             </div>
+            {banned !== null && <Notice tone="success">{t.bans.banned(banned)}</Notice>}
+            {allows(me, Permission.BansView) && <PlayerBans player={profile.id} zone={profile.zone} />}
             <section className="card p-5 max-md:p-4" aria-label={words.facts}>
                 <dl className="grid grid-cols-2 gap-x-6 gap-y-3 md:flex md:flex-wrap md:gap-x-9">
                     <HeaderFact term={t.players.list.state}>
@@ -163,6 +176,23 @@ function Profile({ profile }: { profile: PlayerProfile }) {
             )}
             {profile.linked !== null && <LinkedCard linked={profile.linked} />}
             {forgetting && <ForgetDialog profile={profile} onClose={() => setForgetting(false)} />}
+            {banning && (
+                <BanDialog
+                    target={{
+                        player: {
+                            id: profile.id,
+                            name: profile.name,
+                            license: profile.license,
+                            online: profile.online,
+                        },
+                    }}
+                    onClose={() => setBanning(false)}
+                    onBanned={(ban) => {
+                        setBanning(false);
+                        setBanned(ban.code);
+                    }}
+                />
+            )}
         </>
     );
 }

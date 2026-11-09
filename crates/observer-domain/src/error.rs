@@ -155,6 +155,24 @@ pub enum ErrorCode {
     InvalidPlayersFile,
     /// The drop retention is out of its range. Params: `min`, `max`.
     InvalidDropsSettings,
+    /// No ban has this code.
+    BanNotFound,
+    /// The ban already ended or was lifted.
+    BanNotActive,
+    /// A ban cannot be made as asked. Params: `field`, `reason`, `minutes` or `identifiers` (none
+    /// left once checked, or too many).
+    InvalidBan,
+    /// The refusal message is empty or too long, or the tokens needed are out of range. Params:
+    /// `maxMessage`, `maxTokens`.
+    InvalidBansSettings,
+    /// The live map's image was refused. Params: `problem`, `notLocal`, `missing`, `unreadable`,
+    /// `tooLarge` or `notAnImage`.
+    InvalidMapImage,
+    /// The live map has no image.
+    NoMapImage,
+    /// The thresholds are not ordered, the cadence is not 1, 2 or 5 seconds, or the edges enclose
+    /// no area.
+    InvalidMapSettings,
     /// The file changes' database could not be opened: it was set aside, or Observer is stopping.
     ChangesUnavailable,
     /// No start or check of the server has this id.

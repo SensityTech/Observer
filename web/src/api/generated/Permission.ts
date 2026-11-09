@@ -23,4 +23,8 @@ export const Permission = {
     BackupsView: 1n << 19n,
     BackupsRun: 1n << 20n,
     BackupsDownload: 1n << 21n,
+    BansView: 1n << 22n,
+    PlayersBan: 1n << 23n,
+    BansLift: 1n << 24n,
+    PlayersMap: 1n << 25n,
 } as const;
