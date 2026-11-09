@@ -10,6 +10,7 @@ pub mod api;
 pub mod artifacts;
 pub mod audit;
 pub mod backups;
+pub mod bans;
 pub mod changes;
 pub mod delegation;
 pub mod diagnostics;

@@ -43,6 +43,14 @@ pub enum PlayerReportKind {
     Roster(RosterPage),
     /// The latest label of each player whose label changed in the last second.
     Labels(Vec<LabelChange>),
+    /// A player connecting, whom the bridge holds until Observer's verdict on `request`.
+    Connecting(Connecting),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Connecting {
+    pub request: u32,
+    pub shown: Shown,
 }
 
 /// A player who joined: their net id, FXServer's game timer, and what they showed.
@@ -173,6 +181,13 @@ impl PlayerReportKind {
                     dropped,
                 }))
             }
+            "connecting" => Some(Self::Connecting(Connecting {
+                request: payload
+                    .get("request")
+                    .and_then(Value::as_u64)
+                    .and_then(|request| u32::try_from(request).ok())?,
+                shown: shown(payload),
+            })),
             "labels" => Some(Self::Labels(
                 payload
                     .get("labels")
@@ -403,6 +418,31 @@ mod tests {
                 },
             ]))
         );
+    }
+
+    #[test]
+    fn a_connecting_player_carries_the_request_to_answer() {
+        let token = format!("4:{}", "ab".repeat(32));
+        let connecting = report(
+            BRIDGE,
+            json!({
+                "type": "observer", "kind": "connecting", "request": 7, "name": "kaito",
+                "identifiers": ["license:abc", "ip:192.0.2.1"], "tokens": [token],
+            }),
+        );
+        let unnumbered = report(
+            BRIDGE,
+            json!({ "type": "observer", "kind": "connecting", "name": "kaito" }),
+        );
+
+        let Some(PlayerReportKind::Connecting(connecting)) = connecting else {
+            panic!("not a connecting report: {connecting:?}");
+        };
+        assert_eq!(connecting.request, 7);
+        assert_eq!(connecting.shown.identifiers, ["license:abc"]);
+        assert_eq!(connecting.shown.tokens, [token]);
+        assert!(connecting.shown.address.is_some());
+        assert_eq!(unnumbered, None);
     }
 
     #[test]

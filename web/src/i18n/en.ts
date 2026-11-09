@@ -189,6 +189,18 @@ const permissions = {
         description:
             'A backup is the whole game database: every player, and whatever secrets resources keep in it.',
     },
+    bansView: {
+        name: 'View bans',
+        description: 'Who is banned, why, for how long and by whom, with their names and licences.',
+    },
+    playersBan: {
+        name: 'Ban players',
+        description: 'Keep a player out of the server, and drop them if they are connected.',
+    },
+    bansLift: {
+        name: 'Lift bans',
+        description: 'Let a banned player back in, whoever banned them.',
+    },
 } satisfies Record<PermissionKey, { name: string; description: string }>;
 
 const permissionNames = (hex: string) =>
@@ -4567,6 +4579,9 @@ export const en = {
             players_imported: "txAdmin's players imported",
             players_retention_changed: 'Player retention changed',
             player_drops_exported: 'Drop log exported',
+            player_banned: 'Player banned',
+            ban_lifted: 'Ban lifted',
+            bans_settings_changed: 'Ban settings changed',
             drop_rates_exported: 'Drop rates exported',
             drops_retention_changed: 'Drop retention changed',
             change_contents_viewed: 'Changed file read',
@@ -5028,6 +5043,20 @@ export const en = {
         address_search: 'A search never takes an address. Search by a name, a licence or another identifier.',
         invalid_search:
             'What follows this prefix is not a valid identifier of its kind. Check it, or search by a name.',
+        ban_not_found: 'No ban has this ID.',
+        ban_not_active: 'This ban already ended or was lifted.',
+        invalid_ban: (params) => {
+            const field = stringParam(params, 'field');
+            return field === 'reason'
+                ? 'Give a reason of 200 characters at most: the player reads it.'
+                : field === 'minutes'
+                  ? 'A ban lasts from one minute to ten years, or for good.'
+                  : 'Give at least one valid identifier, 64 at most. Addresses are never banned.';
+        },
+        invalid_bans_settings: (params) =>
+            typeof params.maxMessage === 'number' && typeof params.maxTokens === 'number'
+                ? `Write a refusal message of ${formatNumber('en', params.maxMessage)} characters at most, and ask for 0 to ${formatNumber('en', params.maxTokens)} tokens.`
+                : 'These settings are out of range.',
         invalid_players_settings:
             'Some retentions are out of range. Each one says its range below its field.',
         invalid_players_file: (params) => {

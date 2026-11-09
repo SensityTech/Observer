@@ -34,15 +34,20 @@ impl Players {
     }
 
     /// A new player: `name`, and the identifiers and tokens given, or a full set made from their id.
-    /// The address shows IPv4-mapped for every other player, as dual-stack sockets give it.
     pub fn join(
         &mut self,
         name: Option<&str>,
         identifiers: Option<&str>,
         tokens: Option<&str>,
     ) -> (u32, Player) {
-        self.next_id += 1;
-        let id = self.next_id;
+        let player = self.coming(name, identifiers, tokens);
+        (self.admit(player.clone()), player)
+    }
+
+    /// What the next player to join would show with these: a connecting player, before they join.
+    /// The address shows IPv4-mapped for every other player, as dual-stack sockets give it.
+    pub fn coming(&self, name: Option<&str>, identifiers: Option<&str>, tokens: Option<&str>) -> Player {
+        let id = self.next_id + 1;
         let address = if id.is_multiple_of(2) {
             format!("ip:::ffff:{ADDRESS}")
         } else {
@@ -67,13 +72,17 @@ impl Players {
                 .map(|n| format!("{}:{:064x}", n % 5 + 2, u64::from(id) * 1000 + u64::from(n)))
                 .collect(),
         };
-        let player = Player {
+        Player {
             name: name.map_or_else(|| format!("Player {id}"), str::to_owned),
             identifiers: shown,
             tokens,
-        };
-        self.by_id.insert(id, player.clone());
-        (id, player)
+        }
+    }
+
+    pub fn admit(&mut self, player: Player) -> u32 {
+        self.next_id += 1;
+        self.by_id.insert(self.next_id, player);
+        self.next_id
     }
 
     pub fn leave(&mut self, id: u32) -> Option<Player> {

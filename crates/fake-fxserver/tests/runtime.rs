@@ -11,12 +11,13 @@ use std::time::{Duration, Instant};
 
 use jiff::{SignedDuration, Timestamp, Unit};
 use observer_app::{
-    Accounts, AuditLog, Caller, Client, Clock, DatabaseFiles, Diagnostics, DiagnosticsSetup, DiagnosticsTask,
-    Drops, DropsSetup, Error, LogQuery, Metrics, MetricsSetup, PasswordCost, Players, PlayersSetup,
-    PlayersTask, Running, Sampling, Schedule, ScheduleSetup, ScheduleTask, Servers, Setup, Sources,
-    Supervision,
+    Accounts, AuditLog, Bans, BansSetup, Caller, Client, Clock, DatabaseFiles, Diagnostics, DiagnosticsSetup,
+    DiagnosticsTask, Drops, DropsSetup, Error, LogQuery, Metrics, MetricsSetup, PasswordCost, Players,
+    PlayersSetup, PlayersTask, Running, Sampling, Schedule, ScheduleSetup, ScheduleTask, Servers, Setup,
+    Sources, Supervision,
 };
 use observer_domain::audit::{ActorKind, AuditAction, AuditEntry, AuditFilter, Outcome};
+use observer_domain::bans::{BanFilter, BanRequest};
 use observer_domain::diagnostics::{
     Alert, AlertKind, AnalysisState, CrashFileKind, CrashKind, DiagnosticsEvent, ListenerRole, ProcessKind,
     Protocol, Scope,
@@ -1543,6 +1544,118 @@ async fn players_are_confirmed_followed_and_credited_and_their_address_is_kept_n
         files_holding(observer.dir.path(), b"192.0.2.77"),
         Vec::<PathBuf>::new()
     );
+}
+
+#[tokio::test]
+async fn a_banned_player_is_refused_at_connection_and_dropped_when_banned_while_playing() {
+    let mut observer = Observer::new(false).await;
+    let (bans, banning) = Bans::start(BansSetup {
+        db: observer.db.clone(),
+        clock: Clock::system(),
+        supervision: observer.supervision.clone(),
+        schedule: observer.schedule.status(),
+    });
+    let cheater = format!("license:{}", "a".repeat(40));
+    let ada = format!("license:{}", "b".repeat(40));
+    let ban = |license: &str| BanRequest {
+        player: None,
+        identifiers: vec![license.to_owned()],
+        reason: "Aimbot".to_owned(),
+        minutes: None,
+    };
+    let first = bans.ban(&observer.owner, ban(&cheater)).await.unwrap();
+    let send = |line: String| {
+        let observer = &observer;
+        async move {
+            observer
+                .supervision
+                .command(&observer.owner, &line, CONSOLE_ROUTE.0, CONSOLE_ROUTE.1)
+                .await
+                .unwrap();
+        }
+    };
+
+    observer.supervision.start_server(&observer.owner).await.unwrap();
+    observer.state(ServerState::Online).await;
+    send(format!("fake_connecting Cheater {cheater}")).await;
+    let refused = observer.console_until("refused ").await;
+    let refused_event = observer.console_until("observer:playerRefused").await;
+    send(format!("fake_connecting Ada {ada}")).await;
+    observer.console_until("Player Ada connected").await;
+    let second = bans.ban(&observer.owner, ban(&ada)).await.unwrap();
+    let banned_event = observer.console_until("observer:playerBanned").await;
+    let listed = bans
+        .page(BanFilter::Active, None, None, Permissions::all())
+        .await
+        .unwrap();
+    observer.supervision.stop_server(&observer.owner).await.unwrap();
+    observer.state(ServerState::Stopped).await;
+    banning.close().await;
+    observer.stop_observer().await;
+
+    let message = format!(
+        "You are banned from this server.
+Reason: Aimbot
+Ends: never
+Ban ID: {}",
+        first.code
+    );
+    assert!(
+        plain(&refused.5).contains(&json!(message).to_string()),
+        "{}",
+        refused.5
+    );
+    assert!(
+        plain(&refused_event.5).contains(&first.code),
+        "{}",
+        refused_event.5
+    );
+    assert!(
+        plain(&banned_event.5).contains(&second.code),
+        "{}",
+        banned_event.5
+    );
+    assert!(
+        plain(&banned_event.5).contains("\"player\":1"),
+        "{}",
+        banned_event.5
+    );
+    assert!(
+        !observer
+            .console()
+            .iter()
+            .any(|line| plain(&line.5).contains("Player Cheater connected")),
+        "the cheater got in"
+    );
+    let refusals: Vec<(String, u32)> = listed
+        .bans
+        .iter()
+        .map(|ban| (ban.code.clone(), ban.refused))
+        .collect();
+    assert_eq!(refusals, [(second.code.clone(), 1), (first.code.clone(), 1)]);
+}
+
+#[tokio::test]
+async fn a_player_gets_in_when_observer_does_not_answer_in_time() {
+    let mut observer =
+        Observer::launched(false, Duration::from_millis(50), &[("fake_verdict_ms", "300")]).await;
+
+    observer.supervision.start_server(&observer.owner).await.unwrap();
+    observer.state(ServerState::Online).await;
+    observer
+        .supervision
+        .command(
+            &observer.owner,
+            "fake_connecting Ada",
+            CONSOLE_ROUTE.0,
+            CONSOLE_ROUTE.1,
+        )
+        .await
+        .unwrap();
+    observer.console_until("Player Ada connected").await;
+    observer.supervision.stop_server(&observer.owner).await.unwrap();
+    observer.state(ServerState::Stopped).await;
+    observer.stop_observer().await;
 }
 
 fn profile_json(profile: &PlayerProfile) -> serde_json::Value {
