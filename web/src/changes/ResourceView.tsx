@@ -367,7 +367,7 @@ function FileRow({
                 onClick={() => onPick(file.path)}
                 className={cn(
                     'group flex min-w-0 flex-1 flex-col gap-1 px-5 py-1.5 text-left hover:bg-hover max-md:px-4',
-                    current && 'bg-accent-soft shadow-[inset_2px_0_0_var(--accent)]',
+                    current && 'bg-accent-soft',
                 )}
             >
                 {label}

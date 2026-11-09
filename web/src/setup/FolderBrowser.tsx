@@ -278,12 +278,7 @@ function Row({
     const readable = entry.kind !== 'unreadable';
     const Icon = readable ? Folder : Lock;
     return (
-        <li
-            className={cn(
-                'flex items-center gap-1 rounded-sm pr-1',
-                selected && 'bg-accent-soft shadow-[inset_2px_0_0_var(--accent)]',
-            )}
-        >
+        <li className={cn('flex items-center gap-1 rounded-sm pr-1', selected && 'bg-accent-soft')}>
             <button
                 type="button"
                 aria-pressed={selected}

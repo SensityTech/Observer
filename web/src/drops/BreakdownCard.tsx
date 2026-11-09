@@ -13,13 +13,10 @@ import { chartOf } from './search';
 import { CategoryWord, formatRate, formatShare, ShareBar, trendWindows, VerdictChip } from './words';
 
 /**
- * The selected row (DESIGN §8.8): the accent's soft fill, its 2 px bar against the first cell, and
- * the secondary text in ink-2, which ink-3 would not be readable on.
+ * The selected row or phone line (DESIGN §8.8): the accent's soft fill, and the secondary text in
+ * ink-2, which ink-3 would not be readable on.
  */
-const SELECTED_ROW =
-    'bg-accent-soft [&_.text-ink-3]:text-ink-2 [&>td:first-child]:shadow-[inset_2px_0_0_var(--accent)]';
-/** The same on a phone's line, the bar against the line itself. */
-const SELECTED_ITEM = 'bg-accent-soft shadow-[inset_2px_0_0_var(--accent)] [&_.text-ink-3]:text-ink-2';
+const SELECTED = 'bg-accent-soft [&_.text-ink-3]:text-ink-2';
 
 /** Unexpected categories first, then the expected ones, each ranked by its drops. */
 const groups = (categories: readonly CategoryShare[]) =>
@@ -181,9 +178,7 @@ function Ranking({
                             {group.rows.map((row, index) => (
                                 <tr
                                     key={row.category}
-                                    className={
-                                        selected === row.category ? SELECTED_ROW : 'hover:bg-surface-2'
-                                    }
+                                    className={selected === row.category ? SELECTED : 'hover:bg-surface-2'}
                                 >
                                     <td className={cn(table.td, 'align-top')}>
                                         <div className="flex flex-col gap-0.5">
@@ -236,7 +231,7 @@ function Ranking({
                                     key={row.category}
                                     className={cn(
                                         'flex flex-col gap-1.5 border-b border-line px-4 py-2.5',
-                                        selected === row.category && SELECTED_ITEM,
+                                        selected === row.category && SELECTED,
                                     )}
                                 >
                                     <div className="flex items-center justify-between gap-3">

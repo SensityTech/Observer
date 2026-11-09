@@ -174,18 +174,6 @@
     .nav-item[aria-current='page'] > svg {
         color: var(--accent);
     }
-    /* A notch of accent against the rail's edge: what the eye finds first in a column of grey entries. */
-    .nav-item[aria-current='page']::before {
-        content: '';
-        position: absolute;
-        left: calc(-1 * var(--rail-pad));
-        top: 50%;
-        width: 3px;
-        height: 18px;
-        margin-top: -9px;
-        border-radius: 0 3px 3px 0;
-        background: var(--accent);
-    }
 
     .nav-group {
         display: flex;

@@ -702,14 +702,7 @@ function ProcessRow({ process }: { process: TreeProcess }) {
     }, [line, whole]);
     return (
         <tr className={alert ? 'bg-warning-soft [&:last-child>td]:border-b-0' : table.row}>
-            <td
-                className={cn(
-                    table.td,
-                    table.mono,
-                    'align-top',
-                    alert && 'shadow-[inset_2px_0_0_var(--warning-fill)]',
-                )}
-            >
+            <td className={cn(table.td, table.mono, 'align-top')}>
                 <time dateTime={process.lastStartedAt}>
                     {format.timestamp(process.lastStartedAt, { seconds: false })}
                 </time>

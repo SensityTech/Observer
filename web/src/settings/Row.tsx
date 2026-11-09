@@ -48,7 +48,7 @@ export function SettingRow({
             className={cn(
                 'flex flex-wrap items-start gap-x-6 gap-y-3 border-t border-line px-5 py-4 first:border-t-0 max-md:px-4',
                 // ink-3 falls under 4.5:1 on the accent's tint: the row's grey text, hints included, turns ink-2.
-                found && 'bg-accent-soft shadow-[inset_2px_0_0_var(--accent)] [&_.text-ink-3]:text-ink-2',
+                found && 'bg-accent-soft [&_.text-ink-3]:text-ink-2',
             )}
         >
             <div className="flex min-w-0 flex-[1_1_16rem] flex-col gap-1">

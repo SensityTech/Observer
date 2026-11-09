@@ -73,7 +73,7 @@ export function StartsCard({
                                 onClick={() => onPick(start)}
                                 className={cn(
                                     'group min-w-0 rounded-sm px-2 py-1.25 text-left hover:bg-hover',
-                                    picked && 'bg-accent-soft shadow-[inset_2px_0_0_var(--accent)]',
+                                    picked && 'bg-accent-soft',
                                 )}
                             >
                                 <span className="sr-only">{words.compare(time)}</span>
