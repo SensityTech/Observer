@@ -249,12 +249,24 @@ fn cargo() -> Command {
 }
 
 fn npm() -> Command {
-    // npm is a batch script on Windows, which Command does not resolve without its extension.
-    Command::new(if cfg!(windows) { "npm.cmd" } else { "npm" })
+    Command::new(node_tool("npm"))
 }
 
 fn npx() -> Command {
-    Command::new(if cfg!(windows) { "npx.cmd" } else { "npx" })
+    Command::new(node_tool("npx"))
+}
+
+/// npm's own installer puts batch scripts on Windows, which Command does not find without their
+/// extension; some Node managers put executables instead, which it finds by their bare name.
+fn node_tool(name: &str) -> String {
+    let script = format!("{name}.cmd");
+    let on_path = std::env::var_os("PATH")
+        .is_some_and(|path| std::env::split_paths(&path).any(|folder| folder.join(&script).is_file()));
+    if cfg!(windows) && on_path {
+        script
+    } else {
+        name.to_owned()
+    }
 }
 
 fn root() -> PathBuf {
