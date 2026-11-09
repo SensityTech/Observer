@@ -13,10 +13,16 @@ const word = (t: Messages, code: string, params: Record<string, unknown>) => {
     return null;
 };
 
+// Observer never answers these without a code: a proxy in front of it answers them in its place.
+const PROXY_ANSWERS = new Set(['http_502', 'http_503', 'http_504']);
+
 /** What to tell the user about a failed request: the API's code in their language, or a fallback. */
 export const errorMessage = (t: Messages, error: unknown) => {
     if (error instanceof ApiError) {
-        return word(t, error.code, error.params) ?? t.failure.unknown;
+        return (
+            word(t, error.code, error.params) ??
+            (PROXY_ANSWERS.has(error.code) ? t.failure.network : t.failure.unknown)
+        );
     }
     // fetch rejects with a TypeError when the request never got an answer.
     if (error instanceof TypeError) {
