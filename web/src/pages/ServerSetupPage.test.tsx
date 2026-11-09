@@ -324,9 +324,8 @@ describe('ServerSetupPage', () => {
 
         await typeFolder(DATA_PATH);
 
-        getByText(
-            'At least 1,800 resources in 250 categories: the count stopped at 250 categories or 5,000 files and folders.',
-        );
+        getByText('1,800+');
+        getByText(words.folder.countStopped);
     });
 
     it('should say why a folder is refused, stay on it at Continue, and offer the one nearby that fits', async () => {
@@ -767,7 +766,7 @@ describe('ServerSetupPage', () => {
         expect(document.activeElement).toBe(getByRole('heading', { name: words.headings.folder }));
     });
 
-    it('should offer the servers found, the first one picked, and go on with it once its check passes', async () => {
+    it('should offer the servers found, the first one picked, check each one picked, and go on with the last', async () => {
         const api = serve({
             [DISCOVER_ROUTE]: json({ places: PLACES, servers: [LIVE, LAB], truncated: false }),
             [FOLDER_ROUTE]: json(FOLDER),
@@ -782,6 +781,8 @@ describe('ServerSetupPage', () => {
         within(live).getByText(words.folder.usedByTxAdmin);
         within(live).getByText(words.folder.onesync.on);
         getByText(words.folder.portTaken(30120, { program: 'FXServer.exe', fxServer: true }, true));
+        within(live).getByText(words.folder.portInUse(30120, 'FXServer.exe'));
+        await waitFor(() => getByText(words.folder.accepted));
 
         fireEvent.click(found.getByRole('button', { name: /lab-server/ }));
         await settle();
@@ -790,7 +791,11 @@ describe('ServerSetupPage', () => {
         await settle();
         await press(words.folder.continueWith('server-data'));
 
-        expect(api.of(FOLDER_ROUTE)).toEqual([{ dataPath: DATA_PATH }]);
+        expect(api.of(FOLDER_ROUTE)).toEqual([
+            { dataPath: DATA_PATH },
+            { dataPath: LAB.path },
+            { dataPath: DATA_PATH },
+        ]);
         expect(api.of(CFG_ROUTE)).toEqual([{ dataPath: DATA_PATH, cfgFile: 'server.cfg', onesync: 'on' }]);
         expect(document.activeElement).toBe(getByRole('heading', { name: words.headings.cfg }));
     });
@@ -810,7 +815,7 @@ describe('ServerSetupPage', () => {
         );
         fireEvent.click(folders.getByRole('button', { name: /^server-data/ }));
 
-        await waitFor(() => getByText(words.folder.browser.isServer));
+        await waitFor(() => getByText(words.folder.accepted));
         expect(api.of(FOLDERS_ROUTE)).toEqual([{ path: 'D:\\FXServer\\', prefix: '' }]);
         await press(words.folder.browser.use);
 

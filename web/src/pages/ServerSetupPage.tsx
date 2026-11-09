@@ -118,9 +118,17 @@ function Setup({ saved }: { saved: StoredLaunch | null }) {
     }, []);
 
     // With `goOn`, a folder that passes takes the setup to its cfg: Continue on a folder not checked.
+    // As for the cfg, only the last check sent counts: a server picked after another overtakes it.
+    const lastFolderCheck = useRef<FolderCheck | null>(null);
     const folderCheck = useMutation({
         mutationFn: ({ request }: { request: FolderCheck; goOn: boolean }) => checkFolder(request),
+        onMutate: ({ request }) => {
+            lastFolderCheck.current = request;
+        },
         onSuccess: (report, { request, goOn }) => {
+            if (request !== lastFolderCheck.current) {
+                return;
+            }
             setFolder({ request, report });
             if (report.problem !== null) {
                 return;
@@ -135,7 +143,11 @@ function Setup({ saved }: { saved: StoredLaunch | null }) {
                 enterCfg({ ...draft, cfgFile });
             }
         },
-        onError: (error) => setOutcome({ tone: 'danger', message: errorMessage(t, error) }),
+        onError: (error, { request }) => {
+            if (request === lastFolderCheck.current) {
+                setOutcome({ tone: 'danger', message: errorMessage(t, error) });
+            }
+        },
     });
     const checkThisFolder = (dataPath: string, goOn: boolean) =>
         folderCheck.mutate({ request: { dataPath: dataPath.trim() }, goOn });

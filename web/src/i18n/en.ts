@@ -3586,6 +3586,7 @@ export const en = {
             searchStopped:
                 'The search stopped before it looked everywhere: if yours is missing, browse to it or type its path.',
             searchFailed: (reason: string) => `Observer could not search this machine. ${reason}`,
+            foundHere: 'Found on this machine',
             servers: 'Servers found',
             selected: 'Selected',
             resourceCount: (resources: number, truncated: boolean) =>
@@ -3595,8 +3596,10 @@ export const en = {
                 on: 'OneSync on',
                 legacy: 'OneSync legacy',
             } satisfies Record<OneSync, string>,
-            usedByTxAdmin: 'used by txAdmin',
-            portInUse: (port: number) => `port ${formatNumber('en', port, { useGrouping: false })} in use`,
+            usedByTxAdmin: 'In a txAdmin profile',
+            port: (port: number) => `Port ${formatNumber('en', port, { useGrouping: false })}`,
+            portInUse: (port: number, program: string | null) =>
+                `Port ${formatNumber('en', port, { useGrouping: false })} ${program === null ? 'in use' : `taken by ${program}`}`,
             portTaken: (
                 port: number,
                 holder: { program: string | null; fxServer: boolean },
@@ -3607,7 +3610,7 @@ export const en = {
                         ? `FXServer already listens on port ${formatNumber('en', port, { useGrouping: false })}, and txAdmin is set up for this server. Stop it in txAdmin before the first start here, or both will fight for the port.`
                         : `Another FXServer already listens on port ${formatNumber('en', port, { useGrouping: false })}. Stop it before the first start here, or both will fight for the port.`
                     : `${holder.program ?? 'Another program'} already listens on port ${formatNumber('en', port, { useGrouping: false })}: FXServer cannot start on it until that program lets it go.`,
-            elsewhere: 'Somewhere else',
+            elsewhere: 'Or a folder elsewhere',
             label: 'Server data folder',
             placeholder: 'Start typing a path',
             hint: 'The folder that holds your resources folder and your server.cfg. Observer lists the folders on this machine as you type.',
@@ -3658,7 +3661,6 @@ export const en = {
                 selection: 'Selected folder',
                 selected: 'Selected',
                 checking: 'Checking the folder',
-                isServer: 'This is a server folder',
                 resources: 'Resources',
                 inCategories: (categories: number) =>
                     `in ${count(categories, { one: 'category', other: 'categories' })}`,
@@ -3678,9 +3680,11 @@ export const en = {
             } satisfies Record<FolderProblem, string>,
             suggestion: 'A folder nearby holds a server:',
             useSuggestion: 'Use this folder',
-            accepted: 'FXServer can run from this folder.',
-            resources: (resources: number, categories: number, truncated: boolean) =>
-                `${truncated ? 'At least ' : ''}${count(resources, { one: 'resource', other: 'resources' })} in ${count(categories, { one: 'category', other: 'categories' })}${truncated ? ': the count stopped at 250 categories or 5,000 files and folders' : ''}.`,
+            accepted: 'FXServer can run from this folder',
+            countStopped:
+                'Observer stopped counting at 250 categories or 5,000 files and folders: the folder holds more.',
+            withoutManifestCount: 'Without a manifest',
+            skipped: 'FXServer does not start them',
             withoutManifest: (names: string[]) =>
                 `Without fxmanifest.lua or __resource.lua, FXServer does not start ${list(names)}.`,
             cfgFiles: 'Config files found',
@@ -3775,21 +3779,33 @@ export const en = {
         },
         build: {
             lead: 'The FXServer build Observer starts. Install the one Cfx.re recommends, or import a folder of FXServer you already have.',
-            selected: (build: string) => `FXServer starts build ${build}.`,
+            selectedBuild: 'Selected build',
+            selected: 'Selected',
+            startsFromIt: 'FXServer starts from this build.',
+            recommendedBuild: 'Recommended build',
+            recommendedFor: (platform: string) => `The build Cfx.re recommends for ${platform} servers.`,
             none: 'No build is selected yet.',
             unknown: 'The builds are not known while the live link is down.',
-            install: 'Install the recommended build',
+            install: 'Install',
             catalogLoading: 'Reading the builds Cfx.re lists.',
             catalogFailed:
                 'The builds Cfx.re lists could not be read: import a folder instead, or try again later.',
             noRecommended: 'Cfx.re recommends no build for this system right now: import a folder instead.',
             recommendedInstalled: (build: string) =>
                 `The build Cfx.re recommends, ${build}, is installed already: use it below.`,
-            importFolder: 'Import a folder',
             installed: 'Installed builds',
             use: (build: string) => `Use build ${build}`,
+            otherWays: 'Other ways',
+            change: 'Change the build',
+            importTitle: 'Import a build you have',
+            importDetail: "A folder of FXServer, copied into Observer's own.",
+            choose: 'Choose…',
+            anotherTitle: 'Another build',
+            anotherDetail: 'Every build Cfx.re lists, on the FXServer builds page.',
+            latestIs: (build: string) => `The latest is ${build}, newer than the recommended one.`,
+            seeAll: 'See all',
+            goesOn: 'The install goes on if you leave this page.',
             skip: 'Skip for now',
-            openArtifacts: 'Open the Artifacts page',
         },
         start: {
             how: 'How FXServer starts',

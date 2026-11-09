@@ -10,6 +10,7 @@ export const chipVariants = cva(
         variants: {
             tone: {
                 neutral: 'border-line bg-surface-2 text-ink-2',
+                accent: 'border-transparent bg-accent-soft text-accent-ink',
                 success: 'border-transparent bg-success-soft text-success',
                 warning: 'border-transparent bg-warning-soft text-warning',
                 danger: 'border-transparent bg-danger-soft text-danger-ink',

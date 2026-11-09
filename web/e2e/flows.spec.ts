@@ -74,12 +74,9 @@ test.describe.serial('Observer in a browser', () => {
         await page.getByRole('button', { name: en.setup.submit }).click();
         await expect(page.getByRole('heading', { level: 1 })).toContainText(setup.headings.folder);
 
-        // The search of the host comes first; a server it finds closes the field for another path.
+        // The search of the host comes first; the field for another path stays beside what it finds.
         await expect(page.getByText(/^Observer looked in the usual places/)).toBeVisible({ timeout: 30_000 });
         const folder = page.getByRole('combobox', { name: setup.folder.label });
-        if (!(await folder.isVisible())) {
-            await page.getByText(setup.folder.elsewhere, { exact: true }).click();
-        }
         await folder.fill(env('E2E_SERVER_DATA'));
         await folder.press('Enter');
         await expect(page.getByText(setup.folder.accepted)).toBeVisible();

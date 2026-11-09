@@ -1,15 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import {
-    ArrowLeft,
-    Check,
-    ChevronDown,
-    CircleCheck,
-    FolderOpen,
-    FolderSearch,
-    RotateCw,
-    Server,
-    TriangleAlert,
-} from 'lucide-react';
+import { ArrowLeft, Check, FolderOpen, LoaderCircle, RotateCw, Server, TriangleAlert } from 'lucide-react';
 import { useEffect, useRef, useState, type ReactNode, type Ref } from 'react';
 
 import type { FolderCheck } from '../api/generated/FolderCheck';
@@ -25,6 +15,7 @@ import { useI18n } from '../i18n/I18nProvider';
 import { cn } from '../lib/cn';
 import { FolderBrowser } from './FolderBrowser';
 import { FolderField } from './FolderField';
+import { FolderVerdict } from './FolderVerdict';
 import { crumbs, folderName } from './paths';
 import type { Checked } from './state';
 import { StepActions } from './StepActions';
@@ -32,7 +23,9 @@ import { StepPage } from './StepPage';
 
 /**
  * The server folder: one of those Observer found on the host, a path typed with the host's folders
- * offered as it goes, or a folder picked in the browser. Continue checks it first when it was not.
+ * offered as it goes, or a folder picked in the browser. A server found is checked once picked and
+ * the folder the step opens on at once, for the verdict to show before Continue; a path typed is
+ * checked once chosen, and Continue checks the folder first when it was not.
  */
 export function FolderStep({
     titleRef,
@@ -61,7 +54,6 @@ export function FolderStep({
     const path = draft.dataPath.trim();
     const picked = servers.find((server) => server.path === path) ?? null;
     const [browsing, setBrowsing] = useState(false);
-    const [elsewhere, setElsewhere] = useState<boolean | null>(null);
     const report = checked !== null && checked.request.dataPath === path ? checked.report : null;
 
     // With no folder yet, the first server found is offered as the one to run.
@@ -74,11 +66,16 @@ export function FolderStep({
         }
     }, [discovery.data, draft.dataPath, onPath]);
 
-    // Open until the owner closes it: when nothing was found, or the folder is none of those found.
-    const open =
-        elsewhere ??
-        (discovery.isError ||
-            (discovery.isSuccess && (servers.length === 0 || (path !== '' && picked === null))));
+    const [openedOn] = useState(path);
+    const toCheck = picked?.path ?? (path !== '' && path === openedOn ? path : null);
+    const checkedLast = useRef<string | null>(null);
+    useEffect(() => {
+        if (toCheck !== null && report === null && checkedLast.current !== toCheck) {
+            checkedLast.current = toCheck;
+            onCheck(toCheck, false);
+        }
+    }, [toCheck, report, onCheck, checkedLast]);
+
     const problem = report?.problem ?? null;
     const refusal =
         problem === null
@@ -86,6 +83,8 @@ export function FolderStep({
             : problem === 'invalidPath' && report?.pathProblem != null
               ? t.server.problems[report.pathProblem]
               : words.problems[problem];
+    // A path typed has its refusal under the field: the verdict then has only a folder nearby to offer.
+    const verdict = report !== null && (problem === null || picked !== null || report.suggestion !== null);
     const lead = discovery.isPending
         ? words.searching
         : discovery.isSuccess
@@ -110,14 +109,7 @@ export function FolderStep({
                 browsing ? (
                     // The browser's own button takes the folder it shows.
                     <StepActions>
-                        <Button
-                            tone="ghost"
-                            icon={ArrowLeft}
-                            onClick={() => {
-                                setBrowsing(false);
-                                setElsewhere(true);
-                            }}
-                        >
+                        <Button tone="ghost" icon={ArrowLeft} onClick={() => setBrowsing(false)}>
                             {words.browser.typeInstead}
                         </Button>
                     </StepActions>
@@ -154,9 +146,9 @@ export function FolderStep({
                     }}
                 />
             ) : (
-                <>
+                <div className="flex max-w-250 flex-col gap-7 max-md:gap-5">
                     {discovery.isPending && (
-                        <div className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,18rem),1fr))] gap-3">
+                        <div className="grid gap-3 md:grid-cols-2">
                             {[0, 1].map((index) => (
                                 <div key={index} className="card flex flex-col gap-3 p-4.5">
                                     <span className="skeleton w-1/3" />
@@ -170,72 +162,68 @@ export function FolderStep({
                         <Notice tone="danger">{words.searchFailed(errorMessage(t, discovery.error))}</Notice>
                     )}
                     {servers.length > 0 && (
-                        <ul
-                            aria-label={words.servers}
-                            className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,18rem),1fr))] gap-3"
-                        >
-                            {servers.map((server) => (
-                                <li key={server.path} className="flex">
-                                    <ServerCard
-                                        server={server}
-                                        selected={server === picked}
-                                        onPick={() => onPath(server.path)}
-                                    />
-                                </li>
-                            ))}
-                        </ul>
+                        <section className="flex flex-col gap-3">
+                            <h2 className="eyebrow">{words.foundHere}</h2>
+                            <ul aria-label={words.servers} className="grid gap-3 md:grid-cols-2">
+                                {servers.map((server) => (
+                                    <li key={server.path} className="flex">
+                                        <ServerCard
+                                            server={server}
+                                            selected={server === picked}
+                                            onPick={() => onPath(server.path)}
+                                        />
+                                    </li>
+                                ))}
+                            </ul>
+                        </section>
                     )}
                     {picked?.portHolder != null && picked.port !== null && (
                         <Notice tone="warning" live={false}>
                             {words.portTaken(picked.port, picked.portHolder, picked.txAdmin)}
                         </Notice>
                     )}
-                    {picked !== null && refusal !== undefined && <Notice tone="danger">{refusal}</Notice>}
-
-                    <details
-                        className="card group"
-                        open={open}
-                        onToggle={(event) => setElsewhere(event.currentTarget.open)}
-                    >
-                        <summary className="flex cursor-pointer list-none items-center gap-2.5 rounded-card px-4.5 py-3.5 text-body font-medium text-ink max-md:min-h-11 [&::-webkit-details-marker]:hidden">
-                            <FolderSearch
-                                size={14}
-                                strokeWidth={1.5}
-                                className="text-ink-3"
-                                aria-hidden="true"
-                            />
-                            {words.elsewhere}
-                            <ChevronDown
-                                size={14}
-                                strokeWidth={1.5}
-                                className="ml-auto text-ink-3 transition-transform group-open:rotate-180 motion-reduce:transition-none"
-                                aria-hidden="true"
-                            />
-                        </summary>
-                        <div className="flex flex-col gap-4 px-4.5 pb-4.5">
-                            <FolderField
-                                value={draft.dataPath}
-                                error={picked === null ? refusal : undefined}
-                                onChange={onPath}
-                                onChoose={(folder) => onCheck(folder, false)}
-                                beside={
-                                    <Button icon={FolderOpen} onClick={() => setBrowsing(true)}>
-                                        {words.browse}
-                                    </Button>
-                                }
-                            />
-                            {picked === null && report !== null && (
-                                <Outcome
-                                    report={report}
-                                    onUse={(folder) => {
-                                        onPath(folder);
-                                        onCheck(folder, false);
-                                    }}
-                                />
-                            )}
-                        </div>
-                    </details>
-                </>
+                    <section className="flex flex-col gap-3">
+                        {servers.length > 0 && <h2 className="eyebrow">{words.elsewhere}</h2>}
+                        <FolderField
+                            value={draft.dataPath}
+                            error={picked === null ? refusal : undefined}
+                            onChange={onPath}
+                            onChoose={(folder) => onCheck(folder, false)}
+                            beside={
+                                <Button icon={FolderOpen} onClick={() => setBrowsing(true)}>
+                                    {words.browse}
+                                </Button>
+                            }
+                        />
+                    </section>
+                    <div aria-live="polite" className="empty:hidden">
+                        {path !== '' && (verdict || (checking && report === null)) && (
+                            <div className="card flex flex-col gap-4 p-5 max-md:p-4">
+                                {report === null ? (
+                                    <span className="flex items-center gap-2 text-small text-ink-3">
+                                        <LoaderCircle
+                                            size={14}
+                                            strokeWidth={1.5}
+                                            className="animate-spin"
+                                            aria-hidden="true"
+                                        />
+                                        {words.browser.checking}
+                                    </span>
+                                ) : (
+                                    <FolderVerdict
+                                        report={report}
+                                        problemShown={picked === null}
+                                        suggestionLabel={words.useSuggestion}
+                                        onSuggestion={(folder) => {
+                                            onPath(folder);
+                                            onCheck(folder, false);
+                                        }}
+                                    />
+                                )}
+                            </div>
+                        )}
+                    </div>
+                </div>
             )}
         </StepPage>
     );
@@ -258,105 +246,47 @@ function ServerCard({
             type="button"
             aria-pressed={selected}
             className={cn(
-                'card flex w-full flex-col gap-3 p-4.5 text-left transition-[border-color,box-shadow] hover:border-line-strong motion-reduce:transition-none',
+                'card flex w-full flex-col gap-3.5 p-4.5 text-left transition-[border-color,box-shadow] hover:border-line-strong motion-reduce:transition-none',
                 selected && 'border-accent ring-3 ring-focus-ring hover:border-accent',
             )}
             onClick={onPick}
         >
-            <span className="flex w-full items-center gap-2.5">
-                <span className="grid size-7 flex-none place-items-center rounded-sm bg-surface-2 text-ink-2">
-                    <Server size={14} strokeWidth={1.5} aria-hidden="true" />
+            <span className="flex w-full items-center gap-3">
+                <span
+                    className={cn(
+                        'grid size-9 flex-none place-items-center rounded-control',
+                        selected ? 'bg-accent-soft text-accent-ink' : 'bg-surface-2 text-ink-2',
+                    )}
+                >
+                    <Server size={18} strokeWidth={1.5} aria-hidden="true" />
                 </span>
-                <b className="min-w-0 truncate text-card text-ink">{folderName(server.path)}</b>
+                <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                    <b className="truncate text-card text-ink">{folderName(server.path)}</b>
+                    <span className="font-mono text-meta text-ink-3 [overflow-wrap:anywhere]">
+                        {server.path}
+                    </span>
+                </span>
                 {selected && (
-                    <span className="ml-auto inline-flex flex-none items-center gap-1.5 text-small text-accent-ink">
-                        <Check size={14} strokeWidth={1.75} aria-hidden="true" />
+                    <span className="inline-flex h-6 flex-none items-center gap-1.5 self-start rounded-pill bg-accent px-2.5 text-meta font-semibold text-on-accent">
+                        <Check size={12} strokeWidth={3} aria-hidden="true" />
                         {words.selected}
                     </span>
                 )}
             </span>
-            <span className="font-mono text-meta text-ink-3 [overflow-wrap:anywhere]">{server.path}</span>
             <span className="flex flex-wrap gap-1.5">
                 <Chip>{words.resourceCount(server.resources, server.resourcesTruncated)}</Chip>
                 {server.cfg !== null && <Chip className="font-mono">{server.cfg}</Chip>}
+                {server.port !== null &&
+                    (server.portHolder === null ? (
+                        <Chip>{words.port(server.port)}</Chip>
+                    ) : (
+                        <Chip tone="warning" icon={TriangleAlert}>
+                            {words.portInUse(server.port, server.portHolder.program)}
+                        </Chip>
+                    ))}
                 {server.onesync !== null && <Chip>{words.onesync[server.onesync]}</Chip>}
-                {server.txAdmin && <Chip>{words.usedByTxAdmin}</Chip>}
-                {server.portHolder !== null && server.port !== null && (
-                    <Chip tone="warning" icon={TriangleAlert}>
-                        {words.portInUse(server.port)}
-                    </Chip>
-                )}
+                {server.txAdmin && <Chip tone="accent">{words.usedByTxAdmin}</Chip>}
             </span>
         </button>
-    );
-}
-
-/** What the folder check said of a path typed: why it is refused and a folder nearby, or what it holds. */
-function Outcome({ report, onUse }: { report: FolderReport; onUse: (path: string) => void }) {
-    const { t } = useI18n();
-    const words = t.serverSetup.folder;
-    const resources = report.resources;
-    const suggestion = report.suggestion;
-    if (suggestion !== null) {
-        return (
-            <div className="flex flex-col items-start gap-2">
-                <p className="text-small text-ink-2">
-                    {words.suggestion}{' '}
-                    <span className="font-mono text-ink [overflow-wrap:anywhere]">{suggestion}</span>
-                </p>
-                <Button
-                    size="sm"
-                    icon={FolderSearch}
-                    className="max-md:w-full"
-                    onClick={() => onUse(suggestion)}
-                >
-                    {words.useSuggestion}
-                </Button>
-            </div>
-        );
-    }
-    if (report.problem !== null || resources === null) {
-        return null;
-    }
-    return (
-        <output className="flex flex-col gap-3">
-            <p className="flex items-center gap-2 text-body font-medium text-success">
-                <CircleCheck size={16} strokeWidth={1.5} className="flex-none" aria-hidden="true" />
-                {words.accepted}
-            </p>
-            <p className="text-body text-ink-2">
-                {words.resources(resources.resources, resources.categories, resources.truncated)}
-            </p>
-            {resources.withoutManifest.length > 0 && (
-                <p className="flex items-start gap-2 text-small text-warning">
-                    <TriangleAlert
-                        size={14}
-                        strokeWidth={1.5}
-                        className="mt-0.5 flex-none"
-                        aria-hidden="true"
-                    />
-                    <span className="[overflow-wrap:anywhere]">
-                        {words.withoutManifest(resources.withoutManifest)}
-                    </span>
-                </p>
-            )}
-            {report.cfgFiles.length === 0 ? (
-                <p className="text-small text-ink-3">{words.noCfgFile}</p>
-            ) : (
-                <div className="flex flex-col gap-1.5">
-                    <p className="text-ui font-medium text-ink">{words.cfgFiles}</p>
-                    <ul className="flex flex-wrap gap-1.5">
-                        {report.cfgFiles.map((file) => (
-                            <li
-                                key={file}
-                                className="rounded-xs border border-line bg-surface-2 px-1.5 py-0.5 font-mono text-small text-ink-2 [overflow-wrap:anywhere]"
-                            >
-                                {file}
-                            </li>
-                        ))}
-                    </ul>
-                </div>
-            )}
-        </output>
     );
 }
