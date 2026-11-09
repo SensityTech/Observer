@@ -21,6 +21,8 @@ import type { CfgFileState } from '../api/generated/CfgFileState';
 import type { ChartCategory } from '../api/generated/ChartCategory';
 import type { CommandRefusal } from '../api/generated/CommandRefusal';
 import type { Contest } from '../api/generated/Contest';
+import type { ConvarFlag } from '../api/generated/ConvarFlag';
+import type { ConvarKind } from '../api/generated/ConvarKind';
 import type { CrashForm } from '../api/generated/CrashForm';
 import type { DatabaseEngine } from '../api/generated/DatabaseEngine';
 import type { Difference } from '../api/generated/Difference';
@@ -3703,18 +3705,18 @@ export const en = {
             'FXServer ran from a folder of yours until this version. Observer now runs builds from its data folder: import it on the Artifacts page to keep using it.',
         onesync: 'OneSync',
         onesyncModes: { off: 'Off', on: 'On', legacy: 'Legacy' } satisfies Record<OneSync, string>,
-        onesyncHint: 'Set after your cfg on the command line, so it wins over the cfg.',
+        onesyncHint: 'Set on the command line, before your cfg runs: a cfg that sets onesync wins over it.',
         autoStart: 'Start FXServer with Observer',
         autoStartHint: 'When Observer starts, FXServer starts too.',
         txadminEvents: "Send txAdmin's events too",
         txadminEventsHint:
             "Resources written for txAdmin also receive txAdmin's events, such as txAdmin:events:scheduledRestart, next to Observer's.",
-        argument: (position: number) => `Argument ${formatNumber('en', position)}`,
+        argument: (position: number) => `Convar ${formatNumber('en', position)}`,
         argumentName: 'Name',
         argumentValue: 'Value',
-        removeArgument: (position: number) => `Remove argument ${formatNumber('en', position)}`,
-        addArgument: 'Add an argument',
-        noArguments: 'No extra argument.',
+        removeArgument: (position: number) => `Remove convar ${formatNumber('en', position)}`,
+        addArgument: 'Add a convar',
+        noArguments: 'No convar yet. Add one: its name suggests the convars FXServer declares.',
         discarded: 'Changes discarded: the form shows the settings as stored.',
         saved: 'Saved. FXServer uses these settings from its next start, a restart after a crash included.',
         savedHang: 'Saved. Hang detection applies at once, to a running server too.',
@@ -4284,7 +4286,7 @@ export const en = {
             },
             onesync: {
                 label: 'OneSync',
-                about: "How many players the server holds, and whether the server or the players' games keep the world in sync. Observer sets it after your cfg, so it wins over what the cfg says.",
+                about: "How many players the server holds, and whether the server or the players' games keep the world in sync. Observer sets it on the command line, which FXServer applies before your cfg: a cfg that sets onesync wins over it.",
             },
             autoStart: {
                 label: 'Start FXServer with Observer',
@@ -4303,8 +4305,8 @@ export const en = {
                 about: 'Minutes of silence, from 1 to 60, 6 by default. Raise it if a first start is slow while resources build their caches of clothing and vehicles.',
             },
             extraArguments: {
-                label: 'Extra arguments',
-                about: "Each goes on FXServer's command line as +set <name> <value>, after your cfg, so it wins over it. Keep secrets in the cfg: anyone on the host can read a command line.",
+                label: 'Convars',
+                about: "Each goes on FXServer's command line as +set <name> <value>. FXServer applies them before your cfg, so a convar your cfg sets too keeps the cfg's value. Keep secrets in the cfg: anyone on the host can read a command line.",
             },
             scheduleEnabled: {
                 label: 'Restart on a schedule',
@@ -4594,11 +4596,52 @@ export const en = {
                     about: "No OneSync: at most 32 slots, and the players' games sync entities among themselves.",
                 },
             } satisfies Record<OneSync, { name: string; about: string }>,
-            advanced: 'Advanced',
+            advanced: 'Convars',
             argumentsSet: (value: number) =>
-                value === 0
-                    ? 'No extra argument'
-                    : count(value, { one: 'extra argument', other: 'extra arguments' }),
+                value === 0 ? 'None set' : count(value, { one: 'convar', other: 'convars' }),
+            convars: {
+                catalog: (build: string) =>
+                    `Names and values are suggested from the sources of FXServer ${build}. A convar they do not declare still goes on the command line as typed.`,
+                kinds: {
+                    bool: 'true or false',
+                    int: 'whole number',
+                    float: 'number',
+                    string: 'text',
+                    enum: 'one of its values',
+                } satisfies Record<ConvarKind, string>,
+                defaultValue: (value: string) => (value === '' ? 'empty by default' : `default ${value}`),
+                defaultInCode: 'default set by FXServer',
+                values: (values: string) => `values ${values}`,
+                orAnyNumber: 'or any build number',
+                flags: {
+                    archive: 'archived',
+                    serverInfo: 'public',
+                    replicated: 'sent to players',
+                    readOnly: 'set at start only',
+                    userPref: 'user preference',
+                    internal: 'internal',
+                    scriptRestricted: 'hidden from scripts',
+                } satisfies Record<ConvarFlag, string>,
+                windows: 'Windows only',
+                linux: 'Linux only',
+                comment: (text: string) => `Comment in the sources: “${text}”`,
+                undeclared: 'FXServer reads it, but its sources declare no type or default.',
+                unknown: (build: string) =>
+                    `Not declared in the sources of FXServer ${build}: passed as typed.`,
+                cfgSets: (file: string, line: number, value: string) =>
+                    `${file} line ${line} sets ${value}. FXServer runs the cfg after the command line: ${value} applies.`,
+                cfgSetsSame: (file: string, line: number) => `${file} line ${line} sets the same value.`,
+                cfgSetsSecret: (file: string, line: number) =>
+                    `${file} line ${line} sets it too, and its value applies: FXServer runs the cfg after the command line.`,
+                inCfg: (value: number) =>
+                    `Set by your cfg: ${count(value, { one: 'more convar', other: 'more convars' })}`,
+                secret: 'secret, not shown',
+                place: (file: string, line: number) => `${file}:${line}`,
+                incomplete:
+                    'Your cfg runs files Observer did not read, outside the server data folder or past what it reads: a convar set there is not shown.',
+                unreadable: (file: string) =>
+                    `Observer could not read ${file}, so what it sets is not shown.`,
+            },
         },
         restarts: {
             openSchedule: 'Open the Schedule page',

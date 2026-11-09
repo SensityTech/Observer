@@ -12,6 +12,7 @@ pub mod audit;
 pub mod backups;
 pub mod bans;
 pub mod changes;
+pub mod convars;
 pub mod delegation;
 pub mod diagnostics;
 pub mod drops;

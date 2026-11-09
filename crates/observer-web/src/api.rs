@@ -167,6 +167,8 @@ pub(crate) fn routes() -> Vec<Route> {
         route(M::DELETE, "/files/services/{id}",               change_files, files::delete_service),
         route(M::GET,    "/servers/default/launch",     read_launch,  servers::launch_settings),
         route(M::PUT,    "/servers/default/launch",     edit_launch,  servers::change_launch_settings),
+        route(M::GET,    "/servers/default/launch/cfg-convars", read_launch, servers::cfg_convars),
+        route(M::GET,    "/convars",                    read_launch,  servers::convar_catalog),
         route(M::POST,   "/servers/default/setup/folder", read_launch, servers::check_folder),
         route(M::POST,   "/servers/default/setup/cfg",    read_launch, servers::check_cfg),
         route(M::POST,   "/servers/default/setup/folders",  read_launch, servers::list_folders),
