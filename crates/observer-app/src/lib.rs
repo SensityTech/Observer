@@ -15,6 +15,7 @@ mod drops;
 mod error;
 mod features;
 mod files;
+mod host_file;
 mod metrics;
 mod own_paths;
 mod passwords;
