@@ -32,6 +32,8 @@ export type SettingId =
     | 'backupsTimes'
     | 'backupsDestinations'
     | 'backupsLast'
+    | 'refusalMessage'
+    | 'tokenMatches'
     | 'switchSftp'
     | 'switchChanges'
     | 'switchTools'
@@ -76,6 +78,7 @@ export type CategoryId =
     | 'restarts'
     | 'builds'
     | 'backups'
+    | 'bans'
     | 'features'
     | 'data'
     | 'tools'
@@ -147,6 +150,15 @@ export const CATEGORIES: readonly Category[] = [
             { id: 'backupsTimes' },
             { id: 'backupsDestinations' },
             { id: 'backupsLast' },
+        ],
+    },
+    {
+        id: 'bans',
+        group: 'server',
+        access: ['SettingsView'],
+        settings: [
+            { id: 'refusalMessage', applies: 'now' },
+            { id: 'tokenMatches', applies: 'now' },
         ],
     },
     {

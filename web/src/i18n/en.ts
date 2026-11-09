@@ -12,6 +12,8 @@ import type { ArtifactSettingsProblem } from '../api/generated/ArtifactSettingsP
 import type { AuditAction } from '../api/generated/AuditAction';
 import type { BackupError } from '../api/generated/BackupError';
 import type { BackupPhase } from '../api/generated/BackupPhase';
+import type { BanFilter } from '../api/generated/BanFilter';
+import type { BanState } from '../api/generated/BanState';
 import type { BeforeRestarts } from '../api/generated/BeforeRestarts';
 import type { BuildPlatform } from '../api/generated/BuildPlatform';
 import type { CfgFileProblem } from '../api/generated/CfgFileProblem';
@@ -441,6 +443,7 @@ export const en = {
         audit: 'Audit log',
         diagnostics: 'Diagnostics',
         players: 'Players',
+        bans: 'Bans',
         drops: 'Drops',
         changes: 'File changes',
         tools: 'Tools',
@@ -1987,6 +1990,136 @@ export const en = {
                 `Imported ${at}: ${count(imported, { one: 'new profile', other: 'new profiles' })}, ${formatNumber('en', updated)} updated, ${formatNumber('en', forgotten)} skipped as forgotten, ${formatNumber('en', invalid)} without a valid licence.`,
             stopped: (at: string, written: number, read: number) =>
                 `The import of ${at} stopped after ${formatNumber('en', written)} of ${count(read, { one: 'player', other: 'players' })}. Import the file again to finish: what was written stays.`,
+        },
+    },
+    bans: {
+        title: 'Bans',
+        gloss: 'Who the server refuses, and why.',
+        banIdentifiers: 'Ban identifiers',
+        list: 'Bans',
+        filter: 'Show',
+        filters: {
+            active: 'Active',
+            ended: 'Ended',
+            lifted: 'Lifted',
+            all: 'All',
+        } satisfies Record<BanFilter, string>,
+        states: {
+            active: 'Active',
+            ended: 'Ended',
+            lifted: 'Lifted',
+        } satisfies Record<BanState, string>,
+        search: 'Search',
+        searchHint: 'A name, a licence, words of a reason, or a ban ID.',
+        searchHintIdentifiers: 'A name, a licence or another identifier, words of a reason, or a ban ID.',
+        submit: 'Search',
+        clear: 'Clear',
+        caption: (filter: string) => `Bans: ${filter.toLowerCase()}, latest first`,
+        player: 'Player',
+        reason: 'Reason',
+        ends: 'Ends',
+        lifted: 'Lifted',
+        by: 'By',
+        code: 'Ban ID',
+        noProfile: 'No profile',
+        held: (identifiers: number, tokens: number) =>
+            `${count(identifiers, { one: 'identifier', other: 'identifiers' })} and the licence, ${count(tokens, { one: 'token', other: 'tokens' })}`,
+        heldTyped: (identifiers: number, tokens: number) =>
+            `${count(identifiers, { one: 'identifier', other: 'identifiers' })}, ${count(tokens, { one: 'token', other: 'tokens' })}`,
+        permanent: 'Permanent',
+        endsIn: (left: string) => `in ${left}`,
+        endedAt: 'Ended',
+        liftedBy: (by: string) => `by ${by}`,
+        refused: (times: number) =>
+            times === 0 ? 'Never refused anyone' : `Refused ${count(times, { one: 'time', other: 'times' })}`,
+        empty: {
+            active: 'No one is banned. Ban a player from their profile, or ban identifiers with the button above.',
+            ended: 'No ban has run out yet.',
+            lifted: 'No ban was lifted.',
+            all: 'No ban yet. Ban a player from their profile, or ban identifiers with the button above.',
+        } satisfies Record<BanFilter, string>,
+        noMatch: 'No ban matches this search.',
+        loading: 'Loading the bans',
+        failed: 'The bans could not be read.',
+        shown: (value: number) => `${formatNumber('en', value)} shown`,
+        allShown: (value: number) => count(value, { one: 'ban', other: 'bans' }),
+        loadMore: 'Show more',
+        kept: 'Ended and lifted bans stay in the list, with who lifted them and why.',
+        actions: (code: string) => `Actions for ban ${code}`,
+        openProfile: 'Open profile',
+        copyCode: 'Copy ban ID',
+        lift: 'Lift ban…',
+        dialog: {
+            titlePlayer: (name: string) => `Ban ${name}`,
+            titleIdentifiers: 'Ban identifiers',
+            licence: (licence: string, online: boolean) => (online ? `${licence} · connected now` : licence),
+            length: 'How long',
+            lengths: {
+                hour: '1 hour',
+                day: '1 day',
+                threeDays: '3 days',
+                week: '1 week',
+                month: '1 month',
+                permanent: 'Permanent',
+                other: 'Other',
+            },
+            amount: 'Length',
+            units: { minutes: 'Minutes', hours: 'Hours', days: 'Days' },
+            unit: 'Unit',
+            ends: (when: string, zone: string) => `Ends ${when}, ${zone}.`,
+            never: 'Never ends: lift it by hand to let them back in.',
+            outOfRange: 'A ban lasts from one minute to ten years, or for good.',
+            reason: 'Reason',
+            reasonHint: 'The player reads it when the server refuses them.',
+            reasonMissing: 'Say why: the player reads it.',
+            counter: (used: number, max: number) =>
+                `${formatNumber('en', used)} / ${formatNumber('en', max)}`,
+            holds: 'What the ban holds',
+            holdsProfile:
+                "The licence, and every other identifier and hardware token this player's profile links to. A second account that shares the tokens is refused too.",
+            identifiers: 'Identifiers',
+            identifiersHint:
+                'One a line: license:…, license2:…, discord:…, steam:…, fivem:…, xbl:…, live:…, or a hardware token. Addresses are never banned.',
+            identifiersMissing: 'Give at least one identifier.',
+            online: (name: string) =>
+                `${name} is connected: the server drops them at once, with the refusal message.`,
+            submit: (length: string) => `Ban for ${length}`,
+            submitPermanent: 'Ban for good',
+        },
+        banned: (code: string) => `Banned. The ban ID is ${code}.`,
+        liftedNotice: (code: string) => `Ban ${code} lifted.`,
+        liftDialog: {
+            title: (name: string) => `Lift ${name}'s ban?`,
+            titleCode: (code: string) => `Lift ban ${code}?`,
+            lead: 'They can connect again at once. The ban stays in the list as lifted, with your name.',
+            why: 'Why',
+            whyHint: 'Kept with the ban and in the audit log.',
+            submit: 'Lift ban',
+        },
+        profile: {
+            ban: 'Ban…',
+            banned: 'Banned',
+            title: 'Bans',
+            meta: (all: number, active: number) =>
+                `${formatNumber('en', all)}, ${active === 0 ? 'none active' : `${formatNumber('en', active)} active`}`,
+            until: (when: string, left: string) => `Refused at every connection until ${when}, in ${left}.`,
+            forGood: 'Refused at every connection, for good.',
+            madeBy: (by: string, when: string, code: string) => `Banned by ${by} on ${when} · ban ${code}`,
+            length: 'Length',
+            state: 'State',
+        },
+        /** A ban's length in its largest whole unit: `7 days`, `90 minutes`. */
+        lengthOf: (minutes: number | null) => {
+            if (minutes === null) {
+                return 'Permanent';
+            }
+            if (minutes % (24 * 60) === 0) {
+                return count(minutes / (24 * 60), { one: 'day', other: 'days' });
+            }
+            if (minutes % 60 === 0) {
+                return count(minutes / 60, { one: 'hour', other: 'hours' });
+            }
+            return count(minutes, { one: 'minute', other: 'minutes' });
         },
     },
     drops: {
@@ -4030,6 +4163,10 @@ export const en = {
                 name: 'Launch',
                 about: 'How Observer starts FXServer: the folder, the cfg, OneSync and what goes on the command line. Most of these apply at the next start of FXServer.',
             },
+            bans: {
+                name: 'Bans',
+                about: 'What a banned player reads, and how much of a ban they must show to be refused. Banning and lifting is on the Bans page.',
+            },
             restarts: {
                 name: 'Restarts',
                 about: 'When FXServer restarts by itself, and how long before your resources hear of it. Skipping or delaying one restart is on the Schedule page.',
@@ -4316,6 +4453,14 @@ export const en = {
                 label: 'My SSH keys',
                 about: 'The keys you log in with over SFTP.',
             },
+            refusalMessage: {
+                label: 'Refusal message',
+                about: 'What a banned player reads when the server refuses them, or drops them: the only text Observer ever shows players. {reason}, {ends}, {id}, {name} and {by} are filled in.',
+            },
+            tokenMatches: {
+                label: 'Hardware tokens to match',
+                about: "How many of a ban's hardware tokens a player must show to be refused by them alone. Any identifier the ban holds refuses at once; 0 never refuses on tokens alone.",
+            },
         } satisfies Record<SettingId, { label: string; about: string }>,
         applies: {
             now: 'Applies at once',
@@ -4384,6 +4529,25 @@ export const en = {
         },
         builds: {
             openArtifacts: 'Open the Artifacts page',
+        },
+        bans: {
+            openBans: 'Open the Bans page',
+            insert: 'Insert',
+            preview: 'Preview, with an example ban',
+            example: {
+                reason: 'Aimbot, seen on stream',
+                ends: '2026-11-16 21:04 (Europe/Paris)',
+                code: 'K7QM-2XPA',
+                name: 'kaito',
+                by: 'maxime',
+            },
+            messageMissing: 'Write a message: a banned player always reads one.',
+            messageTooLong: (max: number) => `${formatNumber('en', max)} characters at most.`,
+            tokensOutOfRange: (max: number) => `From 0 to ${formatNumber('en', max)}.`,
+            saved: 'Saved. The next connection reads it.',
+            discarded: 'Changes discarded.',
+            readOnly: 'Your account can read these; changing them takes the permission to change settings.',
+            loadFailed: 'These settings could not be read.',
         },
         data: {
             changes: 'File changes',
