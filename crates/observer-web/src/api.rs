@@ -156,6 +156,8 @@ pub(crate) fn routes() -> Vec<Route> {
         route(M::POST,   "/servers/default/setup/folder", read_launch, servers::check_folder),
         route(M::POST,   "/servers/default/setup/cfg",    read_launch, servers::check_cfg),
         route(M::POST,   "/servers/default/setup/folders",  read_launch, servers::list_folders),
+        route(M::POST,   "/servers/default/setup/files",    read_launch, servers::list_files),
+        route(M::POST,   "/servers/default/setup/cfg/text", read_launch, servers::cfg_text),
         route(M::POST,   "/servers/default/setup/discover", read_launch, servers::discover),
         route(M::PUT,    "/servers/default/setup",        edit_launch, servers::save_setup),
         route(M::POST,   "/servers/default/start",      control,      servers::start),
