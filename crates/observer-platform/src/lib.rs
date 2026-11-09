@@ -44,7 +44,7 @@ pub use usage::{
 #[cfg(windows)]
 pub use windows::ProcessTree;
 #[cfg(windows)]
-pub use windows::authenticode::verify_signature;
+pub use windows::authenticode::{signer_of, verify_signature};
 #[cfg(windows)]
 pub use windows::confined::{ConfinedTree, Folder, TemporaryFile};
 #[cfg(windows)]

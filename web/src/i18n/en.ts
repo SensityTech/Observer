@@ -85,6 +85,10 @@ import type { ToolRunMode } from '../api/generated/ToolRunMode';
 import type { ToolRunOutcome } from '../api/generated/ToolRunOutcome';
 import type { ToolTrigger } from '../api/generated/ToolTrigger';
 import type { TrendVerdict } from '../api/generated/TrendVerdict';
+import type { RollbackReason } from '../api/generated/RollbackReason';
+import type { UpdateBlock } from '../api/generated/UpdateBlock';
+import type { UpdateStep } from '../api/generated/UpdateStep';
+import type { UpdateWhen } from '../api/generated/UpdateWhen';
 import type { DestinationKind } from '../api/backups';
 import { parsePermissions, permissionKeys, type PermissionKey } from '../auth/permissions';
 import type { InvisibleKind } from '../changes/invisible';
@@ -204,9 +208,21 @@ const features = {
     metrics: 'Statistics',
     players: 'Players',
     drops: 'Player drops',
+    updates: 'Updates',
 } satisfies Record<Feature, string>;
 
 const isFeature = (key: string): key is Feature => Object.hasOwn(features, key);
+
+const updateBlocks = {
+    developmentBuild:
+        'This Observer was built from source, not downloaded from a release: update it by building it again.',
+    noReleaseKey:
+        'This Observer was built without the key releases are signed with, so it cannot tell a genuine release: install the next one by hand.',
+    readOnly:
+        'The account that runs Observer cannot write next to its executable, so it cannot replace it. Under systemd, keep Observer out of /usr and /etc.',
+} satisfies Record<UpdateBlock, string>;
+
+const isUpdateBlock = (key: string): key is UpdateBlock => Object.hasOwn(updateBlocks, key);
 
 const commandRefusals = {
     empty: 'Type a command first.',
@@ -668,9 +684,6 @@ export const en = {
                 commit: 'installing',
             } satisfies Record<JobStep, string>,
             progress: 'Progress',
-            downloaded: (received: string, total: string) => `${received} of ${total}`,
-            rate: (rate: string) => `${rate}/s`,
-            left: (left: string) => `${left} left`,
             files: (done: number, total: number | null) =>
                 total === null
                     ? count(done, { one: 'file', other: 'files' })
@@ -4180,6 +4193,10 @@ export const en = {
                 label: 'Player drops',
                 about: "Why players leave: crashes, timeouts and kicks, and the signatures behind them, read from the players' sessions.",
             },
+            switchUpdates: {
+                label: 'Updates',
+                about: 'Every 6 hours, Observer asks GitHub for a newer release, which the owner installs from the About page. Off, Observer never contacts GitHub.',
+            },
             changesEnabled: {
                 label: 'Take a snapshot at each start',
                 about: 'Observer lists the server folder as FXServer starts, then reads what changed once it is up: the Changes page compares two starts with it.',
@@ -4454,6 +4471,8 @@ export const en = {
                 metricsUpkeep: 'the aggregates and retention of statistics',
                 playersFollower: 'following players as they come and go',
                 dropsWorker: 'the analysis of drops',
+                updateCheck: 'the check for a newer release',
+                updateProbation: 'settling an update once Observer restarted',
             } satisfies Record<FeatureTask, string>,
             turnedOn: (name: string) => `${name} is on.`,
             turnedOnLater: (name: string, state: string) => `${name}: ${state}.`,
@@ -4589,6 +4608,9 @@ export const en = {
             backups_expired: 'Old backups deleted by their retention',
             statistics_link_dismissed: 'Crash wave marked not related to a change',
             statistics_link_restored: 'Crash wave link restored',
+            observer_update_started: 'Observer update started',
+            observer_update_cancelled: 'Observer update cancelled',
+            observer_update_finished: 'Observer update finished',
         } satisfies Record<AuditAction, string>,
         outcomes: {
             success: 'Success',
@@ -4799,6 +4821,7 @@ export const en = {
             window: 'the host window',
             console: "Observer's console",
             signal: 'a signal',
+            update: 'an update',
         } satisfies Record<StopSource, string>,
         missReasons: {
             late: 'Observer saw the time pass too late',
@@ -4826,6 +4849,116 @@ export const en = {
             hierarchy: 'An account holding more than they do',
             self_edit: 'Their own account',
         },
+    },
+    download: {
+        received: (received: string, total: string) => `${received} of ${total}`,
+        rate: (rate: string) => `${rate}/s`,
+        left: (left: string) => `${left} left`,
+    },
+    updates: {
+        title: 'Updates',
+        rail: 'New release',
+        railBusy: 'Updating',
+        checked: (when: string) => `Checked ${when}`,
+        neverChecked: 'Not checked yet',
+        checking: 'Checking GitHub…',
+        check: 'Check now',
+        upToDate: (version: string) => `Observer ${version} is the newest release.`,
+        from: (current: string, next: string) => `${current} → ${next}`,
+        published: (date: string) => `published ${date}`,
+        signed: 'signed',
+        unsigned: 'not signed',
+        notes: 'Release notes',
+        notesCut: 'These notes go on: the release on GitHub has them all.',
+        noNotes: 'This release has no notes.',
+        onGithub: 'Open the release on GitHub',
+        when: 'When FXServer stops',
+        whenWords: {
+            now: 'Now',
+            scheduledRestart: 'At the next restart',
+        } satisfies Record<UpdateWhen, string>,
+        whenAbout: {
+            now: 'FXServer stops with the usual notice to your resources, Observer restarts into the new release, then FXServer starts again.',
+            scheduledRestart: (time: string) =>
+                `Observer verifies the release now, then restarts into it at the next restart, ${time}. Your resources hear the schedule's warnings as usual, and the restart takes a few seconds longer.`,
+            stopped:
+                'FXServer is stopped: Observer restarts into the new release, and FXServer stays stopped.',
+        },
+        noRestart:
+            'No restart is planned while FXServer runs: plan a single restart on the Restarts page to give players notice.',
+        noAsset: 'This release has no archive for this platform, so Observer cannot install it.',
+        unsignedRelease: 'This release carries no signature, so Observer will not install it.',
+        install: (version: string) => `Install ${version}`,
+        confirm: (version: string) => `Install Observer ${version}?`,
+        confirmNow:
+            'FXServer stops with the usual notice to your resources, Observer restarts into the new release, then FXServer starts again. The panel reconnects by itself.',
+        confirmAtRestart: (time: string) =>
+            `Observer downloads and verifies the release now, and restarts into it at the next restart, ${time}.`,
+        confirmStopped: 'Observer restarts into the new release. FXServer stays stopped.',
+        rollbackNote:
+            'Should the new release not start, Observer puts the previous one back, with its database, and starts it again.',
+        steps: {
+            download: 'Download',
+            verify: 'Verify',
+            wait: 'Wait for the restart',
+            restart: 'Restart',
+        } satisfies Record<UpdateStep, string>,
+        stepsLabel: (version: string) => `Installing ${version}`,
+        progress: 'Download progress',
+        verifying: 'Checking the signature, the checksums, and that the new executable runs.',
+        waiting: (time: string) => `Verified. Observer restarts into it at the next restart, ${time}.`,
+        waitingUnknown: 'Verified. Observer restarts into it at the next restart.',
+        restarting: (version: string) =>
+            `Observer is restarting into ${version}. The panel reconnects and reloads by itself.`,
+        cancel: 'Cancel',
+        cancelled: 'The install was cancelled. Nothing changed.',
+        failed: (reason: string) => `The install stopped: ${reason} Nothing changed.`,
+        retry: 'Try again',
+        failures: {
+            unreachable: 'GitHub could not be reached.',
+            httpStatus: (status: number) => `GitHub answered HTTP ${status}.`,
+            badLength: 'the archive was not the size GitHub lists.',
+            truncated: 'the download stopped before its end.',
+            tooLarge: 'the archive is larger than Observer accepts.',
+            unsigned: 'the release carries no signature, so it cannot be told genuine.',
+            badSignature: "the release is not signed with Observer's release key.",
+            notListed: "the release's signed checksums do not list its archive.",
+            checksumMismatch: 'the archive is not the one its signed checksums describe.',
+            digestMismatch: 'the archive is not the one GitHub stores.',
+            damaged: 'the archive is damaged, or holds something other than Observer.',
+            wontRun: 'the new executable did not run, or named another version.',
+            signature: 'the new executable is not signed as this one is.',
+            diskSpace: (needed: string, available: string) =>
+                `${needed} of free space is needed for the download, and ${available} is left.`,
+            io: "a file could not be read or written; Observer's log says which.",
+            interrupted: 'Observer stopped while it was under way.',
+            restartMissed: 'the restart it waited for did not come.',
+        },
+        checkFailures: {
+            unreachable: 'GitHub could not be reached. Observer tries again in 6 hours.',
+            httpStatus: (status: number) =>
+                `GitHub answered HTTP ${status}. Observer tries again in 6 hours.`,
+            noRelease: 'GitHub lists no release of Observer yet.',
+            rateLimited: (until: string | null) =>
+                until === null
+                    ? 'GitHub allows 60 checks an hour from this address, and they are spent.'
+                    : `GitHub allows 60 checks an hour from this address, and they are spent until ${until}.`,
+            malformed: "GitHub's answer was not one Observer reads.",
+        },
+        blocked: updateBlocks,
+        last: {
+            installed: (from: string, to: string, at: string) => `Updated from ${from} to ${to}, ${at}.`,
+            rolledBack: (from: string, to: string, at: string) =>
+                `${to} did not start, ${at}: Observer ${from} is back, with its database.`,
+        },
+        rollbackReasons: {
+            failed: "It stopped with an error as it started; Observer's log says why.",
+            crashed: 'It ended as it started, before it was up.',
+            swap: 'Observer could not put the new executable in place.',
+        } satisfies Record<RollbackReason, string>,
+        off: 'Update checks are off: Observer never contacts GitHub.',
+        turnOn: 'Turn them on in Settings',
+        reloading: 'Observer restarted: loading the panel of the new release…',
     },
     about: {
         title: 'About',
@@ -5083,6 +5216,15 @@ export const en = {
         invalid_backup_destination: 'This destination needs fixing. Each field says why.',
         backup_not_configured: 'Add a destination first: a backup needs somewhere to go.',
         backup_copy_unavailable: 'This copy is no longer stored there.',
+        update_not_available: 'This release is no longer the one Observer found. Check for updates again.',
+        update_running: 'An update is already under way. Wait for it to end, or cancel it.',
+        no_update: 'No update is under way.',
+        update_restarting:
+            'Observer is already restarting into the new release: it can no longer be cancelled.',
+        update_blocked: (params) => {
+            const key = stringParam(params, 'reason');
+            return isUpdateBlock(key) ? updateBlocks[key] : 'This Observer cannot install a release.';
+        },
     } satisfies Record<ErrorCode, ErrorMessage>,
     failure: {
         unknown: 'Something went wrong. Try again.',

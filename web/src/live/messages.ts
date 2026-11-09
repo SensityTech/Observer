@@ -251,6 +251,9 @@ const AUDIT_ACTIONS = {
     backups_expired: true,
     statistics_link_dismissed: true,
     statistics_link_restored: true,
+    observer_update_started: true,
+    observer_update_cancelled: true,
+    observer_update_finished: true,
 } satisfies Record<AuditAction, true>;
 
 const OUTCOMES = { success: true, failure: true, denied: true } satisfies Record<Outcome, true>;

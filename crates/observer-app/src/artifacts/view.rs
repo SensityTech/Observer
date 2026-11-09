@@ -90,7 +90,19 @@ pub(crate) fn failure(error: &InstallError) -> InstallFailure {
         InstallError::Unsafe { refusal, .. } => InstallFailure::UnsafeEntry {
             refusal: refusal_code(refusal).to_owned(),
         },
-        InstallError::Damaged(_) => InstallFailure::Damaged,
+        // Observer's own releases are never a build's install.
+        InstallError::Damaged(_)
+        | InstallError::RateLimited { .. }
+        | InstallError::ReleaseFormat(_)
+        | InstallError::NoReleaseKey
+        | InstallError::NoArchive { .. }
+        | InstallError::Unsigned
+        | InstallError::BadSignature
+        | InstallError::NotListed { .. }
+        | InstallError::ChecksumMismatch { .. }
+        | InstallError::DigestMismatch { .. }
+        | InstallError::WontRun(_)
+        | InstallError::ExecutableSignature(_) => InstallFailure::Damaged,
         InstallError::Layout { path, problem } => InstallFailure::Layout {
             path: (*path).to_owned(),
             problem: match problem {

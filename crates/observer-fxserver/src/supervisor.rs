@@ -441,6 +441,9 @@ enum Request {
     },
     Shutdown {
         shortened: bool,
+        /// What resources hear: `shutdown`, or `scheduled` when the stop takes the place of a
+        /// scheduled restart.
+        reason: StopReason,
     },
     Configure(Box<ServerLaunch>),
     SkipHangSnapshots,
@@ -599,7 +602,25 @@ impl Supervisor {
     /// Stops the server, then the supervisor. `shortened` is for a closing console, which leaves
     /// a few seconds only.
     pub async fn shutdown(&self, shortened: bool) {
-        let _ = self.requests.send(Request::Shutdown { shortened }).await;
+        let _ = self
+            .requests
+            .send(Request::Shutdown {
+                shortened,
+                reason: StopReason::Shutdown,
+            })
+            .await;
+    }
+
+    /// Stops the server, then the supervisor, in the place of a scheduled restart: resources hear
+    /// `scheduled`, as they would for the restart, and FXServer comes back with the next Observer.
+    pub async fn shutdown_scheduled(&self) {
+        let _ = self
+            .requests
+            .send(Request::Shutdown {
+                shortened: false,
+                reason: StopReason::Scheduled,
+            })
+            .await;
     }
 
     pub fn events(&self) -> broadcast::Receiver<Event> {
@@ -913,7 +934,7 @@ impl Actor {
                 Wake::Request(Some(request)) => self.request(request).await,
                 Wake::Request(None) => {
                     self.orphaned = true;
-                    self.shutdown(false);
+                    self.shutdown(false, StopReason::Shutdown);
                 }
                 Wake::Exit(exit) => self.exited(exit).await,
                 Wake::Trace(trace) => self.trace(trace),
@@ -968,7 +989,7 @@ impl Actor {
             } => {
                 let _ = reply.send(self.command(command, actor));
             }
-            Request::Shutdown { shortened } => self.shutdown(shortened),
+            Request::Shutdown { shortened, reason } => self.shutdown(shortened, reason),
             Request::Configure(launch) => self.configure(*launch),
             Request::SkipHangSnapshots => self.settings.hang_snapshot = None,
         }
@@ -1227,7 +1248,7 @@ impl Actor {
         Ok(written)
     }
 
-    fn shutdown(&mut self, shortened: bool) {
+    fn shutdown(&mut self, shortened: bool, reason: StopReason) {
         let shortened = shortened || self.shutdown == Some(true);
         self.shutdown = Some(shortened);
         let now = Instant::now();
@@ -1251,7 +1272,7 @@ impl Actor {
                     self.set_state(State::Stopping, Cause::Shutdown);
                 }
             }
-            Phase::Running => self.begin_stop(StopReason::Shutdown, Cause::Shutdown, After::Exit, shortened),
+            Phase::Running => self.begin_stop(reason, Cause::Shutdown, After::Exit, shortened),
             Phase::Notice { quit_at, reason } => {
                 let Some(run) = &mut self.run else {
                     return;

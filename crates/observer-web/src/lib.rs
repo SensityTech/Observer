@@ -21,7 +21,7 @@ use axum::extract::Request;
 use axum::{Router, middleware};
 use observer_app::{
     Accounts, Artifacts, AuditLog, Backups, Changes, Diagnostics, Drops, Error, Features, Files, Metrics,
-    Players, Schedule, Servers, Statistics, Supervision, Tools,
+    Players, Schedule, Servers, Statistics, Supervision, Tools, Updates,
 };
 use observer_domain::about::Build;
 use observer_domain::features::Feature;
@@ -58,6 +58,7 @@ pub struct AppState {
     players: Option<Players>,
     drops: Option<Drops>,
     changes: Option<Changes>,
+    updates: Option<Updates>,
     pub backups: Backups,
     pub live: Live,
     /// Cookies ignore ports, so the name carries the instance id: two Observers on one host never
@@ -94,6 +95,7 @@ pub struct Services {
     pub players: Option<Players>,
     pub drops: Option<Drops>,
     pub changes: Option<Changes>,
+    pub updates: Option<Updates>,
     pub backups: Backups,
 }
 
@@ -121,6 +123,7 @@ impl AppState {
             players,
             drops,
             changes,
+            updates,
             backups,
             statistics,
         } = services;
@@ -140,6 +143,7 @@ impl AppState {
             players,
             drops,
             changes,
+            updates,
             backups,
             statistics,
             live: Live::new(),
@@ -180,6 +184,12 @@ impl AppState {
         self.changes
             .as_ref()
             .ok_or_else(|| self.features.refusal(Feature::Changes))
+    }
+
+    pub(crate) fn updates(&self) -> Result<&Updates, Error> {
+        self.updates
+            .as_ref()
+            .ok_or_else(|| self.features.refusal(Feature::Updates))
     }
 }
 

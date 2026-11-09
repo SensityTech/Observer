@@ -20,6 +20,7 @@ mod servers;
 mod settings;
 mod setup;
 mod tools;
+mod updates;
 mod users;
 
 use axum::extract::State;
@@ -117,6 +118,10 @@ pub(crate) fn routes() -> Vec<Route> {
     let download_backups = Reauthenticated(P::BACKUPS_DOWNLOAD);
     let test_backups = Owner;
     let change_backups = ReauthenticatedOwner;
+    // A release replaces the executable the host runs: the owner's alone, with the password again
+    // to install one. Reading and checking reach GitHub only, with nothing of the owner's.
+    let read_updates = Owner;
+    let install_update = ReauthenticatedOwner;
     vec![
         route(M::GET,    "/health",                     Public,       health),
         route(M::GET,    "/setup",                      Public,       setup::status),
@@ -248,6 +253,10 @@ pub(crate) fn routes() -> Vec<Route> {
         route(M::GET,    "/servers/default/backups/runs/{id}",            read_backups,     backups::run),
         route(M::DELETE, "/servers/default/backups/runs/{id}",            change_backups,   backups::delete_run),
         route(M::GET,    "/servers/default/backups/copies/{id}/download", download_backups, backups::download),
+        route(M::GET,    "/updates",         read_updates,   updates::view),
+        route(M::POST,   "/updates/check",   read_updates,   updates::check),
+        route(M::POST,   "/updates/install", install_update, updates::install),
+        route(M::DELETE, "/updates/install", install_update, updates::cancel),
     ]
 }
 

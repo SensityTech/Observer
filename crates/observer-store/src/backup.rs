@@ -12,6 +12,8 @@ pub enum BackupKind {
     Daily,
     PreMigration,
     Manual,
+    /// Before an install of a new release swaps Observer's executable.
+    PreUpdate,
 }
 
 impl BackupKind {
@@ -20,13 +22,14 @@ impl BackupKind {
             Self::Daily => "daily",
             Self::PreMigration => "pre-migration",
             Self::Manual => "manual",
+            Self::PreUpdate => "pre-update",
         }
     }
 
     fn keep(self) -> usize {
         match self {
             Self::Daily => 7,
-            Self::PreMigration => 3,
+            Self::PreMigration | Self::PreUpdate => 3,
             Self::Manual => 10,
         }
     }
@@ -51,6 +54,35 @@ pub(crate) fn create(conn: &Connection, dir: &Path, kind: BackupKind) -> Result<
 
     prune(dir, kind)?;
     Ok(target)
+}
+
+/// Puts `backup` in the place of the database at `database`: the database and its `-wal` and
+/// `-shm` files go aside first, as `<name>.<suffix>`, so that nothing of it meets the backup.
+/// Observer must not hold the database. Says where the database went.
+pub fn restore(database: &Path, backup: &Path, suffix: &str) -> io::Result<PathBuf> {
+    let aside = |path: &Path| {
+        let mut name = path.as_os_str().to_owned();
+        name.push(format!(".{suffix}"));
+        PathBuf::from(name)
+    };
+    let set_aside = aside(database);
+    for companion in ["-wal", "-shm"] {
+        let mut name = database.as_os_str().to_owned();
+        name.push(companion);
+        let path = PathBuf::from(name);
+        if path.exists() {
+            fs::rename(&path, aside(&path))?;
+        }
+    }
+    if database.exists() {
+        fs::rename(database, &set_aside)?;
+    }
+    let partial = aside(&database.with_extension("restoring"));
+    fs::copy(backup, &partial)?;
+    // Windows flushes only a file opened for writing.
+    fs::File::options().write(true).open(&partial)?.sync_all()?;
+    fs::rename(&partial, database)?;
+    Ok(set_aside)
 }
 
 /// When the most recent backup of this kind was written, if there is one.
@@ -119,6 +151,27 @@ mod tests {
         assert!(daily[0].ends_with("observer-20261003T030000Z-daily.sqlite3"));
         assert_eq!(list(dir.path(), BackupKind::PreMigration).unwrap().len(), 1);
         assert!(dir.path().join("notes.txt").exists());
+    }
+
+    #[test]
+    fn a_restored_backup_takes_the_place_of_the_database_and_its_companions() {
+        let dir = tempfile::tempdir().unwrap();
+        let database = dir.path().join("observer.sqlite3");
+        fs::write(&database, b"migrated").unwrap();
+        fs::write(dir.path().join("observer.sqlite3-wal"), b"wal").unwrap();
+        let backup = dir.path().join("observer-20261109T100000Z-pre-update.sqlite3");
+        fs::write(&backup, b"before").unwrap();
+
+        let aside = restore(&database, &backup, "update-1").unwrap();
+
+        assert_eq!(fs::read(&database).unwrap(), b"before");
+        assert_eq!(fs::read(&aside).unwrap(), b"migrated");
+        assert!(!dir.path().join("observer.sqlite3-wal").exists());
+        assert_eq!(
+            fs::read(dir.path().join("observer.sqlite3-wal.update-1")).unwrap(),
+            b"wal"
+        );
+        assert!(backup.exists());
     }
 
     #[test]

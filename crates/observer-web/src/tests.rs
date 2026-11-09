@@ -17,6 +17,7 @@ mod servers;
 mod settings;
 mod setup;
 mod tools;
+mod updates;
 
 use std::collections::BTreeSet;
 use std::net::SocketAddr;
@@ -32,10 +33,11 @@ use observer_app::{
     Changes, ChangesSetup, ChangesTask, Clock, Diagnostics, DiagnosticsSetup, DiagnosticsTask, Drops,
     DropsSetup, DropsTask, Features, FeaturesSetup, Metrics, MetricsSetup, OwnPaths, PasswordCost, Players,
     PlayersSetup, PlayersTask, Running, Schedule, ScheduleSetup, ScheduleTask, Servers, Setup, Statistics,
-    Supervision, Tools, ToolsSetup,
+    Supervision, Tools, ToolsSetup, Updates, UpdatesSetup, UpdatesTask,
 };
 use observer_artifacts::Http;
 use observer_artifacts::catalog::{Catalog, Listing};
+use observer_artifacts::releases::Releases;
 use observer_domain::about::Build;
 use observer_domain::audit::ActorKind;
 use observer_store::{ChangesDatabase, Database};
@@ -75,6 +77,7 @@ struct Server {
     _dropping: DropsTask,
     _following: ChangesTask,
     _backing_up: BackupsTask,
+    _updating: UpdatesTask,
     cookie_name: String,
 }
 
@@ -265,6 +268,18 @@ impl Server {
         )
         .await
         .unwrap();
+        // Nothing listens on this port: a check never leaves the machine.
+        let (updates, updating, _takeovers) = Updates::start(UpdatesSetup {
+            db: db.clone(),
+            clock: clock.clone(),
+            data_dir: dir.path().join("data"),
+            releases: Releases::local(41977, Some(observer_artifacts::releases::fake::test_key())),
+            executable: dir.path().join("observer"),
+            current: semver::Version::new(0, 1, 0),
+            development: false,
+            supervision: supervision.clone(),
+            schedule: schedule.status(),
+        });
         let statistics = Statistics::new(
             features.clone(),
             Some(metrics.clone()),
@@ -287,6 +302,7 @@ impl Server {
             players: Some(players),
             drops: Some(drops),
             changes: Some(changes),
+            updates: Some(updates),
             backups,
             statistics,
         };
@@ -322,6 +338,7 @@ impl Server {
             _dropping: dropping,
             _following: following,
             _backing_up: backing_up,
+            _updating: updating,
             cookie_name: format!("observer_session_{instance_id}"),
         }
     }

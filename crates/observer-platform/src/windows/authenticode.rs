@@ -42,8 +42,17 @@ fn verbatim(path: &Path) -> io::Result<Vec<u16>> {
 
 /// Checks the Authenticode signature of `file` against the machine's trusted roots, then that the
 /// certificate that signed it was issued to `signer`. Revocation is not checked: that would need
-/// the network at install time, for an archive that already came from Cfx.re over HTTPS.
+/// the network at install time, for an archive that already came over HTTPS.
 pub fn verify_signature(file: &Path, signer: &str) -> Result<(), String> {
+    match signer_of(file)? {
+        name if name == signer => Ok(()),
+        name => Err(format!("it is signed by {name:?}")),
+    }
+}
+
+/// The common name of whoever signed `file`, once its Authenticode signature checks against the
+/// machine's trusted roots, revocation left out as above.
+pub fn signer_of(file: &Path) -> Result<String, String> {
     let path = verbatim(file).map_err(|error| format!("its path cannot be resolved: {error}"))?;
     let mut file_info = WINTRUST_FILE_INFO {
         cbStruct: struct_size::<WINTRUST_FILE_INFO>(),
@@ -81,11 +90,7 @@ pub fn verify_signature(file: &Path, signer: &str) -> Result<(), String> {
     if status != 0 {
         return Err(describe(status));
     }
-    match signed_by {
-        Some(name) if name == signer => Ok(()),
-        Some(name) => Err(format!("it is signed by {name:?}")),
-        None => Err("its signer's certificate cannot be read".to_owned()),
-    }
+    signed_by.ok_or_else(|| "its signer's certificate cannot be read".to_owned())
 }
 
 /// The common name on the certificate of the file's first signer.

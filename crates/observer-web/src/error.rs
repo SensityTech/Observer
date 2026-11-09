@@ -43,6 +43,10 @@ impl IntoResponse for Failure {
     }
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "one status per code, read best as one table"
+)]
 fn status(code: ErrorCode) -> StatusCode {
     match code {
         ErrorCode::Unauthenticated | ErrorCode::InvalidCredentials | ErrorCode::TemporaryPasswordExpired => {
@@ -99,7 +103,12 @@ fn status(code: ErrorCode) -> StatusCode {
         | ErrorCode::ToolNotAvailable
         | ErrorCode::BackupRunning
         | ErrorCode::BackupNotConfigured
-        | ErrorCode::BackupCopyUnavailable => StatusCode::CONFLICT,
+        | ErrorCode::BackupCopyUnavailable
+        | ErrorCode::UpdateNotAvailable
+        | ErrorCode::UpdateRunning
+        | ErrorCode::NoUpdate
+        | ErrorCode::UpdateRestarting
+        | ErrorCode::UpdateBlocked => StatusCode::CONFLICT,
         ErrorCode::LaunchFailed
         | ErrorCode::DelayTooLong
         | ErrorCode::NotDownloadable

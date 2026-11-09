@@ -11,18 +11,27 @@ publish.workspace = true
 # feature of observer; a release build never does.
 test-support = ["lzma-rust2/encoder", "tokio/net"]
 
+# A releases server that answers as GitHub's API does, with a release signed by the test key.
+[[bin]]
+name = "fake-releases"
+required-features = ["test-support"]
+
 [dependencies]
+ed25519-dalek.workspace = true
+flate2.workspace = true
 getrandom.workspace = true
 jiff.workspace = true
 lzma-rust2.workspace = true
+observer-domain.workspace = true
 observer-platform.workspace = true
 reqwest.workspace = true
+semver.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 tar.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["fs", "io-util", "rt", "sync", "time"] }
+tokio = { workspace = true, features = ["fs", "io-util", "process", "rt", "sync", "time"] }
 tokio-util.workspace = true
 tracing.workspace = true
 zip.workspace = true

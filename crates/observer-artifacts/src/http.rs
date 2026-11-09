@@ -8,18 +8,26 @@ use reqwest::{Method, Response, StatusCode, Url};
 use crate::error::Error;
 
 pub(crate) const MIB: u64 = 1024 * 1024;
-/// Cfx.re's build listings, its support policy and its archives: the only hosts Observer talks to.
-const HOSTS: [&str; 3] = ["runtime.fivem.net", "changelogs-live.fivem.net", "docs.fivem.net"];
+/// Cfx.re's build listings, its support policy and its archives.
+const CFX: &[&str] = &["runtime.fivem.net", "changelogs-live.fivem.net", "docs.fivem.net"];
+/// GitHub's API, its release pages, and where their downloads redirect to.
+const GITHUB: &[&str] = &[
+    "api.github.com",
+    "github.com",
+    "release-assets.githubusercontent.com",
+    "objects.githubusercontent.com",
+];
 pub(crate) const MAX_REDIRECTS: usize = 3;
 const PAGE_LIMIT: u64 = 4 * MIB;
 pub(crate) const ARCHIVE_LIMIT: u64 = 512 * MIB;
 
-/// An HTTP client that reaches only the Cfx.re hosts, over HTTPS and through no proxy, and checks
-/// every redirect against the same hosts before following it. It sends no browser headers and asks
-/// for no compression, so sizes on the wire are the sizes on disk.
+/// An HTTP client that reaches only one set of hosts, Cfx.re's or GitHub's, over HTTPS and through
+/// no proxy, and checks every redirect against the same hosts before following it. It sends no
+/// browser headers and asks for no compression, so sizes on the wire are the sizes on disk.
 #[derive(Debug, Clone)]
 pub struct Http {
     client: reqwest::Client,
+    hosts: &'static [&'static str],
     /// A port on 127.0.0.1 let through over plain HTTP. Only tests set it, to serve archives locally.
     local_port: Option<u16>,
 }
@@ -32,7 +40,17 @@ pub(crate) struct Head {
 }
 
 impl Http {
+    /// A client of the Cfx.re hosts, for FXServer's builds.
     pub fn new() -> Result<Self, Error> {
+        Self::of(CFX)
+    }
+
+    /// A client of the GitHub hosts, for Observer's own releases.
+    pub fn github() -> Result<Self, Error> {
+        Self::of(GITHUB)
+    }
+
+    fn of(hosts: &'static [&'static str]) -> Result<Self, Error> {
         let client = reqwest::Client::builder()
             .no_proxy()
             .redirect(Policy::none())
@@ -43,6 +61,7 @@ impl Http {
             .map_err(Error::Client)?;
         Ok(Self {
             client,
+            hosts,
             local_port: None,
         })
     }
@@ -57,19 +76,9 @@ impl Http {
 
     /// A page or an API answer, at most 4 MiB.
     pub(crate) async fn page(&self, url: &Url, timeout: Duration) -> Result<String, Error> {
-        let mut response = self.send(Method::GET, url, HeaderMap::new(), timeout).await?;
+        let response = self.send(Method::GET, url, HeaderMap::new(), timeout).await?;
         expect_ok(&response)?;
-        let url = response.url().clone();
-        if content_length(&response).is_some_and(|length| length > PAGE_LIMIT) {
-            return Err(too_large(&url, PAGE_LIMIT));
-        }
-        let mut body = Vec::new();
-        while let Some(chunk) = response.chunk().await.map_err(|error| network(&url, &error))? {
-            body.extend_from_slice(&chunk);
-            if body.len() as u64 > PAGE_LIMIT {
-                return Err(too_large(&url, PAGE_LIMIT));
-            }
-        }
+        let body = body(response, PAGE_LIMIT).await?;
         Ok(String::from_utf8_lossy(&body).into_owned())
     }
 
@@ -136,7 +145,7 @@ impl Http {
             && url.scheme() == "http"
             && url.host_str() == Some("127.0.0.1")
             && url.port() == self.local_port;
-        if local || allowed(url) {
+        if local || allowed(url, self.hosts) {
             Ok(())
         } else {
             Err(Error::UrlRefused { url: url.to_string() })
@@ -144,13 +153,13 @@ impl Http {
     }
 }
 
-/// HTTPS on the default port to one of the Cfx.re hosts, with no credentials in the URL.
-fn allowed(url: &Url) -> bool {
+/// HTTPS on the default port to one of `hosts`, with no credentials in the URL.
+fn allowed(url: &Url, hosts: &[&str]) -> bool {
     url.scheme() == "https"
         && url.username().is_empty()
         && url.password().is_none()
         && url.port().is_none()
-        && url.host_str().is_some_and(|host| HOSTS.contains(&host))
+        && url.host_str().is_some_and(|host| hosts.contains(&host))
 }
 
 pub(crate) fn expect_ok(response: &Response) -> Result<(), Error> {
@@ -162,6 +171,22 @@ pub(crate) fn expect_ok(response: &Response) -> Result<(), Error> {
             status: response.status().as_u16(),
         })
     }
+}
+
+/// The whole body of `response`, refused past `limit` bytes.
+pub(crate) async fn body(mut response: Response, limit: u64) -> Result<Vec<u8>, Error> {
+    let url = response.url().clone();
+    if content_length(&response).is_some_and(|length| length > limit) {
+        return Err(too_large(&url, limit));
+    }
+    let mut body = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|error| network(&url, &error))? {
+        body.extend_from_slice(&chunk);
+        if body.len() as u64 > limit {
+            return Err(too_large(&url, limit));
+        }
+    }
+    Ok(body)
 }
 
 /// Read from the header itself: the body's size hint says nothing for a `HEAD`.
@@ -222,7 +247,7 @@ mod tests {
             "https://docs.fivem.net/docs/server-download/?platform=legacy&os=windows",
             "https://RUNTIME.fivem.net:443/artifacts/",
         ] {
-            assert!(allowed(&url.parse().unwrap()), "{url}");
+            assert!(allowed(&url.parse().unwrap(), CFX), "{url}");
         }
         for url in [
             "http://runtime.fivem.net/artifacts/",
@@ -233,8 +258,29 @@ mod tests {
             "https://fivem.net/",
             "https://23.55.1.1/artifacts/",
             "ftp://runtime.fivem.net/artifacts/",
+            "https://api.github.com/repos/SensityTech/Observer/releases/latest",
         ] {
-            assert!(!allowed(&url.parse().unwrap()), "{url}");
+            assert!(!allowed(&url.parse().unwrap(), CFX), "{url}");
+        }
+    }
+
+    #[test]
+    fn only_https_to_the_github_hosts_is_allowed_for_releases() {
+        for url in [
+            "https://api.github.com/repos/SensityTech/Observer/releases/latest",
+            "https://github.com/SensityTech/Observer/releases/download/v0.2.0/SHA256SUMS",
+            "https://release-assets.githubusercontent.com/github-production-release-asset/1/2?sp=r",
+        ] {
+            assert!(allowed(&url.parse().unwrap(), GITHUB), "{url}");
+        }
+        for url in [
+            "http://api.github.com/repos/SensityTech/Observer/releases/latest",
+            "https://gist.github.com/",
+            "https://github.com.example.com/x",
+            "https://runtime.fivem.net/artifacts/",
+            "https://raw.githubusercontent.com/SensityTech/Observer/main/README.md",
+        ] {
+            assert!(!allowed(&url.parse().unwrap(), GITHUB), "{url}");
         }
     }
 

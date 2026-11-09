@@ -8,7 +8,9 @@ publish.workspace = true
 [dependencies]
 anyhow.workspace = true
 brotli = "9.1.1"
+ed25519-dalek.workspace = true
 flate2 = "1.1.10"
+getrandom.workspace = true
 observer-domain.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

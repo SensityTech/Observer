@@ -41,6 +41,7 @@ import { Logo } from './Logo';
 import { OnlineButton, OnlineColumn } from './OnlineColumn';
 import { ServerControls } from './ServerControls';
 import { StatusBar } from './StatusBar';
+import { UpdateSignal } from '../updates/UpdateSignal';
 import { UserMenu } from './UserMenu';
 
 type NavEntry = {
@@ -209,6 +210,7 @@ export function AppShell() {
                                             />
                                         </nav>
                                         <div className="rail-foot">
+                                            {me.isOwner && <UpdateSignal onNavigate={closeMenu} />}
                                             <NavEntries me={me} entries={settings} onNavigate={closeMenu} />
                                             <UserMenu me={me} onNavigate={closeMenu} />
                                         </div>

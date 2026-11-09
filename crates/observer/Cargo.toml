@@ -26,6 +26,7 @@ observer-sftp.workspace = true
 observer-store.workspace = true
 observer-tools.workspace = true
 observer-web.workspace = true
+semver.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true

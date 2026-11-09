@@ -29,7 +29,6 @@ import {
     needsKvpConfirmation,
     protectionsOf,
     refreshCatalog,
-    secondsLeft,
     selectBuild,
     stepsOf,
 } from '../api/artifacts';
@@ -55,6 +54,7 @@ import { Chip } from '../components/Chip';
 import { Dialog } from '../components/Dialog';
 import { TextField, inputClass } from '../components/Field';
 import { Notice } from '../components/Notice';
+import { downloadFigures, ProgressBar } from '../components/Progress';
 import { Steps } from '../components/Steps';
 import { table } from '../components/table';
 import { errorMessage } from '../i18n/errors';
@@ -653,15 +653,10 @@ export function JobCard({
             : entries !== null && entries.total !== null && entries.total > 0
               ? entries.done / entries.total
               : null;
-    const left = download === null ? null : secondsLeft(download);
     // The download's figures while it lasts; the files after it.
     const downloading = job.step === 'download' && download !== null ? download : null;
     const progress = [
-        downloading === null
-            ? null
-            : words.downloaded(format.bytes(downloading.received), format.bytes(downloading.total)),
-        downloading === null || downloading.rate === 0 ? null : words.rate(format.bytes(downloading.rate)),
-        downloading === null || left === null ? null : words.left(format.duration(left)),
+        ...(downloading === null ? [] : downloadFigures(t, format, downloading)),
         entries === null || job.step === 'download' ? null : words.files(entries.done, entries.total),
     ].filter((part) => part !== null);
     const canManage = allows(me, Permission.ArtifactsManage);
@@ -692,12 +687,10 @@ export function JobCard({
                 />
                 {running && (
                     <>
-                        <progress
-                            aria-label={words.progress}
-                            aria-valuetext={progress.join(' · ') || words.steps[job.step]}
-                            max={100}
-                            value={share === null ? undefined : Math.round(share * 100)}
-                            className="h-1.5 w-full appearance-none overflow-hidden rounded-pill bg-surface-2 [&::-moz-progress-bar]:bg-accent [&::-webkit-progress-bar]:bg-surface-2 [&::-webkit-progress-value]:rounded-pill [&::-webkit-progress-value]:bg-accent"
+                        <ProgressBar
+                            label={words.progress}
+                            valueText={progress.join(' · ') || words.steps[job.step]}
+                            share={share}
                         />
                         <p className="flex flex-wrap gap-x-3 text-small text-ink-2 tabular-nums">
                             {progress.length > 0 && <span>{progress.join(' · ')}</span>}
