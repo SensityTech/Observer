@@ -23,7 +23,7 @@ use tokio::task::{JoinError, JoinHandle};
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
-use crate::bridge::{self, BridgeEvent, Report, StopReason};
+use crate::bridge::{self, BridgeAction, BridgeEvent, Report, StopReason};
 use crate::cfg;
 use crate::console::{ConsoleHub, LineAssembler, LineFlags, LineKind, plain, sanitize};
 use crate::crashes::{self, Collected, DumpLimits, HangSnapshotLimits, SnapshotFailure};
@@ -434,6 +434,10 @@ enum Request {
         event: BridgeEvent,
         reply: Reply<()>,
     },
+    Act {
+        action: BridgeAction,
+        reply: Reply<()>,
+    },
     Command {
         command: UserCommand,
         actor: String,
@@ -573,6 +577,11 @@ impl Supervisor {
     /// reported: nothing is queued for a server still starting or already stopping.
     pub async fn announce(&self, event: BridgeEvent) -> Result<(), ControlError> {
         self.ask(|reply| Request::Announce { event, reply }).await
+    }
+
+    /// Has the bridge act, under the same conditions as [`Supervisor::announce`].
+    pub async fn act(&self, action: BridgeAction) -> Result<(), ControlError> {
+        self.ask(|reply| Request::Act { action, reply }).await
     }
 
     /// Writes an operator's command to FXServer and echoes it into the console once written.
@@ -982,6 +991,9 @@ impl Actor {
             Request::Announce { event, reply } => {
                 let _ = reply.send(self.announce(event));
             }
+            Request::Act { action, reply } => {
+                let _ = reply.send(self.to_bridge(SystemLine::Action(action)));
+            }
             Request::Command {
                 command,
                 actor,
@@ -1213,9 +1225,13 @@ impl Actor {
     }
 
     fn announce(&self, event: BridgeEvent) -> Result<(), ControlError> {
+        self.to_bridge(SystemLine::Bridge(event))
+    }
+
+    fn to_bridge(&self, line: SystemLine) -> Result<(), ControlError> {
         match &self.run {
             Some(run) if matches!(self.phase, Phase::Running) && run.bridge_ready => {
-                run.system(SystemLine::Bridge(event));
+                run.system(line);
                 Ok(())
             }
             _ => Err(ControlError::NotRunning),

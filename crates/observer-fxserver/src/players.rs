@@ -24,6 +24,8 @@ const MAX_IDENTIFIER_BYTES: usize = 128;
 const MAX_TEXT_BYTES: usize = 4096;
 /// The bridge sends at most 100 players a page.
 const MAX_PAGE: usize = 200;
+/// Past any map: a position beyond is not one the game holds.
+const MAX_COORDINATE: f64 = 100_000.0;
 
 /// A report and when Observer received it.
 #[derive(Debug, Clone, PartialEq)]
@@ -43,6 +45,36 @@ pub enum PlayerReportKind {
     Roster(RosterPage),
     /// The latest label of each player whose label changed in the last second.
     Labels(Vec<LabelChange>),
+    /// A player connecting, whom the bridge holds until Observer's verdict on `request`.
+    Connecting(Connecting),
+    /// A page of where the players stand, while Observer asks.
+    Positions(PositionsPage),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PositionsPage {
+    /// From 1.
+    pub page: u32,
+    pub last: bool,
+    /// Without OneSync the server has no position, and the page none.
+    pub onesync: bool,
+    pub players: Vec<Position>,
+}
+
+/// Where a player stands, in game units, and which way they face, in degrees.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Position {
+    pub net_id: u32,
+    pub x: f32,
+    pub y: f32,
+    pub z: f32,
+    pub heading: f32,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Connecting {
+    pub request: u32,
+    pub shown: Shown,
 }
 
 /// A player who joined: their net id, FXServer's game timer, and what they showed.
@@ -173,6 +205,29 @@ impl PlayerReportKind {
                     dropped,
                 }))
             }
+            "positions" => Some(Self::Positions(PositionsPage {
+                page: payload
+                    .get("page")
+                    .and_then(Value::as_u64)
+                    .and_then(|page| u32::try_from(page).ok())?,
+                last: payload.get("last").and_then(Value::as_bool).unwrap_or(false),
+                onesync: payload.get("onesync").and_then(Value::as_bool).unwrap_or(false),
+                players: payload
+                    .get("players")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(position)
+                    .take(MAX_PAGE)
+                    .collect(),
+            })),
+            "connecting" => Some(Self::Connecting(Connecting {
+                request: payload
+                    .get("request")
+                    .and_then(Value::as_u64)
+                    .and_then(|request| u32::try_from(request).ok())?,
+                shown: shown(payload),
+            })),
             "labels" => Some(Self::Labels(
                 payload
                     .get("labels")
@@ -197,6 +252,28 @@ impl PlayerReportKind {
             _ => None,
         }
     }
+}
+
+/// A position the game could hold: finite, and within a margin of any map's size.
+fn position(entry: &Value) -> Option<Position> {
+    let coordinate = |key| {
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "positions in tenths of a game unit"
+        )]
+        entry
+            .get(key)
+            .and_then(Value::as_f64)
+            .filter(|value| value.is_finite() && value.abs() <= MAX_COORDINATE)
+            .map(|value| value as f32)
+    };
+    Some(Position {
+        net_id: net_id(entry.get("id"))?,
+        x: coordinate("x")?,
+        y: coordinate("y")?,
+        z: coordinate("z")?,
+        heading: coordinate("h").unwrap_or(0.0),
+    })
 }
 
 fn net_id(value: Option<&Value>) -> Option<u32> {
@@ -403,6 +480,72 @@ mod tests {
                 },
             ]))
         );
+    }
+
+    #[test]
+    fn positions_keep_what_the_game_could_hold() {
+        let page = report(
+            BRIDGE,
+            json!({
+                "type": "observer", "kind": "positions", "t": 1, "page": 1, "last": true, "onesync": true,
+                "players": [
+                    { "id": 3, "x": 412.6, "y": -1208.3, "z": 32.1, "h": 90.0 },
+                    { "id": 4, "x": 1e9, "y": 0, "z": 0 },
+                    { "id": 5, "x": "far", "y": 0, "z": 0 },
+                    { "x": 1, "y": 2, "z": 3 },
+                    { "id": 6, "x": 1, "y": 2, "z": 3 },
+                ],
+            }),
+        );
+
+        let Some(PlayerReportKind::Positions(page)) = page else {
+            panic!("not a positions report: {page:?}");
+        };
+        assert!(page.last && page.onesync);
+        assert_eq!(
+            page.players,
+            [
+                Position {
+                    net_id: 3,
+                    x: 412.6,
+                    y: -1208.3,
+                    z: 32.1,
+                    heading: 90.0
+                },
+                Position {
+                    net_id: 6,
+                    x: 1.0,
+                    y: 2.0,
+                    z: 3.0,
+                    heading: 0.0
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn a_connecting_player_carries_the_request_to_answer() {
+        let token = format!("4:{}", "ab".repeat(32));
+        let connecting = report(
+            BRIDGE,
+            json!({
+                "type": "observer", "kind": "connecting", "request": 7, "name": "kaito",
+                "identifiers": ["license:abc", "ip:192.0.2.1"], "tokens": [token],
+            }),
+        );
+        let unnumbered = report(
+            BRIDGE,
+            json!({ "type": "observer", "kind": "connecting", "name": "kaito" }),
+        );
+
+        let Some(PlayerReportKind::Connecting(connecting)) = connecting else {
+            panic!("not a connecting report: {connecting:?}");
+        };
+        assert_eq!(connecting.request, 7);
+        assert_eq!(connecting.shown.identifiers, ["license:abc"]);
+        assert_eq!(connecting.shown.tokens, [token]);
+        assert!(connecting.shown.address.is_some());
+        assert_eq!(unnumbered, None);
     }
 
     #[test]

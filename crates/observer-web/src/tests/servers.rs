@@ -18,6 +18,7 @@ const STOP: &str = "/api/servers/default/stop";
 const RESTART: &str = "/api/servers/default/restart";
 const CONSOLE: &str = "/api/servers/default/console";
 const LOGS: &str = "/api/servers/default/console/logs";
+const CFG_CONVARS: &str = "/api/servers/default/launch/cfg-convars";
 
 impl Server {
     /// A folder of this test's directory that does not exist.
@@ -470,4 +471,70 @@ async fn the_console_topic_resumes_after_the_last_line_the_panel_holds() {
         "a number this Observer never gave is an earlier one's"
     );
     assert_eq!(restarted["data"]["lines"].as_array().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn the_convar_catalog_and_what_the_cfg_sets_are_the_owners_to_read() {
+    let server = Server::new().await;
+    let owner = server.owner().await;
+    let viewer = server.member(&owner, "grace", "3").await;
+
+    for path in ["/api/convars", CFG_CONVARS] {
+        let refused = server.call(Method::GET, path, Some(&viewer), None).await;
+        assert_eq!(refused.status, StatusCode::FORBIDDEN, "{path}");
+    }
+    let catalog = server.call(Method::GET, "/api/convars", Some(&owner), None).await;
+    assert_eq!(catalog.status, StatusCode::OK);
+    let catalog = catalog.json();
+    assert_eq!(catalog["repository"], "https://github.com/citizenfx/fivem");
+    assert!(
+        catalog["convars"]
+            .as_array()
+            .is_some_and(|convars| !convars.is_empty())
+    );
+    let unsaved = server.call(Method::GET, CFG_CONVARS, Some(&owner), None).await;
+    assert_eq!((unsaved.status, unsaved.json()), (StatusCode::OK, Value::Null));
+
+    let data = server.dir.path().join("server-data");
+    fs::create_dir_all(&data).unwrap();
+    fs::write(
+        data.join("server.cfg"),
+        "set sv_hostname \"Observer lab\"\nset rcon_password hunter2\nlab_convar 2\n",
+    )
+    .unwrap();
+    let settings = json!({
+        "dataPath": data.to_str().unwrap(),
+        "cfgFile": "server.cfg",
+        "onesync": "on",
+        "autoStart": false,
+        "txadminEvents": false,
+        "extraArguments": [{ "name": "lab_convar", "value": "1" }],
+    });
+    let saved = server
+        .call(
+            Method::PUT,
+            "/api/servers/default/launch",
+            Some(&owner),
+            Some(json!({ "settings": settings, "version": null })),
+        )
+        .await;
+    assert_eq!(saved.status, StatusCode::OK, "{}", saved.text);
+
+    let read = server.call(Method::GET, CFG_CONVARS, Some(&owner), None).await;
+
+    assert_eq!(read.status, StatusCode::OK);
+    assert!(!read.text.contains("hunter2"));
+    assert_eq!(
+        read.json(),
+        json!({
+            "cfgFile": "server.cfg",
+            "problem": null,
+            "convars": [
+                { "name": "sv_hostname", "value": "Observer lab", "command": "set", "file": "server.cfg", "line": 1 },
+                { "name": "rcon_password", "value": null, "command": "set", "file": "server.cfg", "line": 2 },
+                { "name": "lab_convar", "value": "2", "command": "bare", "file": "server.cfg", "line": 3 },
+            ],
+            "complete": true,
+        })
+    );
 }

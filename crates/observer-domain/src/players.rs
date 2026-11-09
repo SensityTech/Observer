@@ -223,7 +223,7 @@ impl PlayerLabel {
     }
 }
 
-fn hidden(c: char) -> bool {
+pub(crate) fn hidden(c: char) -> bool {
     c.is_control()
         || matches!(
             c,

@@ -4,7 +4,7 @@
 -- saves and labels would go.
 
 -- The contract this resource was written for.
-local CONTRACT_VERSION = 3
+local CONTRACT_VERSION = 4
 
 local function log(text)
     print(('[observer_example] %s'):format(text))
@@ -71,6 +71,16 @@ AddEventHandler('observer:startChanges', function(payload)
         log(('  %s %s %s -> %s'):format(resource.name, resource.change, show(resource.from), show(resource.to)))
     end
     -- Your changelog goes here: post what changed since the previous start to your staff's channel.
+end)
+
+AddEventHandler('observer:playerRefused', function(payload)
+    log('playerRefused ' .. fields(payload, { 'ban', 'reason', 'endsAt', 'by', 'name', 'license' }))
+    -- Your staff's log goes here: a banned player tried to connect and was refused.
+end)
+
+AddEventHandler('observer:playerBanned', function(payload)
+    log('playerBanned ' .. fields(payload, { 'player', 'ban', 'reason', 'endsAt', 'by', 'name', 'license' }))
+    -- Your saves go here: player payload.player is dropped right after this event.
 end)
 
 -- Your framework gives the label where it knows the player's character, once they picked it for

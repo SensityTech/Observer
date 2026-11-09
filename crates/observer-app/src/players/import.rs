@@ -7,7 +7,6 @@
 //! file holds. The folder it is in can be written by FXServer's resources.
 
 use std::fmt;
-use std::fs::File;
 use std::io::{BufReader, Read};
 use std::path::Path;
 
@@ -15,6 +14,8 @@ use jiff::Timestamp;
 use observer_domain::players::{IdentifierKind, Identifiers, PlayersFileProblem, clean_name};
 use serde::Deserialize;
 use serde::de::{DeserializeSeed, Deserializer, IgnoredAny, MapAccess, SeqAccess, Visitor};
+
+use crate::host_file::{HostFileProblem, open_local};
 
 /// More than any server's players database: txAdmin keeps about 1 KiB per player.
 const MAX_BYTES: u64 = 512 * 1024 * 1024;
@@ -50,10 +51,12 @@ pub(super) struct Parsed {
 /// Reads the file at `path`, a regular local file of at most 512 MiB, and checks every player.
 /// Dates are clamped to `now`, so that one in the future cannot make a profile or a link immortal.
 pub(super) fn read(path: &Path, now: Timestamp) -> Result<Parsed, PlayersFileProblem> {
-    if !path.is_absolute() || remote(path) {
-        return Err(PlayersFileProblem::NotLocal);
-    }
-    let (file, metadata) = open(path)?;
+    let (file, metadata) = open_local(path).map_err(|problem| match problem {
+        HostFileProblem::NotLocal => PlayersFileProblem::NotLocal,
+        HostFileProblem::Missing => PlayersFileProblem::Missing,
+        HostFileProblem::NotAFile => PlayersFileProblem::NotAFile,
+        HostFileProblem::Unreadable => PlayersFileProblem::Unreadable,
+    })?;
     if metadata.len() > MAX_BYTES {
         return Err(PlayersFileProblem::TooLarge);
     }
@@ -77,23 +80,6 @@ pub(super) fn read(path: &Path, now: Timestamp) -> Result<Parsed, PlayersFilePro
         }),
         Some(_) => Err(PlayersFileProblem::UnsupportedVersion),
         None => Err(PlayersFileProblem::NotPlayersDatabase),
-    }
-}
-
-/// A UNC or device path: on Windows, opening one reaches another host, or a pipe that could act
-/// as Observer.
-fn remote(path: &Path) -> bool {
-    let text = path.to_string_lossy();
-    text.starts_with(r"\\") || text.starts_with("//")
-}
-
-/// The path the file system took to the file: on Windows `\\?\C:\...` when it is local, and
-/// `\\?\UNC\...` when a folder link led it to a share.
-fn remote_resolved(resolved: &Path) -> bool {
-    let text = resolved.to_string_lossy();
-    match text.strip_prefix(r"\\?\") {
-        Some(rest) => rest.starts_with(r"UNC\") || rest.starts_with("GLOBALROOT"),
-        None => remote(resolved),
     }
 }
 
@@ -318,41 +304,6 @@ impl<'de> Visitor<'de> for Lenient {
         while map.next_entry::<IgnoredAny, IgnoredAny>()?.is_some() {}
         Ok(Found::Nothing)
     }
-}
-
-/// Opens the file itself, never a link in its place, and checks from the open handle that it is a
-/// regular file.
-fn open(path: &Path) -> Result<(File, std::fs::Metadata), PlayersFileProblem> {
-    let (file, resolved) = observer_platform::open_resolved(path).map_err(|error| {
-        if error.kind() == std::io::ErrorKind::NotFound {
-            PlayersFileProblem::Missing
-        } else if std::fs::symlink_metadata(path).is_ok_and(|metadata| !metadata.is_file()) {
-            PlayersFileProblem::NotAFile
-        } else {
-            PlayersFileProblem::Unreadable
-        }
-    })?;
-    // A folder link on the way may lead to another host's share.
-    if remote_resolved(&resolved) {
-        return Err(PlayersFileProblem::NotLocal);
-    }
-    let metadata = file.metadata().map_err(|_| PlayersFileProblem::Unreadable)?;
-    if !metadata.is_file() || metadata.is_symlink() || reparse_point(&metadata) {
-        return Err(PlayersFileProblem::NotAFile);
-    }
-    Ok((file, metadata))
-}
-
-#[cfg(windows)]
-fn reparse_point(metadata: &std::fs::Metadata) -> bool {
-    use std::os::windows::fs::MetadataExt;
-    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
-    metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
-}
-
-#[cfg(unix)]
-fn reparse_point(_: &std::fs::Metadata) -> bool {
-    false
 }
 
 fn record(entry: &Entry, now: Timestamp) -> Option<Record> {

@@ -11,7 +11,7 @@ use observer_platform::Stdin;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 
-use crate::bridge::{BridgeEvent, StopReason};
+use crate::bridge::{BridgeAction, BridgeEvent, StopReason};
 use crate::command;
 use crate::console::{ConsoleHub, LineFlags, LineKind, mask_command};
 
@@ -41,6 +41,7 @@ const QUIT_REASONS: [StopReason; 5] = [
 pub enum SystemLine {
     Quit(StopReason),
     Bridge(BridgeEvent),
+    Action(BridgeAction),
     SetPerfUser,
     SetPerfPassword(String),
     SetPlayersToken(String),
@@ -51,18 +52,26 @@ impl SystemLine {
         match self {
             Self::Quit(reason) => format!("quit \"{}\"", reason.as_str()),
             Self::Bridge(event) => format!("observer_cmd {}", event.encode()),
+            Self::Action(action) => format!("observer_cmd {}", action.encode()),
             Self::SetPerfUser => format!("set sv_prometheusBasicAuthUser {PERF_USER}"),
             Self::SetPerfPassword(password) => format!("set sv_prometheusBasicAuthPassword {password}"),
             Self::SetPlayersToken(token) => format!("set sv_playersToken {token}"),
         }
     }
 
-    /// What the console shows of the line; the credentials are not shown at all.
+    /// What the console shows of the line: nothing of the credentials, nor of the verdict each
+    /// connection gets.
     fn echo(&self) -> Option<String> {
         match self {
             Self::Quit(_) => Some(self.render()),
             Self::Bridge(event) => Some(format!("observer_cmd {}", event.name())),
-            Self::SetPerfUser | Self::SetPerfPassword(_) | Self::SetPlayersToken(_) => None,
+            // Verdicts come one per connection and positions every few seconds: the console would
+            // fill with them.
+            Self::SetPerfUser
+            | Self::SetPerfPassword(_)
+            | Self::SetPlayersToken(_)
+            | Self::Action(BridgeAction::Verdict { .. } | BridgeAction::Positions { .. }) => None,
+            Self::Action(action) => Some(format!("observer_cmd {}", action.name())),
         }
     }
 }

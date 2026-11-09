@@ -3,8 +3,9 @@
 A server manager for FiveM and RedM, written in Rust.
 
 Observer starts and supervises FXServer, installs its builds and serves a web panel for your staff,
-from one executable that keeps its state in SQLite. It never shows anything to players: it raises
-documented server events, and your own resources decide what to do with them.
+from one executable that keeps its state in SQLite. It never shows anything to players, but for the
+refusal message you write for bans: it raises documented server events, and your own resources decide
+what to do with them.
 
 > **Status: proof of concept.** Settings, the panel and the integration contract may still change
 > between versions.
@@ -20,6 +21,11 @@ documented server events, and your own resources decide what to do with them.
   probation, and a return to the last healthy build.
 - **Statistics and diagnostics.** Players, tick times, CPU and memory of FXServer and the host,
   FXServer's threads and connections, crash dumps and hangs.
+- **Live map.** Where the connected players stand, over a map image you add, coloured by play time,
+  a click away from their profile and a ban.
+- **Bans.** A ban holds a player's licence, other identifiers and hardware tokens, for a time or for
+  good. The server refuses a banned player at connection with your message, and drops one banned while
+  playing.
 - **Accounts and audit.** An owner and sub-users with fine-grained permissions, and an audit log of every
   action.
 - **Updates.** A newer release shows in the panel with its notes; the owner installs it in one click,
@@ -135,10 +141,14 @@ configured, and again from **Server → Run the setup**. It has four steps:
    and the **First launch** checklist follows it: started, port open, licence accepted, Observer bridge
    connected, server ready. Without a build, **Save only** keeps the settings for later.
 
-The **Server** page holds the same settings, [hang detection](#hang-detection), and extra arguments
-that go on the command line as `+set <name> <value>` after the cfg. It refuses secrets there, since
-anyone on the host can read a command line: `sv_licenseKey`, passwords and connection strings belong in
-the cfg.
+The **Server** page holds the same settings, [hang detection](#hang-detection), and convars that go on
+the command line as `+set <name> <value>`. A name field suggests the convars FXServer declares, from a
+catalog read in its sources, and a convar picked there starts at its default; one the catalog does not
+know is passed as typed. FXServer applies every `+set` before it runs the cfg, wherever it stands on the
+command line, so a convar the cfg sets too keeps the cfg's value, OneSync's included: the page says
+where the cfg sets it and which value applies, and lists what only the cfg sets. It refuses secrets on
+the command line, since anyone on the host can read it: `sv_licenseKey`, passwords and connection
+strings belong in the cfg.
 
 Builds go to `data/artifacts/<build>/`. The **Artifacts** page lists the catalog, installs and imports
 builds, chooses the one FXServer runs, and cleans up old ones. A new build is on probation: until it has
@@ -264,6 +274,7 @@ data/
 │   ├── .staging/          downloads and extractions in progress
 │   └── .trash/            deleted builds on their way out
 ├── crashes/               FXServer's crash dumps and hang snapshots: the last 10, 20 GiB at most
+├── map/                   the live map's image, as the owner gave it
 ├── tools/backups/         the originals of the files the server tools changed, each with a .json
 ├── database-backups/.work/ the game database's backup under way, emptied at every start
 ├── updates/               the release being installed (staging/), how the last install ended
@@ -771,6 +782,47 @@ and the setup's last step: from the next start of FXServer, the bridge also rais
 such as `txAdmin:events:scheduledRestart` and `txAdmin:events:serverShuttingDown`, right after Observer's
 own. The contract maps each one.
 
+## Bans
+
+The staff bans a player from their profile on the Players page, or bans identifiers typed by hand on the
+Bans page, with a reason and a length: an hour, a day, a week, a month, any number of minutes, or for
+good. A ban holds the player's licence and every other identifier and hardware token their profile
+links to, so a second account that shares their tokens is refused too. The Bans page lists active, ended
+and lifted bans, and finds them by name, licence, reason or ban ID; finding them by another identifier
+takes **View player identifiers**. Lifting a ban takes a permission of its own and keeps the ban in the
+list, with who lifted it and why. Every ban and every lift is in the audit log.
+
+The bridge holds each connecting player on `playerConnecting` while Observer checks them, which takes
+milliseconds. A banned player is refused with the **refusal message** of the settings' Bans category,
+the only text Observer ever shows players: it can name the reason, when the ban ends and the ban ID to
+quote in an appeal. If Observer has not answered within 5 seconds, the player gets in, and Observer
+drops them once they joined if a ban holds them. A player banned while playing is dropped at once.
+By default one hardware token in common is enough to refuse a player; the settings can ask for more,
+or for none. Addresses are never matched: players behind one address would be refused together.
+
+Your resources hear of both through `observer:playerRefused` and `observer:playerBanned`, in the
+contract.
+
+## Live map
+
+The Live map page shows where the connected players stand, as the server sees them, so that the staff
+can follow the server without joining it. Each player is a mark coloured by play time: new under 10
+hours, regular, veteran from 100 hours, not confirmed yet before their identity is; the marks differ in
+shape too, and the settings' Live map category moves the thresholds. A click on a player gives their
+play time, session, ping and position, a link to their profile and, with **Ban players**, a ban. Seeing
+the map takes **See the live map**.
+
+Observer ships no map: GTA V's belongs to Rockstar Games. The owner gives, in the settings, the path of
+an image on the host they have the right to use, such as GTA V's atlas from their own copy of the game:
+PNG, JPEG or WebP, up to 16,384 pixels a side and 64 MB. Observer keeps a copy in its data folder
+(`map/`) and serves it only to accounts that see the map. To place it in the game, stand at two spots
+you know on the image, far apart, pick yourself in the list and click where you stand, or type the game
+coordinates of the image's four edges. Without an image, the page shows a grid of game coordinates.
+
+Positions come from the bridge, which reads them from OneSync: without OneSync there are none. The
+server sends them every 1, 2 or 5 seconds, only while someone has the page open, and stops within 30
+seconds after the last one leaves. Observer keeps them in memory only: nothing of them is written.
+
 ## Updates
 
 Every 6 hours, Observer asks GitHub for the newest stable release. When it is newer, the owner sees
@@ -866,6 +918,11 @@ with hot reload and forwards `/api` to a running Observer (`OBSERVER_URL` names 
 `cargo xtask e2e` runs the browser tests against a debug Observer built with a test catalog, from which
 the flows install a build; a release never has that catalog, and `cargo xtask dist` refuses a binary
 that does.
+`cargo xtask convars` rewrites `crates/observer-domain/convars.json`, the catalog of FXServer's convars:
+it fetches the sources of citizenfx/fivem at a pinned commit with git (a shallow, sparse checkout under
+`target/fivem/`) and reads every convar the server components declare, with its type, default, values
+and flags. What the sources do not say stays empty. `--commit <sha> --build <n>` reads another build,
+`--source <checkout>` a checkout already there.
 
 ## Known limits
 

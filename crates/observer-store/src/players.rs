@@ -398,7 +398,7 @@ pub fn pseudonyms_of(conn: &Connection, players: &[i64]) -> Result<Vec<[u8; 16]>
     Ok(found)
 }
 
-fn like_escaped(text: &str) -> String {
+pub(crate) fn like_escaped(text: &str) -> String {
     text.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_")
 }
 

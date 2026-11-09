@@ -28,6 +28,7 @@ import type { LineKind } from '../api/generated/LineKind';
 import type { Listener } from '../api/generated/Listener';
 import type { ListenerRole } from '../api/generated/ListenerRole';
 import type { LiveSample } from '../api/generated/LiveSample';
+import type { MapLive } from '../api/generated/MapLive';
 import type { NoticeKind } from '../api/generated/NoticeKind';
 import type { NoticeReason } from '../api/generated/NoticeReason';
 import type { Outcome } from '../api/generated/Outcome';
@@ -70,6 +71,7 @@ const TOPICS = {
     'server.alerts': true,
     'server.diagnostics': true,
     'server.changes': true,
+    'server.map': true,
 } satisfies Record<Topic, true>;
 
 const UNSUBSCRIBE_REASONS = { forbidden: true, disabled: true } satisfies Record<UnsubscribeReason, true>;
@@ -228,6 +230,11 @@ const AUDIT_ACTIONS = {
     player_forgotten: true,
     players_imported: true,
     players_retention_changed: true,
+    player_banned: true,
+    ban_lifted: true,
+    bans_settings_changed: true,
+    map_image_changed: true,
+    map_settings_changed: true,
     player_drops_exported: true,
     drop_rates_exported: true,
     drops_retention_changed: true,
@@ -901,6 +908,26 @@ export const isSnapshotSummary = (value: unknown): value is SnapshotSummary =>
 
 export const isChangesLive = (value: unknown): value is ChangesLive =>
     isRecord(value) && orNull(isSnapshotSummary)(value.latest) && orNull(isSnapshotSummary)(value.check);
+
+const isMapPlayer = (value: unknown) =>
+    isRecord(value) &&
+    isCount(value.netId) &&
+    orNull(isId)(value.player) &&
+    orNull(isText)(value.name) &&
+    (value.label === null || isRecord(value.label)) &&
+    orNull(isFiniteNumber)(value.totalMs) &&
+    isFiniteNumber(value.x) &&
+    isFiniteNumber(value.y) &&
+    isFiniteNumber(value.z) &&
+    isFiniteNumber(value.heading);
+
+export const isMapLive = (value: unknown): value is MapLive =>
+    isRecord(value) &&
+    Array.isArray(value.players) &&
+    value.players.every(isMapPlayer) &&
+    orNull(isTimestamp)(value.at) &&
+    isCount(value.waiting) &&
+    isFlag(value.onesync);
 const isSnapshotData = (topic: Topic, data: unknown) => {
     if (!isRecord(data)) {
         return false;
@@ -931,6 +958,8 @@ const isSnapshotData = (topic: Topic, data: unknown) => {
             return isDiagnosticsSnapshot(data);
         case 'server.changes':
             return isChangesLive(data);
+        case 'server.map':
+            return isMapLive(data);
     }
 };
 
@@ -956,6 +985,8 @@ const isEventData = (topic: Topic, data: unknown) => {
             return isDiagnosticsEvent(data);
         case 'server.changes':
             return isChangesLive(data);
+        case 'server.map':
+            return isMapLive(data);
     }
 };
 

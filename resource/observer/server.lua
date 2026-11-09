@@ -1,11 +1,11 @@
 -- Observer's side of the server: it reports health to Observer through FXServer's structured trace
 -- channel, and turns Observer's commands into server events for other resources to handle.
--- It never shows anything to players.
+-- It never shows anything to players but one text: the refusal message the owner wrote for bans.
 
 -- Bumped when a field is renamed or removed, when resources must find the bridge another way, and
 -- when the bridge gains an export, so that a resource can tell whether it is there; new fields keep
 -- the version.
-local CONTRACT_VERSION = 3
+local CONTRACT_VERSION = 4
 local HEARTBEAT_MS = 3000
 local RESOURCES_SETTLE_MS = 500
 local LABELS_SETTLE_MS = 1000
@@ -15,6 +15,15 @@ local LABEL_NAME_MAX = 64
 local LABEL_ID_MAX = 32
 -- Starts and stops told in one report, past which they are only counted.
 local RESOURCE_EVENTS_MAX = 64
+-- How long a connecting player waits for Observer's verdict before getting in anyway: Observer
+-- checks them again once they joined.
+local VERDICT_WAIT_MS = 5000
+local VERDICT_POLL_MS = 50
+-- While someone watches the live map: how often positions go out, at most, and how long one ask
+-- of Observer lasts before it must ask again.
+local POSITIONS_EVERY_MIN_MS = 1000
+local POSITIONS_EVERY_MAX_MS = 10000
+local POSITIONS_FOR_MAX_MS = 60000
 
 -- The events Observer may raise, and nothing else.
 local EVENTS = {
@@ -180,6 +189,119 @@ exports('clearPlayerLabel', function(player)
     return true
 end)
 
+-- The connections waiting for Observer's verdict, by request: false until it comes.
+local verdicts = {}
+local lastRequest = 0
+
+AddEventHandler('playerConnecting', function(name, setKickReason, deferrals)
+    local player = source
+    deferrals.defer()
+    Wait(0)
+    lastRequest = lastRequest % 2147483647 + 1
+    local request = lastRequest
+    local fields = shown(player)
+    fields.name = fields.name or name
+    fields.request = request
+    verdicts[request] = false
+    report('connecting', fields)
+    local waited = 0
+    while verdicts[request] == false and waited < VERDICT_WAIT_MS do
+        Wait(VERDICT_POLL_MS)
+        waited = waited + VERDICT_POLL_MS
+    end
+    local verdict = verdicts[request]
+    verdicts[request] = nil
+    local refusal = verdict and verdict.refusal
+    if type(refusal) == 'table' and type(refusal.message) == 'string' and refusal.message ~= '' then
+        deferrals.done(refusal.message)
+        if type(refusal.event) == 'table' then
+            TriggerEvent('observer:playerRefused', refusal.event)
+        end
+        return
+    end
+    deferrals.done()
+end)
+
+-- Where the players stand, read from OneSync's entities: without it the server has no position.
+local positionsEvery = 2000
+local positionsUntil = 0
+local positionsFollowing = false
+
+local function tenth(value)
+    return math.floor(value * 10 + 0.5) / 10
+end
+
+local function reportPositions()
+    local t = GetGameTimer()
+    if GetConvar('onesync', 'off') == 'off' then
+        report('positions', { t = t, onesync = false, page = 1, last = true, players = {} })
+        return
+    end
+    local players = GetPlayers()
+    local pages = math.max(1, math.ceil(#players / PLAYERS_PAGE))
+    for page = 1, pages do
+        local entries = {}
+        for index = (page - 1) * PLAYERS_PAGE + 1, math.min(page * PLAYERS_PAGE, #players) do
+            local id = tonumber(players[index])
+            local ped = id and GetPlayerPed(id) or 0
+            -- No ped yet while the player loads.
+            if ped ~= 0 then
+                local coords = GetEntityCoords(ped)
+                entries[#entries + 1] = {
+                    id = id,
+                    x = tenth(coords.x),
+                    y = tenth(coords.y),
+                    z = tenth(coords.z),
+                    h = tenth(GetEntityHeading(ped)),
+                }
+            end
+        end
+        report('positions', { t = t, onesync = true, page = page, last = page == pages, players = entries })
+    end
+end
+
+-- One thread at most, which ends once Observer stopped asking.
+local function followPositions()
+    if positionsFollowing then
+        return
+    end
+    positionsFollowing = true
+    CreateThread(function()
+        while GetGameTimer() < positionsUntil do
+            reportPositions()
+            Wait(positionsEvery)
+        end
+        positionsFollowing = false
+    end)
+end
+
+-- What Observer has the bridge do itself, and nothing else.
+local ACTIONS = {
+    verdict = function(payload)
+        if verdicts[payload.request] == false then
+            verdicts[payload.request] = payload
+        end
+    end,
+    drop = function(payload)
+        local id = connected(payload.player)
+        if not id or type(payload.message) ~= 'string' or payload.message == '' then
+            return
+        end
+        if type(payload.event) == 'table' then
+            TriggerEvent('observer:playerBanned', payload.event)
+        end
+        DropPlayer(tostring(id), payload.message)
+    end,
+    positions = function(payload)
+        if type(payload.everyMs) ~= 'number' or type(payload.forMs) ~= 'number' then
+            return
+        end
+        positionsEvery = math.max(POSITIONS_EVERY_MIN_MS, math.min(POSITIONS_EVERY_MAX_MS, math.floor(payload.everyMs)))
+        positionsUntil = GetGameTimer() + math.max(0, math.min(POSITIONS_FOR_MAX_MS, math.floor(payload.forMs)))
+        followPositions()
+    end,
+}
+
 AddEventHandler('playerDropped', function(reason, resource, category)
     local id = tonumber(source)
     if not id or id <= 0 then
@@ -310,7 +432,15 @@ RegisterCommand('observer_cmd', function(source, args)
         return
     end
     local command = decode(args[1])
-    if not command or not EVENTS[command.event] or type(command.payload) ~= 'table' then
+    if not command or type(command.payload) ~= 'table' then
+        return
+    end
+    local action = ACTIONS[command.action]
+    if action then
+        action(command.payload)
+        return
+    end
+    if not EVENTS[command.event] then
         return
     end
     TriggerEvent('observer:' .. command.event, command.payload)

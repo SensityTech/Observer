@@ -421,6 +421,7 @@ fn facts(data: &Path, cfg_file: &str) -> Option<(Option<OneSync>, Option<u16>)> 
         probe_ports: false,
         system_resources: None,
         follow_outside: false,
+        convars: None,
     };
     let scan = cfg::scan(data, cfg_file, &text, &server_data::walk(data), &context);
     Some((scan.facts.onesync, scan.endpoint.map(|endpoint| endpoint.port())))

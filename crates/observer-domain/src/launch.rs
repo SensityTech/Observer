@@ -74,7 +74,8 @@ pub struct LaunchSettings {
     pub auto_start: bool,
     /// Raise txAdmin's events next to Observer's, for resources written against txAdmin.
     pub txadmin_events: bool,
-    /// Each becomes `+set <name> <value>`, after the cfg and Observer's own convars.
+    /// Each becomes `+set <name> <value>`, which FXServer applies before the cfg: a convar the cfg
+    /// sets too keeps the cfg's value.
     pub extra_arguments: Vec<ExtraArgument>,
     /// Restart a server whose main loop or HTTP endpoints stay silent for the hang timeout. Off,
     /// only a crash restarts it: the process exiting is never left alone. Settings saved before it

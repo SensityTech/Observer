@@ -405,6 +405,7 @@ fn chain(
         probe_ports: false,
         system_resources: None,
         follow_outside: true,
+        convars: None,
     };
     let scan = cfg::scan(data, &launch.cfg_file, &text, &resources, &context);
     let mut chain = Chain {

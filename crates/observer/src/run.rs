@@ -7,11 +7,12 @@ use anyhow::Context;
 use axum::Router;
 use jiff::tz::TimeZone;
 use observer_app::{
-    Accounts, Artifacts, ArtifactsSetup, ArtifactsTask, AuditLog, Backups, BackupsHook, BackupsSetup,
-    BeforeSpawn, Changes, ChangesSetup, Clock, DatabaseFiles, Diagnostics, DiagnosticsSetup, Drops,
-    DropsSetup, Features, FeaturesSetup, Metrics, MetricsSetup, OwnPaths, PRE_LAUNCH_LIMIT, PasswordCost,
-    Players, PlayersSetup, Running, Schedule, ScheduleSetup, ScheduleTask, Servers, Setup, Sources,
-    Statistics, Supervision, Switched, Takeover, Tools, ToolsHook, ToolsSetup, Updates, UpdatesSetup,
+    Accounts, Artifacts, ArtifactsSetup, ArtifactsTask, AuditLog, Backups, BackupsHook, BackupsSetup, Bans,
+    BansSetup, BeforeSpawn, Changes, ChangesSetup, Clock, DatabaseFiles, Diagnostics, DiagnosticsSetup,
+    Drops, DropsSetup, Features, FeaturesSetup, LiveMap, MapSetup, Metrics, MetricsSetup, OwnPaths,
+    PRE_LAUNCH_LIMIT, PasswordCost, Players, PlayersSetup, Running, Schedule, ScheduleSetup, ScheduleTask,
+    Servers, Setup, Sources, Statistics, Supervision, Switched, Takeover, Tools, ToolsHook, ToolsSetup,
+    Updates, UpdatesSetup,
 };
 use observer_artifacts::Http;
 use observer_artifacts::catalog::Catalog;
@@ -278,6 +279,21 @@ async fn run_until_stopped(
         }
         _ => (None, None),
     };
+    // With the players, whose sessions it places.
+    let (map, mapping) = match &players {
+        Some(players) => {
+            let (map, task) = LiveMap::start(MapSetup {
+                db: db.clone(),
+                clock: clock.clone(),
+                supervision: supervision.clone(),
+                players: players.clone(),
+                data_dir: paths.root.clone(),
+            });
+            let switched = features.switched(Feature::Players, move || task.close());
+            (Some(map), Some(switched))
+        }
+        None => (None, None),
+    };
     // After the players, whose start closes what an earlier Observer left open.
     let (drops, dropping) = match (&metrics, &players) {
         (Some(metrics), Some(players)) if features.runs(Feature::Drops) => {
@@ -293,6 +309,14 @@ async fn run_until_stopped(
         }
         _ => (None, None),
     };
+
+    // Before FXServer boots, so that no player gets past the bans.
+    let (bans, banning) = Bans::start(BansSetup {
+        db: db.clone(),
+        clock: clock.clone(),
+        supervision: supervision.clone(),
+        schedule: schedule.status(),
+    });
 
     let listener = TcpListener::bind(config.http.listen)
         .await
@@ -362,10 +386,12 @@ async fn run_until_stopped(
         diagnostics,
         metrics: metrics.clone(),
         players,
+        map,
         drops,
         changes,
         updates: updates.clone(),
         backups,
+        bans,
         statistics,
     };
     let state = observer_web::AppState::new(
@@ -490,8 +516,11 @@ async fn run_until_stopped(
     supervised.close().await;
     close(diagnosing).await;
     // After the supervision, so that FXServer's stop closes the sessions.
+    close(mapping).await;
     close(playing).await;
     close(dropping).await;
+    // After the supervision: the bridge answers no one once FXServer is down.
+    banning.close().await;
     // After the supervision: a stop of FXServer ends a snapshot's job, which this joins.
     close(following).await;
     // After the supervision, so that FXServer's stop is in the statistics.

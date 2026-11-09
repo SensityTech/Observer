@@ -12,6 +12,8 @@ import type { ArtifactSettingsProblem } from '../api/generated/ArtifactSettingsP
 import type { AuditAction } from '../api/generated/AuditAction';
 import type { BackupError } from '../api/generated/BackupError';
 import type { BackupPhase } from '../api/generated/BackupPhase';
+import type { BanFilter } from '../api/generated/BanFilter';
+import type { BanState } from '../api/generated/BanState';
 import type { BeforeRestarts } from '../api/generated/BeforeRestarts';
 import type { BuildPlatform } from '../api/generated/BuildPlatform';
 import type { CfgFileProblem } from '../api/generated/CfgFileProblem';
@@ -19,6 +21,8 @@ import type { CfgFileState } from '../api/generated/CfgFileState';
 import type { ChartCategory } from '../api/generated/ChartCategory';
 import type { CommandRefusal } from '../api/generated/CommandRefusal';
 import type { Contest } from '../api/generated/Contest';
+import type { ConvarFlag } from '../api/generated/ConvarFlag';
+import type { ConvarKind } from '../api/generated/ConvarKind';
 import type { CrashForm } from '../api/generated/CrashForm';
 import type { DatabaseEngine } from '../api/generated/DatabaseEngine';
 import type { Difference } from '../api/generated/Difference';
@@ -192,6 +196,22 @@ const permissions = {
         name: 'Download backups',
         description:
             'A backup is the whole game database: every player, and whatever secrets resources keep in it.',
+    },
+    bansView: {
+        name: 'View bans',
+        description: 'Who is banned, why, for how long and by whom, with their names and licences.',
+    },
+    playersBan: {
+        name: 'Ban players',
+        description: 'Keep a player out of the server, and drop them if they are connected.',
+    },
+    bansLift: {
+        name: 'Lift bans',
+        description: 'Let a banned player back in, whoever banned them.',
+    },
+    playersMap: {
+        name: 'See the live map',
+        description: 'Where every connected player stands, as the server sees it, a few times a minute.',
     },
 } satisfies Record<PermissionKey, { name: string; description: string }>;
 
@@ -445,6 +465,8 @@ export const en = {
         audit: 'Audit log',
         diagnostics: 'Diagnostics',
         players: 'Players',
+        map: 'Live map',
+        bans: 'Bans',
         drops: 'Drops',
         changes: 'File changes',
         tools: 'Tools',
@@ -1990,6 +2012,188 @@ export const en = {
                 `The import of ${at} stopped after ${formatNumber('en', written)} of ${count(read, { one: 'player', other: 'players' })}. Import the file again to finish: what was written stays.`,
         },
     },
+    map: {
+        title: 'Live map',
+        gloss: 'Where the connected players are, as the server sees them.',
+        players: (value: number) => count(value, { one: 'player', other: 'players' }),
+        placed: (placed: number, waiting: number) =>
+            waiting === 0
+                ? `${formatNumber('en', placed)} placed`
+                : `${formatNumber('en', placed)} placed · ${formatNumber('en', waiting)} waiting for their first position`,
+        legend: 'Colours by play time',
+        tiers: {
+            new: 'New',
+            regular: 'Regular',
+            veteran: 'Veteran',
+            unconfirmed: 'Not confirmed yet',
+        },
+        tierRange: {
+            new: (hours: number) => `under ${formatNumber('en', hours)} h`,
+            regular: (from: number, to: number) => `${formatNumber('en', from)}–${formatNumber('en', to)} h`,
+            veteran: (hours: number) => `${formatNumber('en', hours)} h and more`,
+        },
+        find: 'Find a player on the map',
+        noMatch: 'No player on the map matches.',
+        names: 'Names',
+        zoom: 'Zoom',
+        zoomIn: 'Zoom in',
+        zoomOut: 'Zoom out',
+        fit: 'Show every player',
+        selected: 'Selected player',
+        close: 'Close',
+        playTime: 'Play time',
+        session: 'This session',
+        ping: 'Ping',
+        position: 'Position',
+        profile: 'Profile',
+        ban: 'Ban…',
+        dot: (name: string, tier: string, playTime: string | null) =>
+            playTime === null ? `${name}, ${tier}` : `${name}, ${tier}, ${playTime}`,
+        unnamed: (netId: number) => `Player #${netId}`,
+        every: (seconds: number) =>
+            `Positions every ${count(seconds, { one: 'second', other: 'seconds' })}, sent only while someone has this page open.`,
+        updated: (ago: string) => `Updated ${ago} ago`,
+        waitingFirst: 'Waiting for the first positions…',
+        noImage: 'No map image yet: the grid shows game coordinates.',
+        notCalibrated: 'The map image is not placed in the game yet: the grid shows game coordinates.',
+        addImage: 'Add one in Settings',
+        placeImage: 'Place it in Settings',
+        noOneSync:
+            'Positions need OneSync, which this server does not run. Turn it on in the launch settings.',
+        stopped: 'The server is not running: no one is on the map.',
+        scale: (metres: string) => `${metres} m`,
+        unknownPing: 'unknown',
+    },
+    bans: {
+        title: 'Bans',
+        gloss: 'Who the server refuses, and why.',
+        banIdentifiers: 'Ban identifiers',
+        list: 'Bans',
+        filter: 'Show',
+        filters: {
+            active: 'Active',
+            ended: 'Ended',
+            lifted: 'Lifted',
+            all: 'All',
+        } satisfies Record<BanFilter, string>,
+        states: {
+            active: 'Active',
+            ended: 'Ended',
+            lifted: 'Lifted',
+        } satisfies Record<BanState, string>,
+        search: 'Search',
+        searchHint: 'A name, a licence, words of a reason, or a ban ID.',
+        searchHintIdentifiers: 'A name, a licence or another identifier, words of a reason, or a ban ID.',
+        submit: 'Search',
+        clear: 'Clear',
+        caption: (filter: string) => `Bans: ${filter.toLowerCase()}, latest first`,
+        player: 'Player',
+        reason: 'Reason',
+        ends: 'Ends',
+        lifted: 'Lifted',
+        by: 'By',
+        code: 'Ban ID',
+        noProfile: 'No profile',
+        held: (identifiers: number, tokens: number) =>
+            `${count(identifiers, { one: 'identifier', other: 'identifiers' })} and the licence, ${count(tokens, { one: 'token', other: 'tokens' })}`,
+        heldTyped: (identifiers: number, tokens: number) =>
+            `${count(identifiers, { one: 'identifier', other: 'identifiers' })}, ${count(tokens, { one: 'token', other: 'tokens' })}`,
+        permanent: 'Permanent',
+        endsIn: (left: string) => `in ${left}`,
+        endedAt: 'Ended',
+        liftedBy: (by: string) => `by ${by}`,
+        refused: (times: number) =>
+            times === 0 ? 'Never refused anyone' : `Refused ${count(times, { one: 'time', other: 'times' })}`,
+        empty: {
+            active: 'No one is banned. Ban a player from their profile, or ban identifiers with the button above.',
+            ended: 'No ban has run out yet.',
+            lifted: 'No ban was lifted.',
+            all: 'No ban yet. Ban a player from their profile, or ban identifiers with the button above.',
+        } satisfies Record<BanFilter, string>,
+        noMatch: 'No ban matches this search.',
+        loading: 'Loading the bans',
+        failed: 'The bans could not be read.',
+        shown: (value: number) => `${formatNumber('en', value)} shown`,
+        allShown: (value: number) => count(value, { one: 'ban', other: 'bans' }),
+        loadMore: 'Show more',
+        kept: 'Ended and lifted bans stay in the list, with who lifted them and why.',
+        actions: (code: string) => `Actions for ban ${code}`,
+        openProfile: 'Open profile',
+        copyCode: 'Copy ban ID',
+        lift: 'Lift ban…',
+        dialog: {
+            titlePlayer: (name: string) => `Ban ${name}`,
+            titleIdentifiers: 'Ban identifiers',
+            licence: (licence: string, online: boolean) => (online ? `${licence} · connected now` : licence),
+            length: 'How long',
+            lengths: {
+                hour: '1 hour',
+                day: '1 day',
+                threeDays: '3 days',
+                week: '1 week',
+                month: '1 month',
+                permanent: 'Permanent',
+                other: 'Other',
+            },
+            amount: 'Length',
+            units: { minutes: 'Minutes', hours: 'Hours', days: 'Days' },
+            unit: 'Unit',
+            ends: (when: string, zone: string) => `Ends ${when}, ${zone}.`,
+            never: 'Never ends: lift it by hand to let them back in.',
+            outOfRange: 'A ban lasts from one minute to ten years, or for good.',
+            reason: 'Reason',
+            reasonHint: 'The player reads it when the server refuses them.',
+            reasonMissing: 'Say why: the player reads it.',
+            counter: (used: number, max: number) =>
+                `${formatNumber('en', used)} / ${formatNumber('en', max)}`,
+            holds: 'What the ban holds',
+            holdsProfile:
+                "The licence, and every other identifier and hardware token this player's profile links to. A second account that shares the tokens is refused too.",
+            identifiers: 'Identifiers',
+            identifiersHint:
+                'One a line: license:…, license2:…, discord:…, steam:…, fivem:…, xbl:…, live:…, or a hardware token. Addresses are never banned.',
+            identifiersMissing: 'Give at least one identifier.',
+            online: (name: string) =>
+                `${name} is connected: the server drops them at once, with the refusal message.`,
+            submit: (length: string) => `Ban for ${length}`,
+            submitPermanent: 'Ban for good',
+        },
+        banned: (code: string) => `Banned. The ban ID is ${code}.`,
+        liftedNotice: (code: string) => `Ban ${code} lifted.`,
+        liftDialog: {
+            title: (name: string) => `Lift ${name}'s ban?`,
+            titleCode: (code: string) => `Lift ban ${code}?`,
+            lead: 'They can connect again at once. The ban stays in the list as lifted, with your name.',
+            why: 'Why',
+            whyHint: 'Kept with the ban and in the audit log.',
+            submit: 'Lift ban',
+        },
+        profile: {
+            ban: 'Ban…',
+            banned: 'Banned',
+            title: 'Bans',
+            meta: (all: number, active: number) =>
+                `${formatNumber('en', all)}, ${active === 0 ? 'none active' : `${formatNumber('en', active)} active`}`,
+            until: (when: string, left: string) => `Refused at every connection until ${when}, in ${left}.`,
+            forGood: 'Refused at every connection, for good.',
+            madeBy: (by: string, when: string, code: string) => `Banned by ${by} on ${when} · ban ${code}`,
+            length: 'Length',
+            state: 'State',
+        },
+        /** A ban's length in its largest whole unit: `7 days`, `90 minutes`. */
+        lengthOf: (minutes: number | null) => {
+            if (minutes === null) {
+                return 'Permanent';
+            }
+            if (minutes % (24 * 60) === 0) {
+                return count(minutes / (24 * 60), { one: 'day', other: 'days' });
+            }
+            if (minutes % 60 === 0) {
+                return count(minutes / 60, { one: 'hour', other: 'hours' });
+            }
+            return count(minutes, { one: 'minute', other: 'minutes' });
+        },
+    },
     drops: {
         title: 'Player drops',
         gloss: 'How sessions end, and whether it changes.',
@@ -3514,18 +3718,18 @@ export const en = {
             'FXServer ran from a folder of yours until this version. Observer now runs builds from its data folder: import it on the Artifacts page to keep using it.',
         onesync: 'OneSync',
         onesyncModes: { off: 'Off', on: 'On', legacy: 'Legacy' } satisfies Record<OneSync, string>,
-        onesyncHint: 'Set after your cfg on the command line, so it wins over the cfg.',
+        onesyncHint: 'Set on the command line, before your cfg runs: a cfg that sets onesync wins over it.',
         autoStart: 'Start FXServer with Observer',
         autoStartHint: 'When Observer starts, FXServer starts too.',
         txadminEvents: "Send txAdmin's events too",
         txadminEventsHint:
             "Resources written for txAdmin also receive txAdmin's events, such as txAdmin:events:scheduledRestart, next to Observer's.",
-        argument: (position: number) => `Argument ${formatNumber('en', position)}`,
+        argument: (position: number) => `Convar ${formatNumber('en', position)}`,
         argumentName: 'Name',
         argumentValue: 'Value',
-        removeArgument: (position: number) => `Remove argument ${formatNumber('en', position)}`,
-        addArgument: 'Add an argument',
-        noArguments: 'No extra argument.',
+        removeArgument: (position: number) => `Remove convar ${formatNumber('en', position)}`,
+        addArgument: 'Add a convar',
+        noArguments: 'No convar yet. Add one: its name suggests the convars FXServer declares.',
         discarded: 'Changes discarded: the form shows the settings as stored.',
         saved: 'Saved. FXServer uses these settings from its next start, a restart after a crash included.',
         savedHang: 'Saved. Hang detection applies at once, to a running server too.',
@@ -4031,6 +4235,14 @@ export const en = {
                 name: 'Launch',
                 about: 'How Observer starts FXServer: the folder, the cfg, OneSync and what goes on the command line. Most of these apply at the next start of FXServer.',
             },
+            bans: {
+                name: 'Bans',
+                about: 'What a banned player reads, and how much of a ban they must show to be refused. Banning and lifting is on the Bans page.',
+            },
+            map: {
+                name: 'Live map',
+                about: 'The map image of the Live map page, where it sits in the game, and the colours of the players on it.',
+            },
             restarts: {
                 name: 'Restarts',
                 about: 'When FXServer restarts by itself, and how long before your resources hear of it. Skipping or delaying one restart is on the Schedule page.',
@@ -4087,7 +4299,7 @@ export const en = {
             },
             onesync: {
                 label: 'OneSync',
-                about: "How many players the server holds, and whether the server or the players' games keep the world in sync. Observer sets it after your cfg, so it wins over what the cfg says.",
+                about: "How many players the server holds, and whether the server or the players' games keep the world in sync. Observer sets it on the command line, which FXServer applies before your cfg: a cfg that sets onesync wins over it.",
             },
             autoStart: {
                 label: 'Start FXServer with Observer',
@@ -4106,8 +4318,8 @@ export const en = {
                 about: 'Minutes of silence, from 1 to 60, 6 by default. Raise it if a first start is slow while resources build their caches of clothing and vehicles.',
             },
             extraArguments: {
-                label: 'Extra arguments',
-                about: "Each goes on FXServer's command line as +set <name> <value>, after your cfg, so it wins over it. Keep secrets in the cfg: anyone on the host can read a command line.",
+                label: 'Convars',
+                about: "Each goes on FXServer's command line as +set <name> <value>. FXServer applies them before your cfg, so a convar your cfg sets too keeps the cfg's value. Keep secrets in the cfg: anyone on the host can read a command line.",
             },
             scheduleEnabled: {
                 label: 'Restart on a schedule',
@@ -4321,6 +4533,30 @@ export const en = {
                 label: 'My SSH keys',
                 about: 'The keys you log in with over SFTP.',
             },
+            refusalMessage: {
+                label: 'Refusal message',
+                about: 'What a banned player reads when the server refuses them, or drops them: the only text Observer ever shows players. {reason}, {ends}, {id}, {name} and {by} are filled in.',
+            },
+            mapImage: {
+                label: 'Map image',
+                about: "Observer ships no map: GTA V's belongs to Rockstar Games. Give the path of an image on this host that you have the right to use, such as GTA V's atlas from your own copy of the game: PNG, JPEG or WebP, up to 16,384 px a side and 64 MB. Observer keeps a copy in its data folder; only accounts that see the live map load it.",
+            },
+            mapBounds: {
+                label: 'Where the image sits in the game',
+                about: "The game coordinates of the image's edges. Stand somewhere you know on the image, pick yourself, then click where you stand; do it again far from the first spot. Or type the four edges.",
+            },
+            mapTiers: {
+                label: 'Colours by play time',
+                about: 'Play time Observer saw, plus what came from txAdmin. A player is new under the first threshold and a veteran from the second.',
+            },
+            mapCadence: {
+                label: 'Positions sent every',
+                about: 'The server reads positions only while someone has the map open, and stops within 30 seconds after the last one leaves. They need OneSync.',
+            },
+            tokenMatches: {
+                label: 'Hardware tokens to match',
+                about: "How many of a ban's hardware tokens a player must show to be refused by them alone. Any identifier the ban holds refuses at once; 0 never refuses on tokens alone.",
+            },
         } satisfies Record<SettingId, { label: string; about: string }>,
         applies: {
             now: 'Applies at once',
@@ -4377,11 +4613,52 @@ export const en = {
                     about: "No OneSync: at most 32 slots, and the players' games sync entities among themselves.",
                 },
             } satisfies Record<OneSync, { name: string; about: string }>,
-            advanced: 'Advanced',
+            advanced: 'Convars',
             argumentsSet: (value: number) =>
-                value === 0
-                    ? 'No extra argument'
-                    : count(value, { one: 'extra argument', other: 'extra arguments' }),
+                value === 0 ? 'None set' : count(value, { one: 'convar', other: 'convars' }),
+            convars: {
+                catalog: (build: string) =>
+                    `Names and values are suggested from the sources of FXServer ${build}. A convar they do not declare still goes on the command line as typed.`,
+                kinds: {
+                    bool: 'true or false',
+                    int: 'whole number',
+                    float: 'number',
+                    string: 'text',
+                    enum: 'one of its values',
+                } satisfies Record<ConvarKind, string>,
+                defaultValue: (value: string) => (value === '' ? 'empty by default' : `default ${value}`),
+                defaultInCode: 'default set by FXServer',
+                values: (values: string) => `values ${values}`,
+                orAnyNumber: 'or any build number',
+                flags: {
+                    archive: 'archived',
+                    serverInfo: 'public',
+                    replicated: 'sent to players',
+                    readOnly: 'set at start only',
+                    userPref: 'user preference',
+                    internal: 'internal',
+                    scriptRestricted: 'hidden from scripts',
+                } satisfies Record<ConvarFlag, string>,
+                windows: 'Windows only',
+                linux: 'Linux only',
+                comment: (text: string) => `Comment in the sources: “${text}”`,
+                undeclared: 'FXServer reads it, but its sources declare no type or default.',
+                unknown: (build: string) =>
+                    `Not declared in the sources of FXServer ${build}: passed as typed.`,
+                cfgSets: (file: string, line: number, value: string) =>
+                    `${file} line ${line} sets ${value}. FXServer runs the cfg after the command line: ${value} applies.`,
+                cfgSetsSame: (file: string, line: number) => `${file} line ${line} sets the same value.`,
+                cfgSetsSecret: (file: string, line: number) =>
+                    `${file} line ${line} sets it too, and its value applies: FXServer runs the cfg after the command line.`,
+                inCfg: (value: number) =>
+                    `Set by your cfg: ${count(value, { one: 'more convar', other: 'more convars' })}`,
+                secret: 'secret, not shown',
+                place: (file: string, line: number) => `${file}:${line}`,
+                incomplete:
+                    'Your cfg runs files Observer did not read, outside the server data folder or past what it reads: a convar set there is not shown.',
+                unreadable: (file: string) =>
+                    `Observer could not read ${file}, so what it sets is not shown.`,
+            },
         },
         restarts: {
             openSchedule: 'Open the Schedule page',
@@ -4389,6 +4666,62 @@ export const en = {
         },
         builds: {
             openArtifacts: 'Open the Artifacts page',
+        },
+        map: {
+            openMap: 'Open the Live map',
+            path: 'Path on this host',
+            use: 'Use this image',
+            remove: 'Remove the image',
+            none: 'No image yet.',
+            image: (width: number, height: number, size: string, by: string, at: string) =>
+                `${formatNumber('en', width)} × ${formatNumber('en', height)} px · ${size} · added by ${by}, ${at}`,
+            added: 'Image added.',
+            removed: 'Image removed.',
+            ways: { players: 'Two players', edges: 'Edges' },
+            spot: (index: number) => (index === 1 ? 'First spot' : 'Second spot'),
+            pick: 'Who stands there',
+            pickNobody: 'Pick a connected player',
+            clickWhere: 'Then click where they stand on the image.',
+            standsAt: (name: string, x: string, y: string) => `${name} at ${x}, ${y}`,
+            onImage: (x: string, y: string) => `On the image: ${x}, ${y} px`,
+            notClicked: 'Not placed on the image yet',
+            apply: 'Place the image',
+            tooClose: 'The two spots are too close together: pick spots far apart, across the map.',
+            noOneOnline:
+                'No player is connected with a position: start the server and join it to place the image by players, or type the edges.',
+            edges: { west: 'West x', east: 'East x', south: 'South y', north: 'North y' },
+            calibrated: 'Placed',
+            notCalibrated: 'Not placed',
+            edgesInvalid: 'East must be greater than west and north greater than south.',
+            newUnder: 'New under',
+            veteranFrom: 'Veteran from',
+            hours: 'h',
+            tiersInvalid: 'The veteran threshold must be above the new one.',
+            seconds: (value: number) => `${formatNumber('en', value)} s`,
+            saved: 'Saved.',
+            discarded: 'Changes discarded.',
+            readOnly:
+                'Your account can read these; changing them takes the permission to change settings, and the image the owner.',
+            loadFailed: 'These settings could not be read.',
+        },
+        bans: {
+            openBans: 'Open the Bans page',
+            insert: 'Insert',
+            preview: 'Preview, with an example ban',
+            example: {
+                reason: 'Aimbot, seen on stream',
+                ends: '2026-11-16 21:04 (Europe/Paris)',
+                code: 'K7QM-2XPA',
+                name: 'kaito',
+                by: 'maxime',
+            },
+            messageMissing: 'Write a message: a banned player always reads one.',
+            messageTooLong: (max: number) => `${formatNumber('en', max)} characters at most.`,
+            tokensOutOfRange: (max: number) => `From 0 to ${formatNumber('en', max)}.`,
+            saved: 'Saved. The next connection reads it.',
+            discarded: 'Changes discarded.',
+            readOnly: 'Your account can read these; changing them takes the permission to change settings.',
+            loadFailed: 'These settings could not be read.',
         },
         data: {
             changes: 'File changes',
@@ -4586,6 +4919,11 @@ export const en = {
             players_imported: "txAdmin's players imported",
             players_retention_changed: 'Player retention changed',
             player_drops_exported: 'Drop log exported',
+            player_banned: 'Player banned',
+            ban_lifted: 'Ban lifted',
+            bans_settings_changed: 'Ban settings changed',
+            map_image_changed: 'Map image changed',
+            map_settings_changed: 'Live map settings changed',
             drop_rates_exported: 'Drop rates exported',
             drops_retention_changed: 'Drop retention changed',
             change_contents_viewed: 'Changed file read',
@@ -5161,6 +5499,35 @@ export const en = {
         address_search: 'A search never takes an address. Search by a name, a licence or another identifier.',
         invalid_search:
             'What follows this prefix is not a valid identifier of its kind. Check it, or search by a name.',
+        ban_not_found: 'No ban has this ID.',
+        ban_not_active: 'This ban already ended or was lifted.',
+        invalid_ban: (params) => {
+            const field = stringParam(params, 'field');
+            return field === 'reason'
+                ? 'Give a reason of 200 characters at most: the player reads it.'
+                : field === 'minutes'
+                  ? 'A ban lasts from one minute to ten years, or for good.'
+                  : 'Give at least one valid identifier, 64 at most. Addresses are never banned.';
+        },
+        invalid_map_image: (params) => {
+            const problem = stringParam(params, 'problem');
+            return problem === 'missing'
+                ? 'Nothing is at this path on the host.'
+                : problem === 'tooLarge'
+                  ? 'This image is over 64 MB, or over 16,384 px a side.'
+                  : problem === 'notLocal'
+                    ? 'Give the full path of a file on this host, not a network share or a relative path.'
+                    : problem === 'unreadable'
+                      ? 'Observer cannot read this file: check its permissions.'
+                      : 'This file is not a PNG, JPEG or WebP image.';
+        },
+        no_map_image: 'No map image is set.',
+        invalid_map_settings:
+            'Some settings are out of range: the thresholds must be ordered, the cadence 1, 2 or 5 seconds, and the edges must enclose an area.',
+        invalid_bans_settings: (params) =>
+            typeof params.maxMessage === 'number' && typeof params.maxTokens === 'number'
+                ? `Write a refusal message of ${formatNumber('en', params.maxMessage)} characters at most, and ask for 0 to ${formatNumber('en', params.maxTokens)} tokens.`
+                : 'These settings are out of range.',
         invalid_players_settings:
             'Some retentions are out of range. Each one says its range below its field.',
         invalid_players_file: (params) => {
