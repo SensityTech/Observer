@@ -128,7 +128,8 @@ fn udp_socket(pid: u32, local: SocketAddr) -> Socket {
 
 fn tcp_state(state: i32) -> SocketState {
     match state {
-        MIB_TCP_STATE_LISTEN => SocketState::Listen,
+        // Windows 11 build 26300 lists every listener in state 0, which MIB_TCP_STATE leaves undefined.
+        0 | MIB_TCP_STATE_LISTEN => SocketState::Listen,
         MIB_TCP_STATE_ESTAB => SocketState::Established,
         _ => SocketState::Other,
     }
@@ -202,6 +203,8 @@ fn v6_address(address: [u8; 16], raw_port: u32, scope: u32) -> SocketAddr {
 mod tests {
     use std::net::{TcpListener, TcpStream, UdpSocket};
 
+    use windows_sys::Win32::NetworkManagement::IpHelper::MIB_TCP_STATE_TIME_WAIT;
+
     use super::*;
 
     #[test]
@@ -231,6 +234,14 @@ mod tests {
         assert!(sockets.contains(&udp_socket(own, udp.local_addr().unwrap())));
         assert!(sockets.iter().all(|socket| socket.pid == own));
         assert_eq!(super::sockets(&[]).unwrap(), Vec::new());
+    }
+
+    #[test]
+    fn a_listener_in_the_undefined_state_0_is_still_listening() {
+        assert_eq!(tcp_state(0), SocketState::Listen);
+        assert_eq!(tcp_state(MIB_TCP_STATE_LISTEN), SocketState::Listen);
+        assert_eq!(tcp_state(MIB_TCP_STATE_ESTAB), SocketState::Established);
+        assert_eq!(tcp_state(MIB_TCP_STATE_TIME_WAIT), SocketState::Other);
     }
 
     #[test]
