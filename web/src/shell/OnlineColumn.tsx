@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
-import { PanelRightClose, PanelRightOpen, Search, TriangleAlert, Users, X } from 'lucide-react';
+import { PanelRightClose, PanelRightOpen, Search, Tag, TriangleAlert, Users, X } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 
 import { Permission } from '../api/generated/Permission';
@@ -18,6 +18,7 @@ import { useI18n } from '../i18n/I18nProvider';
 import { cn } from '../lib/cn';
 import { PHONE, useMedia } from '../lib/useMedia';
 import { secondsSince, useNow } from '../lib/useNow';
+import { nameOf } from '../players/words';
 import { useServerStatus } from '../server/context';
 
 /** Where the column's folding is kept, per browser. */
@@ -55,8 +56,8 @@ const saveFolded = (folded: boolean) => {
 const hex = (licence: string) => licence.replace(/^license:/, '');
 
 /**
- * A search matches a name in part, a server ID whole, or the start of a licence, with or without
- * its prefix, as the lists show its first digits.
+ * A search matches a name or a label's name in part, a server ID or a label's ID whole, or the start
+ * of a licence, with or without its prefix, as the lists show its first digits.
  */
 export const matches = (player: OnlinePlayer, search: string) => {
     const text = search.trim().toLowerCase();
@@ -66,6 +67,8 @@ export const matches = (player: OnlinePlayer, search: string) => {
     return (
         String(player.netId) === text ||
         (player.name ?? '').toLowerCase().includes(text) ||
+        (player.label?.name ?? '').toLowerCase().includes(text) ||
+        player.label?.id?.toLowerCase() === text ||
         (player.license !== null && hex(player.license).startsWith(hex(text)))
     );
 };
@@ -78,11 +81,13 @@ export const sortPlayers = (players: readonly OnlinePlayer[], sort: Sort, locale
     const collator = new Intl.Collator(locale, { sensitivity: 'base', numeric: true });
     return players.toSorted((a, b) => {
         switch (sort) {
-            case 'name':
-                if (a.name === null || b.name === null) {
-                    return Number(a.name === null) - Number(b.name === null) || a.netId - b.netId;
+            case 'name': {
+                const [first, second] = [nameOf(a.name, a.label), nameOf(b.name, b.label)];
+                if (first === null || second === null) {
+                    return Number(first === null) - Number(second === null) || a.netId - b.netId;
                 }
-                return collator.compare(a.name, b.name) || a.netId - b.netId;
+                return collator.compare(first, second) || a.netId - b.netId;
+            }
             case 'id':
                 return a.netId - b.netId;
             case 'time':
@@ -403,10 +408,12 @@ function PlayerRow({ player }: { player: OnlinePlayer }) {
     const { t, format } = useI18n();
     const words = t.online;
     const confirmed = player.confirmation === 'confirmed';
+    const shown = nameOf(player.name, player.label);
+    const labelled = confirmed && (player.label?.name ?? null) !== null;
     const name = confirmed
-        ? player.name === null || player.name === ''
+        ? shown === null || shown === ''
             ? t.players.noName
-            : player.name
+            : shown
         : player.confirmation === 'confirming'
           ? t.players.now.confirming
           : t.players.now.unconfirmed;
@@ -419,9 +426,13 @@ function PlayerRow({ player }: { player: OnlinePlayer }) {
             <span
                 className={cn(
                     'min-w-0 flex-1 truncate text-ui',
-                    confirmed && player.name ? 'text-ink-2' : 'text-ink-3',
+                    confirmed && shown ? 'text-ink-2' : 'text-ink-3',
                 )}
+                title={labelled ? t.players.label.fivem(player.name || t.players.noName) : undefined}
             >
+                {labelled && (
+                    <Tag size={11} strokeWidth={2} className="mr-1 inline text-ink-3" aria-hidden="true" />
+                )}
                 {name}
             </span>
             <span className="shrink-0 font-mono text-caption text-ink-3">{time}</span>
@@ -470,7 +481,8 @@ function LastJoin({ players }: { players: readonly OnlinePlayer[] }) {
     if (last === null) {
         return null;
     }
-    const name = last.confirmation === 'confirmed' && last.name ? last.name : t.online.someone(last.netId);
+    const shown = nameOf(last.name, last.label);
+    const name = last.confirmation === 'confirmed' && shown ? shown : t.online.someone(last.netId);
     return (
         <p className="mt-auto flex items-center gap-2 border-t border-line bg-bg-subtle px-4 py-2.5 text-small text-ink-3">
             <span className="led led-ok" aria-hidden="true" />

@@ -27,21 +27,19 @@ import { Suspense, useCallback, useEffect, useState } from 'react';
 import { meQuery } from '../api/auth';
 import { Permission } from '../api/generated/Permission';
 import type { Me } from '../api/generated/Me';
-import { allows, MeContext } from '../auth/me';
+import { allows } from '../auth/me';
 import { buttonVariants } from '../components/Button';
 import { Chip } from '../components/Chip';
 import { PlainHttpNotice } from '../components/PlainHttpNotice';
-import { AlertsProvider, useAlerts } from '../diagnostics/alerts';
+import { useAlerts } from '../diagnostics/alerts';
 import { useI18n } from '../i18n/I18nProvider';
-import { useRealtime } from '../live/context';
 import { cn } from '../lib/cn';
 import { PHONE, useMedia } from '../lib/useMedia';
-import { ArtifactsProvider } from '../artifacts/context';
-import { ScheduleProvider } from '../schedule/context';
-import { ServerStatusProvider, useServerStatus } from '../server/context';
+import { useServerStatus } from '../server/context';
 import { Logo } from './Logo';
 import { OnlineButton, OnlineColumn } from './OnlineColumn';
 import { ServerControls } from './ServerControls';
+import { SignedIn } from './SignedIn';
 import { StatusBar } from './StatusBar';
 import { UpdateSignal } from '../updates/UpdateSignal';
 import { UserMenu } from './UserMenu';
@@ -88,13 +86,6 @@ export function AppShell() {
     const openPlayers = useCallback(() => setPlayersOpen(true), []);
     const closePlayers = useCallback(() => setPlayersOpen(false), []);
     const phone = useMedia(PHONE);
-    const live = useRealtime();
-
-    // The socket lives as long as the signed-in shell: signing out unmounts it, and closes it.
-    useEffect(() => {
-        live.start();
-        return () => live.stop();
-    }, [live]);
 
     useEffect(() => {
         if (!menuOpen && !playersOpen) {
@@ -169,105 +160,89 @@ export function AppShell() {
     ];
 
     return (
-        <MeContext value={me}>
-            <ServerStatusProvider>
-                <ScheduleProvider>
-                    <ArtifactsProvider>
-                        <AlertsProvider>
-                            <div className="app">
-                                <a className="skip" href="#content">
-                                    {t.app.skipToContent}
-                                </a>
+        <SignedIn>
+            <div className="app">
+                <a className="skip" href="#content">
+                    {t.app.skipToContent}
+                </a>
 
-                                <aside
-                                    id="rail"
-                                    className={menuOpen ? 'rail-wrap is-open' : 'rail-wrap'}
-                                    aria-label={t.nav.label}
-                                >
-                                    <div className="rail">
-                                        <div className="rail-head">
-                                            <Logo />
-                                            <button
-                                                type="button"
-                                                className={cn(
-                                                    buttonVariants({ tone: 'ghost', size: 'icon' }),
-                                                    'ml-auto xl:hidden',
-                                                )}
-                                                aria-label={t.nav.close}
-                                                onClick={closeMenu}
-                                            >
-                                                <X size={16} strokeWidth={1.5} aria-hidden="true" />
-                                            </button>
-                                        </div>
-                                        <ServerTile />
-                                        <nav className="nav" aria-label={t.nav.sections}>
-                                            <NavEntries me={me} entries={main} onNavigate={closeMenu} />
-                                            <NavEntries
-                                                me={me}
-                                                entries={operations}
-                                                group={t.nav.operations}
-                                                onNavigate={closeMenu}
-                                            />
-                                            <NavEntries
-                                                me={me}
-                                                entries={maintenance}
-                                                group={t.nav.maintenance}
-                                                onNavigate={closeMenu}
-                                            />
-                                        </nav>
-                                        <div className="rail-foot">
-                                            {me.isOwner && <UpdateSignal onNavigate={closeMenu} />}
-                                            <NavEntries me={me} entries={settings} onNavigate={closeMenu} />
-                                            <UserMenu me={me} onNavigate={closeMenu} />
-                                        </div>
-                                    </div>
-                                </aside>
-                                {menuOpen && <div className="scrim" aria-hidden="true" onClick={closeMenu} />}
-
-                                <div className="main" inert={menuOpen || playersOpen}>
-                                    <div className="mobilebar">
-                                        <button
-                                            type="button"
-                                            className={buttonVariants({ tone: 'ghost', size: 'icon' })}
-                                            aria-label={t.nav.open}
-                                            aria-controls="rail"
-                                            aria-expanded={menuOpen}
-                                            onClick={() => setMenuOpen(true)}
-                                        >
-                                            <MenuIcon size={18} strokeWidth={1.5} aria-hidden="true" />
-                                        </button>
-                                        <Logo />
-                                        {players && phone && (
-                                            <OnlineButton open={playersOpen} onOpen={openPlayers} />
-                                        )}
-                                    </div>
-                                    <header className="topbar" aria-label={t.status.label}>
-                                        <div className="status-card">
-                                            <StatusBar />
-                                            <ServerControls />
-                                        </div>
-                                    </header>
-                                    <main className="content" id="content" tabIndex={-1}>
-                                        <PlainHttpNotice />
-                                        <Suspense fallback={<PageLoading />}>
-                                            <Outlet />
-                                        </Suspense>
-                                    </main>
-                                </div>
-
-                                {players && (
-                                    <OnlineColumn
-                                        open={playersOpen}
-                                        onOpen={openPlayers}
-                                        onClose={closePlayers}
-                                    />
+                <aside
+                    id="rail"
+                    className={menuOpen ? 'rail-wrap is-open' : 'rail-wrap'}
+                    aria-label={t.nav.label}
+                >
+                    <div className="rail">
+                        <div className="rail-head">
+                            <Logo />
+                            <button
+                                type="button"
+                                className={cn(
+                                    buttonVariants({ tone: 'ghost', size: 'icon' }),
+                                    'ml-auto xl:hidden',
                                 )}
-                            </div>
-                        </AlertsProvider>
-                    </ArtifactsProvider>
-                </ScheduleProvider>
-            </ServerStatusProvider>
-        </MeContext>
+                                aria-label={t.nav.close}
+                                onClick={closeMenu}
+                            >
+                                <X size={16} strokeWidth={1.5} aria-hidden="true" />
+                            </button>
+                        </div>
+                        <ServerTile />
+                        <nav className="nav" aria-label={t.nav.sections}>
+                            <NavEntries me={me} entries={main} onNavigate={closeMenu} />
+                            <NavEntries
+                                me={me}
+                                entries={operations}
+                                group={t.nav.operations}
+                                onNavigate={closeMenu}
+                            />
+                            <NavEntries
+                                me={me}
+                                entries={maintenance}
+                                group={t.nav.maintenance}
+                                onNavigate={closeMenu}
+                            />
+                        </nav>
+                        <div className="rail-foot">
+                            {me.isOwner && <UpdateSignal onNavigate={closeMenu} />}
+                            <NavEntries me={me} entries={settings} onNavigate={closeMenu} />
+                            <UserMenu me={me} onNavigate={closeMenu} />
+                        </div>
+                    </div>
+                </aside>
+                {menuOpen && <div className="scrim" aria-hidden="true" onClick={closeMenu} />}
+
+                <div className="main" inert={menuOpen || playersOpen}>
+                    <div className="mobilebar">
+                        <button
+                            type="button"
+                            className={buttonVariants({ tone: 'ghost', size: 'icon' })}
+                            aria-label={t.nav.open}
+                            aria-controls="rail"
+                            aria-expanded={menuOpen}
+                            onClick={() => setMenuOpen(true)}
+                        >
+                            <MenuIcon size={18} strokeWidth={1.5} aria-hidden="true" />
+                        </button>
+                        <Logo />
+                        {players && phone && <OnlineButton open={playersOpen} onOpen={openPlayers} />}
+                    </div>
+                    <header className="topbar" aria-label={t.status.label}>
+                        <div className="status-card">
+                            <StatusBar />
+                            <ServerControls />
+                        </div>
+                    </header>
+                    <main className="content" id="content" tabIndex={-1}>
+                        <PlainHttpNotice />
+                        <Suspense fallback={<PageLoading />}>
+                            <Outlet />
+                        </Suspense>
+                    </main>
+                </div>
+
+                {players && <OnlineColumn open={playersOpen} onOpen={openPlayers} onClose={closePlayers} />}
+            </div>
+        </SignedIn>
     );
 }
 

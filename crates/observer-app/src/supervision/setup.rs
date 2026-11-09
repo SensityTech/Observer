@@ -10,13 +10,14 @@ use observer_domain::convars::CfgConvars;
 use observer_domain::error::{ApiError, ErrorCode};
 use observer_domain::launch::{LaunchChange, OneSync, StoredLaunch};
 use observer_domain::server_data::{
-    CfgCheck, CfgFinding, CfgReport, Discovery, EndpointProtocol, FindingKind, FolderCheck, FolderListing,
-    FolderQuery, FolderReport, LicenceState, Place, PlaceKind, Severity,
+    CfgCheck, CfgFinding, CfgReport, CfgText, CfgTextQuery, Discovery, EndpointProtocol, FileListing,
+    FilesQuery, FindingKind, FolderCheck, FolderListing, FolderQuery, FolderReport, LicenceState, Place,
+    PlaceKind, Severity,
 };
 use observer_fxserver::cfg::Context;
 use observer_fxserver::folders::{self, Search};
 use observer_fxserver::layout::{Flavour, Layout};
-use observer_fxserver::server_data;
+use observer_fxserver::{server_data, server_files};
 
 use super::{Supervision, read_launch};
 use crate::servers::follow_rules;
@@ -46,6 +47,26 @@ impl Supervision {
             .map_err(io::Error::other)?;
         let observer = self.inner.data_dir.clone();
         blocking(move || folders::list(&query, &observer)).await
+    }
+
+    /// The entries of one folder of a server folder, for the setup's file browser. It changes
+    /// nothing.
+    pub async fn list_files(&self, query: FilesQuery) -> Result<FileListing, Error> {
+        let _turn = self
+            .inner
+            .folder_reads
+            .acquire()
+            .await
+            .map_err(io::Error::other)?;
+        let observer = self.inner.data_dir.clone();
+        blocking(move || server_files::list(&query.data_path, &query.path, &observer)).await
+    }
+
+    /// A cfg of a server folder with its secrets left out, for the setup to show. It changes
+    /// nothing.
+    pub async fn cfg_text(&self, query: CfgTextQuery) -> Result<CfgText, Error> {
+        let observer = self.inner.data_dir.clone();
+        blocking(move || server_files::cfg_text(&query.data_path, &query.cfg_file, &observer)).await
     }
 
     /// Searches the home folder and the local drives for servers, and names the places the owner

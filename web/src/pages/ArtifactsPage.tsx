@@ -46,6 +46,7 @@ import { Permission } from '../api/generated/Permission';
 import type { PolicyDay } from '../api/generated/PolicyDay';
 import { launchProblem, launchQuery } from '../api/launch';
 import { useArtifacts } from '../artifacts/context';
+import { supportTone } from '../artifacts/support';
 import { allows, useMe } from '../auth/me';
 import { Button } from '../components/Button';
 import { Card } from '../components/Card';
@@ -1107,17 +1108,7 @@ function AvailableCard({
                                                 : day(entry.publishedAt)}
                                         </td>
                                         <td className={table.td}>
-                                            <Chip
-                                                tone={
-                                                    entry.support === 'endOfLife'
-                                                        ? 'danger'
-                                                        : entry.support === 'endOfSupport'
-                                                          ? 'warning'
-                                                          : entry.support === 'supported'
-                                                            ? 'success'
-                                                            : 'neutral'
-                                                }
-                                            >
+                                            <Chip tone={supportTone(entry.support)}>
                                                 {words.supports[entry.support]}
                                             </Chip>
                                             <div className={table.sub}>

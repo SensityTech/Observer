@@ -1,4 +1,5 @@
 import { useMutation } from '@tanstack/react-query';
+import { Link } from '@tanstack/react-router';
 import {
     CalendarClock,
     CalendarX2,
@@ -261,13 +262,22 @@ function NextRestart({
                     <CalendarX2 size={20} strokeWidth={1.5} aria-hidden="true" />
                 </span>
                 <p className="text-[16px] font-semibold text-ink">{t.schedule.emptyTitle}</p>
-                <p className="max-w-empty text-body text-ink-3">
-                    {schedule.settings.enabled &&
-                    schedule.settings.mode === 'interval' &&
-                    !(server !== null && isRunning(server.state))
-                        ? t.schedule.countsFromStart
-                        : t.schedule.emptyBody}
-                </p>
+                {schedule.settings.enabled &&
+                schedule.settings.mode === 'interval' &&
+                !(server !== null && isRunning(server.state)) ? (
+                    <p className="max-w-empty text-body text-ink-3">{t.schedule.countsFromStart}</p>
+                ) : (
+                    <>
+                        <p className="max-w-empty text-body text-ink-3">{t.schedule.emptyBody}</p>
+                        <Link
+                            to="/settings/$category"
+                            params={{ category: 'restarts' }}
+                            className={buttonVariants({ tone: 'secondary' })}
+                        >
+                            {t.schedule.setUp}
+                        </Link>
+                    </>
+                )}
             </div>
         );
     } else {

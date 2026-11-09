@@ -16,6 +16,8 @@ const FOLDER: &str = "/api/servers/default/setup/folder";
 const CFG: &str = "/api/servers/default/setup/cfg";
 const FOLDERS: &str = "/api/servers/default/setup/folders";
 const DISCOVER: &str = "/api/servers/default/setup/discover";
+const FILES: &str = "/api/servers/default/setup/files";
+const CFG_TEXT: &str = "/api/servers/default/setup/cfg/text";
 const SETUP: &str = "/api/servers/default/setup";
 /// A test fixture, not a real key.
 const KEY: &str = "sv_licenseKey cfxk_ObserverLabFixture_k3y";
@@ -178,6 +180,69 @@ async fn a_folders_folders_are_listed_with_what_each_is() {
     assert_eq!(network.json()["problem"], "invalidPath");
     assert_eq!(network.json()["pathProblem"], "networkPath");
     assert_eq!(unknown.code(), "invalid_request");
+}
+
+#[tokio::test]
+async fn a_server_folders_files_are_listed_and_a_cfg_shown_without_its_secrets() {
+    let server = Server::new().await;
+    let owner = server.owner().await;
+    let live = server.server_folder("live", &endpoints(&free_address()));
+    fs::write(
+        std::path::Path::new(&live).join(".env"),
+        "TOKEN=1
+",
+    )
+    .unwrap();
+
+    let listed = server
+        .call(
+            Method::POST,
+            FILES,
+            Some(&owner),
+            Some(json!({ "dataPath": live, "path": "" })),
+        )
+        .await;
+    let climbing = server
+        .call(
+            Method::POST,
+            FILES,
+            Some(&owner),
+            Some(json!({ "dataPath": live, "path": ".." })),
+        )
+        .await;
+    let shown = server
+        .call(
+            Method::POST,
+            CFG_TEXT,
+            Some(&owner),
+            Some(json!({ "dataPath": live, "cfgFile": "server.cfg" })),
+        )
+        .await;
+
+    assert_eq!(listed.status, StatusCode::OK, "{}", listed.text);
+    let kinds: Vec<_> = listed.json()["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|entry| {
+            (
+                entry["name"].as_str().unwrap().to_owned(),
+                entry["kind"].as_str().unwrap().to_owned(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            ("resources".to_owned(), "folder".to_owned()),
+            (".env".to_owned(), "withheld".to_owned()),
+            ("server.cfg".to_owned(), "cfg".to_owned()),
+        ]
+    );
+    assert_eq!(climbing.json()["problem"], "invalidPath");
+    assert_eq!(shown.status, StatusCode::OK, "{}", shown.text);
+    assert!(!shown.text.contains("cfxk_"), "{}", shown.text);
+    assert_eq!(shown.json()["lines"].as_array().unwrap().len(), 3);
 }
 
 #[tokio::test]
@@ -344,6 +409,12 @@ async fn only_the_owner_checks_and_saves_and_the_save_takes_the_password_again()
         (Method::POST, FOLDER, folder.clone()),
         (Method::POST, CFG, cfg),
         (Method::POST, FOLDERS, json!({ "path": live, "prefix": "" })),
+        (Method::POST, FILES, json!({ "dataPath": live, "path": "" })),
+        (
+            Method::POST,
+            CFG_TEXT,
+            json!({ "dataPath": live, "cfgFile": "server.cfg" }),
+        ),
         (Method::POST, DISCOVER, json!({})),
         (Method::PUT, SETUP, change(&live, None)),
     ] {
@@ -385,6 +456,8 @@ async fn only_the_owner_checks_and_saves_and_the_save_takes_the_password_again()
         [
             format!("PUT {SETUP}"),
             format!("POST {DISCOVER}"),
+            format!("POST {CFG_TEXT}"),
+            format!("POST {FILES}"),
             format!("POST {FOLDERS}"),
             format!("POST {CFG}"),
             format!("POST {FOLDER}")
@@ -410,6 +483,8 @@ fn the_route_table_declares_the_setup_routes_owner_only() {
             (Method::POST, "/servers/default/setup/folder", Gate::Owner),
             (Method::POST, "/servers/default/setup/cfg", Gate::Owner),
             (Method::POST, "/servers/default/setup/folders", Gate::Owner),
+            (Method::POST, "/servers/default/setup/files", Gate::Owner),
+            (Method::POST, "/servers/default/setup/cfg/text", Gate::Owner),
             (Method::POST, "/servers/default/setup/discover", Gate::Owner),
             (Method::PUT, "/servers/default/setup", Gate::ReauthenticatedOwner),
         ]

@@ -162,13 +162,7 @@ function ResourceRow({ comparison, resource }: { comparison: Comparison; resourc
     const sub = cn(table.sub, warning && 'text-ink-2');
     return (
         <tr className={warning ? 'bg-warning-soft [&:last-child>td]:border-b-0' : table.row}>
-            <td
-                className={cn(
-                    table.td,
-                    'min-w-56 align-top',
-                    warning && 'shadow-[inset_2px_0_0_var(--warning-fill)]',
-                )}
-            >
+            <td className={cn(table.td, 'min-w-56 align-top')}>
                 <Link
                     to="/changes/resource"
                     search={{

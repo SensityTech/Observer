@@ -234,6 +234,95 @@ pub enum CfgFileProblem {
     TooLarge,
 }
 
+/// `POST /api/servers/default/setup/files`: the entries of one folder of a server folder, for the
+/// setup's file browser.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct FilesQuery {
+    pub data_path: String,
+    /// Relative to the data folder with `/`; empty for the data folder itself.
+    #[serde(default)]
+    pub path: String,
+}
+
+/// One folder of a server folder, as the setup's file browser shows it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct FileListing {
+    /// The folder listed, as asked.
+    pub path: String,
+    /// The data folder's problem, or why this folder cannot be listed: `invalidPath`, `missing`,
+    /// `notAFolder`, `unreadable` (a link, or a folder Observer never opens) or `insideObserver`.
+    pub problem: Option<FolderProblem>,
+    /// Folders first, then files, by name, case aside.
+    pub entries: Vec<FileEntry>,
+    /// More entries than the 500 listed.
+    pub truncated: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct FileEntry {
+    pub name: String,
+    /// Relative to the data folder with `/`.
+    pub path: String,
+    pub kind: FileEntryKind,
+    /// A link or a junction, which the browser never follows.
+    pub link: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum FileEntryKind {
+    Folder,
+    /// A `.cfg` file, which the setup reads.
+    Cfg,
+    /// Any other file: listed, never read.
+    File,
+    /// What holds secrets or belongs to FXServer or Observer: `cache`, txAdmin's data, `.env`
+    /// and key files, Observer's own folder. Listed so the owner sees it is there, never opened.
+    Withheld,
+}
+
+/// `POST /api/servers/default/setup/cfg/text`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct CfgTextQuery {
+    pub data_path: String,
+    /// Relative to the data folder.
+    pub cfg_file: String,
+}
+
+/// A cfg as the setup shows it, with its secrets left out.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct CfgText {
+    /// The data folder's own problem: with one, the cfg is not read.
+    pub folder: Option<FolderProblem>,
+    pub problem: Option<CfgFileProblem>,
+    /// Why the path rules refuse it, with `invalidPath`.
+    pub path_problem: Option<LaunchProblem>,
+    /// Each line, cut where a secret was: the secret itself never leaves Observer.
+    pub lines: Vec<Vec<CfgSpan>>,
+    /// The file has more lines than the 2,000 shown.
+    pub truncated: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct CfgSpan {
+    /// Empty for a secret.
+    pub text: String,
+    pub secret: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
 #[ts(export)]
 pub struct CfgFile {

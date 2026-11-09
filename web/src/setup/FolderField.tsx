@@ -250,7 +250,7 @@ function Option({
             className={cn(
                 'flex flex-wrap items-center gap-x-2.5 gap-y-0.5 rounded-sm px-2.5 py-2 max-md:min-h-11',
                 enabled ? 'cursor-pointer' : 'cursor-not-allowed text-ink-3',
-                active && 'bg-accent-soft shadow-[inset_2px_0_0_var(--accent)]',
+                active && 'bg-accent-soft',
             )}
             // The field keeps the keyboard: a press on an option must not blur it first.
             onMouseDown={(event) => event.preventDefault()}

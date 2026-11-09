@@ -58,6 +58,9 @@ export function LabelChip({ label }: { label: PlayerLabel }) {
     );
 }
 
+/** The name the panel calls a player by: the label's, when the server's resources gave one. */
+export const nameOf = (name: string | null, label: PlayerLabel | null) => label?.name ?? name;
+
 /**
  * A player as the panel names them, opening their profile when it is written: by the label's name
  * when the server's resources gave one, with its chip and the FiveM name under it; by the FiveM name

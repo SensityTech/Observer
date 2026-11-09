@@ -8,7 +8,8 @@ use observer_domain::convars::{CATALOG_JSON, CfgConvars};
 use observer_domain::launch::{LaunchChange, StoredLaunch};
 use observer_domain::server::{CommandAck, ConsoleCommand, LogFile};
 use observer_domain::server_data::{
-    CfgCheck, CfgReport, Discovery, FolderCheck, FolderListing, FolderQuery, FolderReport,
+    CfgCheck, CfgReport, CfgText, CfgTextQuery, Discovery, FileListing, FilesQuery, FolderCheck,
+    FolderListing, FolderQuery, FolderReport,
 };
 use tokio_util::io::ReaderStream;
 
@@ -69,6 +70,20 @@ pub(crate) async fn list_folders(
     JsonBody(query): JsonBody<FolderQuery>,
 ) -> Result<Json<FolderListing>, Failure> {
     Ok(Json(state.supervision.list_folders(query).await?))
+}
+
+pub(crate) async fn list_files(
+    State(state): State<AppState>,
+    JsonBody(query): JsonBody<FilesQuery>,
+) -> Result<Json<FileListing>, Failure> {
+    Ok(Json(state.supervision.list_files(query).await?))
+}
+
+pub(crate) async fn cfg_text(
+    State(state): State<AppState>,
+    JsonBody(query): JsonBody<CfgTextQuery>,
+) -> Result<Json<CfgText>, Failure> {
+    Ok(Json(state.supervision.cfg_text(query).await?))
 }
 
 /// The search takes a few seconds: the panel asks for it once and when the owner asks again.

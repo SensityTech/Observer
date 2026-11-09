@@ -25,6 +25,7 @@ import { RouteError } from './pages/RouteError';
 import { SetupPage } from './pages/SetupPage';
 import { firstCategory, isCategory, type CategoryId } from './settings/catalog';
 import { AppShell } from './shell/AppShell';
+import { FocusShell } from './shell/FocusShell';
 
 // Pages beyond the Overview load when someone opens them: the statistics and their charts, the
 // console's virtual list and colour parser, the restart schedule, the diagnostics, the players and
@@ -134,21 +135,32 @@ const passwordRoute = createRoute({
     component: PasswordChangePage,
 });
 
+/** The account a signed-in screen opens for, or where a visitor without one belongs. */
+const signedIn = async ({ context: { queryClient } }: { context: RouterContext }) => {
+    const me = await queryClient.ensureQueryData(meQuery);
+    if (me === null) {
+        throw await signedOut(queryClient);
+    }
+    // The API refuses everything else until then; the panel goes straight to the form.
+    if (me.mustChangePassword) {
+        throw redirect({ to: '/password' });
+    }
+    return { me };
+};
+
 const panelRoute = createRoute({
     getParentRoute: () => rootRoute,
     id: 'panel',
-    beforeLoad: async ({ context: { queryClient } }) => {
-        const me = await queryClient.ensureQueryData(meQuery);
-        if (me === null) {
-            throw await signedOut(queryClient);
-        }
-        // The API refuses everything else until then; the panel goes straight to the form.
-        if (me.mustChangePassword) {
-            throw redirect({ to: '/password' });
-        }
-        return { me };
-    },
+    beforeLoad: signedIn,
     component: AppShell,
+});
+
+/** Flows on the whole screen, without the panel's rail and columns. */
+const focusRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    id: 'focus',
+    beforeLoad: signedIn,
+    component: FocusShell,
 });
 
 const overviewRoute = createRoute({
@@ -292,14 +304,17 @@ const changesResourceRoute = createRoute({
     ),
 });
 
+// Launch settings are the owner's alone; the setup is a flow of its own, without a page to refuse
+// from, so anyone else goes back to where they land.
 const serverSetupRoute = createRoute({
-    getParentRoute: () => panelRoute,
+    getParentRoute: () => focusRoute,
     path: '/server/setup',
-    component: () => (
-        <RequireOwner>
-            <ServerSetupPage />
-        </RequireOwner>
-    ),
+    beforeLoad: ({ context: { me } }) => {
+        if (!me.isOwner) {
+            throw redirect({ to: landing(me) });
+        }
+    },
+    component: ServerSetupPage,
 });
 
 // The tools read the whole server folder and write into it: the owner's, as the server setup is.
@@ -405,7 +420,6 @@ const routeTree = rootRoute.addChildren([
         changesResourceRoute,
         dropsRoute,
         serverRoute,
-        serverSetupRoute,
         toolsRoute,
         backupsRoute,
         usersRoute,
@@ -415,6 +429,7 @@ const routeTree = rootRoute.addChildren([
         accountRoute,
         aboutRoute,
     ]),
+    focusRoute.addChildren([serverSetupRoute]),
 ]);
 
 export const createPanelRouter = (queryClient: QueryClient) =>

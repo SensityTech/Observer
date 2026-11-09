@@ -72,14 +72,11 @@ test.describe.serial('Observer in a browser', () => {
         await page.getByLabel(en.setup.password, { exact: true }).fill(PASSWORD);
         await page.getByLabel(en.setup.confirm).fill(PASSWORD);
         await page.getByRole('button', { name: en.setup.submit }).click();
-        await expect(page.getByRole('heading', { level: 1 })).toContainText(setup.title);
+        await expect(page.getByRole('heading', { level: 1 })).toContainText(setup.headings.folder);
 
-        // The search of the host comes first; a server it finds closes the field for another path.
+        // The search of the host comes first; the field for another path stays beside what it finds.
         await expect(page.getByText(/^Observer looked in the usual places/)).toBeVisible({ timeout: 30_000 });
         const folder = page.getByRole('combobox', { name: setup.folder.label });
-        if (!(await folder.isVisible())) {
-            await page.getByText(setup.folder.elsewhere, { exact: true }).click();
-        }
         await folder.fill(env('E2E_SERVER_DATA'));
         await folder.press('Enter');
         await expect(page.getByText(setup.folder.accepted)).toBeVisible();
@@ -96,13 +93,13 @@ test.describe.serial('Observer in a browser', () => {
             dialog.getByRole('radio', { name: new RegExp(en.artifacts.use.nextStart) }),
         ).toBeChecked();
         await dialog.getByRole('button', { name: en.artifacts.use.confirm, exact: true }).click();
-        await expect(page.getByText(setup.build.selected(build))).toBeVisible();
+        await expect(page.getByText(en.artifacts.use.done.nextStart(build))).toBeVisible();
         await page.getByRole('button', { name: setup.continue }).click();
 
         await page.getByRole('button', { name: setup.start.saveAndStart }).click();
         // A sign-in a moment ago may stand for the password; otherwise the panel asks for it.
         const reauth = page.locator('dialog[open]').filter({ hasText: en.reauth.title });
-        const starting = page.getByText(setup.start.starting);
+        const starting = page.getByRole('region', { name: setup.launch.checked });
         await expect(starting.or(reauth)).toBeVisible();
         if (await reauth.isVisible()) {
             await reauth.getByLabel(en.reauth.password, { exact: true }).fill(PASSWORD);
@@ -111,6 +108,7 @@ test.describe.serial('Observer in a browser', () => {
         await expect(starting).toBeVisible();
         // Ready once the fake's bridge has reported in.
         await expect(page.getByText(setup.launch.ready)).toBeVisible();
+        await page.getByRole('link', { name: setup.launch.overview }).click();
         await expect(status()).toContainText(en.server_state.states.online);
     });
 

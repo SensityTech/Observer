@@ -1,21 +1,8 @@
 import { useQuery } from '@tanstack/react-query';
-import {
-    ChevronRight,
-    ChevronUp,
-    CircleCheck,
-    CircleX,
-    Folder,
-    HardDrive,
-    House,
-    LoaderCircle,
-    Lock,
-    Search,
-    TriangleAlert,
-} from 'lucide-react';
+import { ChevronRight, ChevronUp, Folder, HardDrive, House, LoaderCircle, Lock, Search } from 'lucide-react';
 import { useId, useState } from 'react';
 
 import type { FolderEntry } from '../api/generated/FolderEntry';
-import type { FolderReport } from '../api/generated/FolderReport';
 import type { FoundServer } from '../api/generated/FoundServer';
 import type { Place } from '../api/generated/Place';
 import { folderCheckQuery, folderQuery } from '../api/serverSetup';
@@ -26,6 +13,7 @@ import { Notice } from '../components/Notice';
 import { errorMessage } from '../i18n/errors';
 import { useI18n } from '../i18n/I18nProvider';
 import { cn } from '../lib/cn';
+import { FolderVerdict } from './FolderVerdict';
 import { crumbs, folderName, intoFolder } from './paths';
 
 /** Where a path is listed and checked from: without its last separator, but for a root's. */
@@ -278,12 +266,7 @@ function Row({
     const readable = entry.kind !== 'unreadable';
     const Icon = readable ? Folder : Lock;
     return (
-        <li
-            className={cn(
-                'flex items-center gap-1 rounded-sm pr-1',
-                selected && 'bg-accent-soft shadow-[inset_2px_0_0_var(--accent)]',
-            )}
-        >
+        <li className={cn('flex items-center gap-1 rounded-sm pr-1', selected && 'bg-accent-soft')}>
             <button
                 type="button"
                 aria-pressed={selected}
@@ -373,7 +356,15 @@ function Preview({
                     </p>
                 )}
                 {check.isError && <Notice tone="danger">{errorMessage(t, check.error)}</Notice>}
-                {report !== undefined && <Verdict report={report} onGo={onGo} />}
+                {report !== undefined && (
+                    <FolderVerdict
+                        report={report}
+                        suggestionLabel={words.browser.showSuggestion}
+                        onSuggestion={(suggestion) =>
+                            onGo(crumbs(suggestion).at(-2)?.path ?? suggestion, suggestion)
+                        }
+                    />
+                )}
             </div>
             <Button
                 tone="ink"
@@ -385,106 +376,5 @@ function Preview({
                 {words.browser.use}
             </Button>
         </aside>
-    );
-}
-
-function Verdict({
-    report,
-    onGo,
-}: {
-    report: FolderReport;
-    onGo: (path: string, select?: string | null) => void;
-}) {
-    const { t, format } = useI18n();
-    const words = t.serverSetup.folder;
-    const resources = report.resources;
-    if (report.problem !== null || resources === null) {
-        const problem = report.problem ?? 'noResources';
-        const suggestion = report.suggestion;
-        return (
-            <>
-                <p className="flex items-start gap-2 text-body text-ink-2">
-                    <CircleX
-                        size={16}
-                        strokeWidth={1.5}
-                        className="mt-0.5 flex-none text-ink-3"
-                        aria-hidden="true"
-                    />
-                    {problem === 'invalidPath' && report.pathProblem !== null
-                        ? t.server.problems[report.pathProblem]
-                        : words.problems[problem]}
-                </p>
-                {suggestion !== null && (
-                    <div className="flex flex-col items-start gap-2">
-                        <p className="text-small text-ink-2">
-                            {words.suggestion}{' '}
-                            <span className="font-mono text-ink [overflow-wrap:anywhere]">{suggestion}</span>
-                        </p>
-                        <Button
-                            size="sm"
-                            onClick={() => onGo(crumbs(suggestion).at(-2)?.path ?? suggestion, suggestion)}
-                        >
-                            {words.browser.showSuggestion}
-                        </Button>
-                    </div>
-                )}
-            </>
-        );
-    }
-    const detected = report.detectedCfg;
-    return (
-        <>
-            <p className="flex items-center gap-2 text-body font-medium text-success">
-                <CircleCheck size={16} strokeWidth={1.5} className="flex-none" aria-hidden="true" />
-                {words.browser.isServer}
-            </p>
-            <dl className="grid grid-cols-2 gap-3">
-                <div className="rounded-box border border-line bg-surface p-3">
-                    <dt className="eyebrow">{words.browser.resources}</dt>
-                    <dd className="text-figure-sm text-ink tabular-nums">
-                        {format.number(resources.resources)}
-                    </dd>
-                    <dd className="text-small text-ink-3">
-                        {words.browser.inCategories(resources.categories)}
-                    </dd>
-                </div>
-                <div className="rounded-box border border-line bg-surface p-3">
-                    <dt className="eyebrow">{words.browser.cfgCount}</dt>
-                    <dd className="text-figure-sm text-ink tabular-nums">
-                        {format.number(report.cfgFiles.length)}
-                    </dd>
-                    {detected !== null && (
-                        <dd className="text-small text-ink-3 [overflow-wrap:anywhere]">
-                            {words.browser.cfgFirst(detected)}
-                        </dd>
-                    )}
-                </div>
-            </dl>
-            {report.cfgFiles.length > 0 && (
-                <ul className="flex flex-wrap gap-1.5" aria-label={words.cfgFiles}>
-                    {report.cfgFiles.map((file) => (
-                        <li
-                            key={file}
-                            className="rounded-xs border border-line bg-surface-2 px-1.5 py-0.5 font-mono text-small text-ink-2 [overflow-wrap:anywhere]"
-                        >
-                            {file}
-                        </li>
-                    ))}
-                </ul>
-            )}
-            {resources.withoutManifest.length > 0 && (
-                <p className="flex items-start gap-2 text-small text-warning">
-                    <TriangleAlert
-                        size={14}
-                        strokeWidth={1.5}
-                        className="mt-0.5 flex-none"
-                        aria-hidden="true"
-                    />
-                    <span className="[overflow-wrap:anywhere]">
-                        {words.withoutManifest(resources.withoutManifest)}
-                    </span>
-                </p>
-            )}
-        </>
     );
 }

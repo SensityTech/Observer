@@ -5,8 +5,9 @@ import { Button } from '../components/Button';
 import { useI18n } from '../i18n/I18nProvider';
 
 /**
- * A step's buttons under its content: Back on the left, the step's own on the right, and above
- * them why the step cannot go on yet. Phones stack them across the whole width.
+ * A step's buttons in the bar at the foot of the screen: Back on the left, the step's own on the
+ * right, and beside them why the step cannot go on yet. On a phone the step's buttons share the
+ * width, and the note goes above them.
  */
 export function StepActions({
     onBack,
@@ -19,14 +20,18 @@ export function StepActions({
 }) {
     const { t } = useI18n();
     return (
-        <div className="flex flex-col gap-3">
-            {note && <p className="text-small text-ink-3">{note}</p>}
-            <div className="flex flex-wrap items-center justify-end gap-2 max-md:flex-col max-md:items-stretch">
-                {onBack !== undefined && (
-                    <Button tone="ghost" icon={ArrowLeft} className="mr-auto max-md:mr-0" onClick={onBack}>
-                        {t.serverSetup.back}
-                    </Button>
-                )}
+        <div className="flex flex-wrap items-center gap-2.5">
+            {onBack !== undefined && (
+                <Button tone="ghost" icon={ArrowLeft} onClick={onBack}>
+                    {t.serverSetup.back}
+                </Button>
+            )}
+            {note && (
+                <p className="order-first basis-full text-small text-ink-3 md:order-none md:ml-auto md:basis-auto">
+                    {note}
+                </p>
+            )}
+            <div className="ml-auto flex flex-wrap items-center justify-end gap-2.5 max-md:flex-1 max-md:*:flex-1">
                 {children}
             </div>
         </div>

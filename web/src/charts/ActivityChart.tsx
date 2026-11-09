@@ -1,6 +1,7 @@
 import {
     HistogramSeries,
     createChart,
+    type AutoscaleInfo,
     type ChartOptions,
     type DeepPartial,
     type IChartApi,
@@ -10,23 +11,32 @@ import {
 } from 'lightweight-charts';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 
-import { FIGURE, formatNumber } from '../i18n/format';
-import type { Messages } from '../i18n/en';
+import { formatPlayTime } from '../i18n/format';
 import { useI18n } from '../i18n/I18nProvider';
 import { dayChartOptions } from './days';
 import { tokenColor } from './theme';
 
 const HOUR = 3_600_000;
 
-/** The scale reads in hours: `1.5h`; a bar's own time, in the tooltip, to the minute. */
-const activityOptions = (host: Element, locale: string, t: Messages): DeepPartial<ChartOptions> => {
+/**
+ * The scale spans an hour at least, so that a few minutes played still read on distinct marks
+ * (`12 min`, `24 min`…) rather than on several `0h`.
+ */
+export const atLeastAnHour = (info: AutoscaleInfo | null): AutoscaleInfo => ({
+    ...info,
+    priceRange: { minValue: 0, maxValue: Math.max(1, info?.priceRange?.maxValue ?? 0) },
+});
+
+/** The scale's marks, in the words play time is written in everywhere else: `24 min`, `1h 30m`. */
+const activityOptions = (host: Element, locale: string): DeepPartial<ChartOptions> => {
     const base = dayChartOptions(host, locale);
     return {
         ...base,
+        // The library sizes the scale on its first and last marks only (`0h`, `1h`): `48 min` needs more.
+        leftPriceScale: { ...base.leftPriceScale, minimumWidth: 56 },
         localization: {
             ...base.localization,
-            priceFormatter: (hours: number) =>
-                t.players.profile.activity.hours(formatNumber(locale, hours, FIGURE)),
+            priceFormatter: (hours: number) => formatPlayTime(locale, hours * HOUR),
         },
     };
 };
@@ -51,18 +61,16 @@ export function ActivityChart({ days, today }: { days: { day: string; playMs: nu
         if (element === null) {
             return;
         }
-        const api = createChart(
-            element,
-            activityOptions(element, localeRef.current.locale, localeRef.current.t),
-        );
+        const api = createChart(element, activityOptions(element, localeRef.current.locale));
         bars.current = api.addSeries(HistogramSeries, {
             priceScaleId: 'left',
             priceLineVisible: false,
             lastValueVisible: false,
+            autoscaleInfoProvider: atLeastAnHour,
         });
         chart.current = api;
         const paint = () => {
-            api.applyOptions(activityOptions(element, localeRef.current.locale, localeRef.current.t));
+            api.applyOptions(activityOptions(element, localeRef.current.locale));
             bars.current?.applyOptions({ color: tokenColor(element, '--chart-muted') });
         };
         paint();
@@ -90,7 +98,7 @@ export function ActivityChart({ days, today }: { days: { day: string; playMs: nu
         localeRef.current = { locale, t };
         const element = host.current;
         if (element !== null) {
-            chart.current?.applyOptions(activityOptions(element, locale, t));
+            chart.current?.applyOptions(activityOptions(element, locale));
         }
     }, [locale, t]);
 

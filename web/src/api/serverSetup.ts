@@ -3,7 +3,11 @@ import { queryOptions } from '@tanstack/react-query';
 import { send } from './client';
 import type { CfgCheck } from './generated/CfgCheck';
 import type { CfgReport } from './generated/CfgReport';
+import type { CfgText } from './generated/CfgText';
+import type { CfgTextQuery } from './generated/CfgTextQuery';
 import type { Discovery } from './generated/Discovery';
+import type { FileListing } from './generated/FileListing';
+import type { FilesQuery } from './generated/FilesQuery';
 import type { FolderCheck } from './generated/FolderCheck';
 import type { FolderListing } from './generated/FolderListing';
 import type { FolderQuery } from './generated/FolderQuery';
@@ -30,6 +34,22 @@ export const folderQuery = (query: FolderQuery) =>
         queryKey: ['servers', 'default', 'setup', 'folders', query.path, query.prefix],
         queryFn: () => listFolders(query),
         staleTime: 10_000,
+    });
+
+/** One folder of the server folder, for the setup's file browser. */
+export const filesQuery = (query: FilesQuery) =>
+    queryOptions({
+        queryKey: ['servers', 'default', 'setup', 'files', query.dataPath, query.path],
+        queryFn: () => send<FileListing>('POST', `${PATH}/files`, query),
+        staleTime: 10_000,
+    });
+
+/** A cfg as the setup shows it, its secrets left out by Observer. */
+export const cfgTextQuery = (query: CfgTextQuery) =>
+    queryOptions({
+        queryKey: ['servers', 'default', 'setup', 'cfg-text', query.dataPath, query.cfgFile],
+        queryFn: () => send<CfgText>('POST', `${PATH}/cfg/text`, query),
+        staleTime: 5_000,
     });
 
 export const folderCheckQuery = (dataPath: string) =>

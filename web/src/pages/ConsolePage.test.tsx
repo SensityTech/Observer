@@ -60,7 +60,11 @@ const screenIs = (phone: boolean) =>
  * The console of an operator who reads it, holding `count` lines. `meanwhile` is what the reader
  * does before the first lines come.
  */
-const consoleWith = async (count: number, meanwhile: (view: RenderResult) => void = () => {}) => {
+const consoleWith = async (
+    count: number,
+    meanwhile: (view: RenderResult) => void = () => {},
+    permissions = '9',
+) => {
     let socket: SocketEvents | undefined;
     const live = new Realtime({
         ticket: async () => 'ticket',
@@ -78,7 +82,7 @@ const consoleWith = async (count: number, meanwhile: (view: RenderResult) => voi
                         id: 2,
                         username: 'kenji',
                         isOwner: false,
-                        permissions: '9',
+                        permissions,
                         mustChangePassword: false,
                     }}
                 >
@@ -206,6 +210,73 @@ describe('ConsolePage', () => {
         fireEvent.click(await findByRole('button', { name: en.console.newLines(2) }));
 
         expect(scrollIntoView).toHaveBeenCalledOnce();
+        live.stop();
+    });
+});
+
+const typeAndSend = (field: HTMLElement, command: string) => {
+    fireEvent.change(field, { target: { value: command } });
+    fireEvent.submit(field.closest('form') as HTMLFormElement);
+};
+
+describe('ConsolePage command line', () => {
+    /** The console commands Observer was sent, each answered when the test says. */
+    const sent: { command: string; answer: (delivery: string) => void }[] = [];
+
+    beforeEach(() => {
+        vi.stubGlobal('ResizeObserver', TestResizeObserver);
+        screenIs(false);
+        Element.prototype.scrollIntoView = () => {};
+        vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
+            if (url.endsWith('/console') && init?.method === 'POST') {
+                const body = JSON.parse(String(init.body)) as { line: string };
+                const delivery = await new Promise<string>((answer) =>
+                    sent.push({ command: body.line, answer }),
+                );
+                return Response.json({ delivery, masked: false });
+            }
+            return Response.json({ code: 'not_found' }, { status: 404 });
+        });
+    });
+
+    afterEach(() => {
+        cleanup();
+        vi.unstubAllGlobals();
+        observed.clear();
+        sent.length = 0;
+        localStorage.clear();
+    });
+
+    it('should keep what is typed while a command is on its way, and send both in order', async () => {
+        const { getByRole, live } = await consoleWith(0, () => {}, '7');
+        const field = getByRole('textbox', { name: en.console.commandLabel });
+
+        typeAndSend(field, 'status');
+        expect(field).toHaveProperty('value', '');
+        typeAndSend(field, 'players');
+        fireEvent.change(field, { target: { value: 'restart hello' } });
+        await settle();
+        sent[0]?.answer('written');
+        await settle();
+        sent[1]?.answer('written');
+        await settle();
+
+        expect(sent.map(({ command }) => command)).toEqual(['status', 'players']);
+        expect(field).toHaveProperty('value', 'restart hello');
+        live.stop();
+    });
+
+    it('should give a refused command back to the field when nothing else was typed', async () => {
+        const { getByRole, live } = await consoleWith(0, () => {}, '7');
+        const field = getByRole('textbox', { name: en.console.commandLabel });
+
+        typeAndSend(field, 'status');
+        await settle();
+        sent[0]?.answer('busy');
+        await settle();
+
+        expect(field).toHaveProperty('value', 'status');
+        expect(getByRole('alert').textContent).toBe(en.console.busy);
         live.stop();
     });
 });

@@ -186,6 +186,41 @@ describe('the players column', () => {
         expect(names(list())).toEqual(['Bastos', 'Ruby Vex', en.players.now.confirming]);
     });
 
+    it('should name a labelled player by their label, found by its name, its whole ID or the FiveM name', () => {
+        PLAYERS.push(
+            player({
+                netId: 8,
+                player: 11,
+                name: 'Ada',
+                label: { name: 'Mara Quinn', id: 'CHAR-1234', resource: 'identity' },
+            }),
+        );
+        try {
+            const { getByRole } = column();
+            const search = getByRole('searchbox', { name: en.online.search });
+            const list = () => getByRole('complementary', { name: en.online.label });
+
+            const sorted = names(list());
+            const mara = getByRole('link', {
+                name: en.online.row('Mara Quinn', 8, '1 min', en.online.pingUnknown),
+            });
+            fireEvent.change(search, { target: { value: 'quinn' } });
+            const byLabel = names(list());
+            fireEvent.change(search, { target: { value: 'char-1234' } });
+            const byId = names(list());
+            fireEvent.change(search, { target: { value: 'ada' } });
+            const byFiveM = names(list());
+
+            expect(sorted).toEqual(['Bastos', 'Mara Quinn', 'Ruby Vex', en.players.now.confirming]);
+            expect(mara.querySelector('[title]')?.getAttribute('title')).toBe(en.players.label.fivem('Ada'));
+            expect(byLabel).toEqual(['Mara Quinn']);
+            expect(byId).toEqual(['Mara Quinn']);
+            expect(byFiveM).toEqual(['Mara Quinn']);
+        } finally {
+            PLAYERS.pop();
+        }
+    });
+
     it('should say who joined last, and how long ago', () => {
         const { getByText } = column();
 

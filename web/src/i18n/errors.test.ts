@@ -43,13 +43,20 @@ describe('errorMessage', () => {
     });
 
     it('should fall back to a generic message for a code it does not know', () => {
-        expect(errorMessage(en, new ApiError(502, 'http_502'))).toBe(en.failure.unknown);
+        expect(errorMessage(en, new ApiError(500, 'http_500'))).toBe(en.failure.unknown);
         expect(errorMessage(en, new ApiError(418, 'toString'))).toBe(en.failure.unknown);
         expect(errorMessage(en, new Error('boom'))).toBe(en.failure.unknown);
     });
 
     it('should say Observer cannot be reached when the request got no answer', () => {
         expect(errorMessage(en, new TypeError('Failed to fetch'))).toBe(en.failure.network);
+    });
+
+    it('should say Observer cannot be reached when a proxy in front of it answers in its place', () => {
+        for (const status of [502, 503, 504]) {
+            expect(errorMessage(en, new ApiError(status, `http_${status}`))).toBe(en.failure.network);
+        }
+        expect(errorMessage(en, new ApiError(503, 'busy'))).not.toBe(en.failure.network);
     });
 });
 
