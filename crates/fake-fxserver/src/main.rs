@@ -407,12 +407,7 @@ impl Fake {
             ("fake_trace", Some(kind)) => self.trace(kind),
             ("fake_join", _) => self.join(args.first(), args.get(1), args.get(2)),
             ("fake_connecting", _) => self.connecting(args.first(), args.get(1), args.get(2)),
-            ("fake_move", Some(id)) => {
-                let coordinates: Vec<f64> = args[1..].iter().filter_map(|value| value.parse().ok()).collect();
-                if let (Ok(id), [x, y, z]) = (id.parse(), coordinates.as_slice()) {
-                    self.placed.insert(id, [*x, *y, *z]);
-                }
-            }
+            ("fake_move", Some(id)) => self.place(id, &args[1..]),
             ("fake_drop", Some(id)) => {
                 let category = args
                     .get(1)
@@ -674,6 +669,17 @@ impl Fake {
             "type": "observer", "kind": "labels",
             "labels": [{ "id": id, "label": label, "resource": "fake" }],
         }));
+    }
+
+    /// Player `id` standing at `[x, y, z]`.
+    fn place(&mut self, id: &str, coordinates: &[String]) {
+        let coordinates: Vec<f64> = coordinates
+            .iter()
+            .filter_map(|value| value.parse().ok())
+            .collect();
+        if let (Ok(id), [x, y, z]) = (id.parse(), coordinates.as_slice()) {
+            self.placed.insert(id, [*x, *y, *z]);
+        }
     }
 
     fn drop_player(&self, id: u32, category: u64, resource: &str, reason: &str) {
