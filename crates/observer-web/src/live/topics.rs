@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use futures_util::Stream;
 use futures_util::stream;
-use observer_app::{ConsoleLines, Error, Features};
+use observer_app::{ConsoleLines, Error, Features, Watching};
 use observer_domain::audit::AuditEntry;
 use observer_domain::diagnostics::DiagnosticsEvent;
 use observer_domain::features::Feature;
@@ -57,6 +57,7 @@ pub(super) fn allows(topic: Topic, held: Permissions) -> bool {
         Topic::ServerAlerts => any(&[Permissions::DASHBOARD_VIEW, Permissions::DIAGNOSTICS_VIEW]),
         Topic::ServerDiagnostics => any(&[Permissions::DIAGNOSTICS_VIEW]),
         Topic::ServerChanges => any(&[Permissions::CHANGES_VIEW]),
+        Topic::ServerMap => any(&[Permissions::PLAYERS_MAP]),
     }
 }
 
@@ -139,6 +140,13 @@ pub(super) async fn open(topic: Topic, since: Option<u64>, state: &AppState) -> 
                 events: Some(diagnostics_events(events)),
             })
         }
+        Topic::ServerMap => {
+            let (snapshot, live, watching) = state.map()?.watch();
+            Ok(Feed {
+                snapshot: TopicSnapshot::ServerMap(snapshot),
+                events: Some(map_events(live, watching)),
+            })
+        }
         Topic::ServerChanges => {
             let mut live = state.changes()?.live();
             let snapshot = live.borrow_and_update().clone();
@@ -187,6 +195,22 @@ where
         let current = status.borrow_and_update().clone();
         Some((Delivery::Event(Box::new(event(current))), status))
     }))
+}
+
+/// The map's changes, holding the guard that keeps the server sending positions: it goes with the
+/// subscription.
+fn map_events(live: watch::Receiver<observer_domain::map::MapLive>, watching: Watching) -> Events {
+    Box::pin(stream::unfold(
+        (live, watching),
+        |(mut live, watching)| async move {
+            live.changed().await.ok()?;
+            let current = live.borrow_and_update().clone();
+            Some((
+                Delivery::Event(Box::new(TopicEvent::ServerMap(current))),
+                (live, watching),
+            ))
+        },
+    ))
 }
 
 fn console_events(lines: ConsoleLines) -> Events {

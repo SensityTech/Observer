@@ -203,6 +203,10 @@ const permissions = {
         name: 'Lift bans',
         description: 'Let a banned player back in, whoever banned them.',
     },
+    playersMap: {
+        name: 'See the live map',
+        description: 'Where every connected player stands, as the server sees it, a few times a minute.',
+    },
 } satisfies Record<PermissionKey, { name: string; description: string }>;
 
 const permissionNames = (hex: string) =>
@@ -4746,6 +4750,8 @@ export const en = {
             player_banned: 'Player banned',
             ban_lifted: 'Ban lifted',
             bans_settings_changed: 'Ban settings changed',
+            map_image_changed: 'Map image changed',
+            map_settings_changed: 'Live map settings changed',
             drop_rates_exported: 'Drop rates exported',
             drops_retention_changed: 'Drop retention changed',
             change_contents_viewed: 'Changed file read',
@@ -5217,6 +5223,21 @@ export const en = {
                   ? 'A ban lasts from one minute to ten years, or for good.'
                   : 'Give at least one valid identifier, 64 at most. Addresses are never banned.';
         },
+        invalid_map_image: (params) => {
+            const problem = stringParam(params, 'problem');
+            return problem === 'missing'
+                ? 'Nothing is at this path on the host.'
+                : problem === 'tooLarge'
+                  ? 'This image is over 64 MB, or over 16,384 px a side.'
+                  : problem === 'notLocal'
+                    ? 'Give the full path of a file on this host, not a network share or a relative path.'
+                    : problem === 'unreadable'
+                      ? 'Observer cannot read this file: check its permissions.'
+                      : 'This file is not a PNG, JPEG or WebP image.';
+        },
+        no_map_image: 'No map image is set.',
+        invalid_map_settings:
+            'Some settings are out of range: the thresholds must be ordered, the cadence 1, 2 or 5 seconds, and the edges must enclose an area.',
         invalid_bans_settings: (params) =>
             typeof params.maxMessage === 'number' && typeof params.maxTokens === 'number'
                 ? `Write a refusal message of ${formatNumber('en', params.maxMessage)} characters at most, and ask for 0 to ${formatNumber('en', params.maxTokens)} tokens.`

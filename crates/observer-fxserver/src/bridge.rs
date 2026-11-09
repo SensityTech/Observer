@@ -350,6 +350,8 @@ pub enum BridgeAction {
         message: String,
         event: BanEvent,
     },
+    /// Has the bridge report where the players stand every `every_ms` for `for_ms`, or stop with 0.
+    Positions { every_ms: u32, for_ms: u32 },
 }
 
 /// What a banned player reads, and the `observer:playerRefused` the bridge raises for it.
@@ -384,6 +386,7 @@ impl BridgeAction {
         match self {
             Self::Verdict { .. } => "verdict",
             Self::Drop { .. } => "drop",
+            Self::Positions { .. } => "positions",
         }
     }
 
@@ -397,7 +400,7 @@ impl BridgeAction {
     pub fn fitted(mut self) -> Self {
         while self.encode().len() > 2 * MAX_BRIDGE_JSON {
             let (message, event) = match &mut self {
-                Self::Verdict { refusal: None, .. } => return self,
+                Self::Verdict { refusal: None, .. } | Self::Positions { .. } => return self,
                 Self::Verdict {
                     refusal: Some(Refusal { message, event }),
                     ..
@@ -839,7 +842,7 @@ mod tests {
         }
     }
 
-    fn every_action() -> [BridgeAction; 2] {
+    fn every_action() -> [BridgeAction; 3] {
         [
             BridgeAction::Verdict {
                 request: 7,
@@ -852,6 +855,10 @@ mod tests {
                 player: 3,
                 message: "Banned".to_owned(),
                 event: ban_event(Some(3)),
+            },
+            BridgeAction::Positions {
+                every_ms: 2000,
+                for_ms: 30_000,
             },
         ]
     }

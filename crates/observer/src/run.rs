@@ -9,9 +9,9 @@ use jiff::tz::TimeZone;
 use observer_app::{
     Accounts, Artifacts, ArtifactsSetup, ArtifactsTask, AuditLog, Backups, BackupsHook, BackupsSetup, Bans,
     BansSetup, BeforeSpawn, Changes, ChangesSetup, Clock, DatabaseFiles, Diagnostics, DiagnosticsSetup,
-    Drops, DropsSetup, Features, FeaturesSetup, Metrics, MetricsSetup, OwnPaths, PRE_LAUNCH_LIMIT,
-    PasswordCost, Players, PlayersSetup, Running, Schedule, ScheduleSetup, ScheduleTask, Servers, Setup,
-    Sources, Statistics, Supervision, Switched, Tools, ToolsHook, ToolsSetup,
+    Drops, DropsSetup, Features, FeaturesSetup, LiveMap, MapSetup, Metrics, MetricsSetup, OwnPaths,
+    PRE_LAUNCH_LIMIT, PasswordCost, Players, PlayersSetup, Running, Schedule, ScheduleSetup, ScheduleTask,
+    Servers, Setup, Sources, Statistics, Supervision, Switched, Tools, ToolsHook, ToolsSetup,
 };
 use observer_artifacts::Http;
 use observer_artifacts::catalog::Catalog;
@@ -198,6 +198,21 @@ pub async fn run(config: Config, args: RunArgs) -> anyhow::Result<()> {
         }
         _ => (None, None),
     };
+    // With the players, whose sessions it places.
+    let (map, mapping) = match &players {
+        Some(players) => {
+            let (map, task) = LiveMap::start(MapSetup {
+                db: db.clone(),
+                clock: clock.clone(),
+                supervision: supervision.clone(),
+                players: players.clone(),
+                data_dir: paths.root.clone(),
+            });
+            let switched = features.switched(Feature::Players, move || task.close());
+            (Some(map), Some(switched))
+        }
+        None => (None, None),
+    };
     // After the players, whose start closes what an earlier Observer left open.
     let (drops, dropping) = match (&metrics, &players) {
         (Some(metrics), Some(players)) if features.runs(Feature::Drops) => {
@@ -290,6 +305,7 @@ pub async fn run(config: Config, args: RunArgs) -> anyhow::Result<()> {
         diagnostics,
         metrics: metrics.clone(),
         players,
+        map,
         drops,
         changes,
         backups,
@@ -392,6 +408,7 @@ pub async fn run(config: Config, args: RunArgs) -> anyhow::Result<()> {
     supervised.close().await;
     close(diagnosing).await;
     // After the supervision, so that FXServer's stop closes the sessions.
+    close(mapping).await;
     close(playing).await;
     close(dropping).await;
     // After the supervision: the bridge answers no one once FXServer is down.

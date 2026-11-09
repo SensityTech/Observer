@@ -21,7 +21,7 @@ use axum::extract::Request;
 use axum::{Router, middleware};
 use observer_app::{
     Accounts, Artifacts, AuditLog, Backups, Bans, Changes, Diagnostics, Drops, Error, Features, Files,
-    Metrics, Players, Schedule, Servers, Statistics, Supervision, Tools,
+    LiveMap, Metrics, Players, Schedule, Servers, Statistics, Supervision, Tools,
 };
 use observer_domain::about::Build;
 use observer_domain::features::Feature;
@@ -56,6 +56,7 @@ pub struct AppState {
     diagnostics: Option<Diagnostics>,
     metrics: Option<Metrics>,
     players: Option<Players>,
+    map: Option<LiveMap>,
     drops: Option<Drops>,
     changes: Option<Changes>,
     pub backups: Backups,
@@ -93,6 +94,7 @@ pub struct Services {
     pub diagnostics: Option<Diagnostics>,
     pub metrics: Option<Metrics>,
     pub players: Option<Players>,
+    pub map: Option<LiveMap>,
     pub drops: Option<Drops>,
     pub changes: Option<Changes>,
     pub backups: Backups,
@@ -121,6 +123,7 @@ impl AppState {
             diagnostics,
             metrics,
             players,
+            map,
             drops,
             changes,
             backups,
@@ -141,6 +144,7 @@ impl AppState {
             diagnostics,
             metrics,
             players,
+            map,
             drops,
             changes,
             backups,
@@ -170,6 +174,13 @@ impl AppState {
 
     pub(crate) fn players(&self) -> Result<&Players, Error> {
         self.players
+            .as_ref()
+            .ok_or_else(|| self.features.refusal(Feature::Players))
+    }
+
+    /// The live map runs with the players, whose sessions it places.
+    pub(crate) fn map(&self) -> Result<&LiveMap, Error> {
+        self.map
             .as_ref()
             .ok_or_else(|| self.features.refusal(Feature::Players))
     }

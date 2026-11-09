@@ -14,6 +14,7 @@ pub mod features;
 pub mod files;
 pub mod launch;
 pub mod login_failures;
+pub mod map;
 pub mod metrics;
 mod migrations;
 pub mod players;

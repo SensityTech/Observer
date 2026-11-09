@@ -181,7 +181,7 @@ impl Bans {
             PlayerReportKind::Drop(dropped) => {
                 self.connected().players.remove(&dropped.net_id);
             }
-            PlayerReportKind::Labels(_) => {}
+            PlayerReportKind::Labels(_) | PlayerReportKind::Positions(_) => {}
         }
     }
 
