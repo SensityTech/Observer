@@ -3,6 +3,7 @@
 
 mod artifacts;
 mod backups;
+mod bans;
 mod changes;
 mod diagnostics;
 mod drops;
@@ -28,11 +29,11 @@ use axum::http::{HeaderMap, Method, Request, StatusCode, header};
 use http_body_util::BodyExt;
 use jiff::SignedDuration;
 use observer_app::{
-    Accounts, Artifacts, ArtifactsSetup, ArtifactsTask, AuditLog, Backups, BackupsSetup, BackupsTask,
-    Changes, ChangesSetup, ChangesTask, Clock, Diagnostics, DiagnosticsSetup, DiagnosticsTask, Drops,
-    DropsSetup, DropsTask, Features, FeaturesSetup, Metrics, MetricsSetup, OwnPaths, PasswordCost, Players,
-    PlayersSetup, PlayersTask, Running, Schedule, ScheduleSetup, ScheduleTask, Servers, Setup, Statistics,
-    Supervision, Tools, ToolsSetup,
+    Accounts, Artifacts, ArtifactsSetup, ArtifactsTask, AuditLog, Backups, BackupsSetup, BackupsTask, Bans,
+    BansSetup, BansTask, Changes, ChangesSetup, ChangesTask, Clock, Diagnostics, DiagnosticsSetup,
+    DiagnosticsTask, Drops, DropsSetup, DropsTask, Features, FeaturesSetup, Metrics, MetricsSetup, OwnPaths,
+    PasswordCost, Players, PlayersSetup, PlayersTask, Running, Schedule, ScheduleSetup, ScheduleTask,
+    Servers, Setup, Statistics, Supervision, Tools, ToolsSetup,
 };
 use observer_artifacts::Http;
 use observer_artifacts::catalog::{Catalog, Listing};
@@ -73,6 +74,7 @@ struct Server {
     _diagnosing: DiagnosticsTask,
     _playing: PlayersTask,
     _dropping: DropsTask,
+    _banning: BansTask,
     _following: ChangesTask,
     _backing_up: BackupsTask,
     cookie_name: String,
@@ -233,6 +235,12 @@ impl Server {
             schedule: schedule.status(),
             players: players.clone(),
         });
+        let (bans, banning) = Bans::start(BansSetup {
+            db: db.clone(),
+            clock: clock.clone(),
+            supervision: supervision.clone(),
+            schedule: schedule.status(),
+        });
         let instance_id = db.instance_id().await.unwrap();
         // Every feature on, SFTP's address given though nothing listens on it here.
         let features = Features::load(FeaturesSetup {
@@ -288,6 +296,7 @@ impl Server {
             drops: Some(drops),
             changes: Some(changes),
             backups,
+            bans,
             statistics,
         };
         let state = AppState::new(
@@ -320,6 +329,7 @@ impl Server {
             _diagnosing: diagnosing,
             _playing: playing,
             _dropping: dropping,
+            _banning: banning,
             _following: following,
             _backing_up: backing_up,
             cookie_name: format!("observer_session_{instance_id}"),
@@ -642,7 +652,7 @@ async fn setup_signs_the_owner_in_with_a_strict_http_only_cookie() {
     assert_eq!(session["sessionKey"].as_str().unwrap().len(), 64);
     assert_eq!(session["me"]["username"], "ada");
     assert_eq!(session["me"]["isOwner"], true);
-    assert_eq!(session["me"]["permissions"], "3fffff");
+    assert_eq!(session["me"]["permissions"], "1ffffff");
 
     let again = server.call(Method::POST, "/api/setup", None, Some(body)).await;
     assert_eq!(again.status, StatusCode::CONFLICT);

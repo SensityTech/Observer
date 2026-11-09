@@ -6,6 +6,7 @@ pub mod artifacts;
 pub mod audit;
 mod backup;
 pub mod backups;
+pub mod bans;
 pub mod changes;
 mod database;
 pub mod diagnostics;

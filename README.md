@@ -3,8 +3,9 @@
 A server manager for FiveM and RedM, written in Rust.
 
 Observer starts and supervises FXServer, installs its builds and serves a web panel for your staff,
-from one executable that keeps its state in SQLite. It never shows anything to players: it raises
-documented server events, and your own resources decide what to do with them.
+from one executable that keeps its state in SQLite. It never shows anything to players, but for the
+refusal message you write for bans: it raises documented server events, and your own resources decide
+what to do with them.
 
 > **Status: proof of concept.** Settings, the panel and the integration contract may still change
 > between versions.
@@ -20,6 +21,9 @@ documented server events, and your own resources decide what to do with them.
   probation, and a return to the last healthy build.
 - **Statistics and diagnostics.** Players, tick times, CPU and memory of FXServer and the host,
   FXServer's threads and connections, crash dumps and hangs.
+- **Bans.** A ban holds a player's licence, other identifiers and hardware tokens, for a time or for
+  good. The server refuses a banned player at connection with your message, and drops one banned while
+  playing.
 - **Accounts and audit.** An owner and sub-users with fine-grained permissions, and an audit log of every
   action.
 
@@ -757,6 +761,27 @@ Resources written for txAdmin keep working with **Send txAdmin's events too**, i
 and the setup's last step: from the next start of FXServer, the bridge also raises txAdmin's events,
 such as `txAdmin:events:scheduledRestart` and `txAdmin:events:serverShuttingDown`, right after Observer's
 own. The contract maps each one.
+
+## Bans
+
+The staff bans a player from their profile on the Players page, or bans identifiers typed by hand on the
+Bans page, with a reason and a length: an hour, a day, a week, a month, any number of minutes, or for
+good. A ban holds the player's licence and every other identifier and hardware token their profile
+links to, so a second account that shares their tokens is refused too. The Bans page lists active, ended
+and lifted bans, and finds them by name, licence, reason or ban ID; finding them by another identifier
+takes **View player identifiers**. Lifting a ban takes a permission of its own and keeps the ban in the
+list, with who lifted it and why. Every ban and every lift is in the audit log.
+
+The bridge holds each connecting player on `playerConnecting` while Observer checks them, which takes
+milliseconds. A banned player is refused with the **refusal message** of the settings' Bans category,
+the only text Observer ever shows players: it can name the reason, when the ban ends and the ban ID to
+quote in an appeal. If Observer has not answered within 5 seconds, the player gets in, and Observer
+drops them once they joined if a ban holds them. A player banned while playing is dropped at once.
+By default one hardware token in common is enough to refuse a player; the settings can ask for more,
+or for none. Addresses are never matched: players behind one address would be refused together.
+
+Your resources hear of both through `observer:playerRefused` and `observer:playerBanned`, in the
+contract.
 
 ## Upgrading
 

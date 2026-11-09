@@ -7,11 +7,11 @@ use anyhow::Context;
 use axum::Router;
 use jiff::tz::TimeZone;
 use observer_app::{
-    Accounts, Artifacts, ArtifactsSetup, ArtifactsTask, AuditLog, Backups, BackupsHook, BackupsSetup,
-    BeforeSpawn, Changes, ChangesSetup, Clock, DatabaseFiles, Diagnostics, DiagnosticsSetup, Drops,
-    DropsSetup, Features, FeaturesSetup, Metrics, MetricsSetup, OwnPaths, PRE_LAUNCH_LIMIT, PasswordCost,
-    Players, PlayersSetup, Running, Schedule, ScheduleSetup, ScheduleTask, Servers, Setup, Sources,
-    Statistics, Supervision, Switched, Tools, ToolsHook, ToolsSetup,
+    Accounts, Artifacts, ArtifactsSetup, ArtifactsTask, AuditLog, Backups, BackupsHook, BackupsSetup, Bans,
+    BansSetup, BeforeSpawn, Changes, ChangesSetup, Clock, DatabaseFiles, Diagnostics, DiagnosticsSetup,
+    Drops, DropsSetup, Features, FeaturesSetup, Metrics, MetricsSetup, OwnPaths, PRE_LAUNCH_LIMIT,
+    PasswordCost, Players, PlayersSetup, Running, Schedule, ScheduleSetup, ScheduleTask, Servers, Setup,
+    Sources, Statistics, Supervision, Switched, Tools, ToolsHook, ToolsSetup,
 };
 use observer_artifacts::Http;
 use observer_artifacts::catalog::Catalog;
@@ -214,6 +214,14 @@ pub async fn run(config: Config, args: RunArgs) -> anyhow::Result<()> {
         _ => (None, None),
     };
 
+    // Before FXServer boots, so that no player gets past the bans.
+    let (bans, banning) = Bans::start(BansSetup {
+        db: db.clone(),
+        clock: clock.clone(),
+        supervision: supervision.clone(),
+        schedule: schedule.status(),
+    });
+
     let listener = TcpListener::bind(config.http.listen)
         .await
         .with_context(|| format!("cannot listen on {}", config.http.listen))?;
@@ -285,6 +293,7 @@ pub async fn run(config: Config, args: RunArgs) -> anyhow::Result<()> {
         drops,
         changes,
         backups,
+        bans,
         statistics,
     };
     let state = observer_web::AppState::new(
@@ -385,6 +394,8 @@ pub async fn run(config: Config, args: RunArgs) -> anyhow::Result<()> {
     // After the supervision, so that FXServer's stop closes the sessions.
     close(playing).await;
     close(dropping).await;
+    // After the supervision: the bridge answers no one once FXServer is down.
+    banning.close().await;
     // After the supervision: a stop of FXServer ends a snapshot's job, which this joins.
     close(following).await;
     // After the supervision, so that FXServer's stop is in the statistics.

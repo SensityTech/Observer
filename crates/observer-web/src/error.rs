@@ -43,6 +43,7 @@ impl IntoResponse for Failure {
     }
 }
 
+#[expect(clippy::too_many_lines, reason = "one arm per status, read best as one table")]
 fn status(code: ErrorCode) -> StatusCode {
     match code {
         ErrorCode::Unauthenticated | ErrorCode::InvalidCredentials | ErrorCode::TemporaryPasswordExpired => {
@@ -67,6 +68,7 @@ fn status(code: ErrorCode) -> StatusCode {
         | ErrorCode::CrashFileNotFound
         | ErrorCode::StartNotFound
         | ErrorCode::PlayerNotFound
+        | ErrorCode::BanNotFound
         | ErrorCode::FeatureDisabled => StatusCode::NOT_FOUND,
         ErrorCode::ContentNotKept => StatusCode::GONE,
         ErrorCode::Conflict
@@ -99,7 +101,8 @@ fn status(code: ErrorCode) -> StatusCode {
         | ErrorCode::ToolNotAvailable
         | ErrorCode::BackupRunning
         | ErrorCode::BackupNotConfigured
-        | ErrorCode::BackupCopyUnavailable => StatusCode::CONFLICT,
+        | ErrorCode::BackupCopyUnavailable
+        | ErrorCode::BanNotActive => StatusCode::CONFLICT,
         ErrorCode::LaunchFailed
         | ErrorCode::DelayTooLong
         | ErrorCode::NotDownloadable
@@ -132,6 +135,8 @@ fn status(code: ErrorCode) -> StatusCode {
         | ErrorCode::AddressSearch
         | ErrorCode::InvalidSearch
         | ErrorCode::InvalidPlayersSettings
+        | ErrorCode::InvalidBan
+        | ErrorCode::InvalidBansSettings
         | ErrorCode::InvalidBackupSettings
         | ErrorCode::InvalidBackupDestination => StatusCode::BAD_REQUEST,
         ErrorCode::TooManyAttempts

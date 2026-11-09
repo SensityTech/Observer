@@ -31,7 +31,7 @@ pub(crate) const REPORT_TYPE: &str = "observer";
 
 /// The version of the server events the bridge raises; it must match `CONTRACT_VERSION` in
 /// `server.lua`.
-pub const CONTRACT_VERSION: u32 = 3;
+pub const CONTRACT_VERSION: u32 = 4;
 
 const FILES: [(&str, &str); 3] = [
     (
@@ -312,17 +312,115 @@ impl BridgeEvent {
     /// The argument of `observer_cmd`: the event's JSON in lowercase hex, which leaves no quote,
     /// semicolon or line break for the console parser to act on.
     pub fn encode(&self) -> String {
-        let json = serde_json::to_vec(self).expect("strings and numbers always serialise");
-        let mut hex = String::with_capacity(json.len() * 2);
-        for byte in json {
-            hex.push(char::from(HEX[usize::from(byte >> 4)]));
-            hex.push(char::from(HEX[usize::from(byte & 0xf)]));
-        }
-        hex
+        hex_json(self)
     }
 }
 
+fn hex_json(value: &impl Serialize) -> String {
+    let json = serde_json::to_vec(value).expect("strings and numbers always serialise");
+    let mut hex = String::with_capacity(json.len() * 2);
+    for byte in json {
+        hex.push(char::from(HEX[usize::from(byte >> 4)]));
+        hex.push(char::from(HEX[usize::from(byte & 0xf)]));
+    }
+    hex
+}
+
 const HEX: &[u8; 16] = b"0123456789abcdef";
+
+/// What Observer has the bridge do itself, through `observer_cmd` as the events go, rather than
+/// raise for the server's resources.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(
+    tag = "action",
+    content = "payload",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum BridgeAction {
+    /// The answer to a `connecting` report: in, or refused with the owner's message.
+    Verdict {
+        request: u32,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        refusal: Option<Refusal>,
+    },
+    /// Drops a connected player with the owner's message, after `observer:playerBanned`.
+    Drop {
+        player: u32,
+        message: String,
+        event: BanEvent,
+    },
+}
+
+/// What a banned player reads, and the `observer:playerRefused` the bridge raises for it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Refusal {
+    pub message: String,
+    pub event: BanEvent,
+}
+
+/// The payload of `observer:playerRefused` and `observer:playerBanned`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BanEvent {
+    /// The ban's code.
+    pub ban: String,
+    pub reason: String,
+    /// Unix milliseconds; absent for a permanent ban.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ends_at: Option<i64>,
+    pub by: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub license: Option<String>,
+    /// The net id of the player dropped; absent for a refused connection, which has none yet.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub player: Option<u32>,
+}
+
+impl BridgeAction {
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Verdict { .. } => "verdict",
+            Self::Drop { .. } => "drop",
+        }
+    }
+
+    pub fn encode(&self) -> String {
+        hex_json(self)
+    }
+
+    /// The action shortened until it fits the console's line: the message first, then the
+    /// event's name and reason, each cut on a character boundary.
+    #[must_use]
+    pub fn fitted(mut self) -> Self {
+        while self.encode().len() > 2 * MAX_BRIDGE_JSON {
+            let (message, event) = match &mut self {
+                Self::Verdict { refusal: None, .. } => return self,
+                Self::Verdict {
+                    refusal: Some(Refusal { message, event }),
+                    ..
+                }
+                | Self::Drop { message, event, .. } => (message, event),
+            };
+            let longest = [message, &mut event.reason]
+                .into_iter()
+                .chain(event.name.as_mut())
+                .max_by_key(|text| text.len())
+                .expect("a message is always there");
+            if longest.is_empty() {
+                return self;
+            }
+            let mut end = longest.len() * 3 / 4;
+            while !longest.is_char_boundary(end) {
+                end -= 1;
+            }
+            longest.truncate(end);
+        }
+        self
+    }
+}
 
 /// What the bridge reports, through `PrintStructuredTrace`.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -727,6 +825,136 @@ mod tests {
         }
         assert!(EXAMPLE.contains(&format!("local CONTRACT_VERSION = {CONTRACT_VERSION}\n")));
         assert!(!EXAMPLE.contains("RegisterNetEvent("));
+    }
+
+    fn ban_event(player: Option<u32>) -> BanEvent {
+        BanEvent {
+            ban: "K7QM-2XPA".to_owned(),
+            reason: "Aimbot".to_owned(),
+            ends_at: Some(1_794_000_000_000),
+            by: "maxime".to_owned(),
+            name: Some("kaito".to_owned()),
+            license: Some(format!("license:{}", "a".repeat(40))),
+            player,
+        }
+    }
+
+    fn every_action() -> [BridgeAction; 2] {
+        [
+            BridgeAction::Verdict {
+                request: 7,
+                refusal: Some(Refusal {
+                    message: "Banned".to_owned(),
+                    event: ban_event(None),
+                }),
+            },
+            BridgeAction::Drop {
+                player: 3,
+                message: "Banned".to_owned(),
+                event: ban_event(Some(3)),
+            },
+        ]
+    }
+
+    #[test]
+    fn the_resource_takes_exactly_the_actions_observer_can_send() {
+        let lua = FILES[1].1;
+        let start = lua
+            .find(
+                "local ACTIONS = {
+",
+            )
+            .expect("the bridge has its actions");
+        let actions = &lua[start..];
+        let actions = &actions[..actions
+            .find(
+                "
+}
+",
+            )
+            .expect("the actions end")];
+
+        for action in every_action() {
+            assert!(actions.contains(&format!(
+                "
+    {} = function(payload)
+",
+                action.name()
+            )));
+            assert_eq!(decode(&action.encode())["action"], action.name());
+        }
+        assert_eq!(
+            actions
+                .matches(
+                    " = function(payload)
+"
+                )
+                .count(),
+            every_action().len()
+        );
+        assert_eq!(
+            decode(
+                &BridgeAction::Verdict {
+                    request: 9,
+                    refusal: None
+                }
+                .encode()
+            ),
+            json!({ "action": "verdict", "payload": { "request": 9 } })
+        );
+    }
+
+    #[test]
+    fn the_contract_and_the_example_cover_the_ban_events_with_every_field() {
+        for (name, player) in [("playerRefused", None), ("playerBanned", Some(3))] {
+            let wire = serde_json::to_value(ban_event(player)).unwrap();
+            let heading = format!("### `observer:{name}`");
+            let start = CONTRACT
+                .find(&heading)
+                .unwrap_or_else(|| panic!("CONTRACT.md has no section {heading}"));
+            let section = &CONTRACT[start + heading.len()..];
+            let section = &section[..section
+                .find(
+                    "
+#",
+                )
+                .unwrap_or(section.len())];
+
+            assert!(CONTRACT.contains(&format!("| `observer:{name}` |")));
+            assert!(FILES[1].1.contains(&format!("TriggerEvent('observer:{name}'")));
+            assert!(EXAMPLE.contains(&format!("AddEventHandler('observer:{name}'")));
+            for field in wire.as_object().unwrap().keys() {
+                assert!(
+                    section.contains(&format!("| `{field}` |")),
+                    "{heading} does not document `{field}`"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn an_action_is_cut_to_fit_the_console_line() {
+        let mut event = ban_event(Some(3));
+        event.reason = "r".repeat(3000);
+        let long = BridgeAction::Drop {
+            player: 3,
+            message: "é".repeat(2000),
+            event,
+        };
+
+        let fitted = long.fitted();
+
+        assert!(crate::stdin::allowed(&format!(
+            "observer_cmd {}",
+            fitted.encode()
+        )));
+        let BridgeAction::Drop { message, event, .. } = fitted else {
+            panic!("not a drop");
+        };
+        assert_ne!(message, "");
+        assert!(message.chars().all(|c| c == 'é'));
+        assert_ne!(event.reason, "");
+        assert_eq!(every_action()[0].clone().fitted(), every_action()[0]);
     }
 
     #[test]

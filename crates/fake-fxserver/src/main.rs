@@ -39,6 +39,10 @@
 //!   `fake_label <id> [label id] [name...]`, a resource giving a player a label, or clearing it
 //!   without one; the players already there are reported once the bridge starts, and `quit` drops
 //!   every player with category 7 through the trace thread, as FXServer does;
+//! - on stdin: `fake_connecting [name] [identifier,...] [token,...]`, a player the bridge holds at
+//!   `playerConnecting`: it reports them and waits for Observer's verdict, `fake_verdict_ms`
+//!   (5000) at most, then lets them in as `fake_join` does, or refuses them; a verdict to drop a
+//!   connected player drops them with category 1, the bridge as the resource;
 //! - on stdin: `fake_crash [code]`, `fake_hang`, `fake_spin` (a busy loop), `fake_print <text>`,
 //!   `fake_trace <type>`, `fake_stall_input <ms>`, which stops reading stdin for a while, as
 //!   FXServer does while its main loop is stuck; `fake_spawn [NAME=value...] <program> <args...>`,
@@ -50,7 +54,8 @@
 //! The main loop runs in a thread named `UV loop: svMain`, as FXServer's does.
 //!
 //! The bridge's `observer_cmd <hex>` prints the event it decodes, which the real bridge does not, so
-//! that tests can see it arrive. Unknown commands get FXServer's `No such command <name>.`
+//! that tests can see it arrive; a refusal prints the message as JSON after `refused`, which the
+//! real bridge shows the player instead. Unknown commands get FXServer's `No such command <name>.`
 
 mod console;
 mod dump;
@@ -174,10 +179,21 @@ struct Bridge {
     next_heartbeat: Instant,
     next_heap: Instant,
     ready: bool,
+    /// The `CONTRACT_VERSION` of the script, which the real bridge reports when it is ready.
+    contract: u64,
+}
+
+/// A player the bridge holds at `playerConnecting` until Observer's verdict on `request`.
+struct Waiting {
+    request: u32,
+    player: Player,
+    until: Instant,
 }
 
 struct Fake {
     server: Arc<Server>,
+    waiting: Vec<Waiting>,
+    last_request: u32,
     traces: Traces,
     endpoint: Option<String>,
     bridge: Option<Bridge>,
@@ -210,6 +226,8 @@ fn main() {
                 input_stalled_until: AtomicU64::new(0),
             }),
             traces,
+            waiting: Vec::new(),
+            last_request: 0,
             endpoint: None,
             bridge: None,
             started: Vec::new(),
@@ -293,6 +311,7 @@ impl Fake {
             }
             self.children
                 .retain_mut(|child| matches!(child.try_wait(), Ok(None)));
+            self.admit_unanswered(now);
             self.beat(now);
             self.server.tick();
             thread::sleep(TICK);
@@ -369,6 +388,7 @@ impl Fake {
             }
             ("fake_trace", Some(kind)) => self.trace(kind),
             ("fake_join", _) => self.join(args.first(), args.get(1), args.get(2)),
+            ("fake_connecting", _) => self.connecting(args.first(), args.get(1), args.get(2)),
             ("fake_drop", Some(id)) => {
                 let category = args
                     .get(1)
@@ -411,13 +431,14 @@ impl Fake {
         if !self.started.iter().any(|started| started == resource) {
             self.started.push(resource.to_owned());
         }
-        if self.is_bridge(resource) {
+        if let Some(contract) = self.bridge_script(resource).as_deref().and_then(contract_version) {
             let heap_period = Duration::from_millis(self.server.number("fake_heap_ms").unwrap_or(10_000));
             self.bridge = Some(Bridge {
                 name: resource.to_owned(),
                 next_heartbeat: Instant::now(),
                 next_heap: Instant::now() + heap_period,
                 ready: false,
+                contract,
             });
         }
     }
@@ -444,7 +465,7 @@ impl Fake {
             bridge.ready = true;
             self.traces.script(
                 &bridge.name,
-                &json!({ "type": "observer", "kind": "ready", "contractVersion": 3 }),
+                &json!({ "type": "observer", "kind": "ready", "contractVersion": bridge.contract }),
             );
             self.traces.script(
                 &bridge.name,
@@ -491,14 +512,58 @@ impl Fake {
     }
 
     fn join(&self, name: Option<&String>, identifiers: Option<&String>, tokens: Option<&String>) {
-        let (id, player) = self.server.players().join(
+        let player = self.server.players().coming(
             name.map(String::as_str),
             identifiers.map(String::as_str),
             tokens.map(String::as_str),
         );
+        self.admit(&player);
+    }
+
+    fn admit(&self, player: &Player) {
+        let id = self.server.players().admit(player.clone());
         console::line(MAIN, &format!("Player {} connected (id {id})", player.name));
-        let report = players::join_report(id, &player, self.server.uptime_ms());
+        let report = players::join_report(id, player, self.server.uptime_ms());
         self.bridge_report(&report);
+    }
+
+    /// A player the bridge holds until Observer answers; without the bridge, they get in at once.
+    fn connecting(&mut self, name: Option<&String>, identifiers: Option<&String>, tokens: Option<&String>) {
+        let player = self.server.players().coming(
+            name.map(String::as_str),
+            identifiers.map(String::as_str),
+            tokens.map(String::as_str),
+        );
+        if !self.bridge.as_ref().is_some_and(|bridge| bridge.ready) {
+            self.admit(&player);
+            return;
+        }
+        self.last_request += 1;
+        let mut report = players::entry(0, &player);
+        report["type"] = json!("observer");
+        report["kind"] = json!("connecting");
+        report["request"] = json!(self.last_request);
+        if let Some(entry) = report.as_object_mut() {
+            entry.remove("id");
+        }
+        self.bridge_report(&report);
+        let wait = Duration::from_millis(self.server.number("fake_verdict_ms").unwrap_or(5000));
+        self.waiting.push(Waiting {
+            request: self.last_request,
+            player,
+            until: Instant::now() + wait,
+        });
+    }
+
+    /// Who waited for a verdict longer than the bridge waits gets in.
+    fn admit_unanswered(&mut self, now: Instant) {
+        let (due, waiting): (Vec<Waiting>, Vec<Waiting>) = std::mem::take(&mut self.waiting)
+            .into_iter()
+            .partition(|waiting| now >= waiting.until);
+        self.waiting = waiting;
+        for waiting in due {
+            self.admit(&waiting.player);
+        }
     }
 
     /// A resource's kick inside its own `playerJoining` handler: the drop comes before the join.
@@ -545,40 +610,77 @@ impl Fake {
         }
     }
 
-    /// Whether `resource` is Observer's bridge: a folder of the build's `system_resources` whose
-    /// script registers `observer_cmd`. Its name changes with each start.
-    fn is_bridge(&self, resource: &str) -> bool {
+    /// The script of `resource` if it is Observer's bridge: a folder of the build's
+    /// `system_resources` whose script registers `observer_cmd`. Its name changes with each start.
+    fn bridge_script(&self, resource: &str) -> Option<String> {
         let citizen = self.server.convar("citizen_dir").map(PathBuf::from).or_else(|| {
             let program = std::env::current_exe().ok()?;
             Some(program.parent()?.join("citizen"))
-        });
-        citizen
-            .and_then(|citizen| {
-                let script = citizen.join("system_resources").join(resource).join("server.lua");
-                std::fs::read_to_string(script).ok()
-            })
-            .is_some_and(|script| script.contains("RegisterCommand('observer_cmd'"))
+        })?;
+        let script = citizen.join("system_resources").join(resource).join("server.lua");
+        std::fs::read_to_string(script)
+            .ok()
+            .filter(|script| script.contains("RegisterCommand('observer_cmd'"))
     }
 
     /// What the real bridge raises as `observer:<event>`, printed instead.
-    fn bridge_command(&self, hex: &str) {
+    fn bridge_command(&mut self, hex: &str) {
         let Some(bridge) = &self.bridge else {
             return;
         };
+        let bridge = bridge.name.clone();
         let bytes: Option<Vec<u8>> = (0..hex.len())
             .step_by(2)
             .map(|index| u8::from_str_radix(hex.get(index..index + 2)?, 16).ok())
             .collect();
         let command = bytes.and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok());
-        if let Some(command) = command {
-            console::script(
-                &bridge.name,
+        let Some(command) = command else {
+            return;
+        };
+        let payload = &command["payload"];
+        match command["action"].as_str() {
+            Some("verdict") => self.verdict(&bridge, payload),
+            Some("drop") => {
+                let (Some(id), Some(message)) = (
+                    payload["player"].as_u64().and_then(|id| u32::try_from(id).ok()),
+                    payload["message"].as_str(),
+                ) else {
+                    return;
+                };
+                console::script(&bridge, &format!("observer:playerBanned {}", payload["event"]));
+                self.drop_player(id, 1, &bridge, message);
+            }
+            Some(_) => {}
+            None => console::script(
+                &bridge,
                 &format!(
                     "observer:{} {}",
                     command["event"].as_str().unwrap_or("?"),
-                    command["payload"]
+                    payload
                 ),
-            );
+            ),
+        }
+    }
+
+    /// Observer's answer for a player held at `playerConnecting`: in, or refused with a message.
+    fn verdict(&mut self, bridge: &str, payload: &serde_json::Value) {
+        let Some(index) = self
+            .waiting
+            .iter()
+            .position(|waiting| payload["request"].as_u64() == Some(u64::from(waiting.request)))
+        else {
+            return;
+        };
+        let waiting = self.waiting.remove(index);
+        match payload["refusal"]["message"].as_str() {
+            Some(message) if !message.is_empty() => {
+                console::script(bridge, &format!("refused {}", json!(message)));
+                console::script(
+                    bridge,
+                    &format!("observer:playerRefused {}", payload["refusal"]["event"]),
+                );
+            }
+            _ => self.admit(&waiting.player),
         }
     }
 
@@ -833,6 +935,16 @@ fn build_cfg() -> Vec<Vec<String>> {
     std::fs::read_to_string(file)
         .map(|cfg| cfg.lines().flat_map(split_commands).collect())
         .unwrap_or_default()
+}
+
+/// The `local CONTRACT_VERSION = <n>` a bridge script reports when it is ready.
+fn contract_version(script: &str) -> Option<u64> {
+    script
+        .lines()
+        .find_map(|line| line.strip_prefix("local CONTRACT_VERSION = "))?
+        .trim()
+        .parse()
+        .ok()
 }
 
 fn is_set(command: &[String]) -> bool {

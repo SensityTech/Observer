@@ -200,7 +200,7 @@ async fn a_started_server_speaks_on_every_channel_then_quits() {
 
     fake.bridge_started().await;
     assert_eq!(fake.trace(|_| true).await, TraceKind::Probe);
-    let ready = json!({ "type": "observer", "kind": "ready", "contractVersion": 3 });
+    let ready = json!({ "type": "observer", "kind": "ready", "contractVersion": bridge::CONTRACT_VERSION });
     fake.trace(|kind| matches!(kind, TraceKind::Script { payload, .. } if *payload == ready))
         .await;
     let bridge = fake.bridge.clone();

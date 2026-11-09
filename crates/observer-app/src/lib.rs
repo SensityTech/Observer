@@ -7,6 +7,7 @@ mod accounts;
 mod artifacts;
 mod audit;
 mod backups;
+mod bans;
 mod changes;
 mod clock;
 mod diagnostics;
@@ -39,6 +40,7 @@ pub use backups::{
     Backups, BackupsHook, BackupsSetup, BackupsTask, BackupsTimings, BeforeSpawn, Download, PRE_LAUNCH_LIMIT,
     TOOLS_LIMIT,
 };
+pub use bans::{Bans, BansSetup, BansTask};
 pub use changes::{Changes, ChangesSetup, ChangesTask, ComparedTo, DiffOptions};
 pub use clock::Clock;
 pub use diagnostics::{Diagnostics, DiagnosticsSetup, DiagnosticsTask, MAX_DOWNLOAD};
