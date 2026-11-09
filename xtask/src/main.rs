@@ -5,6 +5,7 @@ mod convars;
 mod dist;
 mod icons;
 mod licences;
+mod release_key;
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -25,7 +26,9 @@ tasks:
   dist      the release archive of a target, its checksum and its checks (--target, --max-glibc)
   e2e       the browser tests: the panel, the debug binaries, Chromium, then Playwright
   icons     draw the executable's icons from the mark (--check: fail if they differ)
-  licences  list the third-party software a target ships, with its licence texts (--target)";
+  licences  list the third-party software a target ships, with its licence texts (--target)
+  release-key <file>  a new key that signs releases: the secret half to <file>, the public half
+            into the source";
 
 /// The browser tests' catalog in place of Cfx.re's, which a release never has.
 const TEST_CATALOG: &str = "observer/test-catalog";
@@ -41,6 +44,12 @@ fn main() -> ExitCode {
         Some("e2e") => e2e(),
         Some("icons") => icons::run(&root(), args.iter().any(|arg| arg == "--check")),
         Some("licences") => target(&args).and_then(|target| licences::write(&root(), &target).map(drop)),
+        Some("release-key") => match args.get(1) {
+            Some(file) => release_key::create(file),
+            None => Err(anyhow::anyhow!(
+                "release-key needs the file the secret key goes to"
+            )),
+        },
         _ => {
             eprintln!("{USAGE}");
             return ExitCode::FAILURE;

@@ -211,6 +211,16 @@ pub enum ErrorCode {
     BackupNotConfigured,
     /// The copy is not stored: it failed, was deleted, or its destination was.
     BackupCopyUnavailable,
+    /// The version asked is not the newer release Observer found: check again.
+    UpdateNotAvailable,
+    /// An install of a release is under way or waits for a restart: one at a time.
+    UpdateRunning,
+    /// No install of a release is under way.
+    NoUpdate,
+    /// Observer is restarting into the new release: it can no longer be stopped.
+    UpdateRestarting,
+    /// Params: `reason`, an `UpdateBlock`.
+    UpdateBlocked,
 }
 
 /// The body of every error response.

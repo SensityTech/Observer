@@ -12,6 +12,7 @@ mod shutdown;
 #[cfg(target_os = "linux")]
 mod systemd;
 mod tools;
+mod update;
 mod user;
 
 use std::path::PathBuf;
@@ -180,7 +181,12 @@ async fn perform(
     let _ = config_path;
     let done = match command {
         Command::Tools(command) => return tools::command(&config, command).await,
-        Command::Run(args) => run::run(config, args).await,
+        Command::Run(args) => {
+            return match run::run(config, args).await? {
+                run::Exit::Stopped => Ok(ExitCode::SUCCESS),
+                run::Exit::Relaunch(relaunch) => Ok(update::relaunch(&relaunch)),
+            };
+        }
         Command::Db(DbCommand::Check) => db::check(&config).await,
         Command::Db(DbCommand::Backup) => db::backup(&config).await,
         Command::User(UserCommand::List) => user::list(&config).await,

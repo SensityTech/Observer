@@ -31,3 +31,4 @@ pub mod server_data;
 pub mod settings;
 pub mod statistics;
 pub mod tools;
+pub mod updates;

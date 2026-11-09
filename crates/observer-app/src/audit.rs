@@ -372,11 +372,11 @@ impl AuditLog {
     }
 
     /// Records that Observer is stopping, before FXServer is: someone at the host asked, from the
-    /// window or the console, or a signal did.
+    /// window or the console, a signal did, or an install of a release restarts it.
     pub async fn record_stop(&self, from: StopSource) -> Result<(), Error> {
         let actor = match from {
             StopSource::Window | StopSource::Console => ActorKind::Local,
-            StopSource::Signal => ActorKind::System,
+            StopSource::Signal | StopSource::Update => ActorKind::System,
         };
         let record = Record::operator(actor, AuditAction::ObserverStopped).details(json!({ "from": from }));
         let now = self.clock.now();

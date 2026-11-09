@@ -33,6 +33,7 @@ mod tests;
 mod throttle;
 mod tickets;
 mod tools;
+pub mod updates;
 mod users;
 
 pub use accounts::Accounts;
@@ -62,3 +63,4 @@ pub use setup::SetupToken;
 pub use statistics::Statistics;
 pub use supervision::{ConsoleLines, LinesMissed, Running, Setup, Supervision};
 pub use tools::{ReportError, RunResult, Target, Tools, ToolsHook, ToolsSetup, outcome_text, report};
+pub use updates::{Takeover, Updates, UpdatesSetup, UpdatesTask};

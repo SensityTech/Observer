@@ -207,10 +207,20 @@ pub enum AuditAction {
     StatisticsLinkDismissed,
     /// The link was taken back.
     StatisticsLinkRestored,
+    /// The owner asked to install a release of Observer. The target is its version; `details`
+    /// hold when it `applies` (`now` or `scheduledRestart`).
+    ObserverUpdateStarted,
+    /// The install was cancelled before Observer restarted, at the `step` it was at: by the owner,
+    /// or by the system when the restart it waited for did not come.
+    ObserverUpdateCancelled,
+    /// How an install ended, by the system. A success once the new version started (`from`,
+    /// `to`); a failure when the release could not be downloaded or verified (`reason`), or when
+    /// the new version did not finish starting and the previous one came back (`rolledBack`).
+    ObserverUpdateFinished,
 }
 
 impl AuditAction {
-    pub const ALL: [Self; 101] = [
+    pub const ALL: [Self; 104] = [
         Self::SetupCompleted,
         Self::SetupLinkCreated,
         Self::LoginSucceeded,
@@ -312,6 +322,9 @@ impl AuditAction {
         Self::BackupsExpired,
         Self::StatisticsLinkDismissed,
         Self::StatisticsLinkRestored,
+        Self::ObserverUpdateStarted,
+        Self::ObserverUpdateCancelled,
+        Self::ObserverUpdateFinished,
     ];
 
     #[expect(clippy::too_many_lines, reason = "one arm per action, read best as one list")]
@@ -418,6 +431,9 @@ impl AuditAction {
             Self::BackupsExpired => "backups_expired",
             Self::StatisticsLinkDismissed => "statistics_link_dismissed",
             Self::StatisticsLinkRestored => "statistics_link_restored",
+            Self::ObserverUpdateStarted => "observer_update_started",
+            Self::ObserverUpdateCancelled => "observer_update_cancelled",
+            Self::ObserverUpdateFinished => "observer_update_finished",
         }
     }
 
@@ -477,6 +493,8 @@ pub enum StopSource {
     Console,
     /// A signal from a service manager or a closed terminal session.
     Signal,
+    /// An install of a new release, which restarts Observer.
+    Update,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]

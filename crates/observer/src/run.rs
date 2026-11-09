@@ -11,21 +11,31 @@ use observer_app::{
     BansSetup, BeforeSpawn, Changes, ChangesSetup, Clock, DatabaseFiles, Diagnostics, DiagnosticsSetup,
     Drops, DropsSetup, Features, FeaturesSetup, LiveMap, MapSetup, Metrics, MetricsSetup, OwnPaths,
     PRE_LAUNCH_LIMIT, PasswordCost, Players, PlayersSetup, Running, Schedule, ScheduleSetup, ScheduleTask,
-    Servers, Setup, Sources, Statistics, Supervision, Switched, Tools, ToolsHook, ToolsSetup,
+    Servers, Setup, Sources, Statistics, Supervision, Switched, Takeover, Tools, ToolsHook, ToolsSetup,
+    Updates, UpdatesSetup,
 };
 use observer_artifacts::Http;
 use observer_artifacts::catalog::Catalog;
+use observer_artifacts::releases::{ReleaseKey, Releases};
+use observer_domain::audit::StopSource;
 use observer_domain::features::Feature;
 use observer_fxserver::console::{ConsoleLog, LogLimits};
 use observer_store::{BackupKind, ChangesDatabase, Database};
 use tokio::net::TcpListener;
+use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
 use crate::config::{Config, DataPaths, HttpConfig};
 use crate::shutdown::{Signals, StopRequest};
+use crate::update::{self, Arrival, Probation, Relaunch, Returned};
 use crate::{BUILD, lock, logging, setup};
+
+/// In a build with the `test-catalog` feature, the version this Observer takes itself for, so
+/// that the test release is newer; the Observer it starts does not inherit it.
+#[cfg(feature = "test-catalog")]
+pub const TEST_VERSION: &str = "OBSERVER_TEST_VERSION";
 
 const DAILY: Duration = Duration::from_hours(24);
 const BACKUP_CHECK_INTERVAL: Duration = Duration::from_hours(1);
@@ -40,11 +50,14 @@ pub struct RunArgs {
     no_window: bool,
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "Observer's start, then its stop, each step in the order it must take"
-)]
-pub async fn run(config: Config, args: RunArgs) -> anyhow::Result<()> {
+/// How `observer run` ended.
+pub enum Exit {
+    Stopped,
+    /// A new release, or the previous one, starts in this one's place.
+    Relaunch(Relaunch),
+}
+
+pub async fn run(config: Config, args: RunArgs) -> anyhow::Result<Exit> {
     let paths = config.paths();
     let _lock = lock::acquire(&paths.root)?;
     let log_guard = logging::init(&config.log.level, &paths.logs)?;
@@ -52,10 +65,60 @@ pub async fn run(config: Config, args: RunArgs) -> anyhow::Result<()> {
 
     info!(version = BUILD.version, commit = BUILD.commit, data_dir = %paths.root.display(), "starting Observer");
 
+    let executable = std::env::current_exe().context("cannot tell where this executable is")?;
+    let (mut probation, returned) = match update::arrive(&paths, &executable).await? {
+        Arrival::Plain => (None, None),
+        Arrival::Probation(probation) => (Some(probation), None),
+        Arrival::Returned(returned) => (None, Some(returned)),
+        Arrival::RolledBack(relaunch) => return Ok(Exit::Relaunch(relaunch)),
+    };
+    let started = Started { executable, returned };
+    let exit = match run_until_stopped(config, args, &paths, &mut signals, &mut probation, started).await {
+        Ok(exit) => exit,
+        Err(error) => match probation {
+            Some(probation) => {
+                error!("the new release of Observer did not start: {error:#}");
+                Exit::Relaunch(probation.roll_back()?)
+            }
+            None => return Err(error),
+        },
+    };
+
+    info!("Observer stopped");
+    drop(log_guard);
+    signals.release();
+    Ok(exit)
+}
+
+/// What this start of Observer knows of an update before it serves.
+struct Started {
+    executable: std::path::PathBuf,
+    returned: Option<Returned>,
+}
+
+#[expect(
+    clippy::too_many_lines,
+    reason = "Observer's start, then its stop, each step in the order it must take"
+)]
+async fn run_until_stopped(
+    config: Config,
+    args: RunArgs,
+    paths: &DataPaths,
+    signals: &mut Signals,
+    probation: &mut Option<Probation>,
+    started: Started,
+) -> anyhow::Result<Exit> {
     let db = Database::open(&paths.database, &paths.backups)
         .await
         .with_context(|| format!("cannot open {}", paths.database.display()))?;
     let clock = Clock::system();
+    if let Some(returned) = &started.returned {
+        returned.record(&db, &clock, &paths.root).await;
+    }
+    #[cfg(feature = "test-catalog")]
+    if probation.is_some() && std::env::var_os("OBSERVER_TEST_FAIL_UPDATE").is_some() {
+        anyhow::bail!("OBSERVER_TEST_FAIL_UPDATE makes the new release fail as it starts");
+    }
     let observer_started = clock.now();
     // Before every optional feature: one that is off now is never built.
     let features = Features::load(FeaturesSetup {
@@ -165,7 +228,25 @@ pub async fn run(config: Config, args: RunArgs) -> anyhow::Result<()> {
     .await?;
     backups_hook.bind(backups.clone());
     let (artifacts, building) =
-        builds(&db, &clock, &accounts, &servers, &supervision, &schedule, &paths).await?;
+        builds(&db, &clock, &accounts, &servers, &supervision, &schedule, paths).await?;
+    let (updates, updating, mut takeovers) = if features.runs(Feature::Updates) {
+        let (releases, testing) = releases()?;
+        let (updates, task, takeovers) = Updates::start(UpdatesSetup {
+            db: db.clone(),
+            clock: clock.clone(),
+            data_dir: paths.root.clone(),
+            releases,
+            executable: started.executable.clone(),
+            current: current_version()?,
+            development: BUILD.commit.is_none() && !testing,
+            supervision: supervision.clone(),
+            schedule: schedule.status(),
+        });
+        let switched = features.switched(Feature::Updates, move || task.close());
+        (Some(updates), Some(switched), Some(takeovers))
+    } else {
+        (None, None, None)
+    };
     // The statistics' database also holds the players' sessions, which the drops are drawn from.
     let metrics = if [Feature::Metrics, Feature::Players, Feature::Drops]
         .into_iter()
@@ -308,6 +389,7 @@ pub async fn run(config: Config, args: RunArgs) -> anyhow::Result<()> {
         map,
         drops,
         changes,
+        updates: updates.clone(),
         backups,
         bans,
         statistics,
@@ -376,15 +458,40 @@ pub async fn run(config: Config, args: RunArgs) -> anyhow::Result<()> {
         listen: config.http.listen,
         data_dir: &paths.root,
         setup_token,
-        signals: &signals,
+        signals,
     });
-    if let Err(error) = supervision.boot().await {
+    // After an update, FXServer comes back if it ran before, whatever the settings say.
+    let after_update = probation.as_ref().is_some_and(Probation::fxserver)
+        || started
+            .returned
+            .as_ref()
+            .is_some_and(|returned| returned.fxserver);
+    let booted = if after_update {
+        supervision.boot_after_update().await
+    } else {
+        supervision.boot().await
+    };
+    if let Err(error) = booted {
         error!(%error, "cannot start FXServer with Observer");
     }
+    if let Some(probation) = probation.take()
+        && let Some(outcome) = probation.confirm(&db, &clock).await
+        && let Some(updates) = &updates
+    {
+        updates.settled(outcome);
+    }
 
-    let first = signals.next().await;
+    let (first, takeover) = tokio::select! {
+        request = signals.next() => (request, None),
+        Some(takeover) = next_takeover(&mut takeovers) => (
+            StopRequest { shortened: false, from: StopSource::Update },
+            Some(takeover),
+        ),
+    };
     info!(shortened = first.shortened, from = ?first.from, "stopping Observer");
     host.stopping();
+    // Before anything stops: an install under way must not hand over in the middle of the stop.
+    close(updating).await;
     // Before FXServer's stop: a start queued behind a fix or an undo from the panel waits for it,
     // and the stop waits for that start, so the run ends between two files rather than at its last.
     tools.stopping();
@@ -397,8 +504,9 @@ pub async fn run(config: Config, args: RunArgs) -> anyhow::Result<()> {
         building,
         scheduling,
         &mut supervised,
-        &mut signals,
+        signals,
         first,
+        takeover.as_ref().is_some_and(|takeover| takeover.scheduled),
     )
     .await;
     // Once FXServer is down: waits for a fix or an undo from the panel to end between two files.
@@ -440,10 +548,47 @@ pub async fn run(config: Config, args: RunArgs) -> anyhow::Result<()> {
     // the process run.
     host.close().await;
 
-    info!("Observer stopped");
-    drop(log_guard);
-    signals.release();
-    Ok(())
+    Ok(match takeover {
+        // Once nothing holds the data folder's files, the database included.
+        Some(takeover) => Exit::Relaunch(update::hand_over(&takeover, paths, &started.executable)),
+        None => Exit::Stopped,
+    })
+}
+
+/// The next executable an install hands over, or never when updates are off.
+async fn next_takeover(takeovers: &mut Option<mpsc::Receiver<Takeover>>) -> Option<Takeover> {
+    match takeovers {
+        Some(takeovers) => takeovers.recv().await,
+        None => std::future::pending().await,
+    }
+}
+
+/// Where releases are checked: GitHub with the release key this build carries, or, in a build
+/// with the `test-catalog` feature, the test releases server when `OBSERVER_TEST_RELEASES` names
+/// its port, with the test key. Says whether it is the test server.
+fn releases() -> anyhow::Result<(Releases, bool)> {
+    #[cfg(feature = "test-catalog")]
+    if let Some(port) = std::env::var_os("OBSERVER_TEST_RELEASES") {
+        let port: u16 = port
+            .to_str()
+            .and_then(|port| port.parse().ok())
+            .with_context(|| format!("OBSERVER_TEST_RELEASES is not a port: {}", port.display()))?;
+        warn!(port, "releases come from the test server, not GitHub");
+        let key = observer_artifacts::releases::fake::test_key();
+        return Ok((Releases::local(port, Some(key)), true));
+    }
+    Ok((Releases::github(ReleaseKey::published())?, false))
+}
+
+/// The version this Observer runs, as updates compare it with releases.
+fn current_version() -> anyhow::Result<semver::Version> {
+    #[cfg(feature = "test-catalog")]
+    if let Some(version) = std::env::var_os(TEST_VERSION) {
+        let version = version.to_string_lossy();
+        warn!(%version, "this Observer takes itself for another version");
+        return semver::Version::parse(&version).with_context(|| format!("{TEST_VERSION} is not a version"));
+    }
+    semver::Version::parse(BUILD.version).context("this build's version does not parse")
 }
 
 /// What the host shows of Observer besides its console: the status window and the tray icon on
@@ -679,13 +824,18 @@ async fn stop_fxserver(
     supervised: &mut Running,
     signals: &mut Signals,
     first: StopRequest,
+    scheduled: bool,
 ) {
     let mut shortened = first.shortened;
     // A running job is cancelled first, then the schedule: it must not restart a server Observer
     // is stopping.
     building.close().await;
     scheduling.close().await;
-    supervision.shutdown(shortened).await;
+    if scheduled {
+        supervision.shutdown_scheduled().await;
+    } else {
+        supervision.shutdown(shortened).await;
+    }
     loop {
         tokio::select! {
             () = supervised.stopped() => return,

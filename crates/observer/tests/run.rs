@@ -116,6 +116,12 @@ impl Observer {
     fn spawn_with(extra: &str) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let port = free_port();
+        // Updates stay off: no test reaches GitHub.
+        let extra = if extra.contains("[features]\n") {
+            extra.replace("[features]\n", "[features]\nupdates = \"off\"\n")
+        } else {
+            format!("{extra}\n[features]\nupdates = \"off\"\n")
+        };
         fs::write(
             dir.path().join("observer.toml"),
             format!("data_dir = \"data\"\n\n[http]\nlisten = \"127.0.0.1:{port}\"\n{extra}"),

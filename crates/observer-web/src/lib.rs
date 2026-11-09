@@ -21,7 +21,7 @@ use axum::extract::Request;
 use axum::{Router, middleware};
 use observer_app::{
     Accounts, Artifacts, AuditLog, Backups, Bans, Changes, Diagnostics, Drops, Error, Features, Files,
-    LiveMap, Metrics, Players, Schedule, Servers, Statistics, Supervision, Tools,
+    LiveMap, Metrics, Players, Schedule, Servers, Statistics, Supervision, Tools, Updates,
 };
 use observer_domain::about::Build;
 use observer_domain::features::Feature;
@@ -59,6 +59,7 @@ pub struct AppState {
     map: Option<LiveMap>,
     drops: Option<Drops>,
     changes: Option<Changes>,
+    updates: Option<Updates>,
     pub backups: Backups,
     pub bans: Bans,
     pub live: Live,
@@ -97,6 +98,7 @@ pub struct Services {
     pub map: Option<LiveMap>,
     pub drops: Option<Drops>,
     pub changes: Option<Changes>,
+    pub updates: Option<Updates>,
     pub backups: Backups,
     pub bans: Bans,
 }
@@ -126,6 +128,7 @@ impl AppState {
             map,
             drops,
             changes,
+            updates,
             backups,
             bans,
             statistics,
@@ -147,6 +150,7 @@ impl AppState {
             map,
             drops,
             changes,
+            updates,
             backups,
             bans,
             statistics,
@@ -195,6 +199,12 @@ impl AppState {
         self.changes
             .as_ref()
             .ok_or_else(|| self.features.refusal(Feature::Changes))
+    }
+
+    pub(crate) fn updates(&self) -> Result<&Updates, Error> {
+        self.updates
+            .as_ref()
+            .ok_or_else(|| self.features.refusal(Feature::Updates))
     }
 }
 

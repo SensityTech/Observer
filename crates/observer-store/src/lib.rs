@@ -27,7 +27,7 @@ mod time;
 pub mod tools;
 pub mod users;
 
-pub use backup::BackupKind;
+pub use backup::{BackupKind, restore as restore_backup};
 pub use changes::ChangesDatabase;
 pub use database::{Database, Inspection, StoreError};
 pub use metrics::MetricsDatabase;

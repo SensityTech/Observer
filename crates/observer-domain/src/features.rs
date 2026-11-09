@@ -27,6 +27,8 @@ pub enum Feature {
     Players,
     /// The statistics of player drops, drawn from the players' sessions.
     Drops,
+    /// Checks GitHub for a newer release of Observer, which the owner installs from the panel.
+    Updates,
 }
 
 /// When a change of a switch takes effect.
@@ -92,6 +94,10 @@ pub enum FeatureTask {
     PlayersFollower,
     /// The drop statistics, from the sessions that ended.
     DropsWorker,
+    /// Asks GitHub for the newest release of Observer.
+    UpdateCheck,
+    /// After an install, settles whether the new version started, or puts the previous one back.
+    UpdateProbation,
 }
 
 /// When a task of a feature runs.
@@ -132,7 +138,7 @@ pub enum ServerFolder {
 }
 
 impl Feature {
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 8] = [
         Self::Sftp,
         Self::Changes,
         Self::Tools,
@@ -140,6 +146,7 @@ impl Feature {
         Self::Metrics,
         Self::Players,
         Self::Drops,
+        Self::Updates,
     ];
 
     /// The name on the wire, in the store and in `observer.toml`.
@@ -152,6 +159,7 @@ impl Feature {
             Self::Metrics => "metrics",
             Self::Players => "players",
             Self::Drops => "drops",
+            Self::Updates => "updates",
         }
     }
 
@@ -215,6 +223,10 @@ impl Feature {
         ];
         const PLAYERS: &[FeatureTaskRun] = &[run(T::PlayersFollower, C::Continuous)];
         const DROPS: &[FeatureTaskRun] = &[run(T::DropsWorker, EACH_MINUTE)];
+        const UPDATES: &[FeatureTaskRun] = &[
+            run(T::UpdateCheck, C::Every { seconds: 6 * 3600 }),
+            run(T::UpdateProbation, C::ObserverStart),
+        ];
         match self {
             Self::Sftp => SFTP,
             Self::Changes => CHANGES,
@@ -223,6 +235,7 @@ impl Feature {
             Self::Metrics => METRICS,
             Self::Players => PLAYERS,
             Self::Drops => DROPS,
+            Self::Updates => UPDATES,
         }
     }
 
@@ -247,6 +260,12 @@ impl Feature {
                 task: FeatureTask::ToolsHeal,
                 cadence: Cadence::ServerStart,
             }],
+            // An install restarted Observer: the new version is kept or the previous one put back
+            // whatever the switch says since.
+            Self::Updates => &[FeatureTaskRun {
+                task: FeatureTask::UpdateProbation,
+                cadence: Cadence::ObserverStart,
+            }],
             _ => &[],
         }
     }
@@ -259,6 +278,7 @@ impl Feature {
             Self::Tools => &["tools/backups"],
             Self::Diagnostics => &["crashes"],
             Self::Metrics | Self::Players | Self::Drops => &["metrics.sqlite3"],
+            Self::Updates => &["updates"],
         }
     }
 
@@ -266,7 +286,9 @@ impl Feature {
         match self {
             Self::Sftp | Self::Tools => ServerFolder::Writes,
             Self::Changes => ServerFolder::Reads,
-            Self::Diagnostics | Self::Metrics | Self::Players | Self::Drops => ServerFolder::Untouched,
+            Self::Diagnostics | Self::Metrics | Self::Players | Self::Drops | Self::Updates => {
+                ServerFolder::Untouched
+            }
         }
     }
 
@@ -280,6 +302,7 @@ impl Feature {
             Self::Metrics => &["/metrics"],
             Self::Players => &["/servers/default/players"],
             Self::Drops => &["/servers/default/drops"],
+            Self::Updates => &["/updates"],
         }
     }
 
@@ -289,7 +312,7 @@ impl Feature {
             Self::Diagnostics => &[Topic::ServerDiagnostics, Topic::ServerAlerts],
             Self::Metrics => &[Topic::MetricsLive],
             Self::Players => &[Topic::ServerMap],
-            Self::Sftp | Self::Tools | Self::Drops => &[],
+            Self::Sftp | Self::Tools | Self::Drops | Self::Updates => &[],
         }
     }
 

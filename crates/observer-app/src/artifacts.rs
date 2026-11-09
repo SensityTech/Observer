@@ -474,7 +474,7 @@ struct Slot {
     live: Arc<Mutex<Live>>,
     task: Option<JoinHandle<()>>,
     /// The bytes received at each publication of the last few seconds.
-    samples: VecDeque<(Instant, u64)>,
+    rate: DownloadRate,
     starter: Caller,
 }
 
@@ -727,7 +727,7 @@ impl Driver {
             cancel,
             live,
             task: Some(task),
-            samples: VecDeque::new(),
+            rate: DownloadRate::default(),
             starter: caller.clone(),
         });
     }
@@ -1631,23 +1631,24 @@ fn record(live: &Mutex<Live>, progress: &Progress) {
     }
 }
 
-/// Brings a job's step and counters up to what it reported, with the rate over the last seconds.
-fn refresh(slot: &mut Slot) {
-    let live = slot.live.lock().unwrap_or_else(PoisonError::into_inner);
-    if let Some(step) = live.step {
-        slot.job.step = step;
-    }
-    if live.total > 0 {
+/// The bytes a download receives per second, over the last few seconds.
+#[derive(Debug, Default)]
+pub(crate) struct DownloadRate {
+    samples: VecDeque<(Instant, u64)>,
+}
+
+impl DownloadRate {
+    pub(crate) fn measure(&mut self, received: u64, total: u64) -> DownloadProgress {
         let now = Instant::now();
-        slot.samples.push_back((now, live.received));
-        while slot
+        self.samples.push_back((now, received));
+        while self
             .samples
             .front()
             .is_some_and(|(at, _)| now.duration_since(*at) > RATE_WINDOW)
         {
-            slot.samples.pop_front();
+            self.samples.pop_front();
         }
-        let rate = match (slot.samples.front(), slot.samples.back()) {
+        let rate = match (self.samples.front(), self.samples.back()) {
             (Some((first, from)), Some((last, to))) if last > first => {
                 let seconds = last.duration_since(*first).as_secs_f64();
                 #[expect(
@@ -1661,11 +1662,22 @@ fn refresh(slot: &mut Slot) {
             }
             _ => 0,
         };
-        slot.job.download = Some(DownloadProgress {
-            received: live.received,
-            total: live.total,
+        DownloadProgress {
+            received,
+            total,
             rate,
-        });
+        }
+    }
+}
+
+/// Brings a job's step and counters up to what it reported, with the rate over the last seconds.
+fn refresh(slot: &mut Slot) {
+    let live = slot.live.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some(step) = live.step {
+        slot.job.step = step;
+    }
+    if live.total > 0 {
+        slot.job.download = Some(slot.rate.measure(live.received, live.total));
     }
     if let Some((done, total)) = &live.entries {
         slot.job.entries = Some(EntryProgress {

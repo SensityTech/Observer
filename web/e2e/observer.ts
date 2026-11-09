@@ -158,6 +158,8 @@ export default async function setup() {
         ...process.env,
         OBSERVER_TEST_CATALOG: String(catalogPort),
         OBSERVER_TEST_PROBATION: String(PROBATION_SECONDS),
+        // Nothing listens on port 1: the update checks never leave the machine.
+        OBSERVER_TEST_RELEASES: '1',
     };
     // Under systemd Observer prints no setup link.
     delete env.INVOCATION_ID;

@@ -103,7 +103,12 @@ fn status(code: ErrorCode) -> StatusCode {
         | ErrorCode::BackupRunning
         | ErrorCode::BackupNotConfigured
         | ErrorCode::BackupCopyUnavailable
-        | ErrorCode::BanNotActive => StatusCode::CONFLICT,
+        | ErrorCode::BanNotActive
+        | ErrorCode::UpdateNotAvailable
+        | ErrorCode::UpdateRunning
+        | ErrorCode::NoUpdate
+        | ErrorCode::UpdateRestarting
+        | ErrorCode::UpdateBlocked => StatusCode::CONFLICT,
         ErrorCode::LaunchFailed
         | ErrorCode::DelayTooLong
         | ErrorCode::NotDownloadable
