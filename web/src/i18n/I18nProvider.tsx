@@ -1,6 +1,6 @@
-import { createContext, use, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 
-import type { Messages } from './en';
+import { I18nContext, type I18n } from './context';
 import {
     formatBitRate,
     formatBytes,
@@ -14,31 +14,9 @@ import {
 } from './format';
 import { DEFAULT_LOCALE, LOCALES, isLocale, type Locale } from './locales';
 
+export { useI18n } from './context';
+
 const STORAGE_KEY = 'observer.locale';
-
-type I18n = {
-    locale: Locale;
-    t: Messages;
-    setLocale: (locale: Locale) => void;
-    format: {
-        number: (value: number, options?: Intl.NumberFormatOptions) => string;
-        /** Memory and disk, in multiples of 1024; a `signed` growth reads `+180 MB`. */
-        bytes: (bytes: number, options?: { signed?: boolean }) => string;
-        /** Bytes per second, as bits per second in multiples of 1000. */
-        bitRate: (bytesPerSecond: number) => string;
-        /** `182.0` reads `182%`. */
-        percent: (percent: number) => string;
-        milliseconds: (ms: number) => string;
-        dateTime: (date: Date, options?: Intl.DateTimeFormatOptions) => string;
-        duration: (seconds: number) => string;
-        /** Play time, in hours past the first: `2h 14m`, `312h`; a `signed` difference `+2h 14m`. */
-        playTime: (ms: number, options?: { signed?: boolean }) => string;
-        /** An API timestamp (RFC 3339) as tables show it, in local time. */
-        timestamp: (rfc3339: string, options?: { seconds?: boolean }) => string;
-    };
-};
-
-const I18nContext = createContext<I18n | null>(null);
 
 const savedLocale = (): Locale => {
     try {
@@ -85,11 +63,3 @@ export function I18nProvider({ children }: { children: ReactNode }) {
 
     return <I18nContext value={value}>{children}</I18nContext>;
 }
-
-export const useI18n = () => {
-    const i18n = use(I18nContext);
-    if (i18n === null) {
-        throw new Error('useI18n must be used inside <I18nProvider>');
-    }
-    return i18n;
-};
