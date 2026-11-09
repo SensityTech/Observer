@@ -175,7 +175,7 @@ function CategoryLink({ id, onNavigate }: { id: CategoryId; onNavigate: () => vo
         <Link
             to="/settings/$category"
             params={{ category: id }}
-            className="relative flex min-h-8.5 items-center rounded-[9px] px-3 text-nav font-medium text-ink-2 transition-colors hover:bg-hover hover:text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent aria-[current=page]:bg-active aria-[current=page]:text-ink aria-[current=page]:before:absolute aria-[current=page]:before:top-1/2 aria-[current=page]:before:-left-2 aria-[current=page]:before:-mt-[9px] aria-[current=page]:before:h-4.5 aria-[current=page]:before:w-[3px] aria-[current=page]:before:rounded-r-[3px] aria-[current=page]:before:bg-accent max-md:min-h-11 max-md:aria-[current=page]:before:hidden"
+            className="flex min-h-8.5 items-center rounded-[9px] px-3 text-nav font-medium text-ink-2 transition-colors hover:bg-hover hover:text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent aria-[current=page]:bg-active aria-[current=page]:text-ink max-md:min-h-11"
             onClick={onNavigate}
         >
             {t.settings.categories[id].name}
