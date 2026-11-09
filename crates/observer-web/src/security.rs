@@ -12,9 +12,10 @@ use crate::AppState;
 use crate::error::Failure;
 use crate::proxy::Remote;
 
-/// Everything the panel loads comes from Observer itself. `data:` images carry the grain texture.
+/// Everything the panel loads comes from Observer itself. `data:` images carry the grain texture;
+/// `blob:` ones the live map's image, which the panel fetches with the session key.
 const CONTENT_SECURITY_POLICY: &str = "default-src 'self'; script-src 'self'; style-src 'self'; \
-    img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; \
+    img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; \
     form-action 'self'; frame-ancestors 'none'";
 
 const PERMISSIONS_POLICY: &str = "camera=(), geolocation=(), microphone=(), payment=(), usb=()";
@@ -69,9 +70,12 @@ pub(crate) async fn api(
     }
 
     let mut response = next.run(request).await;
-    response
-        .headers_mut()
-        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    // Only the live map's image says otherwise: private, under an address that changes with it.
+    if !response.headers().contains_key(header::CACHE_CONTROL) {
+        response
+            .headers_mut()
+            .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    }
     response
 }
 

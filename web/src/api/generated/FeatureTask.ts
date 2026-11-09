@@ -3,4 +3,4 @@
 /**
  * What a feature does in the background, for the panel to name.
  */
-export type FeatureTask = "sftpServer" | "sftpUpkeep" | "uploadsSweep" | "snapshots" | "changesUpkeep" | "toolsAtStart" | "toolsHeal" | "processRecords" | "connections" | "crashAnalysis" | "hangSnapshot" | "diagnosticsUpkeep" | "sampler" | "metricsUpkeep" | "playersFollower" | "dropsWorker";
+export type FeatureTask = "sftpServer" | "sftpUpkeep" | "uploadsSweep" | "snapshots" | "changesUpkeep" | "toolsAtStart" | "toolsHeal" | "processRecords" | "connections" | "crashAnalysis" | "hangSnapshot" | "diagnosticsUpkeep" | "sampler" | "metricsUpkeep" | "playersFollower" | "dropsWorker" | "updateCheck" | "updateProbation";

@@ -5,10 +5,15 @@ import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { aboutQuery, licencesQuery } from '../api/about';
 import { ApiError } from '../api/client';
 import type { About } from '../api/generated/About';
+import type { Me } from '../api/generated/Me';
 import type { ThirdPartyLicences } from '../api/generated/ThirdPartyLicences';
+import { MeContext } from '../auth/me';
 import { en } from '../i18n/en';
 import { I18nProvider } from '../i18n/I18nProvider';
 import { AboutPage } from './AboutPage';
+
+/** Whoever is not the owner sees no updates. */
+const VIEWER: Me = { id: 2, username: 'kenji', isOwner: false, permissions: '1', mustChangePassword: false };
 
 const release: About = {
     version: '0.1.0',
@@ -78,7 +83,9 @@ const page = async (about: About, list: ThirdPartyLicences | 'missing') => {
     const view = render(
         <QueryClientProvider client={client}>
             <I18nProvider>
-                <AboutPage />
+                <MeContext value={VIEWER}>
+                    <AboutPage />
+                </MeContext>
             </I18nProvider>
         </QueryClientProvider>,
     );

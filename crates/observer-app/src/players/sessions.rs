@@ -288,6 +288,8 @@ impl Sessions {
             PlayerReportKind::Join(joined) => self.join(joined, report, fingerprints),
             PlayerReportKind::Roster(page) => self.roster(page, report, fingerprints),
             PlayerReportKind::Labels(changes) => self.labelled(changes, report.at_ms),
+            // The bans' to answer, and the live map's: a session starts at the join.
+            PlayerReportKind::Connecting(_) | PlayerReportKind::Positions(_) => {}
         }
     }
 

@@ -92,6 +92,7 @@ fn unit(binary: &Path, config: &Path, folder: &Path, user: &str) -> anyhow::Resu
     ]
     .join(" ");
     let folder = specifiers(folder.as_os_str())?;
+    let restart = crate::update::RESTART_CODE;
     Ok(format!(
         "# Written by `observer service print-unit`.
 [Unit]
@@ -107,6 +108,9 @@ WorkingDirectory={folder}
 ExecStart={exec}
 Restart=on-failure
 RestartSec=5
+# Observer exits with {restart} to start again once it installed a release.
+SuccessExitStatus={restart}
+RestartForceExitStatus={restart}
 # SIGTERM goes to Observer only: it stops FXServer gracefully, then the rest of the group.
 KillMode=mixed
 TimeoutStopSec=45
@@ -324,6 +328,8 @@ mod tests {
             "User=ada",
             "WorkingDirectory=/srv/fivem",
             "ExecStart=/opt/observer/observer --config /srv/fivem/observer.toml run",
+            "SuccessExitStatus=75",
+            "RestartForceExitStatus=75",
         ] {
             assert!(
                 unit.lines().any(|candidate| candidate == line),

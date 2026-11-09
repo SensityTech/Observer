@@ -35,7 +35,7 @@ use observer_store::artifacts::{self as stored_artifacts, ArtifactState};
 use observer_store::launch;
 use serde_json::json;
 use tokio::sync::broadcast::error::{RecvError, TryRecvError};
-use tokio::sync::{Mutex as AsyncMutex, Semaphore, broadcast, watch};
+use tokio::sync::{Mutex as AsyncMutex, Semaphore, broadcast, oneshot, watch};
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
@@ -104,6 +104,9 @@ struct Inner {
     /// The setup's reads of the host's folders under way: each holds a blocking thread, which a
     /// drive that stops answering keeps.
     folder_reads: Semaphore,
+    /// An install of a release that waits for the next scheduled restart: told when it comes, in
+    /// the place of the restart.
+    takeover: Mutex<Option<oneshot::Sender<()>>>,
 }
 
 /// The supervisor's task and the one that follows it for the panel. Once the supervisor has
@@ -282,6 +285,7 @@ impl Supervision {
                 status,
                 commands: Mutex::default(),
                 folder_reads: Semaphore::new(FOLDER_READS),
+                takeover: Mutex::default(),
             }),
         };
         let running = Running {
@@ -296,12 +300,22 @@ impl Supervision {
     /// refuses, or no build selected, leave it stopped, with a note in the console; the status
     /// says why.
     pub async fn boot(&self) -> Result<(), Error> {
+        self.boot_with(false).await
+    }
+
+    /// Starts FXServer as the new release of Observer starts, when the previous one stopped it to
+    /// make way: whether or not the settings ask for a start with Observer.
+    pub async fn boot_after_update(&self) -> Result<(), Error> {
+        self.boot_with(true).await
+    }
+
+    async fn boot_with(&self, after_update: bool) -> Result<(), Error> {
         let (stored, state) = read_launch(&self.inner.db).await?;
         let Some(stored) = stored else {
             info!("FXServer has no launch settings yet: the owner saves them in the server setup");
             return Ok(());
         };
-        if !stored.settings.auto_start {
+        if !stored.settings.auto_start && !after_update {
             return Ok(());
         }
         if !stored.settings.issues(Platform::host()).is_empty() {
@@ -322,8 +336,12 @@ impl Supervision {
         }
         self.inner.launches.give(&stored, &state).await;
         let started = self.inner.supervisor.start(OBSERVER).await;
-        let record = Record::operator(ActorKind::System, AuditAction::ServerStarted)
-            .details(json!({ "automatic": true }));
+        let details = if after_update {
+            json!({ "automatic": true, "afterUpdate": true })
+        } else {
+            json!({ "automatic": true })
+        };
+        let record = Record::operator(ActorKind::System, AuditAction::ServerStarted).details(details);
         self.record_control(record, &started).await?;
         if let Err(error) = started {
             warn!(%error, "FXServer did not start with Observer");
@@ -335,6 +353,26 @@ impl Supervision {
     /// a few seconds only; it may follow a first call that was not.
     pub async fn shutdown(&self, shortened: bool) {
         self.inner.supervisor.shutdown(shortened).await;
+    }
+
+    /// Stops FXServer for good as Observer restarts into a new release in the place of a
+    /// scheduled restart: resources hear `scheduled`, as they would have for the restart.
+    pub async fn shutdown_scheduled(&self) {
+        self.inner.supervisor.shutdown_scheduled().await;
+    }
+
+    /// Lets the next scheduled restart go to an install of a release instead: `takeover` hears of
+    /// it, and FXServer keeps running until Observer stops it. A second call replaces the first.
+    pub(crate) fn hand_next_restart(&self, takeover: oneshot::Sender<()>) {
+        *self.inner.takeover.lock().unwrap_or_else(PoisonError::into_inner) = Some(takeover);
+    }
+
+    pub(crate) fn keep_next_restart(&self) {
+        self.inner
+            .takeover
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
     }
 
     /// Starts FXServer with the stored launch settings, as they are now.
@@ -405,6 +443,19 @@ impl Supervision {
             .is_some_and(|stored| stored.settings.issues(Platform::host()).is_empty());
         if fit {
             self.promote_pending().await;
+        }
+        // A build waiting for this restart is selected all the same: the new release starts it.
+        let takeover = self
+            .inner
+            .takeover
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        if let Some(takeover) = takeover
+            && takeover.send(()).is_ok()
+        {
+            self.note(SCHEDULE, "Observer restarts into its new release at this restart");
+            return Ok(());
         }
         if let Err(error) = self.hand_over_launch().await {
             warn!(%error, "the scheduled restart did not happen: the launch settings cannot start FXServer");

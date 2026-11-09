@@ -11,6 +11,7 @@ use crate::audit::AuditEntry;
 use crate::changes::ChangesLive;
 use crate::diagnostics::{AlertList, DiagnosticsEvent, DiagnosticsSnapshot};
 use crate::error::ErrorCode;
+use crate::map::MapLive;
 use crate::metrics::{LiveSample, MetricsSnapshot};
 use crate::schedule::ScheduleStatus;
 use crate::server::{ConsoleBatch, ConsoleSnapshot, ServerStatus};
@@ -68,10 +69,14 @@ pub enum Topic {
     /// the changes permission.
     #[serde(rename = "server.changes")]
     ServerChanges,
+    /// Where the connected players stand, while the topic is followed: the server reads positions
+    /// only then. Needs the live map permission.
+    #[serde(rename = "server.map")]
+    ServerMap,
 }
 
 impl Topic {
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 11] = [
         Self::Status,
         Self::Audit,
         Self::ServerStatus,
@@ -82,6 +87,7 @@ impl Topic {
         Self::ServerAlerts,
         Self::ServerDiagnostics,
         Self::ServerChanges,
+        Self::ServerMap,
     ];
 }
 
@@ -157,6 +163,8 @@ pub enum TopicSnapshot {
     ServerDiagnostics(DiagnosticsSnapshot),
     #[serde(rename = "server.changes")]
     ServerChanges(ChangesLive),
+    #[serde(rename = "server.map")]
+    ServerMap(MapLive),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, TS)]
@@ -185,6 +193,9 @@ pub enum TopicEvent {
     /// The whole state again, whenever a snapshot moves: during a job, at most twice a second.
     #[serde(rename = "server.changes")]
     ServerChanges(ChangesLive),
+    /// Every placed player again, at each report of the bridge.
+    #[serde(rename = "server.map")]
+    ServerMap(MapLive),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]

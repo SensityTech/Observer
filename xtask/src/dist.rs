@@ -9,6 +9,7 @@ use std::process::Command;
 use anyhow::{Context, bail};
 use flate2::Compression;
 use flate2::write::GzEncoder;
+use observer_domain::updates;
 use sha2::{Digest, Sha256};
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, DateTime, ZipWriter};
@@ -32,6 +33,14 @@ struct Source {
 
 pub fn dist(target: &str, max_glibc: Option<&str>) -> anyhow::Result<()> {
     let system = System::of(target)?;
+    // A release without the key could not verify the next one: its owners would update by hand.
+    let key = fs::read_to_string(root().join(crate::release_key::PUBLIC)).unwrap_or_default();
+    if key.trim().len() != 64 {
+        bail!(
+            "{} holds no release key: run `cargo xtask release-key <file>` once, then commit it",
+            crate::release_key::PUBLIC
+        );
+    }
     let licences = build_panel(target)?;
     let source = source()?;
     let binaries = built(
@@ -82,19 +91,12 @@ pub fn dist(target: &str, max_glibc: Option<&str>) -> anyhow::Result<()> {
     let dist = root().join("target/dist");
     fs::create_dir_all(&dist).with_context(|| format!("cannot create {}", dist.display()))?;
     let notices = fs::read(&licences).with_context(|| format!("cannot read {}", licences.display()))?;
-    let name = format!("observer-{VERSION}-{}-{}", system.name(), arch(target));
-    let archive = match system {
-        System::Windows => {
-            let path = dist.join(format!("{name}.zip"));
-            write_zip(&path, &source.date, &bytes, &notices)?;
-            path
-        }
-        System::Linux => {
-            let path = dist.join(format!("{name}.tar.gz"));
-            write_tar(&path, &source.date, &bytes, &notices)?;
-            path
-        }
-    };
+    let archive = dist.join(updates::archive_name(VERSION, system.name(), arch(target)));
+    let executable = updates::executable_name(system.name());
+    match system {
+        System::Windows => write_zip(&archive, &source.date, executable, &bytes, &notices)?,
+        System::Linux => write_tar(&archive, &source.date, executable, &bytes, &notices)?,
+    }
     let packed = fs::read(&archive)?;
     let checksum = hex(&Sha256::digest(&packed));
     let file_name = archive
@@ -313,7 +315,7 @@ fn parse_glibc(version: &str) -> anyhow::Result<(u32, u32)> {
     Ok((minor.parse()?, patch))
 }
 
-fn write_zip(path: &Path, date: &str, binary: &[u8], notices: &[u8]) -> anyhow::Result<()> {
+fn write_zip(path: &Path, date: &str, executable: &str, binary: &[u8], notices: &[u8]) -> anyhow::Result<()> {
     let (year, month, day) = civil(date)?;
     let stamp = DateTime::from_date_and_time(u16::try_from(year)?, month, day, 0, 0, 0)
         .map_err(|error| anyhow::anyhow!("{date} cannot date a zip entry: {error:?}"))?;
@@ -321,7 +323,7 @@ fn write_zip(path: &Path, date: &str, binary: &[u8], notices: &[u8]) -> anyhow::
     let options = SimpleFileOptions::default()
         .compression_method(CompressionMethod::Deflated)
         .last_modified_time(stamp);
-    for (name, data) in [("observer.exe", binary), (LICENCES, notices)] {
+    for (name, data) in [(executable, binary), (LICENCES, notices)] {
         zip.start_file(name, options)?;
         zip.write_all(data)?;
     }
@@ -329,12 +331,12 @@ fn write_zip(path: &Path, date: &str, binary: &[u8], notices: &[u8]) -> anyhow::
     Ok(())
 }
 
-fn write_tar(path: &Path, date: &str, binary: &[u8], notices: &[u8]) -> anyhow::Result<()> {
+fn write_tar(path: &Path, date: &str, executable: &str, binary: &[u8], notices: &[u8]) -> anyhow::Result<()> {
     let (year, month, day) = civil(date)?;
     let seconds = u64::try_from(days_from_civil(year, month, day))? * 86_400;
     let gzip = GzEncoder::new(BufWriter::new(File::create(path)?), Compression::best());
     let mut tar = tar::Builder::new(gzip);
-    for (name, data, mode) in [("observer", binary, 0o755), (LICENCES, notices, 0o644)] {
+    for (name, data, mode) in [(executable, binary, 0o755), (LICENCES, notices, 0o644)] {
         let mut header = tar::Header::new_gnu();
         header.set_size(u64::try_from(data.len())?);
         header.set_mode(mode);

@@ -1,16 +1,19 @@
 # Integration contract
 
-Observer never shows anything to players. It tells your resources what is about to happen to the
-server, with data and no text, and your resources decide what players see, what gets saved and when.
-This page is that contract: the server events Observer raises, what they carry, what your resources
-can tell Observer about players, and what you can rely on.
+Observer never shows anything to players, but for one text: the refusal message the owner writes
+for bans. It tells your resources what is about to happen to the server, with data and no text, and
+your resources decide what players see, what gets saved and when. This page is that contract: the
+server events Observer raises, what they carry, what your resources can tell Observer about players,
+how bans keep players out, and what you can rely on.
 
 ## The bridge
 
 The bridge is a server-side resource that Observer writes into the build's `system_resources` folder
 before every start of FXServer, and ensures before your cfg runs. Observer overwrites any change made
-to it. It reports the server's health to Observer and turns Observer's commands into server events.
-It has no client script and no UI.
+to it. It reports the server's health to Observer, turns Observer's commands into server events, and refuses
+banned players. While someone has the panel's live map open, it also reads where each player stands,
+from OneSync, every 1 to 5 seconds, and reports it to Observer; it raises no event for it and stops
+within 30 seconds after the last one closes the map. It has no client script and no UI.
 
 Its name changes with every start of FXServer: Observer draws it at random, so that no script can
 target the bridge by a name known in advance. Read it from the `observer_bridge` convar, which
@@ -24,10 +27,10 @@ local bridge = GetConvar('observer_bridge', '') -- empty when Observer did not s
 
 ## Version
 
-This is contract version **3**.
+This is contract version **4**.
 
 ```lua
-local version = exports[GetConvar('observer_bridge', '')]:getContractVersion() -- 3
+local version = exports[GetConvar('observer_bridge', '')]:getContractVersion() -- 4
 ```
 
 Within a version, fields and `reason` values are only ever added. Ignore fields you do not know, and
@@ -35,7 +38,9 @@ treat a `reason` you do not know as the closest one you do (`stop` for `observer
 field renamed or removed, or a change of meaning, is a new version. So is a new export of the
 bridge, so that a resource can check for it before calling it.
 
-Version 3 added the player labels: `setPlayerLabel` and `clearPlayerLabel`. Version 2 changed how a
+Version 4 added bans: the bridge holds every connecting player until Observer checks them, refuses a
+banned one, drops a connected player when they are banned, and raises `observer:playerRefused` and
+`observer:playerBanned`. Version 3 added the player labels: `setPlayerLabel` and `clearPlayerLabel`. Version 2 changed how a
 resource finds the bridge: version 1 named it `observer`, version 2 draws its name at each start and
 gives it in `observer_bridge`. The events and their payloads did not change.
 
@@ -53,6 +58,8 @@ who signs in to nothing. No account can take either name.
 | `observer:restartRescheduled` | A restart announced since this start of FXServer moved to another time. |
 | `observer:shuttingDown` | FXServer quits in `delayMs`: save now. |
 | `observer:startChanges` | Once per start of FXServer, when its files are hashed: what changed since the start before. |
+| `observer:playerRefused` | A ban refused a connecting player. See [Bans](#bans). |
+| `observer:playerBanned` | A ban is about to drop a connected player. See [Bans](#bans). |
 
 ### `observer:restartScheduled`
 
@@ -175,10 +182,50 @@ What Observer does with a label:
   names. The Players page finds a player by the start of a label's name, or by a label's whole id,
   in any case.
 
+## Bans
+
+The staff bans players in Observer's panel. A ban holds the player's licence, their other
+identifiers and their hardware tokens, for a time or for good. The bridge enforces it:
+
+- On `playerConnecting`, the bridge defers the connection and asks Observer. Observer answers within
+  milliseconds. Your own `playerConnecting` handlers run as they do without Observer: the player
+  gets in once every handler is done.
+- A banned player is refused with the refusal message the owner wrote in the panel, which can name
+  the reason, when the ban ends and its code. It is the only text Observer shows players.
+- Without an answer within 5 seconds, the player gets in. Observer checks every player again once
+  they joined, and drops a banned one with the same message.
+- When the staff bans a connected player, the bridge drops them at once with that message.
+
+The bridge raises one event for each, for your logs or your staff's channel. Players have already
+been refused, or are about to be dropped: nothing a resource does changes it.
+
+### `observer:playerRefused`
+
+| Field | Type | Meaning |
+|---|---|---|
+| `ban` | string | The ban's code, `K7QM-2XPA`, which the player can quote to appeal. |
+| `reason` | string | The reason the staff gave. |
+| `endsAt` | integer, or nil | When the ban ends; nil for a permanent ban. |
+| `by` | string | Who banned the player. |
+| `name` | string, or nil | The player's name, as FiveM gives it. |
+| `license` | string, or nil | The player's licence, `license:` and 40 hex digits. |
+
+### `observer:playerBanned`
+
+| Field | Type | Meaning |
+|---|---|---|
+| `player` | integer | The player's server id, dropped right after the event. |
+| `ban` | string | The ban's code. |
+| `reason` | string | The reason the staff gave. |
+| `endsAt` | integer, or nil | When the ban ends; nil for a permanent ban. |
+| `by` | string | Who banned the player. |
+| `name` | string, or nil | The player's name. |
+| `license` | string, or nil | The player's licence. |
+
 ## Security
 
-The bridge raises these events only for commands typed on the server console, where only Observer
-writes, and never for a call from another resource. Listen with `AddEventHandler` only. Never
+The bridge raises these events, refuses players and drops them only for commands typed on the server
+console, where only Observer writes, and never for a call from another resource. Listen with `AddEventHandler` only. Never
 `RegisterNetEvent` these names: clients could then raise them.
 
 Any server resource can give a label: the exports are for your resources, which can already do
@@ -202,7 +249,7 @@ no text.
 | `observer:restartRescheduled` | none | |
 | `observer:shuttingDown` | `txAdmin:events:serverShuttingDown` | `delay` (`delayMs`), `author` (`by`), `message = ''` |
 
-## Not in version 3
+## Not in version 4
 
 Exports to read the next restart or the server's state come later.
 

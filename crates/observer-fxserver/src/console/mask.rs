@@ -76,6 +76,17 @@ pub(crate) fn redact(text: &str, mut secrets: Vec<Range<usize>>) -> String {
     masked
 }
 
+/// A convar's value as the panel may see it: `None` for a secret convar, or one whose name ends
+/// in `password`, `pwd`, `token`, `secret` or `key`; any other value with what [`mask`] hides
+/// in it masked.
+pub fn convar_value(name: &str, value: &str) -> Option<String> {
+    let lower = name.to_ascii_lowercase();
+    if secret_convar(name) || SECRET_NAMES.iter().any(|secret| lower.ends_with(secret)) {
+        return None;
+    }
+    Some(mask(value).unwrap_or_else(|| value.to_owned()))
+}
+
 /// Whether `name` is one of the convars whose value is a secret.
 pub(crate) fn secret_convar(name: &str) -> bool {
     SECRET_CONVARS

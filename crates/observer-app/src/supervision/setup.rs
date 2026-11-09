@@ -6,6 +6,7 @@
 use std::io;
 use std::time::Duration;
 
+use observer_domain::convars::CfgConvars;
 use observer_domain::error::{ApiError, ErrorCode};
 use observer_domain::launch::{LaunchChange, OneSync, StoredLaunch};
 use observer_domain::server_data::{
@@ -117,6 +118,16 @@ impl Supervision {
         blocking(move || server_data::check_cfg(&check.data_path, &check.cfg_file, &observer, &context)).await
     }
 
+    /// What the saved launch's cfg sets, which wins over the launch's own `+set`; `None` until the
+    /// launch settings are saved. It changes nothing.
+    pub async fn cfg_convars(&self) -> Result<Option<CfgConvars>, Error> {
+        let (stored, _) = read_launch(&self.inner.db).await?;
+        let Some(stored) = stored else {
+            return Ok(None);
+        };
+        blocking(move || Some(server_data::cfg_convars(&stored.settings))).await
+    }
+
     /// Saves launch settings from the setup: the rules first, then the folder and its cfg read
     /// again, whatever the panel was told before, and only then the save, as the Server page's.
     pub async fn save_setup(&self, caller: &Caller, change: LaunchChange) -> Result<StoredLaunch, Error> {
@@ -165,6 +176,7 @@ impl Supervision {
             probe_ports: self.inner.supervisor.status().borrow().pid.is_none(),
             system_resources,
             follow_outside: false,
+            convars: None,
         })
     }
 }

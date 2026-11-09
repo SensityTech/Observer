@@ -55,6 +55,8 @@ const DiagnosticsPage = lazyCode(() =>
 const PlayersPage = lazyCode(() =>
     import('./pages/PlayersPage').then((page) => ({ default: page.PlayersPage })),
 );
+const BansPage = lazyCode(() => import('./pages/BansPage').then((page) => ({ default: page.BansPage })));
+const MapPage = lazyCode(() => import('./pages/MapPage').then((page) => ({ default: page.MapPage })));
 const PlayerPage = lazyCode(() =>
     import('./pages/PlayerPage').then((page) => ({ default: page.PlayerPage })),
 );
@@ -239,6 +241,24 @@ const playersRoute = createRoute({
     ),
 });
 
+const mapRoute = createRoute({
+    getParentRoute: () => panelRoute,
+    path: '/map',
+    component: () => (
+        <RequirePermission name="PlayersMap">
+            <MapPage />
+        </RequirePermission>
+    ),
+});
+const bansRoute = createRoute({
+    getParentRoute: () => panelRoute,
+    path: '/bans',
+    component: () => (
+        <RequirePermission name="BansView">
+            <BansPage />
+        </RequirePermission>
+    ),
+});
 const playerRoute = createRoute({
     getParentRoute: () => panelRoute,
     path: '/players/$id',
@@ -394,6 +414,8 @@ const routeTree = rootRoute.addChildren([
         diagnosticsRoute,
         playersRoute,
         playerRoute,
+        mapRoute,
+        bansRoute,
         changesRoute,
         changesResourceRoute,
         dropsRoute,

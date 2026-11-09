@@ -3,4 +3,4 @@
 /**
  * Where the request to stop Observer came from.
  */
-export type StopSource = "window" | "console" | "signal";
+export type StopSource = "window" | "console" | "signal" | "update";

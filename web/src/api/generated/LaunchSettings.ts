@@ -23,7 +23,8 @@ autoStart: boolean,
  */
 txadminEvents: boolean, 
 /**
- * Each becomes `+set <name> <value>`, after the cfg and Observer's own convars.
+ * Each becomes `+set <name> <value>`, which FXServer applies before the cfg: a convar the cfg
+ * sets too keeps the cfg's value.
  */
 extraArguments: Array<ExtraArgument>, 
 /**

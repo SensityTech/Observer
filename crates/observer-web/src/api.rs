@@ -8,11 +8,13 @@ mod artifacts;
 mod audit;
 mod auth;
 mod backups;
+mod bans;
 mod changes;
 mod diagnostics;
 mod drops;
 mod features;
 mod files;
+mod map;
 mod metrics;
 mod players;
 mod schedule;
@@ -20,6 +22,7 @@ mod servers;
 mod settings;
 mod setup;
 mod tools;
+mod updates;
 mod users;
 
 use axum::extract::State;
@@ -91,6 +94,18 @@ pub(crate) fn routes() -> Vec<Route> {
     // too, which the service checks on what is asked. Retentions and erasures are the owner's.
     let players = Permission(P::PLAYERS_VIEW);
     let erase = ReauthenticatedOwner;
+    // Bans are seen, made and lifted under three permissions. The refusal message is the only text
+    // Observer shows players, so changing it takes the settings' permission and the password again.
+    let bans = Permission(P::BANS_VIEW);
+    let ban = Permission(P::PLAYERS_BAN);
+    let lift = Permission(P::BANS_LIFT);
+    let read_ban_settings = Permission(P::SETTINGS_VIEW);
+    let change_ban_settings = Reauthenticated(P::SETTINGS_MANAGE);
+    // Where players stand is its own permission. The image comes from a host path, which is the
+    // owner's to read, with the password again; the calibration and colours are settings.
+    let map = Permission(P::PLAYERS_MAP);
+    let map_image = ReauthenticatedOwner;
+    let change_map = Reauthenticated(P::SETTINGS_MANAGE);
     // Statistics name nobody; the log, its export and reason groups are `PLAYERS_VIEW`'s.
     let drops = Permission(P::DROPS_VIEW);
     // What changed between starts: the history for its permission, the contents behind the critical
@@ -117,6 +132,10 @@ pub(crate) fn routes() -> Vec<Route> {
     let download_backups = Reauthenticated(P::BACKUPS_DOWNLOAD);
     let test_backups = Owner;
     let change_backups = ReauthenticatedOwner;
+    // A release replaces the executable the host runs: the owner's alone, with the password again
+    // to install one. Reading and checking reach GitHub only, with nothing of the owner's.
+    let read_updates = Owner;
+    let install_update = ReauthenticatedOwner;
     vec![
         route(M::GET,    "/health",                     Public,       health),
         route(M::GET,    "/setup",                      Public,       setup::status),
@@ -153,6 +172,8 @@ pub(crate) fn routes() -> Vec<Route> {
         route(M::DELETE, "/files/services/{id}",               change_files, files::delete_service),
         route(M::GET,    "/servers/default/launch",     read_launch,  servers::launch_settings),
         route(M::PUT,    "/servers/default/launch",     edit_launch,  servers::change_launch_settings),
+        route(M::GET,    "/servers/default/launch/cfg-convars", read_launch, servers::cfg_convars),
+        route(M::GET,    "/convars",                    read_launch,  servers::convar_catalog),
         route(M::POST,   "/servers/default/setup/folder", read_launch, servers::check_folder),
         route(M::POST,   "/servers/default/setup/cfg",    read_launch, servers::check_cfg),
         route(M::POST,   "/servers/default/setup/folders",  read_launch, servers::list_folders),
@@ -202,7 +223,18 @@ pub(crate) fn routes() -> Vec<Route> {
         route(M::PUT,    "/servers/default/players/settings",  erase,   players::change_settings),
         route(M::GET,    "/servers/default/players/import",    Owner,   players::import_status),
         route(M::POST,   "/servers/default/players/import",    erase,   players::import),
+        route(M::GET,    "/servers/default/players/map",           map,        map::view),
+        route(M::PUT,    "/servers/default/players/map/settings",  change_map, map::change_settings),
+        route(M::GET,    "/servers/default/players/map/image",     map,        map::image),
+        route(M::PUT,    "/servers/default/players/map/image",     map_image,  map::set_image),
+        route(M::DELETE, "/servers/default/players/map/image",     map_image,  map::remove_image),
         route(M::GET,    "/servers/default/players/{id}",      players, players::profile),
+        route(M::GET,    "/servers/default/players/{id}/bans", bans,    bans::of_player),
+        route(M::GET,    "/servers/default/bans",              bans,    bans::page),
+        route(M::POST,   "/servers/default/bans",              ban,     bans::create),
+        route(M::GET,    "/servers/default/bans/settings",     read_ban_settings,   bans::settings),
+        route(M::PUT,    "/servers/default/bans/settings",     change_ban_settings, bans::change_settings),
+        route(M::POST,   "/servers/default/bans/{code}/lift",  lift,    bans::lift),
         route(M::GET,    "/servers/default/drops/summary",     drops,   drops::summary),
         route(M::GET,    "/servers/default/drops/series",      drops,   drops::series),
         route(M::GET,    "/servers/default/drops/signatures",  drops,   drops::signatures),
@@ -250,6 +282,10 @@ pub(crate) fn routes() -> Vec<Route> {
         route(M::GET,    "/servers/default/backups/runs/{id}",            read_backups,     backups::run),
         route(M::DELETE, "/servers/default/backups/runs/{id}",            change_backups,   backups::delete_run),
         route(M::GET,    "/servers/default/backups/copies/{id}/download", download_backups, backups::download),
+        route(M::GET,    "/updates",         read_updates,   updates::view),
+        route(M::POST,   "/updates/check",   read_updates,   updates::check),
+        route(M::POST,   "/updates/install", install_update, updates::install),
+        route(M::DELETE, "/updates/install", install_update, updates::cancel),
     ]
 }
 

@@ -20,8 +20,8 @@ use std::sync::Arc;
 use axum::extract::Request;
 use axum::{Router, middleware};
 use observer_app::{
-    Accounts, Artifacts, AuditLog, Backups, Changes, Diagnostics, Drops, Error, Features, Files, Metrics,
-    Players, Schedule, Servers, Statistics, Supervision, Tools,
+    Accounts, Artifacts, AuditLog, Backups, Bans, Changes, Diagnostics, Drops, Error, Features, Files,
+    LiveMap, Metrics, Players, Schedule, Servers, Statistics, Supervision, Tools, Updates,
 };
 use observer_domain::about::Build;
 use observer_domain::features::Feature;
@@ -56,9 +56,12 @@ pub struct AppState {
     diagnostics: Option<Diagnostics>,
     metrics: Option<Metrics>,
     players: Option<Players>,
+    map: Option<LiveMap>,
     drops: Option<Drops>,
     changes: Option<Changes>,
+    updates: Option<Updates>,
     pub backups: Backups,
+    pub bans: Bans,
     pub live: Live,
     /// Cookies ignore ports, so the name carries the instance id: two Observers on one host never
     /// read each other's sessions.
@@ -92,9 +95,12 @@ pub struct Services {
     pub diagnostics: Option<Diagnostics>,
     pub metrics: Option<Metrics>,
     pub players: Option<Players>,
+    pub map: Option<LiveMap>,
     pub drops: Option<Drops>,
     pub changes: Option<Changes>,
+    pub updates: Option<Updates>,
     pub backups: Backups,
+    pub bans: Bans,
 }
 
 impl AppState {
@@ -119,9 +125,12 @@ impl AppState {
             diagnostics,
             metrics,
             players,
+            map,
             drops,
             changes,
+            updates,
             backups,
+            bans,
             statistics,
         } = services;
         Self {
@@ -138,9 +147,12 @@ impl AppState {
             diagnostics,
             metrics,
             players,
+            map,
             drops,
             changes,
+            updates,
             backups,
+            bans,
             statistics,
             live: Live::new(),
             cookie: format!("observer_session_{instance_id}"),
@@ -170,6 +182,13 @@ impl AppState {
             .ok_or_else(|| self.features.refusal(Feature::Players))
     }
 
+    /// The live map runs with the players, whose sessions it places.
+    pub(crate) fn map(&self) -> Result<&LiveMap, Error> {
+        self.map
+            .as_ref()
+            .ok_or_else(|| self.features.refusal(Feature::Players))
+    }
+
     pub(crate) fn drops(&self) -> Result<&Drops, Error> {
         self.drops
             .as_ref()
@@ -180,6 +199,12 @@ impl AppState {
         self.changes
             .as_ref()
             .ok_or_else(|| self.features.refusal(Feature::Changes))
+    }
+
+    pub(crate) fn updates(&self) -> Result<&Updates, Error> {
+        self.updates
+            .as_ref()
+            .ok_or_else(|| self.features.refusal(Feature::Updates))
     }
 }
 

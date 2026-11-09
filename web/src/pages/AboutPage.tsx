@@ -8,6 +8,7 @@ import type { About } from '../api/generated/About';
 import type { Ecosystem } from '../api/generated/Ecosystem';
 import type { ThirdPartyLicences } from '../api/generated/ThirdPartyLicences';
 import type { ThirdPartyPackage } from '../api/generated/ThirdPartyPackage';
+import { useMe } from '../auth/me';
 import { ATTRIBUTION } from '../charts/PlayersChart';
 import { Button } from '../components/Button';
 import { Dialog } from '../components/Dialog';
@@ -17,11 +18,13 @@ import { table } from '../components/table';
 import { errorMessage } from '../i18n/errors';
 import { useI18n } from '../i18n/I18nProvider';
 import { cn } from '../lib/cn';
+import { UpdatesCard } from '../updates/UpdatesCard';
 
 const ECOSYSTEMS: Ecosystem[] = ['crate', 'npm'];
 
 export function AboutPage() {
     const { t } = useI18n();
+    const me = useMe();
 
     return (
         <div className="flex flex-col gap-5 max-md:gap-4">
@@ -31,6 +34,7 @@ export function AboutPage() {
                 </h1>
             </div>
             <div className="flex flex-col gap-3">
+                {me.isOwner && <UpdatesCard />}
                 <BuildCard />
                 <LicencesCard />
             </div>

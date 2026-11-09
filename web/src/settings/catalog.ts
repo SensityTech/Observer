@@ -32,6 +32,12 @@ export type SettingId =
     | 'backupsTimes'
     | 'backupsDestinations'
     | 'backupsLast'
+    | 'refusalMessage'
+    | 'tokenMatches'
+    | 'mapImage'
+    | 'mapBounds'
+    | 'mapTiers'
+    | 'mapCadence'
     | 'switchSftp'
     | 'switchChanges'
     | 'switchTools'
@@ -39,6 +45,7 @@ export type SettingId =
     | 'switchMetrics'
     | 'switchPlayers'
     | 'switchDrops'
+    | 'switchUpdates'
     | 'changesEnabled'
     | 'startEvent'
     | 'extensions'
@@ -76,6 +83,8 @@ export type CategoryId =
     | 'restarts'
     | 'builds'
     | 'backups'
+    | 'bans'
+    | 'map'
     | 'features'
     | 'data'
     | 'tools'
@@ -150,6 +159,26 @@ export const CATEGORIES: readonly Category[] = [
         ],
     },
     {
+        id: 'bans',
+        group: 'server',
+        access: ['SettingsView'],
+        settings: [
+            { id: 'refusalMessage', applies: 'now' },
+            { id: 'tokenMatches', applies: 'now' },
+        ],
+    },
+    {
+        id: 'map',
+        group: 'server',
+        access: ['SettingsView', 'PlayersMap'],
+        settings: [
+            { id: 'mapImage' },
+            { id: 'mapBounds', applies: 'now' },
+            { id: 'mapTiers', applies: 'now' },
+            { id: 'mapCadence', applies: 'now' },
+        ],
+    },
+    {
         id: 'features',
         group: 'observer',
         access: ['SettingsView'],
@@ -161,6 +190,7 @@ export const CATEGORIES: readonly Category[] = [
             { id: 'switchMetrics' },
             { id: 'switchPlayers' },
             { id: 'switchDrops' },
+            { id: 'switchUpdates' },
         ],
     },
     {
@@ -239,6 +269,7 @@ export const SWITCH_OF = {
     metrics: 'switchMetrics',
     players: 'switchPlayers',
     drops: 'switchDrops',
+    updates: 'switchUpdates',
 } satisfies Record<Feature, SettingId>;
 
 /** When each setting applies, found by its id. */

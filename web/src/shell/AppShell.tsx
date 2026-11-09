@@ -1,12 +1,14 @@
 import { useQuery } from '@tanstack/react-query';
 import { Link, Outlet } from '@tanstack/react-router';
 import {
+    Ban,
     CalendarClock,
     ChartLine,
     Contact,
     DatabaseBackup,
     GitCompare,
     LayoutDashboard,
+    Map as MapIcon,
     Menu as MenuIcon,
     Package,
     ScrollText,
@@ -39,6 +41,7 @@ import { OnlineButton, OnlineColumn } from './OnlineColumn';
 import { ServerControls } from './ServerControls';
 import { SignedIn } from './SignedIn';
 import { StatusBar } from './StatusBar';
+import { UpdateSignal } from '../updates/UpdateSignal';
 import { UserMenu } from './UserMenu';
 
 type NavEntry = {
@@ -50,6 +53,8 @@ type NavEntry = {
         | '/artifacts'
         | '/diagnostics'
         | '/players'
+        | '/map'
+        | '/bans'
         | '/changes'
         | '/drops'
         | '/settings'
@@ -123,6 +128,8 @@ export function AppShell() {
             access: [Permission.DashboardView, Permission.ScheduleManage, Permission.ServerControl],
         },
         { to: '/players', label: t.nav.players, icon: Contact, access: Permission.PlayersView, nested: true },
+        { to: '/map', label: t.nav.map, icon: MapIcon, access: Permission.PlayersMap },
+        { to: '/bans', label: t.nav.bans, icon: Ban, access: Permission.BansView },
         { to: '/statistics', label: t.nav.statistics, icon: ChartLine, access: Permission.DashboardView },
         {
             to: '/diagnostics',
@@ -196,6 +203,7 @@ export function AppShell() {
                             />
                         </nav>
                         <div className="rail-foot">
+                            {me.isOwner && <UpdateSignal onNavigate={closeMenu} />}
                             <NavEntries me={me} entries={settings} onNavigate={closeMenu} />
                             <UserMenu me={me} onNavigate={closeMenu} />
                         </div>

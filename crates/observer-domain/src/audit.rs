@@ -137,6 +137,20 @@ pub enum AuditAction {
     /// The drop log went out as CSV. The details hold the kinds of its filters, never their
     /// values, and the row count.
     PlayerDropsExported,
+    /// A player, or identifiers typed by hand, were banned. The target is the ban's code;
+    /// `details` hold the profile's id, the licence, the reason, `minutes` (absent when
+    /// permanent), the counts of identifiers and tokens held, and `dropped` when a connected
+    /// player was dropped.
+    PlayerBanned,
+    /// The target is the ban's code; `details` hold the reason given, if any.
+    BanLifted,
+    /// `details` hold each changed setting with its value before and after.
+    BansSettingsChanged,
+    /// The owner added the live map's image, or removed it. `details` hold its size, never the path
+    /// it came from, or `removed`.
+    MapImageChanged,
+    /// `details` hold the live map's settings before and after.
+    MapSettingsChanged,
     /// The daily drop rates went out as CSV.
     DropRatesExported,
     /// How long players' sessions and their texts are kept changed.
@@ -193,10 +207,20 @@ pub enum AuditAction {
     StatisticsLinkDismissed,
     /// The link was taken back.
     StatisticsLinkRestored,
+    /// The owner asked to install a release of Observer. The target is its version; `details`
+    /// hold when it `applies` (`now` or `scheduledRestart`).
+    ObserverUpdateStarted,
+    /// The install was cancelled before Observer restarted, at the `step` it was at: by the owner,
+    /// or by the system when the restart it waited for did not come.
+    ObserverUpdateCancelled,
+    /// How an install ended, by the system. A success once the new version started (`from`,
+    /// `to`); a failure when the release could not be downloaded or verified (`reason`), or when
+    /// the new version did not finish starting and the previous one came back (`rolledBack`).
+    ObserverUpdateFinished,
 }
 
 impl AuditAction {
-    pub const ALL: [Self; 96] = [
+    pub const ALL: [Self; 104] = [
         Self::SetupCompleted,
         Self::SetupLinkCreated,
         Self::LoginSucceeded,
@@ -271,6 +295,11 @@ impl AuditAction {
         Self::PlayersImported,
         Self::PlayersRetentionChanged,
         Self::PlayerDropsExported,
+        Self::PlayerBanned,
+        Self::BanLifted,
+        Self::BansSettingsChanged,
+        Self::MapImageChanged,
+        Self::MapSettingsChanged,
         Self::DropRatesExported,
         Self::DropsRetentionChanged,
         Self::ChangeContentsViewed,
@@ -293,8 +322,12 @@ impl AuditAction {
         Self::BackupsExpired,
         Self::StatisticsLinkDismissed,
         Self::StatisticsLinkRestored,
+        Self::ObserverUpdateStarted,
+        Self::ObserverUpdateCancelled,
+        Self::ObserverUpdateFinished,
     ];
 
+    #[expect(clippy::too_many_lines, reason = "one arm per action, read best as one list")]
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::SetupCompleted => "setup_completed",
@@ -371,6 +404,11 @@ impl AuditAction {
             Self::PlayersImported => "players_imported",
             Self::PlayersRetentionChanged => "players_retention_changed",
             Self::PlayerDropsExported => "player_drops_exported",
+            Self::PlayerBanned => "player_banned",
+            Self::BanLifted => "ban_lifted",
+            Self::BansSettingsChanged => "bans_settings_changed",
+            Self::MapImageChanged => "map_image_changed",
+            Self::MapSettingsChanged => "map_settings_changed",
             Self::DropRatesExported => "drop_rates_exported",
             Self::DropsRetentionChanged => "drops_retention_changed",
             Self::ChangeContentsViewed => "change_contents_viewed",
@@ -393,6 +431,9 @@ impl AuditAction {
             Self::BackupsExpired => "backups_expired",
             Self::StatisticsLinkDismissed => "statistics_link_dismissed",
             Self::StatisticsLinkRestored => "statistics_link_restored",
+            Self::ObserverUpdateStarted => "observer_update_started",
+            Self::ObserverUpdateCancelled => "observer_update_cancelled",
+            Self::ObserverUpdateFinished => "observer_update_finished",
         }
     }
 
@@ -452,6 +493,8 @@ pub enum StopSource {
     Console,
     /// A signal from a service manager or a closed terminal session.
     Signal,
+    /// An install of a new release, which restarts Observer.
+    Update,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]

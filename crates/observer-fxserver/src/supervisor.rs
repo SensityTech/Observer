@@ -23,7 +23,7 @@ use tokio::task::{JoinError, JoinHandle};
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
-use crate::bridge::{self, BridgeEvent, Report, StopReason};
+use crate::bridge::{self, BridgeAction, BridgeEvent, Report, StopReason};
 use crate::cfg;
 use crate::console::{ConsoleHub, LineAssembler, LineFlags, LineKind, plain, sanitize};
 use crate::crashes::{self, Collected, DumpLimits, HangSnapshotLimits, SnapshotFailure};
@@ -434,6 +434,10 @@ enum Request {
         event: BridgeEvent,
         reply: Reply<()>,
     },
+    Act {
+        action: BridgeAction,
+        reply: Reply<()>,
+    },
     Command {
         command: UserCommand,
         actor: String,
@@ -441,6 +445,9 @@ enum Request {
     },
     Shutdown {
         shortened: bool,
+        /// What resources hear: `shutdown`, or `scheduled` when the stop takes the place of a
+        /// scheduled restart.
+        reason: StopReason,
     },
     Configure(Box<ServerLaunch>),
     SkipHangSnapshots,
@@ -572,6 +579,11 @@ impl Supervisor {
         self.ask(|reply| Request::Announce { event, reply }).await
     }
 
+    /// Has the bridge act, under the same conditions as [`Supervisor::announce`].
+    pub async fn act(&self, action: BridgeAction) -> Result<(), ControlError> {
+        self.ask(|reply| Request::Act { action, reply }).await
+    }
+
     /// Writes an operator's command to FXServer and echoes it into the console once written.
     pub async fn command(&self, command: UserCommand, actor: &str) -> Result<(), ControlError> {
         let written = self
@@ -599,7 +611,25 @@ impl Supervisor {
     /// Stops the server, then the supervisor. `shortened` is for a closing console, which leaves
     /// a few seconds only.
     pub async fn shutdown(&self, shortened: bool) {
-        let _ = self.requests.send(Request::Shutdown { shortened }).await;
+        let _ = self
+            .requests
+            .send(Request::Shutdown {
+                shortened,
+                reason: StopReason::Shutdown,
+            })
+            .await;
+    }
+
+    /// Stops the server, then the supervisor, in the place of a scheduled restart: resources hear
+    /// `scheduled`, as they would for the restart, and FXServer comes back with the next Observer.
+    pub async fn shutdown_scheduled(&self) {
+        let _ = self
+            .requests
+            .send(Request::Shutdown {
+                shortened: false,
+                reason: StopReason::Scheduled,
+            })
+            .await;
     }
 
     pub fn events(&self) -> broadcast::Receiver<Event> {
@@ -913,7 +943,7 @@ impl Actor {
                 Wake::Request(Some(request)) => self.request(request).await,
                 Wake::Request(None) => {
                     self.orphaned = true;
-                    self.shutdown(false);
+                    self.shutdown(false, StopReason::Shutdown);
                 }
                 Wake::Exit(exit) => self.exited(exit).await,
                 Wake::Trace(trace) => self.trace(trace),
@@ -961,6 +991,9 @@ impl Actor {
             Request::Announce { event, reply } => {
                 let _ = reply.send(self.announce(event));
             }
+            Request::Act { action, reply } => {
+                let _ = reply.send(self.to_bridge(SystemLine::Action(action)));
+            }
             Request::Command {
                 command,
                 actor,
@@ -968,7 +1001,7 @@ impl Actor {
             } => {
                 let _ = reply.send(self.command(command, actor));
             }
-            Request::Shutdown { shortened } => self.shutdown(shortened),
+            Request::Shutdown { shortened, reason } => self.shutdown(shortened, reason),
             Request::Configure(launch) => self.configure(*launch),
             Request::SkipHangSnapshots => self.settings.hang_snapshot = None,
         }
@@ -1192,9 +1225,13 @@ impl Actor {
     }
 
     fn announce(&self, event: BridgeEvent) -> Result<(), ControlError> {
+        self.to_bridge(SystemLine::Bridge(event))
+    }
+
+    fn to_bridge(&self, line: SystemLine) -> Result<(), ControlError> {
         match &self.run {
             Some(run) if matches!(self.phase, Phase::Running) && run.bridge_ready => {
-                run.system(SystemLine::Bridge(event));
+                run.system(line);
                 Ok(())
             }
             _ => Err(ControlError::NotRunning),
@@ -1227,7 +1264,7 @@ impl Actor {
         Ok(written)
     }
 
-    fn shutdown(&mut self, shortened: bool) {
+    fn shutdown(&mut self, shortened: bool, reason: StopReason) {
         let shortened = shortened || self.shutdown == Some(true);
         self.shutdown = Some(shortened);
         let now = Instant::now();
@@ -1251,7 +1288,7 @@ impl Actor {
                     self.set_state(State::Stopping, Cause::Shutdown);
                 }
             }
-            Phase::Running => self.begin_stop(StopReason::Shutdown, Cause::Shutdown, After::Exit, shortened),
+            Phase::Running => self.begin_stop(reason, Cause::Shutdown, After::Exit, shortened),
             Phase::Notice { quit_at, reason } => {
                 let Some(run) = &mut self.run else {
                     return;

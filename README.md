@@ -3,8 +3,9 @@
 A server manager for FiveM and RedM, written in Rust.
 
 Observer starts and supervises FXServer, installs its builds and serves a web panel for your staff,
-from one executable that keeps its state in SQLite. It never shows anything to players: it raises
-documented server events, and your own resources decide what to do with them.
+from one executable that keeps its state in SQLite. It never shows anything to players, but for the
+refusal message you write for bans: it raises documented server events, and your own resources decide
+what to do with them.
 
 > **Status: proof of concept.** Settings, the panel and the integration contract may still change
 > between versions.
@@ -20,8 +21,16 @@ documented server events, and your own resources decide what to do with them.
   probation, and a return to the last healthy build.
 - **Statistics and diagnostics.** Players, tick times, CPU and memory of FXServer and the host,
   FXServer's threads and connections, crash dumps and hangs.
+- **Live map.** Where the connected players stand, over a map image you add, coloured by play time,
+  a click away from their profile and a ban.
+- **Bans.** A ban holds a player's licence, other identifiers and hardware tokens, for a time or for
+  good. The server refuses a banned player at connection with your message, and drops one banned while
+  playing.
 - **Accounts and audit.** An owner and sub-users with fine-grained permissions, and an audit log of every
   action.
+- **Updates.** A newer release shows in the panel with its notes; the owner installs it in one click,
+  now or at the next scheduled restart, and Observer restarts into it, or back into the previous
+  version if the new one does not start.
 
 ## Install on Windows
 
@@ -132,10 +141,14 @@ configured, and again from **Server → Run the setup**. It has four steps:
    and the **First launch** checklist follows it: started, port open, licence accepted, Observer bridge
    connected, server ready. Without a build, **Save only** keeps the settings for later.
 
-The **Server** page holds the same settings, [hang detection](#hang-detection), and extra arguments
-that go on the command line as `+set <name> <value>` after the cfg. It refuses secrets there, since
-anyone on the host can read a command line: `sv_licenseKey`, passwords and connection strings belong in
-the cfg.
+The **Server** page holds the same settings, [hang detection](#hang-detection), and convars that go on
+the command line as `+set <name> <value>`. A name field suggests the convars FXServer declares, from a
+catalog read in its sources, and a convar picked there starts at its default; one the catalog does not
+know is passed as typed. FXServer applies every `+set` before it runs the cfg, wherever it stands on the
+command line, so a convar the cfg sets too keeps the cfg's value, OneSync's included: the page says
+where the cfg sets it and which value applies, and lists what only the cfg sets. It refuses secrets on
+the command line, since anyone on the host can read it: `sv_licenseKey`, passwords and connection
+strings belong in the cfg.
 
 Builds go to `data/artifacts/<build>/`. The **Artifacts** page lists the catalog, installs and imports
 builds, chooses the one FXServer runs, and cleans up old ones. A new build is on probation: until it has
@@ -177,7 +190,9 @@ The unit:
 
 - is `Type=notify`: systemd counts Observer as started once the panel answers, whatever FXServer does;
 - runs `<binary> --config <observer.toml> run` as that account, from the configuration's folder;
-- restarts Observer on failure, after 5 seconds;
+- restarts Observer on failure, after 5 seconds, and once it exits with 75 after installing an
+  update (`RestartForceExitStatus=75`, `SuccessExitStatus=75`); a unit printed before updates
+  existed restarts it too, as a failure;
 - on stop, sends SIGTERM to Observer alone, which stops FXServer gracefully, then the rest of the
   group (`KillMode=mixed`, `TimeoutStopSec=45`);
 - makes `/usr`, `/boot`, `/efi` and `/etc` read-only (`ProtectSystem=full`), with a private `/tmp`:
@@ -259,8 +274,11 @@ data/
 │   ├── .staging/          downloads and extractions in progress
 │   └── .trash/            deleted builds on their way out
 ├── crashes/               FXServer's crash dumps and hang snapshots: the last 10, 20 GiB at most
+├── map/                   the live map's image, as the owner gave it
 ├── tools/backups/         the originals of the files the server tools changed, each with a .json
 ├── database-backups/.work/ the game database's backup under way, emptied at every start
+├── updates/               the release being installed (staging/), how the last install ended
+│                          (last.json), and while one restarts Observer, handover.json
 └── fxserver.pid           Linux: the running FXServer, which the next start ends if Observer died
 ```
 
@@ -274,6 +292,7 @@ The backups are complete snapshots of the state database:
 | `daily` | at start when none is younger than a day, then once a day | 7 |
 | `pre-migration` | before a new version changes the database's schema | 3 |
 | `manual` | `observer db backup`, while Observer is stopped | 10 |
+| `pre-update` | just before an update swaps Observer's executable | 3 |
 
 ### Ports
 
@@ -285,16 +304,20 @@ The backups are complete snapshots of the state database:
 
 ### Outbound connections
 
-Observer itself only talks to Cfx.re, over HTTPS on port 443, when someone lists or installs builds
-from the panel, the setup or `observer artifacts`. It follows redirects only to the same hosts and
-ignores proxy settings. FXServer's own traffic is FXServer's. The database backups reach the
-database server and the SFTP hosts and S3 endpoints the owner adds as destinations, nothing else.
+Observer itself talks to Cfx.re, over HTTPS on port 443, when someone lists or installs builds from
+the panel, the setup or `observer artifacts`, and to GitHub, every 6 hours and when the owner checks
+or installs an update, unless [updates](#updates) are turned off. It follows redirects only to the
+same hosts and ignores proxy settings. FXServer's own traffic is FXServer's. The database backups
+reach the database server and the SFTP hosts and S3 endpoints the owner adds as destinations,
+nothing else.
 
 | Host | For |
 |---|---|
 | `docs.fivem.net` | the download page: recommended and latest builds |
 | `changelogs-live.fivem.net` | recommended and latest builds, end of support and end of life |
 | `runtime.fivem.net` | the build listings of each branch, and the archives |
+| `api.github.com` | Observer's latest release, without an account: 60 checks an hour per address |
+| `github.com`, `release-assets.githubusercontent.com`, `objects.githubusercontent.com` | a release's archive, its checksums and their signature |
 
 Cfx.re's [Platform License Agreement](https://fivem.net/terms) covers the server builds you download.
 
@@ -670,8 +693,8 @@ use the **Tools** page.
 ## Turning features off
 
 File access over SFTP (`sftp`), file changes (`changes`), the server tools (`tools`), the diagnostics
-(`diagnostics`), the statistics (`metrics`), the players (`players`) and the player drops (`drops`) can
-each be turned off. A feature that is off runs none of its code: Observer does not open its port, start
+(`diagnostics`), the statistics (`metrics`), the players (`players`), the player drops (`drops`) and
+the update checks (`updates`) can each be turned off. A feature that is off runs none of its code: Observer does not open its port, start
 its tasks or open its database, and its API routes answer `feature_disabled`. What it recorded stays on
 disk, and its retention waits until it runs again. Supervision, the console, accounts, the audit log,
 the restart schedule and FXServer's builds are always on.
@@ -689,7 +712,8 @@ what it opens: its port, its tasks, its files, its routes. Only the owner turns 
   reach the audit log, and the uploads a crash cut short still leave the server folder at Observer's
   start. While a fix of the server tools is applied, the work before each start still puts back what it
   took out once the copy it kept is gone, even with the tools off: undo the fixes first to turn the
-  tools off entirely.
+  tools off entirely. An update that restarted Observer is settled at its start, kept or undone, even
+  with updates turned off since.
 
 The host can keep features off whatever the panel says, the owner's account included, in
 `observer.toml`; `"off"` is the only value:
@@ -758,7 +782,92 @@ and the setup's last step: from the next start of FXServer, the bridge also rais
 such as `txAdmin:events:scheduledRestart` and `txAdmin:events:serverShuttingDown`, right after Observer's
 own. The contract maps each one.
 
+## Bans
+
+The staff bans a player from their profile on the Players page, or bans identifiers typed by hand on the
+Bans page, with a reason and a length: an hour, a day, a week, a month, any number of minutes, or for
+good. A ban holds the player's licence and every other identifier and hardware token their profile
+links to, so a second account that shares their tokens is refused too. The Bans page lists active, ended
+and lifted bans, and finds them by name, licence, reason or ban ID; finding them by another identifier
+takes **View player identifiers**. Lifting a ban takes a permission of its own and keeps the ban in the
+list, with who lifted it and why. Every ban and every lift is in the audit log.
+
+The bridge holds each connecting player on `playerConnecting` while Observer checks them, which takes
+milliseconds. A banned player is refused with the **refusal message** of the settings' Bans category,
+the only text Observer ever shows players: it can name the reason, when the ban ends and the ban ID to
+quote in an appeal. If Observer has not answered within 5 seconds, the player gets in, and Observer
+drops them once they joined if a ban holds them. A player banned while playing is dropped at once.
+By default one hardware token in common is enough to refuse a player; the settings can ask for more,
+or for none. Addresses are never matched: players behind one address would be refused together.
+
+Your resources hear of both through `observer:playerRefused` and `observer:playerBanned`, in the
+contract.
+
+## Live map
+
+The Live map page shows where the connected players stand, as the server sees them, so that the staff
+can follow the server without joining it. Each player is a mark coloured by play time: new under 10
+hours, regular, veteran from 100 hours, not confirmed yet before their identity is; the marks differ in
+shape too, and the settings' Live map category moves the thresholds. A click on a player gives their
+play time, session, ping and position, a link to their profile and, with **Ban players**, a ban. Seeing
+the map takes **See the live map**.
+
+Observer ships no map: GTA V's belongs to Rockstar Games. The owner gives, in the settings, the path of
+an image on the host they have the right to use, such as GTA V's atlas from their own copy of the game:
+PNG, JPEG or WebP, up to 16,384 pixels a side and 64 MB. Observer keeps a copy in its data folder
+(`map/`) and serves it only to accounts that see the map. To place it in the game, stand at two spots
+you know on the image, far apart, pick yourself in the list and click where you stand, or type the game
+coordinates of the image's four edges. Without an image, the page shows a grid of game coordinates.
+
+Positions come from the bridge, which reads them from OneSync: without OneSync there are none. The
+server sends them every 1, 2 or 5 seconds, only while someone has the page open, and stops within 30
+seconds after the last one leaves. Observer keeps them in memory only: nothing of them is written.
+
+## Updates
+
+Every 6 hours, Observer asks GitHub for the newest stable release. When it is newer, the owner sees
+**New release** at the foot of the rail, and the **Updates** card on the **About** page (the account
+menu) shows it with its notes. **Install** downloads it, verifies it, then restarts Observer into it.
+Only the owner installs a release, with the password asked again, and each step is in the audit log.
+
+- **What is verified, before anything runs.** A release carries `SHA256SUMS` and `SHA256SUMS.sig`,
+  the Ed25519 signature of the checksums by the release key, whose public half every Observer is
+  built with. The archive must match the signed checksum and the digest GitHub computed when it was
+  uploaded; then the new executable is run once, as `--version`, and must name the release. On
+  Windows, a signed `observer.exe` only gives way to one signed by the same signer. A release that
+  fails any of these is not installed, and the panel says which.
+- **FXServer.** It stops whenever Observer does. **Now** stops it with the usual notice to your
+  resources (`observer:shuttingDown`), and it starts again under the new release. **At the next
+  restart** waits for the schedule's next restart, a single one included: your resources hear its
+  warnings as usual, `observer:shuttingDown` says `scheduled`, and the restart takes a few seconds
+  longer. Plan a single restart on the **Restarts** page to update in a few minutes with notice.
+  FXServer comes back if it ran, whatever **Start FXServer with Observer** says; a stopped server
+  stays stopped.
+- **The swap.** Observer keeps the previous executable beside the new one, as `observer.previous`
+  (`observer.previous.exe`), and backs up its database (`pre-update`). The account running Observer
+  must be able to write next to its executable: under systemd, keep it out of `/usr` and `/etc`.
+- **The restart.** Under systemd, Observer exits with 75 and the unit starts it again. On Linux
+  otherwise, the new executable takes the place of the old in the same process. On Windows, the new
+  executable starts in the same console; a terminal Observer was started from gets its prompt back
+  while Observer goes on in it.
+- **When the new release does not start**, Observer puts the previous executable back, and its
+  database too if the new release had changed the database's schema, then starts it again. The
+  Updates card says so, with the reason. Once a new release has started, it stays: going back is done
+  by hand, as below.
+
+Updates never install by themselves. A build from source is not updated: it says so. Turn the checks
+off on the Settings page (**Features**), or in `observer.toml`: Observer then never contacts GitHub.
+
+To verify a release by hand, with OpenSSL 3 and the release key's public half in PEM:
+
+```sh
+sha256sum -c --ignore-missing SHA256SUMS
+openssl pkeyutl -verify -rawin -pubin -inkey release-key.pem -in SHA256SUMS -sigfile SHA256SUMS.sig
+```
+
 ## Upgrading
+
+Observer installs its releases itself (see [Updates](#updates)). By hand:
 
 1. Stop Observer: **Quit Observer…** in the tray, Ctrl+C in its console, or `sudo systemctl stop
    observer`. FXServer stops with it.
@@ -809,6 +918,11 @@ with hot reload and forwards `/api` to a running Observer (`OBSERVER_URL` names 
 `cargo xtask e2e` runs the browser tests against a debug Observer built with a test catalog, from which
 the flows install a build; a release never has that catalog, and `cargo xtask dist` refuses a binary
 that does.
+`cargo xtask convars` rewrites `crates/observer-domain/convars.json`, the catalog of FXServer's convars:
+it fetches the sources of citizenfx/fivem at a pinned commit with git (a shallow, sparse checkout under
+`target/fivem/`) and reads every convar the server components declare, with its type, default, values
+and flags. What the sources do not say stays empty. `--commit <sha> --build <n>` reads another build,
+`--source <checkout>` a checkout already there.
 
 ## Known limits
 

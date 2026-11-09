@@ -124,6 +124,7 @@ pub fn scan_cfg(folder: &Path, cfg_file: &str, system_resources: Option<PathBuf>
         probe_ports: false,
         system_resources,
         follow_outside: true,
+        convars: None,
     };
     let resources = server_data::walk(folder);
     Ok(cfg::scan(folder, cfg_file, &text, &resources, &context))

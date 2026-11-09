@@ -13,7 +13,7 @@ pub enum Error {
     FormatChanged { origin: Source, reason: String },
     #[error("the HTTP client cannot start: {0}")]
     Client(reqwest::Error),
-    #[error("{url} is not on a Cfx.re artifact host over HTTPS")]
+    #[error("{url} is not on a host Observer downloads from, over HTTPS")]
     UrlRefused { url: String },
     #[error("{url} redirects more than {} times", crate::http::MAX_REDIRECTS)]
     TooManyRedirects { url: String },
@@ -81,6 +81,36 @@ pub enum Error {
     Import { path: PathBuf, refusal: ImportRefusal },
     #[error("{} stays busy: another program holds a file in it", .0.display())]
     Busy(PathBuf),
+    #[error("GitHub refused more requests from this address for now")]
+    RateLimited { until: Option<jiff::Timestamp> },
+    #[error("GitHub's answer about the release is not one Observer reads: {}", Untrusted(.0))]
+    ReleaseFormat(String),
+    #[error("this build of Observer has no release key, so it cannot tell a genuine release")]
+    NoReleaseKey,
+    #[error("the release has no {name}")]
+    NoArchive { name: String },
+    #[error("the release carries no signature of its checksums")]
+    Unsigned,
+    #[error("the release's checksums are not signed with Observer's release key")]
+    BadSignature,
+    #[error("the release's signed checksums do not list {name}")]
+    NotListed { name: String },
+    #[error("{name} is not the archive the signed checksums describe (sha256 {downloaded}, listed {listed})")]
+    ChecksumMismatch {
+        name: String,
+        listed: String,
+        downloaded: String,
+    },
+    #[error("{name} is not the archive GitHub stores (sha256 {downloaded}, GitHub says {github})")]
+    DigestMismatch {
+        name: String,
+        github: String,
+        downloaded: String,
+    },
+    #[error("the new executable does not run as a release of Observer: {}", Untrusted(.0))]
+    WontRun(String),
+    #[error("the new executable is not signed as the running one is: {0}")]
+    ExecutableSignature(String),
 }
 
 /// What is wrong with a file a build must have.

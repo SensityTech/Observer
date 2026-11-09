@@ -37,6 +37,10 @@ impl Permissions {
     pub const BACKUPS_VIEW: Self = Self(1 << 19);
     pub const BACKUPS_RUN: Self = Self(1 << 20);
     pub const BACKUPS_DOWNLOAD: Self = Self(1 << 21);
+    pub const BANS_VIEW: Self = Self(1 << 22);
+    pub const PLAYERS_BAN: Self = Self(1 << 23);
+    pub const BANS_LIFT: Self = Self(1 << 24);
+    pub const PLAYERS_MAP: Self = Self(1 << 25);
 
     /// Every permission in the catalog, which is what the owner holds.
     pub fn all() -> Self {
@@ -422,6 +426,42 @@ pub const CATALOG: &[PermissionInfo] = &[
         danger: Danger::Critical,
         implies: Permissions::BACKUPS_VIEW,
     },
+    PermissionInfo {
+        bit: 22,
+        constant: "BANS_VIEW",
+        key: "bansView",
+        area: PermissionArea::Players,
+        // Who is banned, why and by whom, with their names and licences.
+        danger: Danger::Sensitive,
+        implies: Permissions::PLAYERS_VIEW,
+    },
+    PermissionInfo {
+        bit: 23,
+        constant: "PLAYERS_BAN",
+        key: "playersBan",
+        area: PermissionArea::Players,
+        // A ban keeps a player out and drops them if they are connected.
+        danger: Danger::Sensitive,
+        implies: Permissions::BANS_VIEW,
+    },
+    PermissionInfo {
+        bit: 24,
+        constant: "BANS_LIFT",
+        key: "bansLift",
+        area: PermissionArea::Players,
+        // Lifting anyone's ban lets back in whoever another member of the staff kept out.
+        danger: Danger::Sensitive,
+        implies: Permissions::BANS_VIEW,
+    },
+    PermissionInfo {
+        bit: 25,
+        constant: "PLAYERS_MAP",
+        key: "playersMap",
+        area: PermissionArea::Players,
+        // Where every connected player stands, a few times a minute.
+        danger: Danger::Sensitive,
+        implies: Permissions::PLAYERS_VIEW,
+    },
 ];
 
 #[cfg(test)]
@@ -458,6 +498,10 @@ mod tests {
             (19, "BACKUPS_VIEW", Permissions::BACKUPS_VIEW),
             (20, "BACKUPS_RUN", Permissions::BACKUPS_RUN),
             (21, "BACKUPS_DOWNLOAD", Permissions::BACKUPS_DOWNLOAD),
+            (22, "BANS_VIEW", Permissions::BANS_VIEW),
+            (23, "PLAYERS_BAN", Permissions::PLAYERS_BAN),
+            (24, "BANS_LIFT", Permissions::BANS_LIFT),
+            (25, "PLAYERS_MAP", Permissions::PLAYERS_MAP),
         ];
 
         assert_eq!(CATALOG.len(), frozen.len());

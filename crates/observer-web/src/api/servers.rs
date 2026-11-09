@@ -4,6 +4,7 @@ use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::{Extension, Json};
 use observer_app::{Caller, Servers};
+use observer_domain::convars::{CATALOG_JSON, CfgConvars};
 use observer_domain::launch::{LaunchChange, StoredLaunch};
 use observer_domain::server::{CommandAck, ConsoleCommand, LogFile};
 use observer_domain::server_data::{
@@ -36,6 +37,16 @@ pub(crate) async fn change_launch_settings(
         .change_launch_settings(&caller, Servers::DEFAULT, change.settings, change.version)
         .await?;
     Ok(Json(saved))
+}
+
+/// What the saved launch's cfg sets; null until the launch settings are saved.
+pub(crate) async fn cfg_convars(State(state): State<AppState>) -> Result<Json<Option<CfgConvars>>, Failure> {
+    Ok(Json(state.supervision.cfg_convars().await?))
+}
+
+/// The catalog this build carries, as the generator wrote it.
+pub(crate) async fn convar_catalog() -> Response {
+    ([(header::CONTENT_TYPE, "application/json")], CATALOG_JSON).into_response()
 }
 
 /// A refused folder is what the report says, not a failed request. A path never goes in a URL, so
