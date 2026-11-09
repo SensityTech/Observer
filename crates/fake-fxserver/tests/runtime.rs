@@ -12,9 +12,9 @@ use std::time::{Duration, Instant};
 use jiff::{SignedDuration, Timestamp, Unit};
 use observer_app::{
     Accounts, AuditLog, Bans, BansSetup, Caller, Client, Clock, DatabaseFiles, Diagnostics, DiagnosticsSetup,
-    DiagnosticsTask, Drops, DropsSetup, Error, LogQuery, Metrics, MetricsSetup, PasswordCost, Players,
-    PlayersSetup, PlayersTask, Running, Sampling, Schedule, ScheduleSetup, ScheduleTask, Servers, Setup,
-    Sources, Supervision,
+    DiagnosticsTask, Drops, DropsSetup, Error, LiveMap, LogQuery, MapSetup, Metrics, MetricsSetup,
+    PasswordCost, Players, PlayersSetup, PlayersTask, Running, Sampling, Schedule, ScheduleSetup,
+    ScheduleTask, Servers, Setup, Sources, Supervision,
 };
 use observer_domain::audit::{ActorKind, AuditAction, AuditEntry, AuditFilter, Outcome};
 use observer_domain::bans::{BanFilter, BanRequest};
@@ -1633,6 +1633,64 @@ Ban ID: {}",
         .map(|ban| (ban.code.clone(), ban.refused))
         .collect();
     assert_eq!(refusals, [(second.code.clone(), 1), (first.code.clone(), 1)]);
+}
+
+#[tokio::test]
+async fn the_map_places_the_connected_players_while_someone_watches_it() {
+    let mut observer = Observer::new(false).await;
+    let (metrics, sampling, players, playing) = follow_players(&observer).await;
+    let (map, mapping) = LiveMap::start(MapSetup {
+        db: observer.db.clone(),
+        clock: Clock::system(),
+        supervision: observer.supervision.clone(),
+        players: players.clone(),
+        data_dir: observer.dir.path().join("observer-data"),
+    });
+    observer.supervision.start_server(&observer.owner).await.unwrap();
+    observer.state(ServerState::Online).await;
+    for line in ["fake_join Ada", "fake_move 1 412.6 -1208.3 32.1"] {
+        observer
+            .supervision
+            .command(&observer.owner, line, CONSOLE_ROUTE.0, CONSOLE_ROUTE.1)
+            .await
+            .unwrap();
+    }
+    confirmed(&players, 1).await;
+
+    let (_, mut live, watching) = map.watch();
+    let placed = timeout(WAIT, async {
+        loop {
+            live.changed().await.unwrap();
+            let current = live.borrow_and_update().clone();
+            if !current.players.is_empty() {
+                return current;
+            }
+        }
+    })
+    .await
+    .expect("no position came while the map was watched");
+    drop(watching);
+    observer.supervision.stop_server(&observer.owner).await.unwrap();
+    observer.state(ServerState::Stopped).await;
+    mapping.close().await;
+    playing.close().await;
+    sampling.close().await;
+    metrics.close().await.unwrap();
+    observer.stop_observer().await;
+
+    let ada = &placed.players[0];
+    assert_eq!(ada.name.as_deref(), Some("Ada"));
+    assert!(ada.player.is_some());
+    assert_eq!((ada.x, ada.y, ada.z), (412.6, -1208.3, 32.1));
+    assert!(placed.onesync);
+    assert_eq!(placed.waiting, 0);
+    assert!(
+        !observer
+            .console()
+            .iter()
+            .any(|line| plain(&line.5).contains("observer_cmd positions")),
+        "the asks for positions fill the console"
+    );
 }
 
 #[tokio::test]

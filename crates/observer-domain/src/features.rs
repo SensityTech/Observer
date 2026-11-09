@@ -288,7 +288,8 @@ impl Feature {
             Self::Changes => &[Topic::ServerChanges],
             Self::Diagnostics => &[Topic::ServerDiagnostics, Topic::ServerAlerts],
             Self::Metrics => &[Topic::MetricsLive],
-            Self::Sftp | Self::Tools | Self::Players | Self::Drops => &[],
+            Self::Players => &[Topic::ServerMap],
+            Self::Sftp | Self::Tools | Self::Drops => &[],
         }
     }
 

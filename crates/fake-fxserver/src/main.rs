@@ -43,6 +43,9 @@
 //!   `playerConnecting`: it reports them and waits for Observer's verdict, `fake_verdict_ms`
 //!   (5000) at most, then lets them in as `fake_join` does, or refuses them; a verdict to drop a
 //!   connected player drops them with category 1, the bridge as the resource;
+//! - on stdin: `fake_move <id> <x> <y> <z>`, which puts a player at a position the bridge reports
+//!   while Observer asks for positions; the others go round a circle. With `onesync off` the bridge
+//!   reports no position, as it reads them from OneSync;
 //! - on stdin: `fake_crash [code]`, `fake_hang`, `fake_spin` (a busy loop), `fake_print <text>`,
 //!   `fake_trace <type>`, `fake_stall_input <ms>`, which stops reading stdin for a while, as
 //!   FXServer does while its main loop is stuck; `fake_spawn [NAME=value...] <program> <args...>`,
@@ -183,6 +186,13 @@ struct Bridge {
     contract: u64,
 }
 
+/// While Observer asks for positions: how often the bridge reports them, until when.
+struct Following {
+    every: Duration,
+    until: Instant,
+    next: Instant,
+}
+
 /// A player the bridge holds at `playerConnecting` until Observer's verdict on `request`.
 struct Waiting {
     request: u32,
@@ -193,6 +203,8 @@ struct Waiting {
 struct Fake {
     server: Arc<Server>,
     waiting: Vec<Waiting>,
+    following: Option<Following>,
+    placed: HashMap<u32, [f64; 3]>,
     last_request: u32,
     traces: Traces,
     endpoint: Option<String>,
@@ -227,6 +239,8 @@ fn main() {
             }),
             traces,
             waiting: Vec::new(),
+            following: None,
+            placed: HashMap::new(),
             last_request: 0,
             endpoint: None,
             bridge: None,
@@ -312,6 +326,7 @@ impl Fake {
             self.children
                 .retain_mut(|child| matches!(child.try_wait(), Ok(None)));
             self.admit_unanswered(now);
+            self.report_positions(now);
             self.beat(now);
             self.server.tick();
             thread::sleep(TICK);
@@ -389,6 +404,12 @@ impl Fake {
             ("fake_trace", Some(kind)) => self.trace(kind),
             ("fake_join", _) => self.join(args.first(), args.get(1), args.get(2)),
             ("fake_connecting", _) => self.connecting(args.first(), args.get(1), args.get(2)),
+            ("fake_move", Some(id)) => {
+                let coordinates: Vec<f64> = args[1..].iter().filter_map(|value| value.parse().ok()).collect();
+                if let (Ok(id), [x, y, z]) = (id.parse(), coordinates.as_slice()) {
+                    self.placed.insert(id, [*x, *y, *z]);
+                }
+            }
             ("fake_drop", Some(id)) => {
                 let category = args
                     .get(1)
@@ -555,6 +576,53 @@ impl Fake {
         });
     }
 
+    /// The players' positions, as the bridge reports them while Observer asks.
+    fn report_positions(&mut self, now: Instant) {
+        let Some(following) = self.following.as_mut() else {
+            return;
+        };
+        if now >= following.until {
+            self.following = None;
+            return;
+        }
+        if now < following.next {
+            return;
+        }
+        following.next = now + following.every;
+        let t = self.server.uptime_ms();
+        let onesync = self.server.convar("onesync").is_some_and(|value| value != "off");
+        let players: Vec<serde_json::Value> = if onesync {
+            self.server
+                .players()
+                .ids()
+                .into_iter()
+                .map(|id| {
+                    let [x, y, z] = self.placed.get(&id).copied().unwrap_or_else(|| {
+                        #[expect(clippy::cast_precision_loss, reason = "a test player's place on a circle")]
+                        let angle = t as f64 / 20_000.0 + f64::from(id);
+                        [400.0 * angle.cos() + 300.0, 400.0 * angle.sin() - 1200.0, 30.0]
+                    });
+                    json!({ "id": id, "x": x, "y": y, "z": z, "h": 90.0 })
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        for (index, page) in players.chunks(100).enumerate() {
+            let last = (index + 1) * 100 >= players.len();
+            self.bridge_report(&json!({
+                "type": "observer", "kind": "positions", "t": t, "onesync": onesync,
+                "page": index + 1, "last": last, "players": page,
+            }));
+        }
+        if players.is_empty() {
+            self.bridge_report(&json!({
+                "type": "observer", "kind": "positions", "t": t, "onesync": onesync,
+                "page": 1, "last": true, "players": [],
+            }));
+        }
+    }
+
     /// Who waited for a verdict longer than the bridge waits gets in.
     fn admit_unanswered(&mut self, now: Instant) {
         let (due, waiting): (Vec<Waiting>, Vec<Waiting>) = std::mem::take(&mut self.waiting)
@@ -640,6 +708,16 @@ impl Fake {
         let payload = &command["payload"];
         match command["action"].as_str() {
             Some("verdict") => self.verdict(&bridge, payload),
+            Some("positions") => {
+                let every = payload["everyMs"].as_u64().unwrap_or(2000).clamp(1000, 10_000);
+                let lasting = payload["forMs"].as_u64().unwrap_or(0).min(60_000);
+                let now = Instant::now();
+                self.following = (lasting > 0).then(|| Following {
+                    every: Duration::from_millis(every),
+                    until: now + Duration::from_millis(lasting),
+                    next: now,
+                });
+            }
             Some("drop") => {
                 let (Some(id), Some(message)) = (
                     payload["player"].as_u64().and_then(|id| u32::try_from(id).ok()),

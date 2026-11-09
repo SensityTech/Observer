@@ -20,6 +20,7 @@ pub mod features;
 pub mod files;
 pub mod launch;
 pub mod live;
+pub mod map;
 pub mod metrics;
 pub mod permissions;
 pub mod players;

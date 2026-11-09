@@ -11,7 +11,9 @@ how bans keep players out, and what you can rely on.
 The bridge is a server-side resource that Observer writes into the build's `system_resources` folder
 before every start of FXServer, and ensures before your cfg runs. Observer overwrites any change made
 to it. It reports the server's health to Observer, turns Observer's commands into server events, and refuses
-banned players. It has no client script and no UI.
+banned players. While someone has the panel's live map open, it also reads where each player stands,
+from OneSync, every 1 to 5 seconds, and reports it to Observer; it raises no event for it and stops
+within 30 seconds after the last one closes the map. It has no client script and no UI.
 
 Its name changes with every start of FXServer: Observer draws it at random, so that no script can
 target the bridge by a name known in advance. Read it from the `observer_bridge` convar, which

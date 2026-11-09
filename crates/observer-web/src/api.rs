@@ -14,6 +14,7 @@ mod diagnostics;
 mod drops;
 mod features;
 mod files;
+mod map;
 mod metrics;
 mod players;
 mod schedule;
@@ -99,6 +100,11 @@ pub(crate) fn routes() -> Vec<Route> {
     let lift = Permission(P::BANS_LIFT);
     let read_ban_settings = Permission(P::SETTINGS_VIEW);
     let change_ban_settings = Reauthenticated(P::SETTINGS_MANAGE);
+    // Where players stand is its own permission. The image comes from a host path, which is the
+    // owner's to read, with the password again; the calibration and colours are settings.
+    let map = Permission(P::PLAYERS_MAP);
+    let map_image = ReauthenticatedOwner;
+    let change_map = Reauthenticated(P::SETTINGS_MANAGE);
     // Statistics name nobody; the log, its export and reason groups are `PLAYERS_VIEW`'s.
     let drops = Permission(P::DROPS_VIEW);
     // What changed between starts: the history for its permission, the contents behind the critical
@@ -208,6 +214,11 @@ pub(crate) fn routes() -> Vec<Route> {
         route(M::PUT,    "/servers/default/players/settings",  erase,   players::change_settings),
         route(M::GET,    "/servers/default/players/import",    Owner,   players::import_status),
         route(M::POST,   "/servers/default/players/import",    erase,   players::import),
+        route(M::GET,    "/servers/default/players/map",           map,        map::view),
+        route(M::PUT,    "/servers/default/players/map/settings",  change_map, map::change_settings),
+        route(M::GET,    "/servers/default/players/map/image",     map,        map::image),
+        route(M::PUT,    "/servers/default/players/map/image",     map_image,  map::set_image),
+        route(M::DELETE, "/servers/default/players/map/image",     map_image,  map::remove_image),
         route(M::GET,    "/servers/default/players/{id}",      players, players::profile),
         route(M::GET,    "/servers/default/players/{id}/bans", bans,    bans::of_player),
         route(M::GET,    "/servers/default/bans",              bans,    bans::page),

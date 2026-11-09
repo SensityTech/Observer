@@ -21,6 +21,8 @@ what to do with them.
   probation, and a return to the last healthy build.
 - **Statistics and diagnostics.** Players, tick times, CPU and memory of FXServer and the host,
   FXServer's threads and connections, crash dumps and hangs.
+- **Live map.** Where the connected players stand, over a map image you add, coloured by play time,
+  a click away from their profile and a ban.
 - **Bans.** A ban holds a player's licence, other identifiers and hardware tokens, for a time or for
   good. The server refuses a banned player at connection with your message, and drops one banned while
   playing.
@@ -263,6 +265,7 @@ data/
 │   ├── .staging/          downloads and extractions in progress
 │   └── .trash/            deleted builds on their way out
 ├── crashes/               FXServer's crash dumps and hang snapshots: the last 10, 20 GiB at most
+├── map/                   the live map's image, as the owner gave it
 ├── tools/backups/         the originals of the files the server tools changed, each with a .json
 ├── database-backups/.work/ the game database's backup under way, emptied at every start
 └── fxserver.pid           Linux: the running FXServer, which the next start ends if Observer died
@@ -782,6 +785,26 @@ or for none. Addresses are never matched: players behind one address would be re
 
 Your resources hear of both through `observer:playerRefused` and `observer:playerBanned`, in the
 contract.
+
+## Live map
+
+The Live map page shows where the connected players stand, as the server sees them, so that the staff
+can follow the server without joining it. Each player is a mark coloured by play time: new under 10
+hours, regular, veteran from 100 hours, not confirmed yet before their identity is; the marks differ in
+shape too, and the settings' Live map category moves the thresholds. A click on a player gives their
+play time, session, ping and position, a link to their profile and, with **Ban players**, a ban. Seeing
+the map takes **See the live map**.
+
+Observer ships no map: GTA V's belongs to Rockstar Games. The owner gives, in the settings, the path of
+an image on the host they have the right to use, such as GTA V's atlas from their own copy of the game:
+PNG, JPEG or WebP, up to 16,384 pixels a side and 64 MB. Observer keeps a copy in its data folder
+(`map/`) and serves it only to accounts that see the map. To place it in the game, stand at two spots
+you know on the image, far apart, pick yourself in the list and click where you stand, or type the game
+coordinates of the image's four edges. Without an image, the page shows a grid of game coordinates.
+
+Positions come from the bridge, which reads them from OneSync: without OneSync there are none. The
+server sends them every 1, 2 or 5 seconds, only while someone has the page open, and stops within 30
+seconds after the last one leaves. Observer keeps them in memory only: nothing of them is written.
 
 ## Upgrading
 

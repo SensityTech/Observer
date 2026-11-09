@@ -40,6 +40,7 @@ impl Permissions {
     pub const BANS_VIEW: Self = Self(1 << 22);
     pub const PLAYERS_BAN: Self = Self(1 << 23);
     pub const BANS_LIFT: Self = Self(1 << 24);
+    pub const PLAYERS_MAP: Self = Self(1 << 25);
 
     /// Every permission in the catalog, which is what the owner holds.
     pub fn all() -> Self {
@@ -452,6 +453,15 @@ pub const CATALOG: &[PermissionInfo] = &[
         danger: Danger::Sensitive,
         implies: Permissions::BANS_VIEW,
     },
+    PermissionInfo {
+        bit: 25,
+        constant: "PLAYERS_MAP",
+        key: "playersMap",
+        area: PermissionArea::Players,
+        // Where every connected player stands, a few times a minute.
+        danger: Danger::Sensitive,
+        implies: Permissions::PLAYERS_VIEW,
+    },
 ];
 
 #[cfg(test)]
@@ -491,6 +501,7 @@ mod tests {
             (22, "BANS_VIEW", Permissions::BANS_VIEW),
             (23, "PLAYERS_BAN", Permissions::PLAYERS_BAN),
             (24, "BANS_LIFT", Permissions::BANS_LIFT),
+            (25, "PLAYERS_MAP", Permissions::PLAYERS_MAP),
         ];
 
         assert_eq!(CATALOG.len(), frozen.len());

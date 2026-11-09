@@ -90,7 +90,7 @@ describe('AppShell', () => {
         expect(moderator.getByRole('button', { name: en.online.show('0') })).not.toBeNull();
     });
 
-    it('should list the sections in their groups, the bans and the statistics after the players', async () => {
+    it('should list the sections in their groups, the map, the bans and the statistics after the players', async () => {
         const every = Object.values(Permission).reduce((mask, permission) => mask | permission, 0n);
         const { findByRole, getByRole } = shell({ ...OWNER, permissions: formatPermissions(every) });
         await findByRole('heading', { name: 'Overview' });
@@ -101,6 +101,7 @@ describe('AppShell', () => {
             en.nav.console,
             en.nav.schedule,
             en.nav.players,
+            en.nav.map,
             en.nav.bans,
             en.nav.statistics,
             en.nav.diagnostics,

@@ -203,6 +203,10 @@ const permissions = {
         name: 'Lift bans',
         description: 'Let a banned player back in, whoever banned them.',
     },
+    playersMap: {
+        name: 'See the live map',
+        description: 'Where every connected player stands, as the server sees it, a few times a minute.',
+    },
 } satisfies Record<PermissionKey, { name: string; description: string }>;
 
 const permissionNames = (hex: string) =>
@@ -443,6 +447,7 @@ export const en = {
         audit: 'Audit log',
         diagnostics: 'Diagnostics',
         players: 'Players',
+        map: 'Live map',
         bans: 'Bans',
         drops: 'Drops',
         changes: 'File changes',
@@ -1991,6 +1996,58 @@ export const en = {
             stopped: (at: string, written: number, read: number) =>
                 `The import of ${at} stopped after ${formatNumber('en', written)} of ${count(read, { one: 'player', other: 'players' })}. Import the file again to finish: what was written stays.`,
         },
+    },
+    map: {
+        title: 'Live map',
+        gloss: 'Where the connected players are, as the server sees them.',
+        players: (value: number) => count(value, { one: 'player', other: 'players' }),
+        placed: (placed: number, waiting: number) =>
+            waiting === 0
+                ? `${formatNumber('en', placed)} placed`
+                : `${formatNumber('en', placed)} placed · ${formatNumber('en', waiting)} waiting for their first position`,
+        legend: 'Colours by play time',
+        tiers: {
+            new: 'New',
+            regular: 'Regular',
+            veteran: 'Veteran',
+            unconfirmed: 'Not confirmed yet',
+        },
+        tierRange: {
+            new: (hours: number) => `under ${formatNumber('en', hours)} h`,
+            regular: (from: number, to: number) => `${formatNumber('en', from)}–${formatNumber('en', to)} h`,
+            veteran: (hours: number) => `${formatNumber('en', hours)} h and more`,
+        },
+        find: 'Find a player on the map',
+        noMatch: 'No player on the map matches.',
+        names: 'Names',
+        zoom: 'Zoom',
+        zoomIn: 'Zoom in',
+        zoomOut: 'Zoom out',
+        fit: 'Show every player',
+        selected: 'Selected player',
+        close: 'Close',
+        playTime: 'Play time',
+        session: 'This session',
+        ping: 'Ping',
+        position: 'Position',
+        profile: 'Profile',
+        ban: 'Ban…',
+        dot: (name: string, tier: string, playTime: string | null) =>
+            playTime === null ? `${name}, ${tier}` : `${name}, ${tier}, ${playTime}`,
+        unnamed: (netId: number) => `Player #${netId}`,
+        every: (seconds: number) =>
+            `Positions every ${count(seconds, { one: 'second', other: 'seconds' })}, sent only while someone has this page open.`,
+        updated: (ago: string) => `Updated ${ago} ago`,
+        waitingFirst: 'Waiting for the first positions…',
+        noImage: 'No map image yet: the grid shows game coordinates.',
+        notCalibrated: 'The map image is not placed in the game yet: the grid shows game coordinates.',
+        addImage: 'Add one in Settings',
+        placeImage: 'Place it in Settings',
+        noOneSync:
+            'Positions need OneSync, which this server does not run. Turn it on in the launch settings.',
+        stopped: 'The server is not running: no one is on the map.',
+        scale: (metres: string) => `${metres} m`,
+        unknownPing: 'unknown',
     },
     bans: {
         title: 'Bans',
@@ -4167,6 +4224,10 @@ export const en = {
                 name: 'Bans',
                 about: 'What a banned player reads, and how much of a ban they must show to be refused. Banning and lifting is on the Bans page.',
             },
+            map: {
+                name: 'Live map',
+                about: 'The map image of the Live map page, where it sits in the game, and the colours of the players on it.',
+            },
             restarts: {
                 name: 'Restarts',
                 about: 'When FXServer restarts by itself, and how long before your resources hear of it. Skipping or delaying one restart is on the Schedule page.',
@@ -4457,6 +4518,22 @@ export const en = {
                 label: 'Refusal message',
                 about: 'What a banned player reads when the server refuses them, or drops them: the only text Observer ever shows players. {reason}, {ends}, {id}, {name} and {by} are filled in.',
             },
+            mapImage: {
+                label: 'Map image',
+                about: "Observer ships no map: GTA V's belongs to Rockstar Games. Give the path of an image on this host that you have the right to use, such as GTA V's atlas from your own copy of the game: PNG, JPEG or WebP, up to 16,384 px a side and 64 MB. Observer keeps a copy in its data folder; only accounts that see the live map load it.",
+            },
+            mapBounds: {
+                label: 'Where the image sits in the game',
+                about: "The game coordinates of the image's edges. Stand somewhere you know on the image, pick yourself, then click where you stand; do it again far from the first spot. Or type the four edges.",
+            },
+            mapTiers: {
+                label: 'Colours by play time',
+                about: 'Play time Observer saw, plus what came from txAdmin. A player is new under the first threshold and a veteran from the second.',
+            },
+            mapCadence: {
+                label: 'Positions sent every',
+                about: 'The server reads positions only while someone has the map open, and stops within 30 seconds after the last one leaves. They need OneSync.',
+            },
             tokenMatches: {
                 label: 'Hardware tokens to match',
                 about: "How many of a ban's hardware tokens a player must show to be refused by them alone. Any identifier the ban holds refuses at once; 0 never refuses on tokens alone.",
@@ -4529,6 +4606,43 @@ export const en = {
         },
         builds: {
             openArtifacts: 'Open the Artifacts page',
+        },
+        map: {
+            openMap: 'Open the Live map',
+            path: 'Path on this host',
+            use: 'Use this image',
+            remove: 'Remove the image',
+            none: 'No image yet.',
+            image: (width: number, height: number, size: string, by: string, at: string) =>
+                `${formatNumber('en', width)} × ${formatNumber('en', height)} px · ${size} · added by ${by}, ${at}`,
+            added: 'Image added.',
+            removed: 'Image removed.',
+            ways: { players: 'Two players', edges: 'Edges' },
+            spot: (index: number) => (index === 1 ? 'First spot' : 'Second spot'),
+            pick: 'Who stands there',
+            pickNobody: 'Pick a connected player',
+            clickWhere: 'Then click where they stand on the image.',
+            standsAt: (name: string, x: string, y: string) => `${name} at ${x}, ${y}`,
+            onImage: (x: string, y: string) => `On the image: ${x}, ${y} px`,
+            notClicked: 'Not placed on the image yet',
+            apply: 'Place the image',
+            tooClose: 'The two spots are too close together: pick spots far apart, across the map.',
+            noOneOnline:
+                'No player is connected with a position: start the server and join it to place the image by players, or type the edges.',
+            edges: { west: 'West x', east: 'East x', south: 'South y', north: 'North y' },
+            calibrated: 'Placed',
+            notCalibrated: 'Not placed',
+            edgesInvalid: 'East must be greater than west and north greater than south.',
+            newUnder: 'New under',
+            veteranFrom: 'Veteran from',
+            hours: 'h',
+            tiersInvalid: 'The veteran threshold must be above the new one.',
+            seconds: (value: number) => `${formatNumber('en', value)} s`,
+            saved: 'Saved.',
+            discarded: 'Changes discarded.',
+            readOnly:
+                'Your account can read these; changing them takes the permission to change settings, and the image the owner.',
+            loadFailed: 'These settings could not be read.',
         },
         bans: {
             openBans: 'Open the Bans page',
@@ -4746,6 +4860,8 @@ export const en = {
             player_banned: 'Player banned',
             ban_lifted: 'Ban lifted',
             bans_settings_changed: 'Ban settings changed',
+            map_image_changed: 'Map image changed',
+            map_settings_changed: 'Live map settings changed',
             drop_rates_exported: 'Drop rates exported',
             drops_retention_changed: 'Drop retention changed',
             change_contents_viewed: 'Changed file read',
@@ -5217,6 +5333,21 @@ export const en = {
                   ? 'A ban lasts from one minute to ten years, or for good.'
                   : 'Give at least one valid identifier, 64 at most. Addresses are never banned.';
         },
+        invalid_map_image: (params) => {
+            const problem = stringParam(params, 'problem');
+            return problem === 'missing'
+                ? 'Nothing is at this path on the host.'
+                : problem === 'tooLarge'
+                  ? 'This image is over 64 MB, or over 16,384 px a side.'
+                  : problem === 'notLocal'
+                    ? 'Give the full path of a file on this host, not a network share or a relative path.'
+                    : problem === 'unreadable'
+                      ? 'Observer cannot read this file: check its permissions.'
+                      : 'This file is not a PNG, JPEG or WebP image.';
+        },
+        no_map_image: 'No map image is set.',
+        invalid_map_settings:
+            'Some settings are out of range: the thresholds must be ordered, the cadence 1, 2 or 5 seconds, and the edges must enclose an area.',
         invalid_bans_settings: (params) =>
             typeof params.maxMessage === 'number' && typeof params.maxTokens === 'number'
                 ? `Write a refusal message of ${formatNumber('en', params.maxMessage)} characters at most, and ask for 0 to ${formatNumber('en', params.maxTokens)} tokens.`

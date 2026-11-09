@@ -19,6 +19,11 @@ local RESOURCE_EVENTS_MAX = 64
 -- checks them again once they joined.
 local VERDICT_WAIT_MS = 5000
 local VERDICT_POLL_MS = 50
+-- While someone watches the live map: how often positions go out, at most, and how long one ask
+-- of Observer lasts before it must ask again.
+local POSITIONS_EVERY_MIN_MS = 1000
+local POSITIONS_EVERY_MAX_MS = 10000
+local POSITIONS_FOR_MAX_MS = 60000
 
 -- The events Observer may raise, and nothing else.
 local EVENTS = {
@@ -217,6 +222,59 @@ AddEventHandler('playerConnecting', function(name, setKickReason, deferrals)
     deferrals.done()
 end)
 
+-- Where the players stand, read from OneSync's entities: without it the server has no position.
+local positionsEvery = 2000
+local positionsUntil = 0
+local positionsFollowing = false
+
+local function tenth(value)
+    return math.floor(value * 10 + 0.5) / 10
+end
+
+local function reportPositions()
+    local t = GetGameTimer()
+    if GetConvar('onesync', 'off') == 'off' then
+        report('positions', { t = t, onesync = false, page = 1, last = true, players = {} })
+        return
+    end
+    local players = GetPlayers()
+    local pages = math.max(1, math.ceil(#players / PLAYERS_PAGE))
+    for page = 1, pages do
+        local entries = {}
+        for index = (page - 1) * PLAYERS_PAGE + 1, math.min(page * PLAYERS_PAGE, #players) do
+            local id = tonumber(players[index])
+            local ped = id and GetPlayerPed(id) or 0
+            -- No ped yet while the player loads.
+            if ped ~= 0 then
+                local coords = GetEntityCoords(ped)
+                entries[#entries + 1] = {
+                    id = id,
+                    x = tenth(coords.x),
+                    y = tenth(coords.y),
+                    z = tenth(coords.z),
+                    h = tenth(GetEntityHeading(ped)),
+                }
+            end
+        end
+        report('positions', { t = t, onesync = true, page = page, last = page == pages, players = entries })
+    end
+end
+
+-- One thread at most, which ends once Observer stopped asking.
+local function followPositions()
+    if positionsFollowing then
+        return
+    end
+    positionsFollowing = true
+    CreateThread(function()
+        while GetGameTimer() < positionsUntil do
+            reportPositions()
+            Wait(positionsEvery)
+        end
+        positionsFollowing = false
+    end)
+end
+
 -- What Observer has the bridge do itself, and nothing else.
 local ACTIONS = {
     verdict = function(payload)
@@ -233,6 +291,14 @@ local ACTIONS = {
             TriggerEvent('observer:playerBanned', payload.event)
         end
         DropPlayer(tostring(id), payload.message)
+    end,
+    positions = function(payload)
+        if type(payload.everyMs) ~= 'number' or type(payload.forMs) ~= 'number' then
+            return
+        end
+        positionsEvery = math.max(POSITIONS_EVERY_MIN_MS, math.min(POSITIONS_EVERY_MAX_MS, math.floor(payload.everyMs)))
+        positionsUntil = GetGameTimer() + math.max(0, math.min(POSITIONS_FOR_MAX_MS, math.floor(payload.forMs)))
+        followPositions()
     end,
 }
 

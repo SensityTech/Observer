@@ -65,11 +65,12 @@ impl SystemLine {
         match self {
             Self::Quit(_) => Some(self.render()),
             Self::Bridge(event) => Some(format!("observer_cmd {}", event.name())),
-            // Verdicts come one per connection: the console would fill with them.
+            // Verdicts come one per connection and positions every few seconds: the console would
+            // fill with them.
             Self::SetPerfUser
             | Self::SetPerfPassword(_)
             | Self::SetPlayersToken(_)
-            | Self::Action(BridgeAction::Verdict { .. }) => None,
+            | Self::Action(BridgeAction::Verdict { .. } | BridgeAction::Positions { .. }) => None,
             Self::Action(action) => Some(format!("observer_cmd {}", action.name())),
         }
     }

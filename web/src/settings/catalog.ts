@@ -34,6 +34,10 @@ export type SettingId =
     | 'backupsLast'
     | 'refusalMessage'
     | 'tokenMatches'
+    | 'mapImage'
+    | 'mapBounds'
+    | 'mapTiers'
+    | 'mapCadence'
     | 'switchSftp'
     | 'switchChanges'
     | 'switchTools'
@@ -79,6 +83,7 @@ export type CategoryId =
     | 'builds'
     | 'backups'
     | 'bans'
+    | 'map'
     | 'features'
     | 'data'
     | 'tools'
@@ -159,6 +164,17 @@ export const CATEGORIES: readonly Category[] = [
         settings: [
             { id: 'refusalMessage', applies: 'now' },
             { id: 'tokenMatches', applies: 'now' },
+        ],
+    },
+    {
+        id: 'map',
+        group: 'server',
+        access: ['SettingsView', 'PlayersMap'],
+        settings: [
+            { id: 'mapImage' },
+            { id: 'mapBounds', applies: 'now' },
+            { id: 'mapTiers', applies: 'now' },
+            { id: 'mapCadence', applies: 'now' },
         ],
     },
     {

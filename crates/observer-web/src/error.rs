@@ -69,6 +69,7 @@ fn status(code: ErrorCode) -> StatusCode {
         | ErrorCode::StartNotFound
         | ErrorCode::PlayerNotFound
         | ErrorCode::BanNotFound
+        | ErrorCode::NoMapImage
         | ErrorCode::FeatureDisabled => StatusCode::NOT_FOUND,
         ErrorCode::ContentNotKept => StatusCode::GONE,
         ErrorCode::Conflict
@@ -117,6 +118,7 @@ fn status(code: ErrorCode) -> StatusCode {
         | ErrorCode::InvalidAccess
         | ErrorCode::DiffTooLarge
         | ErrorCode::InvalidPlayersFile
+        | ErrorCode::InvalidMapImage
         | ErrorCode::InvalidDropsSettings => StatusCode::UNPROCESSABLE_ENTITY,
         ErrorCode::JsonRequired => StatusCode::UNSUPPORTED_MEDIA_TYPE,
         ErrorCode::UnknownHost => StatusCode::MISDIRECTED_REQUEST,
@@ -137,6 +139,7 @@ fn status(code: ErrorCode) -> StatusCode {
         | ErrorCode::InvalidPlayersSettings
         | ErrorCode::InvalidBan
         | ErrorCode::InvalidBansSettings
+        | ErrorCode::InvalidMapSettings
         | ErrorCode::InvalidBackupSettings
         | ErrorCode::InvalidBackupDestination => StatusCode::BAD_REQUEST,
         ErrorCode::TooManyAttempts
