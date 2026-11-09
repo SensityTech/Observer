@@ -1,6 +1,7 @@
 import { Clock, OctagonX, Package, RotateCw, Users, Zap, type LucideIcon } from 'lucide-react';
 import { useEffect, useRef } from 'react';
 
+import { Mark } from '../components/Mark';
 import { useI18n } from '../i18n/I18nProvider';
 import type { Messages } from '../i18n/en';
 import { ditherField } from './dither';
@@ -49,17 +50,7 @@ export function Stage() {
                         <div className="signin-dither-still" />
                     </div>
                     <span className="signin-core">
-                        <svg viewBox="0 0 24 24">
-                            <circle
-                                cx="12"
-                                cy="12"
-                                r="6.25"
-                                fill="none"
-                                stroke="currentColor"
-                                strokeWidth="2"
-                            />
-                            <circle cx="12" cy="12" r="2.25" fill="currentColor" />
-                        </svg>
+                        <Mark />
                     </span>
                     <span className="signin-tag signin-tag-tick tint-success">
                         <span className="signin-swatch" />
@@ -116,17 +107,7 @@ function Ticks({ copy = false }: { copy?: boolean }) {
                         stage.ownerInitials
                     ) : (
                         <>
-                            <svg viewBox="0 0 24 24" aria-hidden="true">
-                                <circle
-                                    cx="12"
-                                    cy="12"
-                                    r="6.25"
-                                    fill="none"
-                                    stroke="var(--ink)"
-                                    strokeWidth="2"
-                                />
-                                <circle cx="12" cy="12" r="2.25" fill="var(--accent)" />
-                            </svg>
+                            <Mark />
                             <span className="sr-only">{stage.observer}</span>
                         </>
                     )}

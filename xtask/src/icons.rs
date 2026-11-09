@@ -1,6 +1,7 @@
-//! `cargo xtask icons`: the mark of the design (a rounded tile, a ring, a dot) drawn at every size
+//! `cargo xtask icons`: the mark of the design (a ring and the bead on it, on a rounded tile) drawn at every size
 //! Windows asks an executable for, without a rasteriser.
 
+use std::f64::consts::FRAC_1_SQRT_2;
 use std::fs;
 use std::io::{Read, Write};
 use std::path::Path;
@@ -18,10 +19,13 @@ const WINDOW_SIZE: u32 = 64;
 /// Samples per pixel along each axis.
 const SUPERSAMPLING: u32 = 4;
 
-/// The light theme's ink, page and accent.
+/// The light theme's ink for the tile, then the dark theme's ink and accent on it.
 const TILE: [u8; 3] = [0x1C, 0x1D, 0x1F];
-const RING: [u8; 3] = [0xFF, 0xFF, 0xFF];
-const DOT: [u8; 3] = [0x1F, 0x5B, 0xEA];
+const RING: [u8; 3] = [0xF5, 0xF5, 0xF5];
+const BEAD: [u8; 3] = [0x4D, 0x8D, 0xFF];
+
+/// The bead's centre: on the ring's middle line, top right.
+const BEAD_AT: (f64, f64) = (12.0 + 7.5 * FRAC_1_SQRT_2, 12.0 - 7.5 * FRAC_1_SQRT_2);
 
 const ICO: &str = "crates/observer/assets/observer.ico";
 const RGBA: &str = "crates/observer/assets/mark-64.rgba";
@@ -56,7 +60,8 @@ pub fn run(root: &Path, check: bool) -> anyhow::Result<()> {
 }
 
 /// The mark at `size` pixels, as straight RGBA rows from the top. The design draws it on a grid
-/// of 24 units: a tile with corners of 6, a ring of radius 6.25 and stroke 2, a dot of 2.25.
+/// of 24 units: a tile with corners of 6, a ring of radius 7.5 and stroke 3, a bead of 3 on it at
+/// 45°, and the ring cleared 1.5 around the bead.
 pub fn mark(size: u32) -> Vec<u8> {
     let unit = 24.0 / f64::from(size);
     let samples = f64::from(SUPERSAMPLING * SUPERSAMPLING);
@@ -95,10 +100,10 @@ pub fn mark(size: u32) -> Vec<u8> {
 
 /// The colour of the topmost shape at a point of the 24-unit grid, if any.
 fn colour_at(x: f64, y: f64) -> Option<[u8; 3]> {
-    let from_centre = (x - 12.0).hypot(y - 12.0);
-    if from_centre <= 2.25 {
-        Some(DOT)
-    } else if (from_centre - 6.25).abs() <= 1.0 {
+    let from_bead = (x - BEAD_AT.0).hypot(y - BEAD_AT.1);
+    if from_bead <= 3.0 {
+        Some(BEAD)
+    } else if from_bead >= 4.5 && ((x - 12.0).hypot(y - 12.0) - 7.5).abs() <= 1.5 {
         Some(RING)
     } else if rounded_square(x, y, 24.0, 6.0) <= 0.0 {
         Some(TILE)
@@ -230,13 +235,16 @@ mod tests {
     }
 
     #[test]
-    fn the_mark_has_its_dot_in_the_middle_its_ring_around_and_clear_corners() {
+    fn the_mark_has_its_bead_top_right_on_its_ring_cleared_around_it_and_clear_corners() {
         let image = mark(64);
 
-        assert_eq!(pixel(&image, 64, 32, 32), [0x1F, 0x5B, 0xEA, 255]);
-        // The ring's middle line, 6.25 units out: 16.7 pixels at 64.
-        assert_eq!(pixel(&image, 64, 32, 15), [255, 255, 255, 255]);
-        assert_eq!(pixel(&image, 64, 32, 4), [0x1C, 0x1D, 0x1F, 255]);
+        // The bead's centre, at 17.3 by 6.7 units: 46.1 by 17.9 pixels at 64.
+        assert_eq!(pixel(&image, 64, 46, 17), [0x4D, 0x8D, 0xFF, 255]);
+        // The ring's middle line on the left, 4.5 units in: 12 pixels at 64.
+        assert_eq!(pixel(&image, 64, 12, 32), [0xF5, 0xF5, 0xF5, 255]);
+        // On the ring's middle line, between 3 and 4.5 units from the bead: cleared to the tile.
+        assert_eq!(pixel(&image, 64, 51, 26), [0x1C, 0x1D, 0x1F, 255]);
+        assert_eq!(pixel(&image, 64, 32, 32), [0x1C, 0x1D, 0x1F, 255]);
         assert_eq!(pixel(&image, 64, 0, 0)[3], 0);
     }
 

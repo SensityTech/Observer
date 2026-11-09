@@ -1,6 +1,7 @@
 //! The status window. It opens on its own thread at every start of `observer run`, and again
 //! from the tray after it was closed: closing it leaves Observer running.
 
+use std::f32::consts::FRAC_1_SQRT_2;
 use std::io;
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, TryRecvError};
@@ -627,13 +628,15 @@ fn button(ui: &mut Ui, palette: &Palette, label: &str, kind: Kind, off: Option<&
     response
 }
 
-/// The design's mark: an ink tile, a ring the colour of the page, an accent dot. It follows the
-/// theme, as the panel's logo does.
+/// The design's mark on its 24-unit grid: an ink ring and the accent bead on it, top right, the
+/// ring cleared to the page around the bead. It follows the theme, as the panel's logo does.
 fn paint_mark(painter: &Painter, rect: Rect, palette: &Palette) {
+    let unit = rect.width() / 24.0;
     let centre = rect.center();
-    painter.rect_filled(rect, CornerRadius::same(6), palette.ink);
-    painter.circle_stroke(centre, 6.25, Stroke::new(2.0, palette.bg));
-    painter.circle_filled(centre, 2.25, palette.accent);
+    let bead = centre + Vec2::new(1.0, -1.0) * (7.5 * FRAC_1_SQRT_2 * unit);
+    painter.circle_stroke(centre, 7.5 * unit, Stroke::new(3.0 * unit, palette.ink));
+    painter.circle_filled(bead, 4.5 * unit, palette.bg);
+    painter.circle_filled(bead, 3.0 * unit, palette.accent);
 }
 
 fn paint_led(ui: &mut Ui, palette: &Palette, led: Led) {

@@ -3,6 +3,7 @@ import { Check, ChevronDown, Moon, Sun } from 'lucide-react';
 import type { ReactNode } from 'react';
 
 import { buttonVariants } from '../components/Button';
+import { Mark } from '../components/Mark';
 import { PlainHttpNotice } from '../components/PlainHttpNotice';
 import { useI18n } from '../i18n/I18nProvider';
 import { LOCALES, type Locale } from '../i18n/locales';
@@ -33,11 +34,7 @@ export function SignInLayout({ eyebrow, title, tone, lead, children }: SignInLay
             <header className="signin-head-row">
                 <div className="signin-rail signin-head">
                     <Link to="/" className="signin-logo" aria-label={t.signIn.home}>
-                        <svg viewBox="0 0 24 24" width="28" height="28" aria-hidden="true">
-                            <rect width="24" height="24" rx="6" fill="var(--ink)" />
-                            <circle cx="12" cy="12" r="6.25" fill="none" stroke="var(--bg)" strokeWidth="2" />
-                            <circle cx="12" cy="12" r="2.25" fill="var(--accent)" />
-                        </svg>
+                        <Mark size={28} />
                         <span>{t.app.name}</span>
                     </Link>
                     <fieldset className="signin-prefs" aria-label={t.signIn.preferences}>
