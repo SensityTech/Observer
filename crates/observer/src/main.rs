@@ -184,7 +184,7 @@ async fn perform(
         Command::Run(args) => {
             return match run::run(config, args).await? {
                 run::Exit::Stopped => Ok(ExitCode::SUCCESS),
-                run::Exit::Relaunch(relaunch) => Ok(update::relaunch(relaunch)),
+                run::Exit::Relaunch(relaunch) => Ok(update::relaunch(&relaunch)),
             };
         }
         Command::Db(DbCommand::Check) => db::check(&config).await,

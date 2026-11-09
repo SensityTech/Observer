@@ -225,7 +225,7 @@ async fn restore_if_migrated(paths: &DataPaths, backup: &Path) -> anyhow::Result
 }
 
 /// Starts what `relaunch` names, the way this host starts Observer again.
-pub fn relaunch(relaunch: Relaunch) -> ExitCode {
+pub fn relaunch(relaunch: &Relaunch) -> ExitCode {
     if std::env::var_os("NOTIFY_SOCKET").is_some() {
         return ExitCode::from(RESTART_CODE);
     }
@@ -251,8 +251,8 @@ pub fn relaunch(relaunch: Relaunch) -> ExitCode {
                 return ExitCode::FAILURE;
             }
         };
-        if let Some(data_dir) = relaunch.watch {
-            watch(child, &data_dir, &relaunch.executable, command);
+        if let Some(data_dir) = &relaunch.watch {
+            watch(child, data_dir, &relaunch.executable, command);
         }
         ExitCode::SUCCESS
     }
