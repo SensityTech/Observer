@@ -21,11 +21,26 @@ import { ToolsPage } from './ToolsPage';
 
 // The page links to its settings; no router runs here.
 vi.mock('@tanstack/react-router', () => ({
-    Link: ({ children, className }: { children: ReactNode; className?: string }) => (
-        <a href="/settings/tools" className={className}>
-            {children}
-        </a>
-    ),
+    Link: ({
+        to,
+        params,
+        hash,
+        children,
+        className,
+    }: {
+        to: string;
+        params?: Record<string, string>;
+        hash?: string;
+        children: ReactNode;
+        className?: string;
+    }) => {
+        const path = to.replace(/\$(\w+)/g, (_, name: string) => params?.[name] ?? '');
+        return (
+            <a href={hash === undefined ? path : `${path}#${hash}`} className={className}>
+                {children}
+            </a>
+        );
+    },
 }));
 
 const words = en.tools;
@@ -436,10 +451,12 @@ describe('ToolsPage', () => {
         const fix = () => button(words.archetypes.fix)(within(card));
 
         expect(fix().disabled).toBe(true);
-        expect(within(card).getByText(words.stopFirst)).not.toBeNull();
+        expect(within(card).getByText(words.archetypes.fixWaits(1))).not.toBeNull();
 
         becomes('stopped');
         expect(fix().disabled).toBe(false);
+        expect(within(card).queryByText(words.archetypes.fixWaits(1))).toBeNull();
+        expect(within(card).getByText(words.archetypes.fixPlan(1, 1, 1))).not.toBeNull();
         fireEvent.click(fix());
 
         expect(await findByText(words.archetypes.fixed(1, 1))).not.toBeNull();
@@ -768,6 +785,11 @@ describe('ToolsPage', () => {
         expect(getByText('bzzz_camp_tent')).not.toBeNull();
         // A scan works while FXServer runs; the fix it plans waits for it to stop.
         expect(button(words.archetypes.fix)(within(card)).disabled).toBe(true);
-        expect(within(card).getByText(words.stopFirst)).not.toBeNull();
+        expect(within(card).getByText(words.archetypes.fixWaits(1))).not.toBeNull();
+        // The two it leaves are named with the way to the settings that decide of them.
+        expect(within(card).getByText(words.archetypes.leftHint(2))).not.toBeNull();
+        expect(
+            within(card).getByRole('link', { name: words.archetypes.openSettings }).getAttribute('href'),
+        ).toBe('/settings/tools#setting-toolDifferences');
     });
 });

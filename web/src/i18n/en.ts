@@ -3222,6 +3222,11 @@ export const en = {
             fix: 'Fix',
             fixPlan: (groups: number, removals: number, files: number) =>
                 `Fix takes ${count(removals, { one: 'copy', other: 'copies' })} out of ${count(files, { one: 'file', other: 'files' })}, for ${count(groups, { one: 'duplicate', other: 'duplicates' })}.`,
+            fixWaits: (groups: number) =>
+                `${count(groups, { one: 'duplicate is', other: 'duplicates are' })} ready to fix, and FXServer is running: the tools change files only while it is stopped. Stop FXServer, then press Fix.`,
+            leftHint: (groups: number) =>
+                `${count(groups, { one: 'duplicate is', other: 'duplicates are' })} left as found, each for the reasons its row gives. The settings decide two of them: copies that differ, and resources under the asset escrow.`,
+            openSettings: 'Open the tool’s settings',
             noReport: 'Scan first: Fix applies the plan of the last report.',
             nothingToFix: 'The last report has nothing to fix.',
             applied: "The last report's fixes are written. Scan now to see what is left.",

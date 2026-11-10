@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Copy, ScanSearch, Wrench } from 'lucide-react';
+import { Link } from '@tanstack/react-router';
+import { ArrowRight, Copy, ScanSearch, Wrench } from 'lucide-react';
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 
 import { ApiError } from '../api/client';
@@ -26,6 +27,7 @@ import { errorMessage } from '../i18n/errors';
 import { useI18n } from '../i18n/I18nProvider';
 import type { Messages } from '../i18n/en';
 import { useServerStatus } from '../server/context';
+import { anchorOf } from '../settings/catalog';
 import { MovedSettings } from '../settings/Moved';
 import { FilesCard, type Outcome } from '../tools/FilesCard';
 import { GroupsCard } from '../tools/GroupsCard';
@@ -205,6 +207,9 @@ function DuplicateArchetypes({ view }: { view: ToolView }) {
                 : fixable === 0
                   ? words.nothingToFix
                   : blocked;
+    // The plan is ready and only the running server holds it back: said as what to do next.
+    const waiting = fixReason !== null && fixReason === blocked && status !== null;
+    const left = report === null ? 0 : report.counts.groups - report.counts.groupsFixed;
 
     // A button that goes away or turns disabled leaves the keyboard on the body: it moves to the
     // notice saying what happened.
@@ -255,18 +260,36 @@ function DuplicateArchetypes({ view }: { view: ToolView }) {
                 }
             >
                 <div className="flex max-w-3xl min-w-0 flex-col gap-5">
+                    <p className="text-body text-ink-2">{words.about}</p>
                     <div className="flex flex-col gap-2">
-                        <p className="text-body text-ink-2">{words.about}</p>
-                        <p id={`${id}-fix`} className="text-small text-ink-3">
-                            {fixReason ??
-                                (report === null
-                                    ? null
-                                    : words.fixPlan(
-                                          fixable,
-                                          report.counts.removals,
-                                          report.counts.filesChanged,
-                                      ))}
-                        </p>
+                        <Notice live={false} tone={waiting ? 'warning' : 'neutral'}>
+                            <span id={`${id}-fix`}>
+                                {waiting
+                                    ? words.fixWaits(fixable)
+                                    : (fixReason ??
+                                      (report === null
+                                          ? null
+                                          : words.fixPlan(
+                                                fixable,
+                                                report.counts.removals,
+                                                report.counts.filesChanged,
+                                            )))}
+                            </span>
+                        </Notice>
+                        {left > 0 && !stale && (
+                            <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-small text-ink-2">
+                                {words.leftHint(left)}
+                                <Link
+                                    to="/settings/$category"
+                                    params={{ category: 'tools' }}
+                                    hash={anchorOf('toolDifferences')}
+                                    className="inline-flex items-center gap-1 font-medium text-ink underline-offset-2 hover:underline max-md:min-h-11"
+                                >
+                                    {words.openSettings}
+                                    <ArrowRight size={14} strokeWidth={1.5} aria-hidden="true" />
+                                </Link>
+                            </p>
+                        )}
                     </div>
                     {notice !== null && (
                         <Notice ref={noticeRef} tabIndex={-1} tone={notice.tone}>
