@@ -11,6 +11,11 @@ import { SEA, TILES_BOUNDS, TILES_WORLD, tilesIn, type TileStyle } from './tiles
 /** A player as the map draws them: where, in which colour, and what a reader hears. */
 export type Dot = { id: number; x: number; y: number; tier: Tier; name: string; label: string };
 
+/** Where a player went, in game coordinates, the oldest place first. */
+export type Trail = { id: number; points: readonly { x: number; y: number }[] };
+
+const NO_TRAILS: readonly Trail[] = [];
+
 /** The marks of each colour, which also differ in shape: a colour never says it alone. */
 export const TIER_MARK: Record<Tier, string> = {
     new: 'size-3 rounded-full border-[2.5px] border-warning bg-surface',
@@ -39,6 +44,7 @@ export function MapCanvas({
     image,
     bounds,
     dots,
+    trails = NO_TRAILS,
     selected,
     names,
     focus,
@@ -55,6 +61,8 @@ export function MapCanvas({
     /** Where the image's edges lie in the game; null draws the grid. */
     bounds: MapBounds | null;
     dots: Dot[];
+    /** Drawn under the marks, the selected player's stronger. */
+    trails?: readonly Trail[];
     selected: number | null;
     names: boolean;
     /** A player to bring into view, and a count that changes each time it is asked. */
@@ -118,7 +126,7 @@ export function MapCanvas({
     );
 
     const worldOf = useCallback(
-        (dot: Dot) => {
+        (dot: { x: number; y: number }) => {
             const fraction = toFraction(area, dot.x, dot.y);
             return { x: fraction.x * world.width, y: fraction.y * world.height };
         },
@@ -265,7 +273,7 @@ export function MapCanvas({
     }, []);
 
     const shown = view ?? { scale: 0, x: 0, y: 0 };
-    const screen = (dot: Dot) => {
+    const screen = (dot: { x: number; y: number }) => {
         const point = worldOf(dot);
         return { left: shown.x + point.x * shown.scale, top: shown.y + point.y * shown.scale };
     };
@@ -308,6 +316,30 @@ export function MapCanvas({
             )}
             {view !== null && tiles === null && !placed && (
                 <Grid view={view} world={world} area={area} size={size} />
+            )}
+            {view !== null && trails.length > 0 && (
+                <svg aria-hidden="true" className="pointer-events-none absolute inset-0 size-full">
+                    {trails
+                        .filter((trail) => trail.points.length > 1)
+                        .map((trail) => (
+                            <polyline
+                                key={trail.id}
+                                points={trail.points
+                                    .map((point) => {
+                                        const { left, top } = screen(point);
+                                        return `${left.toFixed(1)},${top.toFixed(1)}`;
+                                    })
+                                    .join(' ')}
+                                fill="none"
+                                stroke="var(--accent)"
+                                strokeWidth={trail.id === selected ? 2.5 : 1.5}
+                                strokeOpacity={trail.id === selected ? 0.95 : 0.55}
+                                strokeDasharray="1 5"
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                            />
+                        ))}
+                </svg>
             )}
             {view !== null &&
                 dots.map((dot) => {

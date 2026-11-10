@@ -66,6 +66,36 @@ describe('MapCanvas', () => {
         expect(screen.queryByText('Ruby Vex')).toBeNull();
     });
 
+    it('should draw each trail of two places or more under the marks, ending where its player stands', async () => {
+        draw({
+            selected: 3,
+            trails: [
+                {
+                    id: 3,
+                    points: [
+                        { x: 300, y: -1300 },
+                        { x: 360, y: -1250 },
+                        { x: 412, y: -1208 },
+                    ],
+                },
+                { id: 7, points: [{ x: -500, y: 2000 }] },
+            ],
+        });
+        await act(async () => {});
+
+        const lines = [...document.querySelectorAll('polyline')];
+        expect(lines).toHaveLength(1);
+        const places = lines[0]!.getAttribute('points')!.split(' ');
+        expect(places).toHaveLength(3);
+        const mark = screen.getByRole('button', { name: DOTS[0]!.label }).parentElement!.style;
+        const [left, top] = places[2]!.split(',').map(Number);
+        expect([left, top]).toEqual([
+            Math.round(parseFloat(mark.left) * 10) / 10,
+            Math.round(parseFloat(mark.top) * 10) / 10,
+        ]);
+        expect(lines[0]!.getAttribute('stroke-width')).toBe('2.5');
+    });
+
     it('should name the selected player, or every player when asked', async () => {
         draw({ selected: 7 });
         await act(async () => {});

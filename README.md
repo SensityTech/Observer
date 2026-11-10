@@ -908,8 +908,16 @@ shape too, and the settings' Live map category moves the thresholds. A click on 
 play time, session, ping and position, a link to their profile and, with **Ban players**, a ban. Seeing
 the map takes **See the live map**.
 
+**On the map** lists the players placed, by name, with their ping: a click centres the map on one, and
+the search narrows the list by name or ID. **Follow**, on the selected player, keeps the map on them at
+each new position. **Trails, 5 min** draws where each player went over the last five minutes: the
+places this page received since it was opened, kept in the browser and gone with the page. Observer
+stores no position, so a trail starts when the page opens.
+
 Under the players, the page draws Rockstar's own map of GTA V, as the game draws it (**Atlas**), seen
-from the sky (**Satellite**) or as a road map (**Roads**): the settings' Live map category chooses.
+from the sky (**Satellite**) or as a road map (**Roads**): the settings' Live map category chooses
+the one a browser opens on, and each viewer switches between the three on the map itself, a choice
+their browser remembers. The switch shows only while the owner's choice is one of Rockstar's maps.
 Observer ships no map and keeps none, GTA V's belongs to Rockstar Games: each browser that opens the
 page loads the map's tiles from Rockstar's servers (`s.rsg.sc`), which then see that browser's address,
 and nothing else of it: no referrer, no cookie of Observer's. It is the one thing the panel loads from
