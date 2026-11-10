@@ -182,6 +182,7 @@ pub(crate) fn routes() -> Vec<Route> {
         route(M::POST,   "/servers/default/setup/discover", read_launch, servers::discover),
         route(M::PUT,    "/servers/default/setup",        edit_launch, servers::save_setup),
         route(M::POST,   "/servers/default/start",      control,      servers::start),
+        route(M::POST,   "/servers/default/start/extend", control,    servers::extend_start),
         route(M::POST,   "/servers/default/stop",       control,      servers::stop),
         route(M::POST,   "/servers/default/restart",    control,      servers::restart),
         route(M::POST,   "/servers/default/console",    command,      servers::command),

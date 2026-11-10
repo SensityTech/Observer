@@ -3,6 +3,7 @@ import type { HealthProblem } from "./HealthProblem";
 import type { LaunchReadiness } from "./LaunchReadiness";
 import type { PlayerCount } from "./PlayerCount";
 import type { ServerState } from "./ServerState";
+import type { StartProgress } from "./StartProgress";
 import type { StateCause } from "./StateCause";
 
 /**
@@ -36,4 +37,8 @@ name: string | null,
 /**
  * The game port, as of the last run.
  */
-port: number | null, };
+port: number | null, 
+/**
+ * Only while FXServer is starting, from its first second.
+ */
+start: StartProgress | null, };

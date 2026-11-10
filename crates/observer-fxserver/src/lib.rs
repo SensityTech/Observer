@@ -17,6 +17,7 @@ pub mod pre_launch;
 pub mod recovery;
 pub mod server_data;
 pub mod server_files;
+pub mod start;
 pub mod stdin;
 pub mod supervisor;
 pub mod trace;

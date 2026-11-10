@@ -50,6 +50,7 @@ const ONLINE = {
     players: { online: 187, max: 2048 },
     restartAt: null,
     launch: 'ready',
+    start: null,
 };
 
 const SCHEDULE = {

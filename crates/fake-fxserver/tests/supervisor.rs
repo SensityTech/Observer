@@ -25,7 +25,8 @@ use observer_fxserver::perf::Thread;
 use observer_fxserver::recovery::RecoveryPolicy;
 use observer_fxserver::stdin::{StdinError, UserCommand};
 use observer_fxserver::supervisor::{
-    Cause, ControlError, Event, EventKind, ProcessChange, Settings, State, StopTimings, Supervisor, TreeEvent,
+    Cause, ControlError, Event, EventKind, ProcessChange, START_EXTENSION, Settings, StartStatus, State,
+    StopTimings, Supervisor, TreeEvent,
 };
 use observer_platform::{ProcessInfo, Protocol, Socket, SocketState};
 use tempfile::TempDir;
@@ -245,6 +246,27 @@ impl Lab {
 
     fn generation(&self) -> u32 {
         self.supervisor.status().borrow().generation
+    }
+
+    /// The start under way once it is as `wanted`, as the status publishes it.
+    async fn start_until(&self, wanted: impl Fn(&StartStatus) -> bool) -> StartStatus {
+        let mut status = self.supervisor.status();
+        let found = timeout(WAIT, async {
+            loop {
+                let start = status.borrow_and_update().start.clone();
+                if let Some(start) = start.filter(&wanted) {
+                    return start;
+                }
+                status.changed().await.unwrap();
+            }
+        })
+        .await;
+        found.unwrap_or_else(|_| {
+            panic!(
+                "the start never came to that: {:#?}",
+                self.supervisor.status().borrow().start
+            )
+        })
     }
 
     /// The bridge's name in the server that runs now.
@@ -929,6 +951,129 @@ async fn a_start_that_stops_starting_resources_is_hung_and_says_where_it_stopped
         }
     );
     lab.supervisor.stop("test").await.ok();
+    lab.shut_down(false).await;
+}
+
+#[tokio::test]
+async fn a_start_is_followed_through_the_commands_of_its_cfg() {
+    // Each resource outlasts a tick, so that every command shows in a status.
+    let mut lab = Lab::tuned(&[("fake_start_ms", "1800")], |settings| {
+        settings.health.heartbeat_fatal = Duration::from_secs(30);
+    })
+    .await;
+    extend_cfg(&lab, &["maps", "clothes", "core"], &[]);
+    assert_eq!(lab.supervisor.status().borrow().start, None);
+
+    lab.supervisor.start("test").await.unwrap();
+
+    let start = lab
+        .start_until(|start| {
+            start
+                .progress
+                .at
+                .as_ref()
+                .is_some_and(|at| at.target == "clothes")
+        })
+        .await;
+    let progress = start.progress;
+    let at = progress.at.unwrap();
+    assert_eq!(
+        (at.file.as_str(), at.line, at.done, at.of),
+        ("server.cfg", 6, 0, 1)
+    );
+    let last = progress.last.unwrap();
+    assert_eq!(last.name, "maps");
+    assert_eq!(at.since_ms, last.at_ms, "FXServer came to clothes as maps was up");
+    assert_eq!(
+        (
+            progress.started,
+            progress.failed,
+            progress.planned,
+            progress.found
+        ),
+        (2, 0, Some(3), Some(4)),
+        "the bridge and maps, of the three the cfg starts"
+    );
+    assert!(
+        progress.slowest.iter().all(|slow| slow.ms >= 1800),
+        "{:?}",
+        progress.slowest
+    );
+    assert!(start.stuck_at_ms.is_some_and(|stuck| stuck > last.at_ms));
+
+    let start = lab
+        .start_until(|start| start.progress.at.as_ref().is_some_and(|at| at.target == "core"))
+        .await;
+    assert_eq!(start.progress.started, 3);
+    assert_eq!(lab.state(State::Online).await, Cause::Ready);
+    assert_eq!(
+        lab.supervisor.status().borrow().start,
+        None,
+        "a start is over once online"
+    );
+    lab.shut_down(false).await;
+}
+
+#[tokio::test]
+async fn a_category_of_the_cfg_is_followed_as_the_resources_under_it() {
+    let mut lab = Lab::tuned(&[("fake_start_ms", "1800")], |settings| {
+        settings.health.heartbeat_fatal = Duration::from_secs(30);
+    })
+    .await;
+    // Created as `resources/[maps]/docks` and `resources/[maps]/pier`, started by one command.
+    extend_cfg(&lab, &[], &["set fake_fail_start pier"]);
+    extend_cfg(&lab, &["[maps]/docks", "[maps]/pier"], &[]);
+    let cfg = lab.dir.path().join("server-data/server.cfg");
+    let text = fs::read_to_string(&cfg)
+        .unwrap()
+        .replace("ensure [maps]/docks\nensure [maps]/pier\n", "ensure [maps]\n");
+    fs::write(&cfg, text).unwrap();
+
+    lab.supervisor.start("test").await.unwrap();
+
+    let start = lab
+        .start_until(|start| start.progress.at.as_ref().is_some_and(|at| at.target == "[maps]"))
+        .await;
+    let at = start.progress.at.unwrap();
+    assert_eq!((at.line, at.of), (6, 2));
+    assert_eq!(start.progress.planned, Some(2));
+    assert_eq!(lab.state(State::Online).await, Cause::Ready);
+    lab.console_until("Couldn't start resource pier.").await;
+    lab.shut_down(false).await;
+}
+
+#[tokio::test]
+async fn a_start_given_more_time_is_not_taken_for_stuck() {
+    // The bridge alone takes longer to start than the two seconds a start may say nothing.
+    let mut lab = Lab::new(&[("fake_start_ms", "3500")]).await;
+    assert_eq!(
+        lab.supervisor.extend_start("test").await,
+        Err(ControlError::NotStarting)
+    );
+    lab.supervisor.start("test").await.unwrap();
+    let before = lab.start_until(|start| start.stuck_at_ms.is_some()).await;
+
+    lab.supervisor.extend_start("ada").await.unwrap();
+
+    let extended = lab
+        .start_until(|start| start.stuck_at_ms != before.stuck_at_ms)
+        .await;
+    let given = extended.stuck_at_ms.unwrap() - before.stuck_at_ms.unwrap();
+    let extension = i64::try_from(START_EXTENSION.as_millis()).unwrap();
+    assert!((extension - 1000..=extension + 1000).contains(&given), "{given}");
+    assert_eq!(lab.state(State::Online).await, Cause::Ready);
+    assert!(
+        !lab.seen.iter().any(hung_or_exited),
+        "the start was taken for a hang: {:#?}",
+        lab.seen
+    );
+    lab.console_until("ada gave this start 15 more minutes before it is taken for stuck")
+        .await;
+    assert_eq!(
+        lab.supervisor.extend_start("test").await,
+        Err(ControlError::NotStarting),
+        "its cfg has run"
+    );
     lab.shut_down(false).await;
 }
 

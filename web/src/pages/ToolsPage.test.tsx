@@ -275,6 +275,7 @@ const statusOf = (state: ServerState) => ({
     players: null,
     restartAt: null,
     launch: 'ready',
+    start: null,
 });
 
 const answer = (status: number, body?: unknown) =>

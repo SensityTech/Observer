@@ -20,6 +20,7 @@ const status = (overrides: Partial<ServerStatus>): ServerStatus => ({
     launch: 'ready',
     name: null,
     port: null,
+    start: null,
     ...overrides,
 });
 

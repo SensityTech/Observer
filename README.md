@@ -157,6 +157,24 @@ server whose heartbeat or HTTP is late when those minutes end passes only once i
 hang that began within them fails the probation however long the [hang delay](#hang-detection). With
 hang detection off, only a crash fails it, and a silent server still waits to answer before it passes.
 
+### Following a start
+
+While FXServer starts, the Overview shows how far it has come: how many resources are up, the
+command of the cfg it is at (`ensure [clothes]`, `server.cfg` line 226, 12 of its 150 resources
+up), the last resource started and how long ago, the resources that did not start, and the five
+slowest so far. The status bar above every page counts them too.
+
+Observer reads this from FXServer's own console: FXServer prints `Started resource <name>` once a
+resource is up, and nothing while it starts one. The command it is at is worked out from the
+resources each `ensure` and `start` of the cfg starts, a category being every resource under the
+folder of that name. When Observer cannot read every command of the cfg, as when it executes a
+file inside a resource, the page says so rather than guess.
+
+Once no resource has started for half a minute, the card says how long Observer still waits
+before it takes the start for stuck (see hang detection below). Whoever may start and stop the
+server can give that start 15 minutes more, as often as needed; the audit log keeps who did. The
+hang delay itself is not changed.
+
 ### Hang detection
 
 Observer watches two signals while FXServer runs: the heartbeat of its bridge resource, which only

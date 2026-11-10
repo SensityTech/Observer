@@ -91,6 +91,7 @@ impl Lab {
             launch: LaunchReadiness::Ready,
             name: None,
             port: None,
+            start: None,
         });
         let tools = Tools::new(ToolsSetup {
             db: db.clone(),

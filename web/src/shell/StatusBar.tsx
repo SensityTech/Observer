@@ -8,6 +8,7 @@ import { cn } from '../lib/cn';
 import { secondsSince, useNow } from '../lib/useNow';
 import { useArtifacts } from '../artifacts/context';
 import { useSchedule } from '../schedule/context';
+import { startTotal } from '../overview/StartCard';
 import { useServerStatus } from '../server/context';
 import { STATE_INK, STATE_LED, isRunning } from '../server/state';
 
@@ -42,7 +43,13 @@ export function StatusBar() {
     const unknown = <span className="font-normal text-ink-3">{t.status.unknown}</span>;
 
     let lasted = null;
-    if (status !== null && isRunning(status.state) && status.startedAt !== null) {
+    if (status !== null && status.state === 'starting') {
+        const started = status.start;
+        lasted = [
+            t.status.forTime(format.elapsed(Math.max(0, now - Date.parse(status.since)) / 1000)),
+            ...(started === null ? [] : [t.status.resources(started.started, startTotal(started))]),
+        ].join(' · ');
+    } else if (status !== null && isRunning(status.state) && status.startedAt !== null) {
         lasted = t.status.upFor(format.duration(secondsSince(status.startedAt, now)));
     } else if (status !== null && !isRunning(status.state)) {
         lasted = t.status.forTime(format.duration(secondsSince(status.since, now)));

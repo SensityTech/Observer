@@ -37,6 +37,9 @@ pub enum AuditAction {
     ServerStarted,
     ServerStopped,
     ServerRestarted,
+    /// Someone gave a start more time before Observer takes it for stuck. `details` holds the
+    /// `minutes` given.
+    ServerStartExtended,
     /// Written before the command reaches FXServer, with the `command` as the console shows it,
     /// secrets masked. `observer_cmd` is denied, with its `refusal`.
     ConsoleCommandSent,
@@ -220,7 +223,7 @@ pub enum AuditAction {
 }
 
 impl AuditAction {
-    pub const ALL: [Self; 104] = [
+    pub const ALL: [Self; 105] = [
         Self::SetupCompleted,
         Self::SetupLinkCreated,
         Self::LoginSucceeded,
@@ -240,6 +243,7 @@ impl AuditAction {
         Self::ServerStarted,
         Self::ServerStopped,
         Self::ServerRestarted,
+        Self::ServerStartExtended,
         Self::ConsoleCommandSent,
         Self::ConsoleLogDownloaded,
         Self::ServerCrashLoop,
@@ -349,6 +353,7 @@ impl AuditAction {
             Self::ServerStarted => "server_started",
             Self::ServerStopped => "server_stopped",
             Self::ServerRestarted => "server_restarted",
+            Self::ServerStartExtended => "server_start_extended",
             Self::ConsoleCommandSent => "console_command_sent",
             Self::ConsoleLogDownloaded => "console_log_downloaded",
             Self::ServerCrashLoop => "server_crash_loop",

@@ -435,6 +435,7 @@ mod tests {
             launch,
             name: None,
             port: None,
+            start: None,
         }
     }
 

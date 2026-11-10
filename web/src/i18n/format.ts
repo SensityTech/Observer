@@ -99,6 +99,20 @@ export const formatDuration = (locale: string, totalSeconds: number) => {
 };
 
 /**
+ * A time that runs, to the second under an hour: `45 s`, `2 min 32 s`, then as a duration. Rounded
+ * down: a counter never shows time that has not passed.
+ */
+export const formatElapsed = (locale: string, totalSeconds: number) => {
+    const seconds = Math.max(0, Math.floor(totalSeconds));
+    if (seconds < 60 || seconds >= 3600) {
+        return formatDuration(locale, seconds);
+    }
+    const n = (value: number) => formatNumber(locale, value);
+    const minutes = `${n(Math.floor(seconds / 60))} min`;
+    return seconds % 60 === 0 ? minutes : `${minutes} ${n(seconds % 60)} s`;
+};
+
+/**
  * Play time, in the hours players and txAdmin count it in, never in days: `0h`, `45 s`, `15 min`,
  * `2h 14m`, `312h`. Past 100 hours the minutes are noise and left out. Rounded down: time not
  * played yet is never shown. A `signed` difference reads `+2h 14m`, its sign written by Intl on

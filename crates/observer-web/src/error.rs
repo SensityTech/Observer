@@ -79,6 +79,7 @@ fn status(code: ErrorCode) -> StatusCode {
         | ErrorCode::ServerRunning
         | ErrorCode::ServerNotRunning
         | ErrorCode::ServerStopping
+        | ErrorCode::ServerNotStarting
         | ErrorCode::NothingToSkip
         | ErrorCode::AlreadySkipped
         | ErrorCode::NothingToRestore

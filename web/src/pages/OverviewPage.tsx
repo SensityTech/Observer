@@ -19,6 +19,7 @@ import { useNow } from '../lib/useNow';
 import { LiveMetricsProvider } from '../metrics/live';
 import { ComingUp, Recent } from '../overview/Agenda';
 import { Alerts } from '../overview/Alerts';
+import { StartCard } from '../overview/StartCard';
 import { Summary } from '../overview/Summary';
 import { ThreadsCard } from '../overview/ThreadsCard';
 import { Tiles } from '../overview/Tiles';
@@ -52,6 +53,9 @@ export function OverviewPage() {
             </div>
             <Alerts />
             {status !== null && notice && <StateNotice status={status} />}
+            {status !== null && status.state === 'starting' && status.start !== null && (
+                <StartCard status={status} start={status.start} />
+            )}
             <Summary />
             <ErrorBoundary
                 fallback={<ChartFailed title={t.charts.players.title} text={t.charts.players.unavailable} />}

@@ -9,7 +9,7 @@ use std::collections::{HashMap, HashSet};
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, PoisonError, Weak};
+use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant};
 
 use observer_domain::diagnostics::ProcessKind;
@@ -25,7 +25,7 @@ use tracing::{error, info, warn};
 
 use crate::bridge::{self, BridgeAction, BridgeEvent, Report, StopReason};
 use crate::cfg;
-use crate::console::{ConsoleHub, LineAssembler, LineFlags, LineKind, plain, sanitize};
+use crate::console::{ConsoleHub, LineAssembler, LineFlags, LineKind, on_channel, plain, sanitize};
 use crate::crashes::{self, Collected, DumpLimits, HangSnapshotLimits, SnapshotFailure};
 use crate::exit;
 use crate::health::{self, HangCause, Health, HealthLimits, PlayerList, Players, Probe, Problem, Verdict};
@@ -35,6 +35,7 @@ use crate::perf::TickReport;
 use crate::players::{PlayerReport, PlayerReportKind};
 use crate::pre_launch::{self, PreLaunch, PreLaunchRequest, PreLaunchResult, TOOLS};
 use crate::recovery::{Next, Recovery, RecoveryPolicy};
+use crate::start::{self, Progress};
 use crate::stdin::{CommandRefusal, Credentials, StdinError, StdinWriter, SystemLine, UserCommand, Write};
 use crate::trace::{self, Trace, TraceDecoder, TraceKind};
 use crate::tree::{self, TreeContext};
@@ -48,6 +49,8 @@ const TREE_KILL: Duration = Duration::from_secs(5);
 const TASK_JOIN: Duration = Duration::from_secs(2);
 /// A dump file touched this recently means the dump server is writing.
 const DUMP_ACTIVITY: Duration = Duration::from_secs(10);
+/// What someone gives a start that needs longer than the hang delay between two resources.
+pub const START_EXTENSION: Duration = Duration::from_mins(15);
 /// FXServer's own default, for a cfg that names no TCP endpoint.
 const DEFAULT_PORT: u16 = 30120;
 const EVENTS: usize = 256;
@@ -363,6 +366,17 @@ pub struct Status {
     pub port: Option<u16>,
     /// The bridge's resource name in the server that runs now, drawn for its start.
     pub bridge: Option<String>,
+    /// How far the start has come, while the server is starting.
+    pub start: Option<StartStatus>,
+}
+
+/// A start under way: what FXServer said of it, and how long Observer still waits for more.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct StartStatus {
+    pub progress: start::Snapshot,
+    /// When the start is taken for stuck, should FXServer start no resource until then. None with
+    /// hang detection off, and once the cfg has run.
+    pub stuck_at_ms: Option<i64>,
 }
 
 /// What the probes read last of the server that runs now, for the statistics. It changes every
@@ -401,6 +415,8 @@ pub enum ControlError {
     NotRunning,
     #[error("the server is stopping")]
     Stopping,
+    #[error("the server is not starting")]
+    NotStarting,
     #[error("Observer is shutting down")]
     ShuttingDown,
     #[error("cannot start FXServer: {0}")]
@@ -423,6 +439,10 @@ enum Request {
         reply: Reply<()>,
     },
     Restart {
+        by: String,
+        reply: Reply<()>,
+    },
+    ExtendStart {
         by: String,
         reply: Reply<()>,
     },
@@ -485,6 +505,7 @@ impl Supervisor {
             name: None,
             port: None,
             bridge: None,
+            start: None,
         };
         let (status_tx, status) = watch::channel(initial);
         let (readings_tx, readings) = watch::channel(Readings::default());
@@ -556,6 +577,16 @@ impl Supervisor {
 
     pub async fn restart(&self, by: &str) -> Result<(), ControlError> {
         self.ask(|reply| Request::Restart {
+            by: by.to_owned(),
+            reply,
+        })
+        .await
+    }
+
+    /// Gives the start under way [`START_EXTENSION`] more before it is taken for stuck, counted
+    /// from when it would have been. Only of a server whose cfg is still running.
+    pub async fn extend_start(&self, by: &str) -> Result<(), ControlError> {
+        self.ask(|reply| Request::ExtendStart {
             by: by.to_owned(),
             reply,
         })
@@ -763,38 +794,6 @@ fn is_licence_rejection(message: &str) -> bool {
         .any(|rejection| message.starts_with(rejection))
 }
 
-/// The text of a line FXServer printed on `channel`, whose name it right-aligns in brackets.
-fn on_channel<'a>(line: &'a str, channel: &str) -> Option<&'a str> {
-    let (name, text) = line.strip_prefix('[')?.split_once("] ")?;
-    (name.trim_start() == channel).then_some(text)
-}
-
-/// The resource a line of FXServer's console says it started, as its `resources` channel prints it
-/// once the resource is up, with its warnings counted after the name.
-fn started_resource(line: &str) -> Option<&str> {
-    on_channel(line, "resources")?
-        .strip_prefix("Started resource ")?
-        .split_whitespace()
-        .next()
-}
-
-/// The last resource FXServer said it started in one run, and when: what shows a start going on
-/// before the bridge's first report.
-#[derive(Debug, Default)]
-struct StartProgress {
-    last: Mutex<Option<(Instant, String)>>,
-}
-
-impl StartProgress {
-    fn started(&self, resource: &str, at: Instant) {
-        *self.last.lock().unwrap_or_else(PoisonError::into_inner) = Some((at, resource.to_owned()));
-    }
-
-    fn last(&self) -> Option<(Instant, String)> {
-        self.last.lock().unwrap_or_else(PoisonError::into_inner).clone()
-    }
-}
-
 /// One spawn of FXServer, from its start until its tree is empty.
 struct Run {
     generation: u32,
@@ -813,7 +812,10 @@ struct Run {
     cancel: CancellationToken,
     tasks: Vec<JoinHandle<()>>,
     health: Health,
-    progress: Arc<StartProgress>,
+    /// What FXServer says of its start: what shows it going on before the bridge's first report.
+    progress: Arc<Progress>,
+    /// The start as published last, and the instant its `stuck_at_ms` was worked out from.
+    start: Option<(StartStatus, Option<Instant>)>,
     bridge_ready: bool,
     ready_at: Option<Instant>,
     after: Option<After>,
@@ -848,6 +850,7 @@ struct Ready {
     endpoint: Option<SocketAddr>,
     /// The launch settings the spawn goes by, which the spawn's event reports.
     settings: LaunchSettings,
+    plan: start::Plan,
 }
 
 impl Ready {
@@ -859,6 +862,7 @@ impl Ready {
             warnings,
             endpoint,
             scan,
+            plan,
         } = prepared;
         let ready = Self {
             launch,
@@ -867,6 +871,7 @@ impl Ready {
             warnings,
             endpoint,
             settings,
+            plan,
         };
         (ready, scan)
     }
@@ -1011,6 +1016,9 @@ impl Actor {
             Request::Restart { by, reply } => {
                 let result = self.restart(by).await;
                 let _ = reply.send(result);
+            }
+            Request::ExtendStart { by, reply } => {
+                let _ = reply.send(self.extend_start(&by));
             }
             Request::RestartScheduled { by, reply } => {
                 let _ = reply.send(self.restart_scheduled(by));
@@ -1518,18 +1526,72 @@ impl Actor {
         }
     }
 
-    async fn weigh_health(&mut self, now: Instant) {
-        // The launch settings given last, rather than the spawn's: turning hang detection off, or
-        // giving a big first start more time, must reach the server that is starting now.
-        let limits = match &self.settings.launch {
+    /// The launch settings given last, rather than the spawn's: turning hang detection off, or
+    /// giving a big first start more time, must reach the server that is starting now.
+    fn health_limits(&self) -> HealthLimits {
+        match &self.settings.launch {
             Some(launch) => self.settings.health.under(&launch.settings),
             None => self.settings.health,
+        }
+    }
+
+    fn extend_start(&mut self, by: &str) -> Result<(), ControlError> {
+        let limits = self.health_limits();
+        let now = Instant::now();
+        match &mut self.run {
+            Some(run) if self.state == State::Starting && !run.health.cfg_ran() => {
+                let stuck = run.health.stuck_at(&limits).map_or(now, |at| at.max(now));
+                run.health.extend(stuck + START_EXTENSION);
+            }
+            _ => return Err(ControlError::NotStarting),
+        }
+        self.note(&format!(
+            "{by} gave this start {} more minutes before it is taken for stuck",
+            START_EXTENSION.as_secs() / 60
+        ));
+        self.follow_start(now, &limits);
+        Ok(())
+    }
+
+    /// Publishes how far the start has come, when that changed since it was last published.
+    fn follow_start(&mut self, now: Instant, limits: &HealthLimits) {
+        let Some(run) = &mut self.run else {
+            return;
         };
+        if self.state != State::Starting {
+            return;
+        }
+        let stuck = run.health.stuck_at(limits);
+        let stuck_at_ms = match &run.start {
+            Some((status, from)) if *from == stuck => status.stuck_at_ms,
+            _ => stuck.map(|at| {
+                let ahead = i64::try_from(at.saturating_duration_since(now).as_millis()).unwrap_or(i64::MAX);
+                let behind = i64::try_from(now.saturating_duration_since(at).as_millis()).unwrap_or(i64::MAX);
+                now_ms().saturating_add(ahead).saturating_sub(behind)
+            }),
+        };
+        let status = StartStatus {
+            progress: run.progress.snapshot(),
+            stuck_at_ms,
+        };
+        if run
+            .start
+            .as_ref()
+            .is_some_and(|(published, _)| *published == status)
+        {
+            return;
+        }
+        run.start = Some((status, stuck));
+        self.publish_status();
+    }
+
+    async fn weigh_health(&mut self, now: Instant) {
+        let limits = self.health_limits();
         let Some(run) = &mut self.run else {
             return;
         };
         if !run.health.cfg_ran()
-            && let Some((at, _)) = run.progress.last()
+            && let Some(at) = run.progress.moved()
         {
             run.health.progressed(at);
         }
@@ -1543,7 +1605,7 @@ impl Actor {
             self.recovery.ready();
         }
         match verdict {
-            Verdict::Starting => {}
+            Verdict::Starting => self.follow_start(now, &limits),
             Verdict::Healthy => match self.state {
                 State::Starting => self.set_state(State::Online, Cause::Ready),
                 State::Degraded => self.set_state(State::Online, Cause::Recovered),
@@ -1953,7 +2015,7 @@ impl Actor {
             .unwrap_or_else(|| SocketAddr::from((Ipv4Addr::LOCALHOST, DEFAULT_PORT)));
         let cancel = CancellationToken::new();
         let (stdin, stdin_task) = StdinWriter::start(spawned.stdin, generation, Arc::clone(&self.console));
-        let progress = Arc::new(StartProgress::default());
+        let progress = Arc::new(Progress::new(prepared.plan, Instant::now(), now_ms()));
         let mut tasks = vec![
             tokio::spawn(read_console(
                 spawned.stdout,
@@ -2015,6 +2077,7 @@ impl Actor {
             tasks,
             health: Health::new(Instant::now()),
             progress,
+            start: None,
             bridge_ready: false,
             ready_at: None,
             after: None,
@@ -2255,6 +2318,10 @@ impl Actor {
             name: self.name.clone(),
             port: self.port,
             bridge: run.map(|run| run.bridge.clone()),
+            start: run
+                .filter(|_| self.state == State::Starting)
+                .and_then(|run| run.start.as_ref())
+                .map(|(status, _)| status.clone()),
         });
     }
 
@@ -2322,7 +2389,7 @@ async fn read_console(
     generation: u32,
     console: Arc<ConsoleHub>,
     signals: mpsc::Sender<(u32, Signal)>,
-    progress: Arc<StartProgress>,
+    progress: Arc<Progress>,
 ) {
     let mut lines = LineAssembler::default();
     let publish = |assembled: crate::console::Assembled| {
@@ -2333,10 +2400,8 @@ async fn read_console(
         };
         let line = console.push(generation, kind, None, sanitize(&assembled.text), flags);
         let text = plain(&line.text);
-        if kind == LineKind::Stdout
-            && let Some(resource) = started_resource(&text)
-        {
-            progress.started(resource, Instant::now());
+        if kind == LineKind::Stdout {
+            progress.read(&text, Instant::now(), now_ms());
         }
         if let Some(signal) = Signal::read(kind, &text) {
             let _ = signals.try_send((generation, signal));
@@ -2500,31 +2565,6 @@ fn now_ms() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn a_started_resource_is_read_from_fxservers_own_channel_only() {
-        // As FXServer 38435 prints them.
-        assert_eq!(
-            started_resource("[           resources] Started resource Pata_BathroomProps"),
-            Some("Pata_BathroomProps")
-        );
-        assert_eq!(
-            started_resource("[           resources] Started resource Pata_Christmas2 (3 warnings)"),
-            Some("Pata_Christmas2")
-        );
-        for line in [
-            "[           resources] Scanning resources.",
-            "[           resources] Found 391 resources.",
-            "[    c-scripting-core] Creating script environments for prompt_vfd_4bays",
-            "[ citizen-server-impl] Couldn't start resource Pata_toddler.",
-            "[resources:Pata_Jap:s] Asset Pata_Jap/pata_jap81.ydr uses 32.0 MiB of physical memory.",
-            "[         script:chat] [           resources] Started resource fake",
-            "[         script:chat] Started resource fake",
-            "Started resource fake",
-        ] {
-            assert_eq!(started_resource(line), None, "{line}");
-        }
-    }
 
     #[test]
     fn a_stuck_start_names_the_last_resource_started_and_how_long_ago() {

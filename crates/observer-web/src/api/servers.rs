@@ -110,6 +110,15 @@ pub(crate) async fn start(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// Gives the start under way more time before Observer takes it for stuck.
+pub(crate) async fn extend_start(
+    State(state): State<AppState>,
+    Extension(caller): Extension<Caller>,
+) -> Result<StatusCode, Failure> {
+    state.supervision.extend_start(&caller).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 pub(crate) async fn stop(
     State(state): State<AppState>,
     Extension(caller): Extension<Caller>,

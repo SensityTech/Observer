@@ -1,0 +1,707 @@
+//! How far a start has come, read from what FXServer prints while it runs its cfg: each resource
+//! once it is up, and nothing of the one it is starting. The command of the cfg it is at is worked
+//! out from the resources each command starts.
+
+use std::collections::HashSet;
+use std::sync::{Mutex, PoisonError};
+use std::time::{Duration, Instant};
+
+use serde::Serialize;
+
+use crate::cfg::{ResourceVerb, Scan};
+use crate::console::on_channel;
+use crate::server_data::Resources;
+
+/// The slowest resources kept of one start.
+const SLOWEST: usize = 5;
+/// Resources of later commands started in a row, none of the command the start is taken to be at,
+/// before it is taken to be past that command. FXServer starts a resource's dependencies ahead of
+/// their own commands, a few in a row at most; a command whose resource never says how it ended
+/// would hold the start there for ever.
+const STRAYS: u32 = 3;
+
+/// A command of the cfg that starts resources, and the resources it starts, in lower case.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Step {
+    file: String,
+    line: u32,
+    target: String,
+    members: Vec<String>,
+}
+
+impl Step {
+    fn starts(&self, resource: &str) -> bool {
+        self.members.iter().any(|member| member == resource)
+    }
+}
+
+/// The commands of a cfg that start resources, in the order FXServer runs them. Empty when the
+/// scan could not read them all: a start cannot be placed among commands that are missing.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Plan {
+    steps: Vec<Step>,
+    resources: Option<u32>,
+}
+
+impl Plan {
+    pub fn new(scan: &Scan, resources: &Resources) -> Self {
+        if !scan.resource_commands_complete {
+            return Self::default();
+        }
+        let steps: Vec<Step> = scan
+            .resource_commands
+            .iter()
+            .filter(|command| matches!(command.verb, ResourceVerb::Start | ResourceVerb::Ensure))
+            .map(|command| {
+                let mut members = resources.started_by(&command.name);
+                // A resource the folder does not hold, as one of the build's own.
+                if members.is_empty() && !command.name.starts_with('[') {
+                    members.push(command.name.to_ascii_lowercase());
+                }
+                Step {
+                    file: command.file.clone(),
+                    line: command.line,
+                    target: command.name.clone(),
+                    members,
+                }
+            })
+            .collect();
+        let distinct: HashSet<&str> = steps
+            .iter()
+            .flat_map(|step| step.members.iter().map(String::as_str))
+            .collect();
+        let resources = u32::try_from(distinct.len()).ok();
+        Self { steps, resources }
+    }
+}
+
+/// What a line of FXServer's console says of its start.
+#[derive(Debug, PartialEq, Eq)]
+enum Said<'a> {
+    /// How many resources the folder holds, said once as the scan of it ends.
+    Found(u32),
+    /// A resource with server scripts begins to start.
+    Entering(&'a str),
+    Started {
+        resource: &'a str,
+        warnings: u32,
+    },
+    /// A resource did not start, or no resource has that name.
+    Failed(&'a str),
+}
+
+impl<'a> Said<'a> {
+    fn read(line: &'a str) -> Option<Self> {
+        if let Some(text) = on_channel(line, "resources") {
+            if let Some(rest) = text.strip_prefix("Started resource ") {
+                let (resource, counted) = rest.split_once(' ').unwrap_or((rest, ""));
+                let warnings = counted
+                    .strip_prefix('(')
+                    .and_then(|counted| counted.split_once(" warning"))
+                    .and_then(|(count, _)| count.parse().ok())
+                    .unwrap_or(0);
+                return (!resource.is_empty()).then_some(Self::Started { resource, warnings });
+            }
+            let found = text.strip_prefix("Found ")?.strip_suffix(" resources.")?;
+            return found.parse().ok().map(Self::Found);
+        }
+        if let Some(text) = on_channel(line, "c-scripting-core") {
+            let resource = text.strip_prefix("Creating script environments for ")?;
+            return (!resource.is_empty()).then_some(Self::Entering(resource));
+        }
+        let text = on_channel(line, "citizen-server-impl")?;
+        let named = text
+            .strip_prefix("Couldn't start resource ")
+            .or_else(|| text.strip_prefix("Couldn't find resource "))?;
+        let resource = named.strip_suffix('.').unwrap_or(named);
+        // A category that is not there starts nothing: its command has no resource to wait for.
+        (!resource.is_empty() && !resource.starts_with("category ")).then_some(Self::Failed(resource))
+    }
+}
+
+/// The last resource FXServer said it started.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Started {
+    /// As FXServer names it.
+    pub name: String,
+    pub at_ms: i64,
+    /// What FXServer counted after its name.
+    pub warnings: u32,
+}
+
+/// The command of the cfg a start is at.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct At {
+    pub file: String,
+    pub line: u32,
+    /// The command's argument as written: a resource, or a category in brackets.
+    pub target: String,
+    /// When FXServer came to it.
+    pub since_ms: i64,
+    /// How many of the resources it starts are up, failed ones counted with them.
+    pub done: u32,
+    pub of: u32,
+    /// The resource whose server scripts FXServer is loading, when it said so.
+    pub resource: Option<String>,
+}
+
+/// A resource and the time FXServer took from the resource before it to this one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Slow {
+    pub name: String,
+    pub ms: u64,
+}
+
+/// A start as it stands.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct Snapshot {
+    /// Resources FXServer said it started.
+    pub started: u32,
+    /// Resources it could not start.
+    pub failed: u32,
+    /// How many the folder holds, once FXServer has said.
+    pub found: Option<u32>,
+    /// How many the cfg's commands start, when Observer read them all.
+    pub planned: Option<u32>,
+    pub last: Option<Started>,
+    /// None before the cfg's first command and after its last, or when Observer could not read
+    /// every command.
+    pub at: Option<At>,
+    /// The slowest first.
+    pub slowest: Vec<Slow>,
+}
+
+#[derive(Debug)]
+struct State {
+    plan: Plan,
+    found: Option<u32>,
+    started: HashSet<String>,
+    failed: HashSet<String>,
+    last: Option<(Instant, Started)>,
+    /// When FXServer last said anything of its start, which the next resource's time counts from.
+    mark: Instant,
+    moved: Option<Instant>,
+    /// The step the start is at: every step before it is over.
+    step: usize,
+    step_since_ms: i64,
+    /// The step the start was at before it was taken to be past it without its resources saying
+    /// so: one of them starting proves it was not.
+    left: Option<usize>,
+    strays: u32,
+    entering: Option<String>,
+    slowest: Vec<Slow>,
+}
+
+impl State {
+    fn settled(&self, resource: &str) -> bool {
+        self.started.contains(resource) || self.failed.contains(resource)
+    }
+
+    fn settle(&mut self, at_ms: i64) {
+        let before = self.step;
+        while self
+            .plan
+            .steps
+            .get(self.step)
+            .is_some_and(|step| step.members.iter().all(|member| self.settled(member)))
+        {
+            self.step += 1;
+        }
+        if self.step != before {
+            self.step_since_ms = at_ms;
+            self.strays = 0;
+        }
+    }
+
+    /// Places the start after `resource` started: at its command, or still where it was when the
+    /// resource is a dependency started ahead of its own command.
+    fn place(&mut self, resource: &str, at_ms: i64) {
+        let steps = &self.plan.steps;
+        let skipped = self.left.unwrap_or(self.step)..self.step;
+        if let Some(back) = skipped.clone().find(|&index| steps[index].starts(resource)) {
+            self.step = back;
+            self.left = None;
+            self.strays = 0;
+        } else if steps.get(self.step).is_some_and(|step| step.starts(resource)) {
+            self.strays = 0;
+        } else if let Some(later) = (self.step + 1..steps.len()).find(|&index| steps[index].starts(resource))
+        {
+            self.strays += 1;
+            if self.strays >= STRAYS {
+                self.left.get_or_insert(self.step);
+                self.step = later;
+                self.step_since_ms = at_ms;
+                self.strays = 0;
+            }
+        }
+    }
+
+    fn timed(&mut self, name: &str, took: Duration) {
+        let ms = u64::try_from(took.as_millis()).unwrap_or(u64::MAX);
+        let rank = self.slowest.partition_point(|slow| slow.ms >= ms);
+        if rank < SLOWEST {
+            self.slowest.insert(
+                rank,
+                Slow {
+                    name: name.to_owned(),
+                    ms,
+                },
+            );
+            self.slowest.truncate(SLOWEST);
+        }
+    }
+}
+
+/// One start, fed by the console's reader and read by the supervisor.
+#[derive(Debug)]
+pub struct Progress {
+    state: Mutex<State>,
+}
+
+impl Progress {
+    pub fn new(plan: Plan, spawned: Instant, spawned_ms: i64) -> Self {
+        Self {
+            state: Mutex::new(State {
+                plan,
+                found: None,
+                started: HashSet::new(),
+                failed: HashSet::new(),
+                last: None,
+                mark: spawned,
+                moved: None,
+                step: 0,
+                step_since_ms: spawned_ms,
+                left: None,
+                strays: 0,
+                entering: None,
+                slowest: Vec::new(),
+            }),
+        }
+    }
+
+    fn state(&self) -> std::sync::MutexGuard<'_, State> {
+        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Takes a line FXServer printed, colours removed, at `at`.
+    pub fn read(&self, line: &str, at: Instant, at_ms: i64) {
+        let Some(said) = Said::read(line) else {
+            return;
+        };
+        let mut state = self.state();
+        match said {
+            Said::Found(found) => state.found = Some(found),
+            Said::Entering(resource) => {
+                state.entering = Some(resource.to_owned());
+                return;
+            }
+            Said::Started { resource, warnings } => {
+                let lower = resource.to_ascii_lowercase();
+                let took = at.saturating_duration_since(state.mark);
+                if state.started.insert(lower.clone()) {
+                    state.timed(resource, took);
+                }
+                state.failed.remove(&lower);
+                state.last = Some((
+                    at,
+                    Started {
+                        name: resource.to_owned(),
+                        at_ms,
+                        warnings,
+                    },
+                ));
+                state.entering = None;
+                state.place(&lower, at_ms);
+            }
+            Said::Failed(resource) => {
+                let lower = resource.to_ascii_lowercase();
+                if !state.started.contains(&lower) {
+                    state.failed.insert(lower);
+                }
+                state.entering = None;
+            }
+        }
+        state.mark = at;
+        state.moved = Some(at);
+        state.settle(at_ms);
+    }
+
+    /// When FXServer last said its start went on.
+    pub fn moved(&self) -> Option<Instant> {
+        self.state().moved
+    }
+
+    /// The last resource FXServer said it started, and when.
+    pub fn last(&self) -> Option<(Instant, String)> {
+        let state = self.state();
+        state
+            .last
+            .as_ref()
+            .map(|(at, started)| (*at, started.name.clone()))
+    }
+
+    pub fn snapshot(&self) -> Snapshot {
+        let state = self.state();
+        let count = |set: &HashSet<String>| u32::try_from(set.len()).unwrap_or(u32::MAX);
+        let at = state.plan.steps.get(state.step).map(|step| At {
+            file: step.file.clone(),
+            line: step.line,
+            target: step.target.clone(),
+            since_ms: state.step_since_ms,
+            done: u32::try_from(step.members.iter().filter(|member| state.settled(member)).count())
+                .unwrap_or(u32::MAX),
+            of: u32::try_from(step.members.len()).unwrap_or(u32::MAX),
+            resource: state.entering.clone(),
+        });
+        Snapshot {
+            started: count(&state.started),
+            failed: count(&state.failed),
+            found: state.found,
+            planned: state.plan.resources,
+            last: state.last.as_ref().map(|(_, started)| started.clone()),
+            at,
+            slowest: state.slowest.clone(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use observer_domain::launch::OneSync;
+
+    use super::*;
+    use crate::{cfg, server_data};
+
+    fn scanned(cfg_text: &str, folders: &[&str]) -> (Scan, Resources) {
+        let dir = tempfile::tempdir().unwrap();
+        for folder in folders {
+            let path = dir.path().join("resources").join(folder);
+            fs::create_dir_all(&path).unwrap();
+            fs::write(path.join("fxmanifest.lua"), "fx_version 'cerulean'\n").unwrap();
+        }
+        fs::write(dir.path().join("server.cfg"), cfg_text).unwrap();
+        let resources = server_data::walk(dir.path());
+        let context = cfg::Context {
+            panel: None,
+            onesync: OneSync::On,
+            probe_ports: false,
+            system_resources: None,
+            follow_outside: false,
+            convars: None,
+        };
+        let scan = cfg::scan(dir.path(), "server.cfg", cfg_text, &resources, &context);
+        (scan, resources)
+    }
+
+    #[test]
+    fn a_plan_holds_the_commands_that_start_resources_with_those_each_one_starts() {
+        let (scan, resources) = scanned(
+            "ensure chat\nstop chat\nensure [Maps]\nstart sessionmanager\nensure [gone]\nrestart chat\n",
+            &["chat", "[maps]/docks", "[maps]/[interiors]/bank"],
+        );
+
+        let plan = Plan::new(&scan, &resources);
+
+        assert_eq!(
+            plan.steps,
+            [
+                step(1, "chat", &["chat"]),
+                step(3, "[Maps]", &["bank", "docks"]),
+                step(4, "sessionmanager", &["sessionmanager"]),
+                step(5, "[gone]", &[]),
+            ]
+        );
+        assert_eq!(plan.resources, Some(4));
+    }
+
+    #[test]
+    fn a_cfg_whose_commands_could_not_all_be_read_gives_no_plan() {
+        let (scan, resources) = scanned("ensure chat\nexec @chat/more.cfg\n", &["chat"]);
+        assert!(!scan.resource_commands_complete);
+
+        assert_eq!(Plan::new(&scan, &resources), Plan::default());
+    }
+
+    fn step(line: u32, target: &str, members: &[&str]) -> Step {
+        Step {
+            file: "server.cfg".to_owned(),
+            line,
+            target: target.to_owned(),
+            members: members.iter().map(|&member| member.to_owned()).collect(),
+        }
+    }
+
+    fn plan(steps: Vec<Step>) -> Plan {
+        let resources = steps.iter().map(|step| step.members.len()).sum::<usize>();
+        Plan {
+            steps,
+            resources: u32::try_from(resources).ok(),
+        }
+    }
+
+    struct Start {
+        progress: Progress,
+        spawned: Instant,
+    }
+
+    impl Start {
+        fn new(plan: Plan) -> Self {
+            let spawned = Instant::now();
+            Self {
+                progress: Progress::new(plan, spawned, 0),
+                spawned,
+            }
+        }
+
+        fn says(&self, seconds: u64, line: &str) -> &Self {
+            let at = self.spawned + Duration::from_secs(seconds);
+            self.progress
+                .read(line, at, i64::try_from(seconds * 1000).unwrap_or(i64::MAX));
+            self
+        }
+
+        fn starts(&self, seconds: u64, resource: &str) -> &Self {
+            self.says(
+                seconds,
+                &format!("[           resources] Started resource {resource}"),
+            )
+        }
+
+        fn at(&self) -> Option<(u32, String)> {
+            self.progress.snapshot().at.map(|at| (at.line, at.target))
+        }
+    }
+
+    #[test]
+    fn the_lines_of_a_start_are_read_from_fxservers_own_channels_only() {
+        assert_eq!(
+            Said::read("[           resources] Started resource Docks_Props"),
+            Some(Said::Started {
+                resource: "Docks_Props",
+                warnings: 0
+            })
+        );
+        assert_eq!(
+            Said::read("[           resources] Started resource maps (1 warning)"),
+            Some(Said::Started {
+                resource: "maps",
+                warnings: 1
+            })
+        );
+        assert_eq!(
+            Said::read("[           resources] Started resource maps (12 warnings)"),
+            Some(Said::Started {
+                resource: "maps",
+                warnings: 12
+            })
+        );
+        assert_eq!(
+            Said::read("[           resources] Found 391 resources."),
+            Some(Said::Found(391))
+        );
+        assert_eq!(
+            Said::read("[    c-scripting-core] Creating script environments for chat"),
+            Some(Said::Entering("chat"))
+        );
+        assert_eq!(
+            Said::read("[ citizen-server-impl] Couldn't start resource nursery."),
+            Some(Said::Failed("nursery"))
+        );
+        assert_eq!(
+            Said::read("[ citizen-server-impl] Couldn't find resource typo."),
+            Some(Said::Failed("typo"))
+        );
+        for line in [
+            "[ citizen-server-impl] Couldn't find resource category [hotel].",
+            "[      script:chat] Started resource maps",
+            "[      script:chat] Couldn't start resource maps.",
+            "Started resource maps",
+            "[           resources] Scanning resources.",
+            "[           resources] Stopping resource maps",
+        ] {
+            assert_eq!(Said::read(line), None, "{line}");
+        }
+    }
+
+    #[test]
+    fn a_start_is_at_the_first_command_whose_resources_are_not_all_up() {
+        let start = Start::new(plan(vec![
+            step(3, "chat", &["chat"]),
+            step(4, "[maps]", &["bridge", "docks", "pier"]),
+            step(9, "jobs", &["jobs"]),
+        ]));
+        assert_eq!(start.at(), Some((3, "chat".to_owned())));
+
+        start.starts(2, "chat");
+        let snapshot = start.progress.snapshot();
+        let at = snapshot.at.unwrap();
+        assert_eq!((at.line, at.since_ms, at.done, at.of), (4, 2000, 0, 3));
+
+        start.starts(5, "Docks").starts(6, "pier");
+        let at = start.progress.snapshot().at.unwrap();
+        assert_eq!((at.line, at.since_ms, at.done, at.of), (4, 2000, 2, 3));
+
+        start.starts(9, "bridge");
+        assert_eq!(start.at(), Some((9, "jobs".to_owned())));
+        start.starts(10, "jobs");
+        assert_eq!(start.at(), None);
+        let snapshot = start.progress.snapshot();
+        assert_eq!((snapshot.started, snapshot.planned), (5, Some(5)));
+        assert_eq!(snapshot.last.unwrap().name, "jobs");
+    }
+
+    #[test]
+    fn a_resource_that_does_not_start_does_not_hold_the_start_at_its_command() {
+        let start = Start::new(plan(vec![
+            step(3, "typo", &["typo"]),
+            step(4, "[props]", &["nursery", "toys"]),
+            step(5, "[hotel]", &[]),
+            step(6, "jobs", &["jobs"]),
+        ]));
+
+        start.says(1, "[ citizen-server-impl] Couldn't find resource typo.");
+        assert_eq!(start.at(), Some((4, "[props]".to_owned())));
+        start
+            .starts(2, "toys")
+            .says(3, "[ citizen-server-impl] Couldn't start resource nursery.");
+
+        assert_eq!(start.at(), Some((6, "jobs".to_owned())));
+        let snapshot = start.progress.snapshot();
+        assert_eq!((snapshot.started, snapshot.failed), (1, 2));
+    }
+
+    #[test]
+    fn a_dependency_started_ahead_of_its_command_leaves_the_start_where_it_is() {
+        let start = Start::new(plan(vec![
+            step(3, "framework", &["framework"]),
+            step(4, "database", &["database"]),
+            step(5, "jobs", &["jobs"]),
+        ]));
+
+        start.starts(1, "database");
+        assert_eq!(start.at(), Some((3, "framework".to_owned())));
+
+        start.starts(4, "framework");
+        assert_eq!(
+            start.at(),
+            Some((5, "jobs".to_owned())),
+            "the database is up already"
+        );
+    }
+
+    #[test]
+    fn a_command_whose_resource_never_says_how_it_ended_is_left_after_three_later_ones() {
+        let start = Start::new(plan(vec![
+            step(3, "[props]", &["silent", "toys"]),
+            step(4, "a", &["a"]),
+            step(5, "b", &["b"]),
+            step(6, "c", &["c"]),
+            step(7, "d", &["d"]),
+        ]));
+
+        start.starts(1, "toys").starts(2, "a").starts(3, "b");
+        assert_eq!(start.at(), Some((3, "[props]".to_owned())));
+        start.starts(4, "c");
+        assert_eq!(start.at(), Some((7, "d".to_owned())));
+
+        start.starts(9, "silent");
+        assert_eq!(
+            start.at(),
+            Some((7, "d".to_owned())),
+            "what was left is over, and so are a, b and c"
+        );
+    }
+
+    #[test]
+    fn a_command_left_too_soon_is_come_back_to_when_its_resource_starts() {
+        let start = Start::new(plan(vec![
+            step(3, "framework", &["framework"]),
+            step(4, "a", &["a"]),
+            step(5, "b", &["b"]),
+            step(6, "c", &["c"]),
+            step(7, "[maps]", &["docks", "pier"]),
+        ]));
+
+        start.starts(1, "a").starts(2, "b").starts(3, "c");
+        assert_eq!(start.at(), Some((7, "[maps]".to_owned())));
+
+        start.starts(60, "framework");
+        assert_eq!(
+            start.at(),
+            Some((7, "[maps]".to_owned())),
+            "its three dependencies were up"
+        );
+        let start = Start::new(plan(vec![
+            step(3, "[core]", &["framework", "hud"]),
+            step(4, "a", &["a"]),
+            step(5, "b", &["b"]),
+            step(6, "c", &["c"]),
+            step(7, "d", &["d"]),
+        ]));
+        start.starts(1, "a").starts(2, "b").starts(3, "c");
+        assert_eq!(start.at(), Some((7, "d".to_owned())));
+        start.starts(60, "framework");
+        assert_eq!(
+            start.at(),
+            Some((3, "[core]".to_owned())),
+            "hud is still to start"
+        );
+    }
+
+    #[test]
+    fn the_slowest_resources_are_timed_from_the_one_before_them() {
+        let start = Start::new(plan(Vec::new()));
+        start.says(4, "[           resources] Found 12 resources.");
+        for (seconds, resource) in [
+            (5, "a"),
+            (11, "b"),
+            (12, "c"),
+            (20, "d"),
+            (22, "e"),
+            (25, "f"),
+            (29, "g"),
+        ] {
+            start.starts(seconds, resource);
+        }
+        start.starts(40, "b");
+
+        let snapshot = start.progress.snapshot();
+        let slowest: Vec<(&str, u64)> = snapshot
+            .slowest
+            .iter()
+            .map(|slow| (slow.name.as_str(), slow.ms))
+            .collect();
+        assert_eq!(
+            slowest,
+            [("d", 8000), ("b", 6000), ("g", 4000), ("f", 3000), ("e", 2000)]
+        );
+        assert_eq!(
+            (snapshot.found, snapshot.started, snapshot.at),
+            (Some(12), 7, None)
+        );
+    }
+
+    #[test]
+    fn the_resource_whose_scripts_load_is_named_until_it_is_up() {
+        let start = Start::new(plan(vec![step(3, "[core]", &["framework", "hud"])]));
+
+        start.says(
+            1,
+            "[    c-scripting-core] Creating script environments for framework",
+        );
+        assert_eq!(
+            start.progress.snapshot().at.unwrap().resource.as_deref(),
+            Some("framework")
+        );
+        assert_eq!(start.progress.moved(), None, "nothing is up yet");
+
+        start.starts(3, "framework");
+        assert_eq!(start.progress.snapshot().at.unwrap().resource, None);
+        assert_eq!(
+            start.progress.moved(),
+            Some(start.spawned + Duration::from_secs(3))
+        );
+    }
+}

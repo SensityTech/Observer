@@ -56,6 +56,8 @@ pub enum ErrorCode {
     ServerNotRunning,
     /// FXServer is stopping; it can be started again once it has.
     ServerStopping,
+    /// Only a start whose cfg still runs can be given more time.
+    ServerNotStarting,
     /// Observer is stopping, and FXServer with it.
     ShuttingDown,
     /// Params: `reason`, a `CommandRefusal`.

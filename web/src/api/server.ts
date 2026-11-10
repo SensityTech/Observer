@@ -10,6 +10,8 @@ const SERVER = '/servers/default';
 export const startServer = () => send('POST', `${SERVER}/start`);
 export const stopServer = () => send('POST', `${SERVER}/stop`);
 export const restartServer = () => send('POST', `${SERVER}/restart`);
+/** Gives the start under way more time before Observer takes it for stuck. */
+export const extendStart = () => send('POST', `${SERVER}/start/extend`);
 
 /** Audited before FXServer gets it; the answer says whether FXServer read it yet. */
 export const sendCommand = (line: string) => send<CommandAck>('POST', `${SERVER}/console`, { line });

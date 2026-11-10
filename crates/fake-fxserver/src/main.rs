@@ -13,9 +13,10 @@
 //! - `fake_quit_delay_ms` (500): time between `quit` and the end, which is what FXServer 35245 does:
 //!   exit code 1 on Windows, SIGSEGV on Linux;
 //! - `fake_ignore_quit 1`: `quit` does nothing;
-//! - `fake_start_ms <ms>` (0): how long each resource takes to start. FXServer 38435 prints
-//!   `Started resource` once a resource is up and nothing while it reads its stream files, which
-//!   took a clothing pack minutes on a first start;
+//! - `fake_start_ms <ms>` (0): how long each resource takes to start, and `fake_start_ms:<name>`
+//!   for one of them. FXServer 38435 prints `Started resource` once a resource is up and nothing
+//!   while it reads its stream files, which took a clothing pack minutes on a first start;
+//! - `fake_fail_start <name>`: that resource does not start, as one whose asset is disabled;
 //! - `fake_heartbeat_ms` (3000): the bridge heartbeat period;
 //! - `fake_heap_ms` (10000): how often the bridge reports the JS heap;
 //! - `fake_players <n>`: `/dynamic.json` counts `n` clients and `/players.json` lists ids 1 to `n`
@@ -74,7 +75,7 @@ mod traces;
 use std::collections::HashMap;
 use std::io::{self, BufRead};
 use std::net::{TcpListener, TcpStream, UdpSocket};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{self, Child, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError, mpsc};
@@ -265,6 +266,33 @@ fn main() {
     process::exit(101);
 }
 
+/// The resources under the folders named `category` of `folder`, in name order, as FXServer
+/// starts every one with that folder on its path.
+fn category_members(folder: &Path, category: &str) -> Vec<String> {
+    let mut members = Vec::new();
+    let mut folders = vec![(folder.to_path_buf(), false)];
+    while let Some((folder, inside)) = folders.pop() {
+        let Ok(entries) = std::fs::read_dir(folder) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+                continue;
+            };
+            if !entry.path().is_dir() {
+                continue;
+            }
+            if name.starts_with('[') && name.ends_with(']') {
+                folders.push((entry.path(), inside || name.eq_ignore_ascii_case(category)));
+            } else if inside {
+                members.push(name);
+            }
+        }
+    }
+    members.sort_unstable();
+    members
+}
+
 impl Fake {
     fn boot(&mut self, commands: &[Vec<String>]) {
         // FXServer applies every `+set` of its command line before it runs anything else, the cfg
@@ -351,15 +379,10 @@ impl Fake {
             ("exec", Some(file)) => self.exec(file),
             ("endpoint_add_tcp", Some(address)) => self.endpoint = Some(address.to_owned()),
             ("endpoint_add_udp", _) => {}
-            ("ensure" | "start", Some(resource)) => {
-                let restarted = self.started.iter().any(|started| started == resource);
-                if self.bridge.as_ref().is_some_and(|bridge| bridge.name == resource) {
-                    stop(resource);
-                }
-                self.start(resource);
-                let events: &[&str] = if restarted { &["stop", "start"] } else { &["start"] };
-                self.resources_changed(resource, events);
+            ("ensure" | "start", Some(category)) if category.starts_with('[') && category.ends_with(']') => {
+                self.ensure_category(category);
             }
+            ("ensure" | "start", Some(resource)) => self.ensure(resource),
             ("restart", Some(resource)) => {
                 stop(resource);
                 self.start(resource);
@@ -457,9 +480,34 @@ impl Fake {
         }
     }
 
+    fn ensure_category(&mut self, category: &str) {
+        let members = category_members(Path::new("resources"), category);
+        if members.is_empty() {
+            console::line(SERVER, &format!("Couldn't find resource category {category}."));
+        }
+        for member in members {
+            self.ensure(&member);
+        }
+    }
+
+    fn ensure(&mut self, resource: &str) {
+        if self.server.convar("fake_fail_start").as_deref() == Some(resource) {
+            console::line(SERVER, &format!("Couldn't start resource {resource}."));
+            return;
+        }
+        let restarted = self.started.iter().any(|started| started == resource);
+        if self.bridge.as_ref().is_some_and(|bridge| bridge.name == resource) {
+            stop(resource);
+        }
+        self.start(resource);
+        let events: &[&str] = if restarted { &["stop", "start"] } else { &["start"] };
+        self.resources_changed(resource, events);
+    }
+
     fn start(&mut self, resource: &str) {
         console::line(SCRIPTING, &format!("Creating script environments for {resource}"));
-        if let Some(ms) = self.server.number("fake_start_ms") {
+        let own = self.server.number(&format!("fake_start_ms:{resource}"));
+        if let Some(ms) = own.or_else(|| self.server.number("fake_start_ms")) {
             thread::sleep(Duration::from_millis(ms));
         }
         console::line(RESOURCES, &format!("Started resource {resource}"));

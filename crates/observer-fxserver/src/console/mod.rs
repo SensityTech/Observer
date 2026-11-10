@@ -28,6 +28,12 @@ const LIVE_CAPACITY: usize = 1024;
 /// Numbers available to each millisecond Observer runs, far more than it ever prints.
 const SEQS_PER_MS: u64 = 1000;
 
+/// The text of a line FXServer printed on `channel`, whose name it right-aligns in brackets.
+pub(crate) fn on_channel<'a>(line: &'a str, channel: &str) -> Option<&'a str> {
+    let (name, text) = line.strip_prefix('[')?.split_once("] ")?;
+    (name.trim_start() == channel).then_some(text)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ConsoleLine {
     /// Numbers every line Observer saw since it started, across server restarts. Counted from the

@@ -500,6 +500,10 @@ export const en = {
         unknown: 'n/a',
         upFor: (uptime: string) => `up ${uptime}`,
         forTime: (lasted: string) => `for ${lasted}`,
+        resources: (started: number, of: number | null) =>
+            of === null
+                ? count(started, { one: 'resource', other: 'resources' })
+                : `${formatNumber('en', started)} of ${count(of, { one: 'resource', other: 'resources' })}`,
         nextRestart: 'Next restart',
         none: 'None',
         inTime: (left: string) => `in ${left}`,
@@ -603,6 +607,44 @@ export const en = {
         },
         details: 'Details',
         detailsHint: 'Every measure of FXServer, the host and Observer.',
+        start: {
+            title: (started: number) => `${count(started, { one: 'resource', other: 'resources' })} started`,
+            ofPlanned: (planned: number) => `of the ${formatNumber('en', planned)} the cfg starts`,
+            ofFound: (found: number) =>
+                `of the ${formatNumber('en', found)} FXServer found; the cfg decides how many it starts`,
+            progress: 'Resources started',
+            progressText: (started: number, of: number) =>
+                `${formatNumber('en', started)} of ${formatNumber('en', of)}`,
+            now: 'Starting now',
+            nowAt: (file: string, line: number, lasted: string) =>
+                `${file} line ${formatNumber('en', line)}, for ${lasted}`,
+            nowOf: (done: number, of: number) =>
+                `${formatNumber('en', done)} of its ${formatNumber('en', of)} are up`,
+            nowScripts: (resource: string) => `FXServer is loading the server scripts of ${resource}.`,
+            quiet: 'FXServer prints nothing while it starts a resource: one with thousands of streamed files can take minutes.',
+            unread: 'Observer could not read every command of the cfg, so it cannot tell which one FXServer is at.',
+            over: 'Every command of the cfg that starts a resource has run. FXServer is finishing its start.',
+            last: 'Last one started',
+            lastAgo: (ago: string, warnings: number) =>
+                warnings === 0
+                    ? `${ago} ago`
+                    : `${ago} ago, with ${count(warnings, { one: 'warning', other: 'warnings' })}`,
+            none: 'None yet.',
+            failed: (failed: number) =>
+                `${count(failed, { one: 'resource', other: 'resources' })} did not start.`,
+            openConsole: 'The console says why',
+            silent: (silence: string, left: string) =>
+                `No resource started for ${silence}. In ${left}, Observer takes this start for stuck and restarts it.`,
+            overdue: (silence: string) =>
+                `No resource started for ${silence}. Observer takes this start for stuck.`,
+            silence: 'Silence before the start is taken for stuck',
+            extend: (minutes: number) => `Give this start ${formatNumber('en', minutes)} min more`,
+            extendFailed: (reason: string) => `This start was not given more time. ${reason}`,
+            hangDetection: 'Hang detection',
+            slowest: 'Slowest so far',
+            slowestHint: 'from the resource started before each one to its own start',
+            seconds: (seconds: string) => `${seconds} s`,
+        },
         stateTitle: 'FXServer',
         notConfigured: 'FXServer has no launch settings yet.',
         notConfiguredOwner: 'The server setup points Observer at your server folder and its cfg.',
@@ -4963,6 +5005,7 @@ export const en = {
             server_started: 'Server started',
             server_stopped: 'Server stopped',
             server_restarted: 'Server restarted',
+            server_start_extended: 'Start given more time',
             console_command_sent: 'Console command',
             console_log_downloaded: 'Console log downloaded',
             server_crash_loop: 'Crash loop: restarts stopped',
@@ -5499,6 +5542,7 @@ export const en = {
         server_running: 'FXServer is already running.',
         server_not_running: 'FXServer is not running.',
         server_stopping: 'FXServer is stopping. Start it again once it has stopped.',
+        server_not_starting: 'FXServer is no longer starting.',
         shutting_down: 'Observer is stopping, and FXServer with it.',
         command_refused: (params) => {
             const reason = stringParam(params, 'reason');
