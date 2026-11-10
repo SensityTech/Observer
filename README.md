@@ -575,11 +575,35 @@ files changed while its version did not. Text files (Lua, JS, JSON, cfg, YAML an
 
 ## Server tools
 
-Server tools look in the server's resources for problems FXServer does not report, and repair those
-they can without changing what players see. The first one finds duplicate archetypes. A tool runs when
-the owner asks, on the **Tools** page or from the [command line](#command-line), and before every
-start of FXServer once the owner turns that on. Nothing is written into the server folder until the
-owner runs a fix or turns fixes on.
+Server tools look in the server's resources for problems FXServer does not report, or reports where
+nobody reads, and repair those they can without changing what players see. A tool runs when the
+owner asks, on the **Tools** page or from the [command line](#command-line), and before every start
+of FXServer once the owner turns that on. Nothing is written into the server folder until the owner
+runs a fix, stages one or turns fixes on.
+
+The **Tools** page, the owner's, gives each tool a card: what it found last, when, and the way in.
+**Needs attention** and **Never run** filter them. Beside the cards:
+
+- **Staged for the next restart**: the fix that waits for the next start of FXServer, with the way
+  to drop it.
+- **Before each start**: what each tool does before FXServer starts, changed in place.
+- **Latest runs**: the last run of each tool; every run that wrote is in the audit log.
+
+Four tools are listed:
+
+- **Duplicate archetypes**, below, which scans, fixes and undoes.
+- **cfg check**: the checks of the [server.cfg page](#editing-servercfg), counted, with the way to
+  the editor.
+- **Heavy assets**: the streamed models and textures FXServer warned about as it last started their
+  resource, heaviest first, with the size it measured and whether it called them oversized.
+  Observer does not rewrite textures: the list is what to work from in a texture editor.
+- **Missing files**: the files a manifest names that its resource does not hold, with the manifest
+  and the line that name each.
+
+The last two are read from FXServer's console as it starts its resources, and kept in memory
+until the next start: they are empty until Observer has started FXServer once. FXServer prints
+these warnings before the line that says a resource started, which is how each is given its
+resource.
 
 ### Duplicate archetypes
 
@@ -683,6 +707,17 @@ in a folder that is gone, or is another folder now, is listed without **Undo**: 
 back by hand. **Fix**, **Undo**, **Undo all** and the settings ask for the owner's password again,
 and the three buttons run only while FXServer is stopped. Writes and settings changes are in the
 audit log, those of a run that Observer's stop cut short at its next start; report runs are not.
+
+While FXServer runs, the plan on screen can be **staged for the next restart** instead. Before the
+next start that is not a recovery from a crash, Observer scans the folder again: it writes the fix
+if the scan plans exactly what was staged, and writes nothing if it plans anything else, saying so
+in the console. Either way the staged fix is gone after that start, and so it is once any run has
+changed files. Staging and dropping a staged fix ask for the password and are in the audit log.
+With **At start** on **Fix** there is nothing to stage: every start fixes.
+
+The tool's page counts the duplicates it leaves by reason, with a switch for the two the owner
+decides: **Change escrowed resources** and **Fix them too, keeping the latest copy** are the
+settings below, saved and followed by a new scan.
 
 Before a start, FXServer waits for the tool. Past 60 seconds, the tool is told to stop between two
 files, and FXServer starts once it has; a stop in the meantime cancels the start. FXServer never

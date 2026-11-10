@@ -1043,6 +1043,62 @@ async fn a_category_of_the_cfg_is_followed_as_the_resources_under_it() {
 }
 
 #[tokio::test]
+async fn what_fxserver_warns_of_as_it_starts_is_kept_with_the_resource_it_was_starting() {
+    let mut lab = Lab::new(&[]).await;
+    assert_eq!(lab.supervisor.start_warnings(), None, "before the first start");
+    extend_cfg(
+        &lab,
+        &[],
+        &[
+            "set fake_heavy maps,a_long_resource_name",
+            "set fake_missing maps",
+        ],
+    );
+    extend_cfg(&lab, &["chat", "maps", "a_long_resource_name"], &[]);
+
+    lab.supervisor.start("test").await.unwrap();
+    assert_eq!(lab.state(State::Online).await, Cause::Ready);
+
+    lab.console_until("Started resource maps (3 warnings)").await;
+    let (_, warnings) = lab.supervisor.start_warnings().unwrap();
+    let heavy: Vec<(&str, &str, u32, bool)> = warnings
+        .heavy
+        .iter()
+        .map(|asset| {
+            (
+                asset.resource.as_str(),
+                asset.file.as_str(),
+                asset.tenths,
+                asset.oversized,
+            )
+        })
+        .collect();
+    assert_eq!(
+        heavy,
+        [
+            ("maps", "maps_hi.ydr", 495, true),
+            ("maps", "maps.ytd", 162, false),
+            ("a_long_resource_name", "a_long_resource_name_hi.ydr", 495, true),
+            ("a_long_resource_name", "a_long_resource_name.ytd", 162, false),
+        ]
+    );
+    let missing: Vec<(&str, &str, &str, u32)> = warnings
+        .missing
+        .iter()
+        .map(|file| {
+            (
+                file.resource.as_str(),
+                file.kind.as_str(),
+                file.file.as_str(),
+                file.line,
+            )
+        })
+        .collect();
+    assert_eq!(missing, [("maps", "client_script", "client/gone.lua", 9)]);
+    lab.shut_down(false).await;
+}
+
+#[tokio::test]
 async fn a_start_given_more_time_is_not_taken_for_stuck() {
     // The bridge alone takes longer to start than the two seconds a start may say nothing.
     let mut lab = Lab::new(&[("fake_start_ms", "3500")]).await;

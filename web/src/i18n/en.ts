@@ -3405,9 +3405,6 @@ export const en = {
                 `Fix takes ${count(removals, { one: 'copy', other: 'copies' })} out of ${count(files, { one: 'file', other: 'files' })}, for ${count(groups, { one: 'duplicate', other: 'duplicates' })}.`,
             fixWaits: (groups: number) =>
                 `${count(groups, { one: 'duplicate is', other: 'duplicates are' })} ready to fix, and FXServer is running: the tools change files only while it is stopped. Stop FXServer, then press Fix.`,
-            leftHint: (groups: number) =>
-                `${count(groups, { one: 'duplicate is', other: 'duplicates are' })} left as found, each for the reasons its row gives. The settings decide two of them: copies that differ, and resources under the asset escrow.`,
-            openSettings: 'Open the tool’s settings',
             noReport: 'Scan first: Fix applies the plan of the last report.',
             nothingToFix: 'The last report has nothing to fix.',
             applied: "The last report's fixes are written. Scan now to see what is left.",
@@ -3457,6 +3454,168 @@ export const en = {
             },
             reportFrom: (time: string) =>
                 `The groups below are from the report of ${time}: the last run made none.`,
+            stage: (groups: number) =>
+                `Stage ${count(groups, { one: 'fix', other: 'fixes' })} for the next restart`,
+            stageWaits: (groups: number) =>
+                `${count(groups, { one: 'duplicate is', other: 'duplicates are' })} ready to fix, and FXServer is running: the tools change files only while it is stopped. Stage the fix and Observer writes it before the next start, or stop FXServer and press Fix.`,
+            staged: (groups: number) =>
+                `Staged: ${count(groups, { one: 'fix', other: 'fixes' })} will be written before the next start of FXServer, if the scan then plans the same.`,
+            stagedBy: (groups: number, by: string) =>
+                `${count(groups, { one: 'fix', other: 'fixes' })} staged by ${by}: written before the next start of FXServer, if the scan then plans the same.`,
+            unstage: 'Drop it',
+            steps: {
+                label: 'Steps',
+                step: (number: number, title: string) => `${formatNumber('en', number)} · ${title}`,
+                scanned: 'Scanned',
+                review: 'Review',
+                fix: 'Fix',
+                notScanned: 'Not yet. Scan now reads the server folder and writes nothing.',
+                read: (resources: number, archetypes: number) =>
+                    `${count(resources, { one: 'resource', other: 'resources' })}, ${count(archetypes, { one: 'archetype', other: 'archetypes' })} read. Nothing written.`,
+                afterScan: 'The scan lists every duplicate, with what a fix would keep and take out.',
+                found: (groups: number, fixable: number, left: number) =>
+                    groups === 0
+                        ? 'No archetype is registered more than once.'
+                        : `${count(groups, { one: 'duplicate', other: 'duplicates' })}: ${formatNumber('en', fixable)} ready to fix, ${formatNumber('en', left)} left as found.`,
+                written: 'Written. Scan now to see what is left.',
+                staged: 'Staged: written before the next start.',
+                nothing: 'Nothing to fix.',
+                running:
+                    'FXServer is running: stage the fix for the next restart, or stop it and fix at once.',
+                ready: 'Ready: the original of every file changed is kept.',
+            },
+            left: {
+                title: (left: number) =>
+                    `Why ${count(left, { one: 'duplicate is', other: 'duplicates are' })} left, and what changes that`,
+                hint: 'A duplicate can have several reasons. Two of them are yours to decide.',
+                nothing: 'Nothing to decide',
+                below: 'Settled by hand, from the list below',
+                escrowed: {
+                    title: 'In a resource under the asset escrow',
+                    text: 'Its author ships the fix. Changing such a resource is yours to allow: Observer keeps its original, as for any file.',
+                    control: 'Change escrowed resources',
+                },
+                differ: {
+                    title: 'The copies differ',
+                    text: 'The game uses the last copy registered. A fix keeps that one and takes the others out, which changes nothing only if the prediction of the order is right.',
+                    control: 'Fix them too, keeping the latest copy',
+                },
+                manifest: {
+                    title: 'Listed by a map manifest',
+                    text: 'A .ymf or a _cache_y.dat names both files, which may load only with the maps that need them. Left on purpose.',
+                },
+                byHand: {
+                    title: 'Several resources, a contested name, an interior or a file that cannot be written',
+                    text: 'Stopping one of two resources, renaming a file or fixing a folder is not a change a tool should make by itself.',
+                },
+            },
+        },
+        hub: {
+            lead: 'Every tool reads first, shows what it would change, and keeps the original of each file it changes.',
+            show: 'Show',
+            filters: {
+                all: (tools: number) => `All ${formatNumber('en', tools)}`,
+                attention: (tools: number) => `Needs attention ${formatNumber('en', tools)}`,
+                never: (tools: number) => `Never run ${formatNumber('en', tools)}`,
+            },
+            running:
+                'FXServer is running. Tools read at any time and write only while it is stopped: a fix you prepare now is staged, and written before the next start.',
+            kinds: { assets: 'assets', server: 'server', resources: 'resources' },
+            open: 'Open',
+            list: 'See the list',
+            noneShown: 'No tool is in that state.',
+            neverScanned: 'Not scanned yet',
+            noStart: 'No start seen since Observer started',
+            noStartLong:
+                'Observer has not started FXServer since it started itself. This list fills from what FXServer prints as it starts its resources.',
+            fromStart: (when: string) => `from what FXServer said at the start of ${when}`,
+            breadcrumb: 'Breadcrumb',
+            search: 'Resource or file',
+            noMatch: 'Nothing matches.',
+            more: (rows: number) => `Show more, ${formatNumber('en', rows)} left`,
+            truncated: 'FXServer warned of more than Observer keeps.',
+            columns: {
+                resource: 'Resource',
+                file: 'File',
+                size: 'Size',
+                memory: 'Memory',
+                asked: 'Asked for as',
+                named: 'Named in',
+            },
+            archetypes: {
+                about: 'Two files define the same prop, vehicle, weapon or ped. The client warns and keeps one.',
+                none: 'No duplicate',
+                found: (groups: number, fixable: number) =>
+                    `${count(groups, { one: 'duplicate', other: 'duplicates' })} · ${formatNumber('en', fixable)} ready to fix`,
+                fixed: (fixed: number, left: number) =>
+                    left === 0
+                        ? `${count(fixed, { one: 'duplicate', other: 'duplicates' })} fixed`
+                        : `${formatNumber('en', fixed)} fixed · ${formatNumber('en', left)} left as found`,
+                scanned: (when: string, took: string, resources: number) =>
+                    `scanned ${when} · ${took} · ${count(resources, { one: 'resource', other: 'resources' })}`,
+                review: 'Review and fix',
+                again: 'Scan again',
+            },
+            heavy: {
+                title: 'Heavy assets',
+                about: 'Models and textures FXServer finds too heavy to stream well, as it says when their resource starts.',
+                long: 'FXServer measures every streamed file as it starts a resource, and warns of those that take much memory: past a size, it says they can keep models from loading. This is that list, heaviest first.',
+                none: 'FXServer warned of none',
+                found: (files: number, oversized: number) =>
+                    oversized === 0
+                        ? count(files, { one: 'heavy file', other: 'heavy files' })
+                        : `${count(files, { one: 'heavy file', other: 'heavy files' })} · ${formatNumber('en', oversized)} oversized`,
+                count: (files: number) => count(files, { one: 'heavy file', other: 'heavy files' }),
+                onlyOversized: 'Oversized only',
+                oversized: 'Oversized',
+                size: (mib: string) => `${mib} MiB`,
+                memory: { physical: 'Physical', virtual: 'Virtual' },
+                next: 'Observer does not rewrite textures yet: a texture is made lighter in a texture editor for now, by dropping its largest level. This list is what such a tool works from.',
+            },
+            cfg: {
+                title: 'cfg check',
+                about: 'Lines of the cfg that start a resource the folder does not hold, set the same thing twice, or work against Observer.',
+                none: 'Nothing to fix',
+                unread: 'The cfg is not read yet',
+                unheld: (lines: number) =>
+                    `${count(lines, { one: 'line starts', other: 'lines start' })} a resource that is not there`,
+                found: (findings: number) =>
+                    `${count(findings, { one: 'check', other: 'checks' })} to look at`,
+                source: (file: string) => `${file}, read when this page opened`,
+                open: 'Open in the editor',
+            },
+            missing: {
+                title: 'Missing files',
+                about: 'Files a manifest names that its resource does not ship: the client asks for them and gets nothing.',
+                long: 'As it starts a resource, FXServer says which files its manifest names that are not in its folder. A script that is missing never runs; a data file that is missing is asked for by every client that joins.',
+                none: 'FXServer found every file',
+                found: (files: number, resources: number) =>
+                    `${count(files, { one: 'file', other: 'files' })} missing in ${count(resources, { one: 'resource', other: 'resources' })}`,
+                count: (files: number) => count(files, { one: 'missing file', other: 'missing files' }),
+                named: (manifest: string, line: string) => `${manifest}:${line}`,
+                next: 'Each is fixed in its resource: put the file back, or take its line out of the manifest.',
+            },
+            staged: {
+                title: 'Staged for the next restart',
+                none: 'Nothing staged. A fix prepared while FXServer runs waits here, and is written before the next start.',
+                fix: (fixes: number, tool: string, by: string, when: string) =>
+                    `${count(fixes, { one: 'fix', other: 'fixes' })} of ${tool}, staged by ${by} on ${when}.`,
+                written:
+                    'Before the next start, the folder is scanned again: the fix is written if the scan plans the same, and dropped if not.',
+                drop: 'Drop it',
+            },
+            beforeStart: {
+                title: 'Before each start',
+                label: (tool: string) => `${tool} before each start`,
+                modes: { off: 'Off', report: 'Report', fix: 'Fix' } satisfies Record<ToolMode, string>,
+                hint: 'What each tool does before FXServer starts. Changing it asks for your password; a start never waits for a tool longer than the time it is given.',
+            },
+            runs: {
+                title: 'Latest runs',
+                none: 'No run yet.',
+                run: (tool: string, mode: string) => `${tool} · ${mode}`,
+                audit: 'Every run that wrote, in the audit log',
+            },
         },
         groups: {
             title: 'Groups',
@@ -5145,6 +5304,8 @@ export const en = {
             server_start_extended: 'Start given more time',
             server_cfg_changed: 'server.cfg saved',
             server_cfg_restored: 'server.cfg version put back',
+            tool_fix_staged: 'Tool fix staged for the next start',
+            tool_fix_unstaged: 'Staged tool fix dropped',
             console_command_sent: 'Console command',
             console_log_downloaded: 'Console log downloaded',
             server_crash_loop: 'Crash loop: restarts stopped',

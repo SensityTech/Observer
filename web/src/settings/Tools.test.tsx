@@ -23,6 +23,7 @@ const viewOf = (tool: Partial<ToolView> = {}): ToolsView => ({
             unreachable: [],
             closed: [],
             backupBytes: 0,
+            staged: null,
             ...tool,
         },
     ],

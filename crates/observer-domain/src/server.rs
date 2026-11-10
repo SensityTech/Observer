@@ -216,6 +216,59 @@ pub struct StartProgress {
     pub extension_minutes: u32,
 }
 
+/// The memory FXServer measures a streamed file by.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum AssetMemory {
+    Physical,
+    Virtual,
+}
+
+/// A streamed file FXServer said is heavy as it started the file's resource.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct HeavyAsset {
+    pub resource: String,
+    /// Within the resource, as FXServer names it.
+    pub file: String,
+    /// In tenths of a MiB, as FXServer prints it.
+    pub tenths: u32,
+    pub memory: AssetMemory,
+    /// FXServer says it can keep models from loading.
+    pub oversized: bool,
+}
+
+/// A file a manifest names that its resource does not hold, as FXServer said when it started the
+/// resource.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct MissingFile {
+    pub resource: String,
+    /// What the manifest asks for it as: `client_script`, `file`.
+    pub kind: String,
+    pub file: String,
+    /// The manifest and the line that name it.
+    pub manifest: String,
+    pub line: u32,
+}
+
+/// `GET /api/servers/default/start/warnings`: what FXServer warned about as it started its
+/// resources, the latest time Observer started it. Read from its console, kept in memory.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct StartWarnings {
+    /// Null when Observer has not started FXServer since it started itself.
+    pub started_at: Option<Timestamp>,
+    pub heavy: Vec<HeavyAsset>,
+    pub missing: Vec<MissingFile>,
+    /// FXServer warned of more than Observer keeps.
+    pub truncated: bool,
+}
+
 /// The `server.status` topic.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]

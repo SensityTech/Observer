@@ -6,7 +6,7 @@ use axum::{Extension, Json};
 use observer_app::{Caller, Servers};
 use observer_domain::convars::{CATALOG_JSON, CfgConvars};
 use observer_domain::launch::{LaunchChange, StoredLaunch};
-use observer_domain::server::{CommandAck, ConsoleCommand, LogFile};
+use observer_domain::server::{CommandAck, ConsoleCommand, LogFile, StartWarnings};
 use observer_domain::server_data::{
     CfgCheck, CfgReport, CfgText, CfgTextQuery, Discovery, FileListing, FilesQuery, FolderCheck,
     FolderListing, FolderQuery, FolderReport,
@@ -108,6 +108,11 @@ pub(crate) async fn start(
 ) -> Result<StatusCode, Failure> {
     state.supervision.start_server(&caller).await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// What FXServer warned about as it last started its resources, which the tools list.
+pub(crate) async fn start_warnings(State(state): State<AppState>) -> Json<StartWarnings> {
+    Json(state.supervision.start_warnings())
 }
 
 /// Gives the start under way more time before Observer takes it for stuck.

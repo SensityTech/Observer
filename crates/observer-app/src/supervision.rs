@@ -19,14 +19,16 @@ use observer_domain::launch::{Platform, StoredLaunch};
 use observer_domain::permissions::Permissions;
 use observer_domain::schedule::RestartSource;
 use observer_domain::server::{
-    CommandAck, CommandRefusal, ConsoleLine, ConsoleSnapshot, Delivery, HangCause, HealthProblem,
-    LINE_MASKED, LINE_NO_EOL, LINE_TRUNCATED, LaunchReadiness, LineKind, LogFile, PlayerCount, ServerState,
-    ServerStatus, SlowResource, StartCommand, StartProgress, StartedResource, StateCause,
+    AssetMemory, CommandAck, CommandRefusal, ConsoleLine, ConsoleSnapshot, Delivery, HangCause,
+    HealthProblem, HeavyAsset, LINE_MASKED, LINE_NO_EOL, LINE_TRUNCATED, LaunchReadiness, LineKind, LogFile,
+    MissingFile, PlayerCount, ServerState, ServerStatus, SlowResource, StartCommand, StartProgress,
+    StartWarnings, StartedResource, StateCause,
 };
 use observer_fxserver::bridge::BridgeEvent;
 use observer_fxserver::console::{self as fx_console, ConsoleHub, ConsoleLog, LineFlags};
 use observer_fxserver::health;
 use observer_fxserver::launch::ServerLaunch;
+use observer_fxserver::start as fx_start;
 use observer_fxserver::stdin::{self, StdinError, UserCommand};
 use observer_fxserver::supervisor::{
     self as fx, Cause, ControlError, EventKind, Settings, State, Supervisor,
@@ -388,6 +390,47 @@ impl Supervision {
     pub async fn stop_server(&self, caller: &Caller) -> Result<(), Error> {
         self.stop_by(&caller.username, Record::by(caller, AuditAction::ServerStopped))
             .await
+    }
+
+    /// What FXServer warned about as it started its resources, the latest time it was started.
+    pub fn start_warnings(&self) -> StartWarnings {
+        let Some((spawned_ms, warnings)) = self.inner.supervisor.start_warnings() else {
+            return StartWarnings {
+                started_at: None,
+                heavy: Vec::new(),
+                missing: Vec::new(),
+                truncated: false,
+            };
+        };
+        StartWarnings {
+            started_at: Timestamp::from_millisecond(spawned_ms).ok(),
+            heavy: warnings
+                .heavy
+                .into_iter()
+                .map(|asset| HeavyAsset {
+                    resource: asset.resource,
+                    file: asset.file,
+                    tenths: asset.tenths,
+                    memory: match asset.memory {
+                        fx_start::Memory::Physical => AssetMemory::Physical,
+                        fx_start::Memory::Virtual => AssetMemory::Virtual,
+                    },
+                    oversized: asset.oversized,
+                })
+                .collect(),
+            missing: warnings
+                .missing
+                .into_iter()
+                .map(|file| MissingFile {
+                    resource: file.resource,
+                    kind: file.kind,
+                    file: file.file,
+                    manifest: file.manifest,
+                    line: file.line,
+                })
+                .collect(),
+            truncated: warnings.truncated,
+        }
     }
 
     /// Gives the start under way more time before it is taken for stuck: a first start, or one

@@ -179,6 +179,8 @@ const AUDIT_ACTIONS = {
     server_start_extended: true,
     server_cfg_changed: true,
     server_cfg_restored: true,
+    tool_fix_staged: true,
+    tool_fix_unstaged: true,
     console_command_sent: true,
     console_log_downloaded: true,
     server_crash_loop: true,

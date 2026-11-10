@@ -28,10 +28,16 @@ const LIVE_CAPACITY: usize = 1024;
 /// Numbers available to each millisecond Observer runs, far more than it ever prints.
 const SEQS_PER_MS: u64 = 1000;
 
-/// The text of a line FXServer printed on `channel`, whose name it right-aligns in brackets.
-pub(crate) fn on_channel<'a>(line: &'a str, channel: &str) -> Option<&'a str> {
+/// The channel FXServer printed a line on, whose name it right-aligns in brackets and cuts at
+/// twenty characters, and the line's text.
+pub(crate) fn channel(line: &str) -> Option<(&str, &str)> {
     let (name, text) = line.strip_prefix('[')?.split_once("] ")?;
-    (name.trim_start() == channel).then_some(text)
+    Some((name.trim_start(), text))
+}
+
+/// The text of a line FXServer printed on `channel`.
+pub(crate) fn on_channel<'a>(line: &'a str, name: &str) -> Option<&'a str> {
+    channel(line).and_then(|(on, text)| (on == name).then_some(text))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

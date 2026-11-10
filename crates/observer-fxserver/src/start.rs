@@ -9,11 +9,13 @@ use std::time::{Duration, Instant};
 use serde::Serialize;
 
 use crate::cfg::{ResourceVerb, Scan};
-use crate::console::on_channel;
+use crate::console::channel;
 use crate::server_data::Resources;
 
 /// The slowest resources kept of one start.
 const SLOWEST: usize = 5;
+/// Warnings of each kind kept of one run.
+const MAX_WARNINGS: usize = 2000;
 /// Resources of later commands started in a row, none of the command the start is taken to be at,
 /// before it is taken to be past that command. FXServer starts a resource's dependencies ahead of
 /// their own commands, a few in a row at most; a command whose resource never says how it ended
@@ -88,11 +90,38 @@ enum Said<'a> {
     },
     /// A resource did not start, or no resource has that name.
     Failed(&'a str),
+    /// A streamed file FXServer finds heavy, as `resource/file`, in tenths of a MiB.
+    Heavy {
+        path: &'a str,
+        tenths: u32,
+        memory: Memory,
+        oversized: bool,
+    },
+    /// A file a manifest names that its resource does not hold.
+    Missing {
+        kind: &'a str,
+        file: &'a str,
+        manifest: &'a str,
+        line: u32,
+    },
+}
+
+/// The memory FXServer measures a streamed file by.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Memory {
+    Physical,
+    Virtual,
 }
 
 impl<'a> Said<'a> {
     fn read(line: &'a str) -> Option<Self> {
-        if let Some(text) = on_channel(line, "resources") {
+        let (channel, text) = channel(line)?;
+        // FXServer names the channel `resources:<resource>:stream`, cut at twenty characters.
+        if channel.starts_with("resources:") {
+            return Self::warning(text);
+        }
+        if channel == "resources" {
             if let Some(rest) = text.strip_prefix("Started resource ") {
                 let (resource, counted) = rest.split_once(' ').unwrap_or((rest, ""));
                 let warnings = counted
@@ -105,17 +134,115 @@ impl<'a> Said<'a> {
             let found = text.strip_prefix("Found ")?.strip_suffix(" resources.")?;
             return found.parse().ok().map(Self::Found);
         }
-        if let Some(text) = on_channel(line, "c-scripting-core") {
+        if channel == "c-scripting-core" {
             let resource = text.strip_prefix("Creating script environments for ")?;
             return (!resource.is_empty()).then_some(Self::Entering(resource));
         }
-        let text = on_channel(line, "citizen-server-impl")?;
+        if channel != "citizen-server-impl" {
+            return None;
+        }
         let named = text
             .strip_prefix("Couldn't start resource ")
             .or_else(|| text.strip_prefix("Couldn't find resource "))?;
         let resource = named.strip_suffix('.').unwrap_or(named);
         // A category that is not there starts nothing: its command has no resource to wait for.
         (!resource.is_empty() && !resource.starts_with("category ")).then_some(Self::Failed(resource))
+    }
+
+    /// What FXServer says of a resource's files as it starts it, before the line that says it
+    /// started: `Asset maps/dock.ydr uses 49.5 MiB of physical memory.`, and
+    /// ``Warning: could not find file `x.lua` (defined in fxmanifest.lua:12)``.
+    fn warning(text: &'a str) -> Option<Self> {
+        if let Some(rest) = text.strip_prefix("Asset ") {
+            let (path, said) = rest.split_once(" uses ")?;
+            let (size, of) = said.split_once(" MiB of ")?;
+            let memory = if of.starts_with("physical memory") {
+                Memory::Physical
+            } else if of.starts_with("virtual memory") {
+                Memory::Virtual
+            } else {
+                return None;
+            };
+            let (whole, tenth) = size.split_once('.').unwrap_or((size, "0"));
+            let tenths = whole
+                .parse::<u32>()
+                .ok()?
+                .saturating_mul(10)
+                .saturating_add(tenth.get(..1)?.parse().ok()?);
+            return path.contains('/').then_some(Self::Heavy {
+                path,
+                tenths,
+                memory,
+                oversized: of.contains("Oversized assets"),
+            });
+        }
+        let rest = text.strip_prefix("Warning: could not find ")?;
+        let (kind, rest) = rest.split_once(" `")?;
+        let (file, rest) = rest.split_once("` (defined in ")?;
+        let (manifest, line) = rest.strip_suffix(')')?.rsplit_once(':')?;
+        Some(Self::Missing {
+            kind,
+            file,
+            manifest,
+            line: line.parse().ok()?,
+        })
+    }
+}
+
+/// A streamed file FXServer finds heavy.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
+pub struct HeavyAsset {
+    pub resource: String,
+    /// Within the resource, as FXServer names it.
+    pub file: String,
+    /// In tenths of a MiB.
+    pub tenths: u32,
+    pub memory: Memory,
+    /// FXServer says it can keep models from loading.
+    pub oversized: bool,
+}
+
+/// A file a manifest names that its resource does not hold.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
+pub struct MissingFile {
+    pub resource: String,
+    /// What the manifest asks for it as: `client_script`, `file`.
+    pub kind: String,
+    pub file: String,
+    pub manifest: String,
+    pub line: u32,
+}
+
+/// What FXServer warned about as it started its resources, each once.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct Warnings {
+    pub heavy: Vec<HeavyAsset>,
+    pub missing: Vec<MissingFile>,
+    /// FXServer warned of more than are kept.
+    pub truncated: bool,
+}
+
+impl Warnings {
+    fn heavy(&mut self, asset: HeavyAsset) {
+        if self.heavy.contains(&asset) {
+            return;
+        }
+        if self.heavy.len() < MAX_WARNINGS {
+            self.heavy.push(asset);
+        } else {
+            self.truncated = true;
+        }
+    }
+
+    fn missing(&mut self, file: MissingFile) {
+        if self.missing.contains(&file) {
+            return;
+        }
+        if self.missing.len() < MAX_WARNINGS {
+            self.missing.push(file);
+        } else {
+            self.truncated = true;
+        }
     }
 }
 
@@ -190,9 +317,21 @@ struct State {
     strays: u32,
     entering: Option<String>,
     slowest: Vec<Slow>,
+    warnings: Warnings,
+    /// The files FXServer could not find since the last resource started: it says them before
+    /// the resource they belong to, which the line does not name.
+    unplaced: Vec<MissingFile>,
 }
 
 impl State {
+    /// Gives the files not found since the last resource to `resource`, which they are said before.
+    fn place_missing(&mut self, resource: &str) {
+        for mut file in std::mem::take(&mut self.unplaced) {
+            resource.clone_into(&mut file.resource);
+            self.warnings.missing(file);
+        }
+    }
+
     fn settled(&self, resource: &str) -> bool {
         self.started.contains(resource) || self.failed.contains(resource)
     }
@@ -275,6 +414,8 @@ impl Progress {
                 strays: 0,
                 entering: None,
                 slowest: Vec::new(),
+                warnings: Warnings::default(),
+                unplaced: Vec::new(),
             }),
         }
     }
@@ -295,6 +436,39 @@ impl Progress {
                 state.entering = Some(resource.to_owned());
                 return;
             }
+            Said::Heavy {
+                path,
+                tenths,
+                memory,
+                oversized,
+            } => {
+                let (resource, file) = path.split_once('/').unwrap_or((path, ""));
+                state.warnings.heavy(HeavyAsset {
+                    resource: resource.to_owned(),
+                    file: file.to_owned(),
+                    tenths,
+                    memory,
+                    oversized,
+                });
+                return;
+            }
+            Said::Missing {
+                kind,
+                file,
+                manifest,
+                line,
+            } => {
+                if state.unplaced.len() < MAX_WARNINGS {
+                    state.unplaced.push(MissingFile {
+                        resource: String::new(),
+                        kind: kind.to_owned(),
+                        file: file.to_owned(),
+                        manifest: manifest.to_owned(),
+                        line,
+                    });
+                }
+                return;
+            }
             Said::Started { resource, warnings } => {
                 let lower = resource.to_ascii_lowercase();
                 let took = at.saturating_duration_since(state.mark);
@@ -311,9 +485,11 @@ impl Progress {
                     },
                 ));
                 state.entering = None;
+                state.place_missing(resource);
                 state.place(&lower, at_ms);
             }
             Said::Failed(resource) => {
+                state.place_missing(resource);
                 let lower = resource.to_ascii_lowercase();
                 if !state.started.contains(&lower) {
                     state.failed.insert(lower);
@@ -338,6 +514,11 @@ impl Progress {
             .last
             .as_ref()
             .map(|(at, started)| (*at, started.name.clone()))
+    }
+
+    /// What FXServer warned about so far, in this run.
+    pub fn warnings(&self) -> Warnings {
+        self.state().warnings.clone()
     }
 
     pub fn snapshot(&self) -> Snapshot {
@@ -523,6 +704,70 @@ mod tests {
         ] {
             assert_eq!(Said::read(line), None, "{line}");
         }
+    }
+
+    #[test]
+    fn what_fxserver_warns_of_is_kept_once_with_the_resource_it_was_starting() {
+        let start = Start::new(plan(Vec::new()));
+        let heavy = "[resources:maps:stream] Asset maps/dock.ydr uses 49.5 MiB of physical memory. \
+            Oversized assets can and WILL lead to streaming issues (such as models not loading/rendering).";
+        start
+            .says(1, heavy)
+            .says(1, "[  resources:maps:str] Asset maps/pier.ytd uses 16 MiB of virtual memory.")
+            .says(1, "[resources:Long_Name] Warning: could not find file `data/**/x.meta` (defined in fxmanifest.lua:12)")
+            .says(1, "[resources:Long_Name] Warning: could not find client_script `cl.lua` (defined in __resource.lua:3)")
+            .says(1, "[resources:Long_Name] Warning: Long_Name1 does not have a resource manifest (fxmanifest.lua)")
+            .starts(2, "Long_Name_Of_A_Resource (2 warnings)")
+            .says(3, heavy)
+            .says(3, "[         script:maps] Asset maps/fake.ydr uses 99.0 MiB of physical memory.")
+            .says(3, "[resources:gone:strea] Warning: could not find file `a.lua` (defined in fxmanifest.lua:1)")
+            .says(4, "[ citizen-server-impl] Couldn't start resource gone.");
+
+        assert_eq!(
+            start.progress.warnings(),
+            Warnings {
+                heavy: vec![
+                    HeavyAsset {
+                        resource: "maps".to_owned(),
+                        file: "dock.ydr".to_owned(),
+                        tenths: 495,
+                        memory: Memory::Physical,
+                        oversized: true,
+                    },
+                    HeavyAsset {
+                        resource: "maps".to_owned(),
+                        file: "pier.ytd".to_owned(),
+                        tenths: 160,
+                        memory: Memory::Virtual,
+                        oversized: false,
+                    },
+                ],
+                missing: vec![
+                    MissingFile {
+                        resource: "Long_Name_Of_A_Resource".to_owned(),
+                        kind: "file".to_owned(),
+                        file: "data/**/x.meta".to_owned(),
+                        manifest: "fxmanifest.lua".to_owned(),
+                        line: 12,
+                    },
+                    MissingFile {
+                        resource: "Long_Name_Of_A_Resource".to_owned(),
+                        kind: "client_script".to_owned(),
+                        file: "cl.lua".to_owned(),
+                        manifest: "__resource.lua".to_owned(),
+                        line: 3,
+                    },
+                    MissingFile {
+                        resource: "gone".to_owned(),
+                        kind: "file".to_owned(),
+                        file: "a.lua".to_owned(),
+                        manifest: "fxmanifest.lua".to_owned(),
+                        line: 1,
+                    },
+                ],
+                truncated: false,
+            }
+        );
     }
 
     #[test]

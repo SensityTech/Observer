@@ -182,6 +182,12 @@ pub enum AuditAction {
     /// tool; `details` holds the `run`, the `reason` (`heal` or `undo`), the `files` (a capped
     /// list) and their `count`.
     ToolFilesRestored,
+    /// The owner staged a tool's fix for the next start of FXServer. The target is the tool;
+    /// `details` holds the `fixes` it plans.
+    ToolFixStaged,
+    /// A staged fix was dropped: by the owner, or by Observer when the scan before the start
+    /// planned another fix than the one staged (`planChanged`).
+    ToolFixUnstaged,
     /// The owner turned an optional feature on or off. The target is the feature; `details`
     /// holds `enabled` and when it `applies` (`now` or `nextStart`). A refusal by the host's
     /// lock in `observer.toml` is `denied`.
@@ -229,7 +235,7 @@ pub enum AuditAction {
 }
 
 impl AuditAction {
-    pub const ALL: [Self; 107] = [
+    pub const ALL: [Self; 109] = [
         Self::SetupCompleted,
         Self::SetupLinkCreated,
         Self::LoginSucceeded,
@@ -322,6 +328,8 @@ impl AuditAction {
         Self::ToolSettingsChanged,
         Self::ToolFilesChanged,
         Self::ToolFilesRestored,
+        Self::ToolFixStaged,
+        Self::ToolFixUnstaged,
         Self::FeatureChanged,
         Self::BackupSettingsChanged,
         Self::BackupDestinationCreated,
@@ -434,6 +442,8 @@ impl AuditAction {
             Self::ToolSettingsChanged => "tool_settings_changed",
             Self::ToolFilesChanged => "tool_files_changed",
             Self::ToolFilesRestored => "tool_files_restored",
+            Self::ToolFixStaged => "tool_fix_staged",
+            Self::ToolFixUnstaged => "tool_fix_unstaged",
             Self::FeatureChanged => "feature_changed",
             Self::BackupSettingsChanged => "backup_settings_changed",
             Self::BackupDestinationCreated => "backup_destination_created",

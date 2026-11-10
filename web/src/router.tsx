@@ -45,6 +45,19 @@ const ServerSetupPage = lazyCode(() =>
 );
 const ToolsPage = lazyCode(() => import('./pages/ToolsPage').then((page) => ({ default: page.ToolsPage })));
 const CfgPage = lazyCode(() => import('./pages/CfgPage').then((page) => ({ default: page.CfgPage })));
+const ArchetypesPage = lazyCode(() =>
+    import('./pages/ArchetypesPage').then((page) => ({ default: page.ArchetypesPage })),
+);
+const HeavyAssetsPage = lazyCode(() =>
+    import('./pages/ToolWarningsPage').then((page) => ({
+        default: () => <page.ToolWarningsPage kind="heavy" />,
+    })),
+);
+const MissingFilesPage = lazyCode(() =>
+    import('./pages/ToolWarningsPage').then((page) => ({
+        default: () => <page.ToolWarningsPage kind="missing" />,
+    })),
+);
 const BackupsPage = lazyCode(() =>
     import('./pages/BackupsPage').then((page) => ({ default: page.BackupsPage })),
 );
@@ -329,6 +342,36 @@ const toolsRoute = createRoute({
     ),
 });
 
+const archetypesRoute = createRoute({
+    getParentRoute: () => panelRoute,
+    path: '/tools/duplicate-archetypes',
+    component: () => (
+        <RequireOwner>
+            <ArchetypesPage />
+        </RequireOwner>
+    ),
+});
+
+const heavyAssetsRoute = createRoute({
+    getParentRoute: () => panelRoute,
+    path: '/tools/heavy-assets',
+    component: () => (
+        <RequireOwner>
+            <HeavyAssetsPage />
+        </RequireOwner>
+    ),
+});
+
+const missingFilesRoute = createRoute({
+    getParentRoute: () => panelRoute,
+    path: '/tools/missing-files',
+    component: () => (
+        <RequireOwner>
+            <MissingFilesPage />
+        </RequireOwner>
+    ),
+});
+
 // The cfg holds the server's secrets and decides what it runs: the owner's, as the launch settings are.
 const cfgRoute = createRoute({
     getParentRoute: () => panelRoute,
@@ -433,6 +476,9 @@ const routeTree = rootRoute.addChildren([
         dropsRoute,
         serverRoute,
         toolsRoute,
+        archetypesRoute,
+        heavyAssetsRoute,
+        missingFilesRoute,
         cfgRoute,
         backupsRoute,
         usersRoute,

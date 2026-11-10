@@ -44,8 +44,8 @@ use observer_domain::features::Feature;
 use observer_domain::server::{ServerState, ServerStatus};
 use observer_domain::server_data::Game;
 use observer_domain::tools::{
-    ToolChangeState, ToolCloseReason, ToolKind, ToolMode, ToolRun, ToolRunMode, ToolRunOutcome, ToolSettings,
-    ToolSettingsChange, ToolTrigger, ToolUndoRequest, ToolUndoScope, ToolView, ToolsView,
+    StagedFix, ToolChangeState, ToolCloseReason, ToolKind, ToolMode, ToolRun, ToolRunMode, ToolRunOutcome,
+    ToolSettings, ToolSettingsChange, ToolTrigger, ToolUndoRequest, ToolUndoScope, ToolView, ToolsView,
 };
 use observer_fxserver::layout::{Flavour, Layout};
 use observer_fxserver::pre_launch::{PreLaunch, PreLaunchFuture, PreLaunchRequest, PreLaunchResult};
@@ -207,11 +207,12 @@ impl Tools {
     /// what their backups take.
     pub async fn view(&self) -> Result<ToolsView, Error> {
         let since = self.inner.clock.now() - CLOSED_KEPT;
-        let (settings, version, last_run, last_report, changes) = self
+        let (settings, version, last_run, last_report, changes, staged) = self
             .inner
             .db
             .read(move |conn| -> Result<_, StoreError> {
                 let (settings, version) = stored::settings(conn, Servers::DEFAULT, TOOL)?;
+                let staged = stored::staged(conn, Servers::DEFAULT, TOOL)?;
                 let last_run = match stored::runs(conn, Servers::DEFAULT, TOOL, 1)?.first() {
                     Some(latest) => stored::run(conn, latest.id)?,
                     None => None,
@@ -219,7 +220,7 @@ impl Tools {
                 let last_report = stored::last_report(conn, Servers::DEFAULT, TOOL)?
                     .filter(|report| last_run.as_ref().is_none_or(|last| last.id != report.id));
                 let changes = stored::changes(conn, Servers::DEFAULT, TOOL, since, CLOSED_LISTED)?;
-                Ok((settings, version, last_run, last_report, changes))
+                Ok((settings, version, last_run, last_report, changes, staged))
             })
             .await?;
         let originals: BTreeSet<[u8; 32]> = changes
@@ -250,6 +251,7 @@ impl Tools {
                 unreachable,
                 closed: changes.closed.iter().map(ToolChangeRow::view).collect(),
                 backup_bytes,
+                staged,
             }],
         })
     }
@@ -343,6 +345,57 @@ impl Tools {
                 Ok((settings, Some(saved)))
             })
             .await
+    }
+
+    /// Keeps the plan of the latest report for the next start of FXServer: its fix is written
+    /// then, before FXServer starts, if a fresh scan plans exactly that. Refused with
+    /// `plan_changed` when `plan` is not the latest report's, or fixes nothing.
+    pub async fn stage(&self, caller: &Caller, plan: &str) -> Result<ToolsView, Error> {
+        observer_domain::tools::sha256_from_hex(plan).ok_or(ErrorCode::InvalidRequest)?;
+        let record = Asker::Owner(caller.clone()).record(AuditAction::ToolFixStaged);
+        let (plan, by, now) = (plan.to_owned(), caller.username.clone(), self.inner.clock.now());
+        self.inner
+            .db
+            .write(move |tx| -> Result<(), Error> {
+                let report = stored::last_report(tx, Servers::DEFAULT, TOOL)?;
+                let fixes = report
+                    .as_ref()
+                    .filter(|report| report.plan.as_deref() == Some(plan.as_str()))
+                    .and_then(|report| report.summary.as_ref())
+                    .map_or(0, |summary| summary.fixable);
+                if fixes == 0 {
+                    return Err(ApiError::new(ErrorCode::PlanChanged)
+                        .with("run", serde_json::to_value(&report).unwrap_or_default())
+                        .into());
+                }
+                let fix = StagedFix {
+                    plan,
+                    fixes,
+                    staged_at: now,
+                    staged_by: by,
+                };
+                stored::stage(tx, Servers::DEFAULT, TOOL, &fix)?;
+                record.details(json!({ "fixes": fixes })).write(tx, now)?;
+                Ok(())
+            })
+            .await?;
+        self.view().await
+    }
+
+    /// Drops the fix staged for the next start, if there is one.
+    pub async fn unstage(&self, caller: &Caller) -> Result<ToolsView, Error> {
+        let record = Asker::Owner(caller.clone()).record(AuditAction::ToolFixUnstaged);
+        let now = self.inner.clock.now();
+        self.inner
+            .db
+            .write(move |tx| -> Result<(), Error> {
+                if stored::unstage(tx, Servers::DEFAULT, TOOL)? {
+                    record.write(tx, now)?;
+                }
+                Ok(())
+            })
+            .await?;
+        self.view().await
     }
 
     /// Scans the server folder as the launch settings give it, and records the report. Writes
@@ -506,6 +559,15 @@ impl Tools {
         } else {
             settings.at_start
         };
+        // A fix at every start already writes whatever the fresh scan plans.
+        let staged = if request.cause == Cause::Recovery || !on || mode == ToolMode::Fix {
+            None
+        } else {
+            self.inner
+                .db
+                .read(|conn| stored::staged(conn, Servers::DEFAULT, TOOL))
+                .await?
+        };
         let target = Target::Scanned {
             folder: PathBuf::from(&request.launch.settings.data_path),
             system_resources: Some(request.layout.system_resources()),
@@ -513,7 +575,12 @@ impl Tools {
         };
         let prepared = self.prepare(target.clone()).await?;
         let open = self.open_count(&prepared.folder).await?;
+        let confirmed = staged
+            .as_ref()
+            .filter(|_| prepared.supported())
+            .and_then(|staged| observer_domain::tools::sha256_from_hex(&staged.plan));
         let (steps, run_mode) = match mode {
+            _ if confirmed.is_some() => (Steps::Fix(confirmed), ToolRunMode::Fix),
             _ if open == 0 && (mode == ToolMode::Off || !prepared.supported()) => return Ok(Vec::new()),
             ToolMode::Off => (Steps::Heal, ToolRunMode::Heal),
             ToolMode::Report => (Steps::HealAndReport, ToolRunMode::Report),
@@ -529,7 +596,8 @@ impl Tools {
         };
         let run = self.insert_run(&Asker::Start, run_mode).await?;
         // A report alone writes nothing: SFTP goes on meanwhile.
-        let writes = open > 0 || mode == ToolMode::Fix;
+        let writes = open > 0 || mode == ToolMode::Fix || confirmed.is_some();
+        let mode = if confirmed.is_some() { ToolMode::Fix } else { mode };
         let gate = if writes {
             Some(self.inner.gate.exclusive().await)
         } else {
@@ -538,9 +606,38 @@ impl Tools {
         let job = self.job(&target, prepared, settings, run, request.cancel, open);
         let finished = blocking(move || work::run(job, &steps)).await?;
         drop(gate);
-        let lines = lines::start(&finished, mode, previous.as_ref());
+        let mut lines = lines::start(&finished, mode, previous.as_ref());
+        let read = finished.outcome() == ToolRunOutcome::Done;
+        let changed = finished.plan_changed;
         self.finish(run, &Asker::Start, finished).await?;
+        // Read once: written, or another plan by now, which the owner reviews before staging again.
+        if let Some(staged) = staged.filter(|_| confirmed.is_some() && read) {
+            if changed {
+                lines.push(format!(
+                    "the fix {} staged was not written: the scan plans another one by now, to review on the Tools page",
+                    staged.staged_by
+                ));
+            }
+            self.drop_staged(changed).await?;
+        }
         Ok(lines)
+    }
+
+    /// Drops the staged fix once a start has read it, recorded when it was not written.
+    async fn drop_staged(&self, plan_changed: bool) -> Result<(), Error> {
+        let record = Asker::Start
+            .record(AuditAction::ToolFixUnstaged)
+            .details(json!({ "planChanged": true }));
+        let now = self.inner.clock.now();
+        self.inner
+            .db
+            .write(move |tx| -> Result<(), Error> {
+                if stored::unstage(tx, Servers::DEFAULT, TOOL)? && plan_changed {
+                    record.write(tx, now)?;
+                }
+                Ok(())
+            })
+            .await
     }
 
     /// At Observer's start, before FXServer's: settles the writes an earlier Observer was
@@ -893,6 +990,10 @@ impl Tools {
                 )?;
                 for record in records {
                     record.write(tx, now)?;
+                }
+                // Files changed: a plan staged before is no longer the one a scan would make.
+                if wrote {
+                    stored::unstage(tx, Servers::DEFAULT, TOOL)?;
                 }
                 Ok(())
             })

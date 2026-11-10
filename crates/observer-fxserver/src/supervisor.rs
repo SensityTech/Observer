@@ -9,7 +9,7 @@ use std::collections::{HashMap, HashSet};
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Weak};
+use std::sync::{Arc, Mutex, PoisonError, Weak};
 use std::time::{Duration, Instant};
 
 use observer_domain::diagnostics::ProcessKind;
@@ -473,9 +473,14 @@ enum Request {
     SkipHangSnapshots,
 }
 
+/// The latest spawn's progress and when it was spawned: what FXServer said as it started, kept
+/// after the start and until the next one.
+type LatestStart = Arc<Mutex<Option<(i64, Arc<Progress>)>>>;
+
 /// The handle to the supervisor task. Clones talk to the same task.
 #[derive(Clone)]
 pub struct Supervisor {
+    latest_start: LatestStart,
     requests: mpsc::Sender<Request>,
     events: broadcast::Sender<Event>,
     processes: broadcast::Sender<TreeEvent>,
@@ -512,7 +517,9 @@ impl Supervisor {
         let (traces_tx, traces) = mpsc::channel(CHANNEL);
         let (signals_tx, signals) = mpsc::channel(CHANNEL);
         let (probes_tx, probes) = mpsc::channel(CHANNEL);
+        let latest_start = LatestStart::default();
         let actor = Actor {
+            latest_start: Arc::clone(&latest_start),
             recovery: Recovery::new(settings.recovery.clone()),
             settings,
             console,
@@ -546,6 +553,7 @@ impl Supervisor {
         let task = tokio::spawn(actor.run());
         (
             Self {
+                latest_start,
                 requests,
                 events,
                 processes,
@@ -581,6 +589,15 @@ impl Supervisor {
             reply,
         })
         .await
+    }
+
+    /// What FXServer warned about as it started its resources, in the latest start, with when
+    /// that start was spawned. None before the first start.
+    pub fn start_warnings(&self) -> Option<(i64, start::Warnings)> {
+        let latest = self.latest_start.lock().unwrap_or_else(PoisonError::into_inner);
+        latest
+            .as_ref()
+            .map(|(spawned_ms, progress)| (*spawned_ms, progress.warnings()))
     }
 
     /// Gives the start under way [`START_EXTENSION`] more before it is taken for stuck, counted
@@ -918,6 +935,7 @@ enum Wake {
 }
 
 struct Actor {
+    latest_start: LatestStart,
     settings: Settings,
     console: Arc<ConsoleHub>,
     events: broadcast::Sender<Event>,
@@ -2015,7 +2033,7 @@ impl Actor {
             .unwrap_or_else(|| SocketAddr::from((Ipv4Addr::LOCALHOST, DEFAULT_PORT)));
         let cancel = CancellationToken::new();
         let (stdin, stdin_task) = StdinWriter::start(spawned.stdin, generation, Arc::clone(&self.console));
-        let progress = Arc::new(Progress::new(prepared.plan, Instant::now(), now_ms()));
+        let progress = self.progress_of(prepared.plan);
         let mut tasks = vec![
             tokio::spawn(read_console(
                 spawned.stdout,
@@ -2085,6 +2103,15 @@ impl Actor {
             killed: false,
         };
         Ok((run, probe, prepared.warnings, prepared.settings))
+    }
+
+    /// What a spawn says of its start from now on, kept as the latest start's.
+    fn progress_of(&self, plan: start::Plan) -> Arc<Progress> {
+        let spawned_ms = now_ms();
+        let progress = Arc::new(Progress::new(plan, Instant::now(), spawned_ms));
+        *self.latest_start.lock().unwrap_or_else(PoisonError::into_inner) =
+            Some((spawned_ms, Arc::clone(&progress)));
+        progress
     }
 
     /// Writes the bridge into the build as `bridge`, and moves away the dumps of a run Observer

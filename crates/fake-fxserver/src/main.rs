@@ -17,6 +17,10 @@
 //!   for one of them. FXServer 38435 prints `Started resource` once a resource is up and nothing
 //!   while it reads its stream files, which took a clothing pack minutes on a first start;
 //! - `fake_fail_start <name>`: that resource does not start, as one whose asset is disabled;
+//! - `fake_heavy <names>`, `fake_missing <names>`, each a list separated by commas: as it starts
+//!   one of them, FXServer warns of two heavy streamed files, one of them oversized, or of a script
+//!   its manifest names and it does not hold, on the channel `resources:<name>:stream` cut at
+//!   twenty characters, and counts the warnings on the line that says the resource started;
 //! - `fake_heartbeat_ms` (3000): the bridge heartbeat period;
 //! - `fake_heap_ms` (10000): how often the bridge reports the JS heap;
 //! - `fake_players <n>`: `/dynamic.json` counts `n` clients and `/players.json` lists ids 1 to `n`
@@ -510,7 +514,38 @@ impl Fake {
         if let Some(ms) = own.or_else(|| self.server.number("fake_start_ms")) {
             thread::sleep(Duration::from_millis(ms));
         }
-        console::line(RESOURCES, &format!("Started resource {resource}"));
+        let listed = |convar: &str| {
+            self.server
+                .convar(convar)
+                .is_some_and(|names| names.split(',').any(|name| name == resource))
+        };
+        let stream = format!("resources:{resource}:stream");
+        let channel = (stream.get(..20).unwrap_or(&stream), 83);
+        let mut warnings = Vec::new();
+        if listed("fake_heavy") {
+            warnings.push(format!(
+                "Asset {resource}/{resource}_hi.ydr uses 49.5 MiB of physical memory. Oversized assets \
+                 can and WILL lead to streaming issues (such as models not loading/rendering)."
+            ));
+            warnings.push(format!(
+                "Asset {resource}/{resource}.ytd uses 16.2 MiB of physical memory."
+            ));
+        }
+        if listed("fake_missing") {
+            warnings.push(
+                "Warning: could not find client_script `client/gone.lua` (defined in fxmanifest.lua:9)"
+                    .to_owned(),
+            );
+        }
+        for warning in &warnings {
+            console::line(channel, warning);
+        }
+        let counted = match warnings.len() {
+            0 => String::new(),
+            1 => " (1 warning)".to_owned(),
+            several => format!(" ({several} warnings)"),
+        };
+        console::line(RESOURCES, &format!("Started resource {resource}{counted}"));
         if !self.started.iter().any(|started| started == resource) {
             self.started.push(resource.to_owned());
         }

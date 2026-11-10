@@ -16,6 +16,8 @@ const TOOLS: &str = "/api/tools";
 const SCAN: &str = "/api/tools/duplicate-archetypes/scan";
 const FIX: &str = "/api/tools/duplicate-archetypes/fix";
 const UNDO: &str = "/api/tools/duplicate-archetypes/undo";
+const STAGE: &str = "/api/tools/duplicate-archetypes/stage";
+const WARNINGS: &str = "/api/servers/default/start/warnings";
 const SETTINGS: &str = "/api/tools/duplicate-archetypes/settings";
 
 impl Server {
@@ -93,6 +95,9 @@ async fn the_tools_are_the_owner_s_and_what_writes_takes_the_password_again() {
         (Method::POST, SCAN, None),
         (Method::POST, FIX, Some(json!({ "plan": "0".repeat(64) }))),
         (Method::POST, UNDO, Some(json!({ "scope": "all" }))),
+        (Method::POST, STAGE, Some(json!({ "plan": "0".repeat(64) }))),
+        (Method::DELETE, STAGE, None),
+        (Method::GET, WARNINGS, None),
     ] {
         let refused = server.call(method, path, Some(&manager), body).await;
         assert_eq!(refused.status, StatusCode::FORBIDDEN, "{path}");
@@ -101,6 +106,20 @@ async fn the_tools_are_the_owner_s_and_what_writes_takes_the_password_again() {
     let page = server.call(Method::GET, TOOLS, Some(&owner), None).await;
     let scanned = server.call(Method::POST, SCAN, Some(&owner), None).await;
     let plan = scanned.json()["plan"].clone();
+    let warnings = server.call(Method::GET, WARNINGS, Some(&owner), None).await;
+    assert_eq!(
+        warnings.json(),
+        json!({ "startedAt": null, "heavy": [], "missing": [], "truncated": false }),
+        "FXServer was not started yet"
+    );
+    for (method, body) in [
+        (Method::POST, Some(json!({ "plan": plan }))),
+        (Method::DELETE, None),
+    ] {
+        let staging = server.call(method, STAGE, Some(&owner), body).await;
+        assert_eq!(staging.status, StatusCode::FORBIDDEN);
+        assert_eq!(staging.code(), "reauth_required");
+    }
     let without_password = [
         server
             .call(Method::POST, FIX, Some(&owner), Some(json!({ "plan": plan })))
