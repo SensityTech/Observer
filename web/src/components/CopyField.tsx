@@ -6,11 +6,22 @@ import { cn } from '../lib/cn';
 import { Button } from './Button';
 import { inputClass } from './Field';
 
-/** A secret shown once: readable, selectable, and copied in one click where the browser allows it. */
-export function CopyField({ label, value }: { label: string; value: string }) {
+/**
+ * A value to take elsewhere, a secret shown once or lines for a file: readable, selectable, and
+ * copied in one click where the browser allows it. `multiline` keeps its line breaks.
+ */
+export function CopyField({
+    label,
+    value,
+    multiline = false,
+}: {
+    label: string;
+    value: string;
+    multiline?: boolean;
+}) {
     const { t } = useI18n();
     const id = useId();
-    const input = useRef<HTMLInputElement>(null);
+    const field = useRef<HTMLInputElement & HTMLTextAreaElement>(null);
     const [state, setState] = useState<'idle' | 'copied' | 'blocked'>('idle');
 
     const copy = async () => {
@@ -19,7 +30,7 @@ export function CopyField({ label, value }: { label: string; value: string }) {
             setState('copied');
         } catch {
             // No clipboard outside a secure context (plain HTTP on a LAN address): select it instead.
-            input.current?.select();
+            field.current?.select();
             setState('blocked');
         }
     };
@@ -29,16 +40,34 @@ export function CopyField({ label, value }: { label: string; value: string }) {
             <label htmlFor={id} className="text-ui font-medium text-ink">
                 {label}
             </label>
-            <div className="flex gap-2">
-                <input
-                    ref={input}
-                    id={id}
-                    readOnly
-                    value={value}
-                    spellCheck={false}
-                    className={cn(inputClass, 'min-w-0 font-mono text-ui [font-variant-ligatures:none]')}
-                    onFocus={(event) => event.currentTarget.select()}
-                />
+            <div className={cn('flex items-start gap-2', multiline && 'flex-wrap')}>
+                {multiline ? (
+                    <textarea
+                        ref={field}
+                        id={id}
+                        readOnly
+                        rows={value.split('\n').length}
+                        value={value}
+                        spellCheck={false}
+                        wrap="off"
+                        className={cn(
+                            inputClass,
+                            // Wide enough for its lines, or a line of its own with the button under it.
+                            'h-auto min-w-0 flex-[1_1_17rem] resize-none py-2 font-mono text-ui [font-variant-ligatures:none] max-md:h-auto',
+                        )}
+                        onFocus={(event) => event.currentTarget.select()}
+                    />
+                ) : (
+                    <input
+                        ref={field}
+                        id={id}
+                        readOnly
+                        value={value}
+                        spellCheck={false}
+                        className={cn(inputClass, 'min-w-0 font-mono text-ui [font-variant-ligatures:none]')}
+                        onFocus={(event) => event.currentTarget.select()}
+                    />
+                )}
                 <Button icon={state === 'copied' ? Check : Copy} onClick={copy}>
                     {state === 'copied' ? t.common.copied : t.common.copy}
                 </Button>

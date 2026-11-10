@@ -4840,7 +4840,7 @@ export const en = {
                 on: 'On',
                 off: 'Off',
                 locked: 'Locked off in observer.toml',
-                notConfigured: 'On, but not set up: observer.toml gives no [sftp] address',
+                notConfigured: 'On, but it waits for its address in observer.toml',
                 requires: (names: string[]) => `On, but waits for ${list(names)}`,
                 nextServerStart: 'On from the next start of FXServer',
                 observerRestart: 'On from the next start of Observer',
@@ -4894,6 +4894,19 @@ export const en = {
             turnedOn: (name: string) => `${name} is on.`,
             turnedOnLater: (name: string, state: string) => `${name}: ${state}.`,
             turnedOff: (name: string) => `${name} is off: its tasks have stopped.`,
+        },
+        sftpSetup: {
+            short: 'It needs two lines in observer.toml on the host, then a restart of Observer.',
+            how: 'How to set it up',
+            title: 'SFTP waits for its address',
+            add: 'Someone with access to the host adds these lines to observer.toml, next to Observer, creating the file if it is not there.',
+            addTo: (file: string) =>
+                `Add these lines to ${file} on the host, creating the file if it is not there.`,
+            lines: 'Lines to add',
+            restart:
+                'Restart Observer: it reads the file as it starts, opens the port and logs the fingerprint of its SSH host key.',
+            next: 'Then give people and pipelines their groups under File access.',
+            why: 'SFTP opens a port on the host, so the host names it and the panel never does. 0.0.0.0 listens on every interface; 40126 is the port Observer suggests, and any free one will do.',
         },
         panel: {
             file: (path: string) => `Read from ${path} when Observer starts.`,

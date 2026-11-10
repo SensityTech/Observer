@@ -26,6 +26,7 @@ import { useI18n } from '../i18n/I18nProvider';
 import { cn } from '../lib/cn';
 import { anchorOf } from './catalog';
 import { CategoryHead } from './Row';
+import { SftpSetup, sftpNotSetUp } from './SftpSetup';
 
 type Open =
     | { dialog: 'group'; group: FileGroup | null }
@@ -50,6 +51,15 @@ export function FilesSettings() {
         void queryClient.invalidateQueries({ queryKey: ['files'] });
     };
     const names = new Map((groups.data ?? []).map((group) => [group.id, group.name]));
+    // Without its address SFTP answers nothing: what it needs takes the place of three failed cards.
+    if (sftpNotSetUp(groups.error) || sftpNotSetUp(accesses.error)) {
+        return (
+            <>
+                <CategoryHead category="files" />
+                <SftpSetup />
+            </>
+        );
+    }
 
     return (
         <>

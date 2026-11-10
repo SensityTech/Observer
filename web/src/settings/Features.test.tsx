@@ -101,6 +101,13 @@ const serve = (answer: (body: { enabled: boolean }) => FeatureList | Response = 
     return asked;
 };
 
+/** What a route of SFTP answers while `observer.toml` gives it no address. */
+const refused = () =>
+    Response.json(
+        { code: 'feature_disabled', params: { feature: 'sftp', held: 'notConfigured' } },
+        { status: 403 },
+    );
+
 /** The card of a feature, by its name. */
 const card = (feature: keyof typeof items) => {
     const section = document.getElementById(`setting-${feature}`);
@@ -200,6 +207,62 @@ describe('Features settings', () => {
 
         expect(getByText(words.readOnly)).not.toBeNull();
         expect((card('switchMetrics').getByRole('switch') as HTMLInputElement).disabled).toBe(true);
+    });
+
+    it('should tell what SFTP still needs when observer.toml gives it no address, and spell it out under File access', async () => {
+        const setup = en.settings.sftpSetup;
+        const waiting: FeatureList = {
+            features: [view('sftp', { running: false, held: 'notConfigured' }), view('changes')],
+        };
+        const asked: string[] = [];
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(async (input: string, init: RequestInit) => {
+                const route = `${init.method ?? 'GET'} ${String(input).replace(/^\/api/, '')}`;
+                asked.push(route);
+                if (route === 'GET /features') {
+                    return Response.json(waiting);
+                }
+                if (route === 'GET /servers/default/files/groups' || route === 'GET /files/accesses') {
+                    return refused();
+                }
+                if (route === 'GET /settings/observer') {
+                    return Response.json({
+                        configFile: 'C:\\observer\\observer.toml',
+                        listen: '0.0.0.0:40125',
+                        hosts: [],
+                        trustedProxies: [],
+                        statistics: { samples: 86_400, minutes: 2_592_000 },
+                    });
+                }
+                return Response.json({ code: 'not_found', params: {} }, { status: 404 });
+            }),
+        );
+        const { findByText, getByLabelText, getByText, queryByText } =
+            await openSettings('/settings/features');
+
+        const sftp = card('switchSftp');
+        expect(sftp.getByText(words.states.notConfigured)).not.toBeNull();
+        expect(sftp.getByText(setup.short)).not.toBeNull();
+        expect(card('switchChanges').queryByText(setup.short)).toBeNull();
+        fireEvent.click(sftp.getByRole('link', { name: setup.how }));
+
+        // The page it leads to holds the lines, the file's place on the host and what comes next.
+        expect(await findByText(setup.addTo('C:\\observer\\observer.toml'))).not.toBeNull();
+        expect((getByLabelText(setup.lines) as HTMLTextAreaElement).value).toBe(
+            '[sftp]\nlisten = "0.0.0.0:40126"',
+        );
+        expect(getByText(setup.restart)).not.toBeNull();
+        expect(queryByText(en.files.intro)).toBeNull();
+        expect(
+            queryByText(en.errors.feature_disabled({ feature: 'sftp', held: 'notConfigured' })),
+        ).toBeNull();
+        cleanup();
+
+        // An account that only views settings reads what it waits for, without the way to a page it cannot open.
+        await openSettings('/settings/features', { me: VIEWER });
+        expect(card('switchSftp').getByText(setup.short)).not.toBeNull();
+        expect(card('switchSftp').queryByRole('link', { name: setup.how })).toBeNull();
     });
 
     it('should count the features left on beside their category', async () => {
