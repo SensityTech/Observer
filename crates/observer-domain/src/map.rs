@@ -1,5 +1,6 @@
-//! The live map: where connected players stand, as the server sees them, drawn over a map image
-//! the owner adds. Observer ships no map: GTA V's belongs to Rockstar Games.
+//! The live map: where connected players stand, as the server sees them, drawn over Rockstar's map
+//! of GTA V, which each browser loads from Rockstar's servers, or over an image the owner adds.
+//! Observer ships and keeps no map of its own: GTA V's belongs to Rockstar Games.
 
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
@@ -38,11 +39,33 @@ impl MapBounds {
     }
 }
 
+/// What the map draws under the players.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum MapImagery {
+    /// Rockstar's map of GTA V as the game draws it. Like the two after it, each browser that
+    /// opens the map loads it from Rockstar's servers.
+    #[default]
+    Atlas,
+    /// The same map, seen from the sky.
+    Satellite,
+    /// The same map, as a road map.
+    Roads,
+    /// The image the owner added, once it is placed in the game.
+    Image,
+    /// A grid of game coordinates.
+    Grid,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[ts(export)]
 pub struct MapSettings {
-    /// `None` until the image is calibrated: the map then shows a grid of game coordinates.
+    #[serde(default)]
+    pub imagery: MapImagery,
+    /// Where the owner's image sits; `None` until it is calibrated: the map then shows a grid of
+    /// game coordinates in its place.
     pub bounds: Option<MapBounds>,
     /// A player is new under this many hours of play time.
     pub new_hours: u32,
@@ -55,6 +78,7 @@ pub struct MapSettings {
 impl Default for MapSettings {
     fn default() -> Self {
         Self {
+            imagery: MapImagery::default(),
             bounds: None,
             new_hours: 10,
             veteran_hours: 100,
@@ -157,6 +181,20 @@ mod tests {
 
         assert!(MapSettings::default().is_valid());
         assert!(valid.is_valid());
+        assert_eq!(MapSettings::default().imagery, MapImagery::Atlas);
+        // Settings sent without it, as a panel loaded before it existed sends them.
+        let sent: MapSettings =
+            serde_json::from_str(r#"{"bounds":null,"newHours":10,"veteranHours":100,"everySeconds":2}"#)
+                .unwrap();
+        assert_eq!(sent, MapSettings::default());
+        assert_eq!(
+            serde_json::to_value(MapSettings {
+                imagery: MapImagery::Satellite,
+                ..MapSettings::default()
+            })
+            .unwrap()["imagery"],
+            "satellite"
+        );
         for invalid in [
             MapSettings {
                 new_hours: 100,

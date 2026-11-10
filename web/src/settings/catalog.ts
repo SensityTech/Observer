@@ -34,6 +34,7 @@ export type SettingId =
     | 'backupsLast'
     | 'refusalMessage'
     | 'tokenMatches'
+    | 'mapImagery'
     | 'mapImage'
     | 'mapBounds'
     | 'mapTiers'
@@ -46,6 +47,7 @@ export type SettingId =
     | 'switchPlayers'
     | 'switchDrops'
     | 'switchUpdates'
+    | 'switchDebug'
     | 'changesEnabled'
     | 'startEvent'
     | 'extensions'
@@ -71,6 +73,7 @@ export type SettingId =
     | 'hosts'
     | 'trustedProxies'
     | 'accounts'
+    | 'sftpAddress'
     | 'fileGroups'
     | 'filePeople'
     | 'filePipelines'
@@ -172,6 +175,7 @@ export const CATEGORIES: readonly Category[] = [
         group: 'server',
         access: ['SettingsView', 'PlayersMap'],
         settings: [
+            { id: 'mapImagery', applies: 'now' },
             { id: 'mapImage' },
             { id: 'mapBounds', applies: 'now' },
             { id: 'mapTiers', applies: 'now' },
@@ -191,6 +195,7 @@ export const CATEGORIES: readonly Category[] = [
             { id: 'switchPlayers' },
             { id: 'switchDrops' },
             { id: 'switchUpdates' },
+            { id: 'switchDebug' },
         ],
     },
     {
@@ -248,7 +253,12 @@ export const CATEGORIES: readonly Category[] = [
         id: 'files',
         group: 'people',
         access: ['FilesManage'],
-        settings: [{ id: 'fileGroups' }, { id: 'filePeople' }, { id: 'filePipelines' }],
+        settings: [
+            { id: 'sftpAddress' },
+            { id: 'fileGroups' },
+            { id: 'filePeople' },
+            { id: 'filePipelines' },
+        ],
     },
     {
         id: 'account',
@@ -270,6 +280,7 @@ export const SWITCH_OF = {
     players: 'switchPlayers',
     drops: 'switchDrops',
     updates: 'switchUpdates',
+    debug: 'switchDebug',
 } satisfies Record<Feature, SettingId>;
 
 /** When each setting applies, found by its id. */

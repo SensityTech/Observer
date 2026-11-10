@@ -1,6 +1,6 @@
 use std::net::{IpAddr, SocketAddr};
 
-use observer_domain::map::MapBounds;
+use observer_domain::map::{MapBounds, MapImagery};
 use observer_domain::permissions::Permissions;
 use observer_domain::schedule::{ScheduleSettings, ScheduleStatus};
 use tempfile::TempDir;
@@ -194,6 +194,7 @@ async fn settings_are_checked_before_they_are_kept() {
     let lab = Lab::new().await;
     let (map, task) = lab.map();
     let placed = MapSettings {
+        imagery: MapImagery::Image,
         bounds: Some(MapBounds {
             west: -5640.0,
             east: 6470.0,

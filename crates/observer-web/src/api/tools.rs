@@ -15,6 +15,23 @@ pub(crate) async fn view(State(state): State<AppState>) -> Result<Json<ToolsView
     Ok(Json(state.tools.view().await?))
 }
 
+/// Keeps the plan whose digest the request names for the next start of FXServer, which writes it
+/// before FXServer starts if a fresh scan plans exactly that.
+pub(crate) async fn stage(
+    State(state): State<AppState>,
+    Extension(caller): Extension<Caller>,
+    JsonBody(request): JsonBody<ToolFixRequest>,
+) -> Result<Json<ToolsView>, Failure> {
+    Ok(Json(state.tools.stage(&caller, &request.plan).await?))
+}
+
+pub(crate) async fn unstage(
+    State(state): State<AppState>,
+    Extension(caller): Extension<Caller>,
+) -> Result<Json<ToolsView>, Failure> {
+    Ok(Json(state.tools.unstage(&caller).await?))
+}
+
 /// Scans the server folder and records the report: nothing is written.
 pub(crate) async fn scan(
     State(state): State<AppState>,

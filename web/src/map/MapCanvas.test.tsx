@@ -19,6 +19,13 @@ class FixedSize {
     disconnect() {}
 }
 
+/** Whether a mark placed there lies out of the 800 by 600 map. */
+const outside = (style: CSSStyleDeclaration) =>
+    parseFloat(style.left) < 0 ||
+    parseFloat(style.left) > 800 ||
+    parseFloat(style.top) < 0 ||
+    parseFloat(style.top) > 600;
+
 const draw = (props: Partial<Parameters<typeof MapCanvas>[0]> = {}) => {
     const onSelect = vi.fn();
     render(
@@ -59,6 +66,36 @@ describe('MapCanvas', () => {
         expect(screen.queryByText('Ruby Vex')).toBeNull();
     });
 
+    it('should draw each trail of two places or more under the marks, ending where its player stands', async () => {
+        draw({
+            selected: 3,
+            trails: [
+                {
+                    id: 3,
+                    points: [
+                        { x: 300, y: -1300 },
+                        { x: 360, y: -1250 },
+                        { x: 412, y: -1208 },
+                    ],
+                },
+                { id: 7, points: [{ x: -500, y: 2000 }] },
+            ],
+        });
+        await act(async () => {});
+
+        const lines = [...document.querySelectorAll('polyline')];
+        expect(lines).toHaveLength(1);
+        const places = lines[0]!.getAttribute('points')!.split(' ');
+        expect(places).toHaveLength(3);
+        const mark = screen.getByRole('button', { name: DOTS[0]!.label }).parentElement!.style;
+        const [left, top] = places[2]!.split(',').map(Number);
+        expect([left, top]).toEqual([
+            Math.round(parseFloat(mark.left) * 10) / 10,
+            Math.round(parseFloat(mark.top) * 10) / 10,
+        ]);
+        expect(lines[0]!.getAttribute('stroke-width')).toBe('2.5');
+    });
+
     it('should name the selected player, or every player when asked', async () => {
         draw({ selected: 7 });
         await act(async () => {});
@@ -74,6 +111,46 @@ describe('MapCanvas', () => {
         await act(async () => {});
         expect(screen.getByText('Ruby Vex')).not.toBeNull();
         expect(screen.getByText('kaito')).not.toBeNull();
+    });
+
+    it('should draw Rockstar’s map as tiles in place of the grid, and tell when its servers do not send it', async () => {
+        const onTilesFailed = vi.fn();
+        draw({ tiles: 'atlas', onTilesFailed });
+        await act(async () => {});
+        const tiles = [...document.querySelectorAll('img')];
+
+        expect(tiles.length).toBeGreaterThan(1);
+        expect(tiles[0]!.src).toBe('https://s.rsg.sc/sc/images/games/GTAV/map/game/0/0/0.jpg');
+        for (const tile of tiles) {
+            expect(tile.src).toMatch(
+                /^https:\/\/s\.rsg\.sc\/sc\/images\/games\/GTAV\/map\/game\/\d\/\d+\/\d+\.jpg$/,
+            );
+            expect(tile.getAttribute('referrerpolicy')).toBe('no-referrer');
+        }
+        expect(screen.queryAllByText('0')).toHaveLength(0);
+        expect(screen.getByRole('button', { name: DOTS[0]!.label })).not.toBeNull();
+
+        // A tile that does not come leaves the whole map under it; the whole map missing is told.
+        fireEvent.error(tiles[1]!);
+        expect(tiles[1]!.style.visibility).toBe('hidden');
+        expect(onTilesFailed).not.toHaveBeenCalled();
+        fireEvent.error(tiles[0]!);
+        expect(onTilesFailed).toHaveBeenCalledTimes(1);
+    });
+
+    it('should bring a mark out of view into it when the keyboard reaches it', async () => {
+        draw({ tiles: 'atlas' });
+        await act(async () => {});
+        const mark = screen.getByRole('button', { name: DOTS[0]!.label });
+        for (let click = 0; click < 8; click += 1) {
+            fireEvent.click(screen.getByRole('button', { name: en.map.zoomIn }));
+        }
+        expect(outside(mark.parentElement!.style)).toBe(true);
+
+        fireEvent.focus(mark);
+
+        expect(parseFloat(mark.parentElement!.style.left)).toBeCloseTo(400, 0);
+        expect(parseFloat(mark.parentElement!.style.top)).toBeCloseTo(300, 0);
     });
 
     it('should zoom from its buttons and draw a grid of game coordinates without an image', async () => {

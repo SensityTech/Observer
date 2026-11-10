@@ -12,11 +12,13 @@ use crate::AppState;
 use crate::error::Failure;
 use crate::proxy::Remote;
 
-/// Everything the panel loads comes from Observer itself. `data:` images carry the grain texture;
-/// `blob:` ones the live map's image, which the panel fetches with the session key.
+/// Everything the panel loads comes from Observer itself, but the tiles of Rockstar's map of
+/// GTA V, which the live map loads from Rockstar's servers when the owner picks it: images only,
+/// from that one host, without a referrer. `data:` images carry the grain texture; `blob:` ones
+/// the owner's map image, which the panel fetches with the session key.
 const CONTENT_SECURITY_POLICY: &str = "default-src 'self'; script-src 'self'; style-src 'self'; \
-    img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; \
-    form-action 'self'; frame-ancestors 'none'";
+    img-src 'self' data: blob: https://s.rsg.sc; font-src 'self'; connect-src 'self'; object-src 'none'; \
+    base-uri 'none'; form-action 'self'; frame-ancestors 'none'";
 
 const PERMISSIONS_POLICY: &str = "camera=(), geolocation=(), microphone=(), payment=(), usb=()";
 

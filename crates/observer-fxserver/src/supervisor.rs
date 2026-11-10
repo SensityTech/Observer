@@ -6,10 +6,11 @@
 //! once it has ended. A stop or a shutdown meanwhile tells it to end, waits, and spawns nothing.
 
 use std::collections::{HashMap, HashSet};
+use std::fmt;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Weak};
+use std::sync::{Arc, Mutex, PoisonError, Weak};
 use std::time::{Duration, Instant};
 
 use observer_domain::diagnostics::ProcessKind;
@@ -25,16 +26,18 @@ use tracing::{error, info, warn};
 
 use crate::bridge::{self, BridgeAction, BridgeEvent, Report, StopReason};
 use crate::cfg;
-use crate::console::{ConsoleHub, LineAssembler, LineFlags, LineKind, plain, sanitize};
+use crate::console::{ConsoleHub, LineAssembler, LineFlags, LineKind, on_channel, plain, sanitize};
 use crate::crashes::{self, Collected, DumpLimits, HangSnapshotLimits, SnapshotFailure};
 use crate::exit;
 use crate::health::{self, HangCause, Health, HealthLimits, PlayerList, Players, Probe, Problem, Verdict};
+use crate::hook;
 use crate::launch::{self, ServerLaunch};
 use crate::layout::{Flavour, Layout};
 use crate::perf::TickReport;
 use crate::players::{PlayerReport, PlayerReportKind};
 use crate::pre_launch::{self, PreLaunch, PreLaunchRequest, PreLaunchResult, TOOLS};
 use crate::recovery::{Next, Recovery, RecoveryPolicy};
+use crate::start::{self, Progress};
 use crate::stdin::{CommandRefusal, Credentials, StdinError, StdinWriter, SystemLine, UserCommand, Write};
 use crate::trace::{self, Trace, TraceDecoder, TraceKind};
 use crate::tree::{self, TreeContext};
@@ -48,6 +51,8 @@ const TREE_KILL: Duration = Duration::from_secs(5);
 const TASK_JOIN: Duration = Duration::from_secs(2);
 /// A dump file touched this recently means the dump server is writing.
 const DUMP_ACTIVITY: Duration = Duration::from_secs(10);
+/// What someone gives a start that needs longer than the hang delay between two resources.
+pub const START_EXTENSION: Duration = Duration::from_mins(15);
 /// FXServer's own default, for a cfg that names no TCP endpoint.
 const DEFAULT_PORT: u16 = 30120;
 const EVENTS: usize = 256;
@@ -55,6 +60,8 @@ const EVENTS: usize = 256;
 const PROCESS_EVENTS: usize = 1024;
 /// A restart of a full server reports a join or a drop for each of its players at once.
 const PLAYER_REPORTS: usize = 8192;
+/// Every resource of a server that counts reports each second it had something to count.
+const HOOK_REPORTS: usize = 8192;
 /// How often the tree's members are compared with what its notifications said.
 const RECONCILE_EVERY: Duration = Duration::from_secs(5);
 /// A member younger than this is the notifications' to report: a fork may not have run its program
@@ -90,6 +97,53 @@ pub enum State {
     CrashLoop,
 }
 
+/// Whether the next start counts what its resources send and receive, asked at each spawn.
+#[derive(Clone)]
+pub struct Counting(Arc<dyn Fn() -> bool + Send + Sync>);
+
+impl Counting {
+    pub fn new(asked: impl Fn() -> bool + Send + Sync + 'static) -> Self {
+        Self(Arc::new(asked))
+    }
+
+    fn asked(&self) -> bool {
+        (self.0)()
+    }
+}
+
+impl fmt::Debug for Counting {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("Counting")
+    }
+}
+
+/// What became of the hook at a start that was to count.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Hooked {
+    /// The start it was for.
+    pub generation: u32,
+    /// Why the build's scheduler was left as it was, and that start counts nothing.
+    pub refused: Option<String>,
+}
+
+type LatestHook = Arc<Mutex<Option<Hooked>>>;
+
+/// What a start did with the hook.
+enum Hook {
+    /// The start does not count: the scheduler is the build's own.
+    Out,
+    In,
+    /// The start was to count, and the scheduler was left as it was.
+    Refused(String),
+}
+
+/// What one resource counted, with the start it is of.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HookReport {
+    pub generation: u32,
+    pub report: hook::Report,
+}
+
 #[derive(Debug, Clone)]
 pub struct Settings {
     /// What the next spawn launches, none until [`Supervisor::configure`] gives it.
@@ -115,6 +169,8 @@ pub struct Settings {
     pub pre_launch: Option<Arc<dyn PreLaunch>>,
     /// How long that work gets before it is told to end. The spawn still waits until it has.
     pub pre_launch_limit: Duration,
+    /// Whether a start counts what its resources send and receive; `None` never does.
+    pub counting: Option<Counting>,
 }
 
 impl Settings {
@@ -132,6 +188,7 @@ impl Settings {
             drop_first_tree_change: false,
             pre_launch: None,
             pre_launch_limit: pre_launch::DEFAULT_LIMIT,
+            counting: None,
         }
     }
 }
@@ -363,6 +420,17 @@ pub struct Status {
     pub port: Option<u16>,
     /// The bridge's resource name in the server that runs now, drawn for its start.
     pub bridge: Option<String>,
+    /// How far the start has come, while the server is starting.
+    pub start: Option<StartStatus>,
+}
+
+/// A start under way: what FXServer said of it, and how long Observer still waits for more.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct StartStatus {
+    pub progress: start::Snapshot,
+    /// When the start is taken for stuck, should FXServer start no resource until then. None with
+    /// hang detection off, and once the cfg has run.
+    pub stuck_at_ms: Option<i64>,
 }
 
 /// What the probes read last of the server that runs now, for the statistics. It changes every
@@ -401,6 +469,8 @@ pub enum ControlError {
     NotRunning,
     #[error("the server is stopping")]
     Stopping,
+    #[error("the server is not starting")]
+    NotStarting,
     #[error("Observer is shutting down")]
     ShuttingDown,
     #[error("cannot start FXServer: {0}")]
@@ -423,6 +493,10 @@ enum Request {
         reply: Reply<()>,
     },
     Restart {
+        by: String,
+        reply: Reply<()>,
+    },
+    ExtendStart {
         by: String,
         reply: Reply<()>,
     },
@@ -453,13 +527,20 @@ enum Request {
     SkipHangSnapshots,
 }
 
+/// The latest spawn's progress and when it was spawned: what FXServer said as it started, kept
+/// after the start and until the next one.
+type LatestStart = Arc<Mutex<Option<(i64, Arc<Progress>)>>>;
+
 /// The handle to the supervisor task. Clones talk to the same task.
 #[derive(Clone)]
 pub struct Supervisor {
+    latest_start: LatestStart,
+    latest_hook: LatestHook,
     requests: mpsc::Sender<Request>,
     events: broadcast::Sender<Event>,
     processes: broadcast::Sender<TreeEvent>,
     players: broadcast::Sender<PlayerReport>,
+    counts: broadcast::Sender<HookReport>,
     status: watch::Receiver<Status>,
     readings: watch::Receiver<Readings>,
 }
@@ -472,6 +553,7 @@ impl Supervisor {
         let events = broadcast::channel(EVENTS).0;
         let processes = broadcast::channel(PROCESS_EVENTS).0;
         let players = broadcast::channel(PLAYER_REPORTS).0;
+        let counts = broadcast::channel(HOOK_REPORTS).0;
         let initial = Status {
             state: State::Stopped,
             generation: 0,
@@ -485,13 +567,19 @@ impl Supervisor {
             name: None,
             port: None,
             bridge: None,
+            start: None,
         };
         let (status_tx, status) = watch::channel(initial);
         let (readings_tx, readings) = watch::channel(Readings::default());
         let (traces_tx, traces) = mpsc::channel(CHANNEL);
         let (signals_tx, signals) = mpsc::channel(CHANNEL);
         let (probes_tx, probes) = mpsc::channel(CHANNEL);
+        let latest_start = LatestStart::default();
+        let latest_hook = LatestHook::default();
         let actor = Actor {
+            latest_start: Arc::clone(&latest_start),
+            latest_hook: Arc::clone(&latest_hook),
+            counts: counts.clone(),
             recovery: Recovery::new(settings.recovery.clone()),
             settings,
             console,
@@ -525,10 +613,13 @@ impl Supervisor {
         let task = tokio::spawn(actor.run());
         (
             Self {
+                latest_start,
+                latest_hook,
                 requests,
                 events,
                 processes,
                 players,
+                counts,
                 status,
                 readings,
             },
@@ -556,6 +647,25 @@ impl Supervisor {
 
     pub async fn restart(&self, by: &str) -> Result<(), ControlError> {
         self.ask(|reply| Request::Restart {
+            by: by.to_owned(),
+            reply,
+        })
+        .await
+    }
+
+    /// What FXServer warned about as it started its resources, in the latest start, with when
+    /// that start was spawned. None before the first start.
+    pub fn start_warnings(&self) -> Option<(i64, start::Warnings)> {
+        let latest = self.latest_start.lock().unwrap_or_else(PoisonError::into_inner);
+        latest
+            .as_ref()
+            .map(|(spawned_ms, progress)| (*spawned_ms, progress.warnings()))
+    }
+
+    /// Gives the start under way [`START_EXTENSION`] more before it is taken for stuck, counted
+    /// from when it would have been. Only of a server whose cfg is still running.
+    pub async fn extend_start(&self, by: &str) -> Result<(), ControlError> {
+        self.ask(|reply| Request::ExtendStart {
             by: by.to_owned(),
             reply,
         })
@@ -645,6 +755,20 @@ impl Supervisor {
     /// logged, since a join carries the player's address.
     pub fn player_reports(&self) -> broadcast::Receiver<PlayerReport> {
         self.players.subscribe()
+    }
+
+    /// What the resources of a start that counts report, each second. Off the event bus too:
+    /// there are hundreds a second.
+    pub fn hook_reports(&self) -> broadcast::Receiver<HookReport> {
+        self.counts.subscribe()
+    }
+
+    /// What became of the hook at the latest start, if that start was to count.
+    pub fn hooked(&self) -> Option<Hooked> {
+        self.latest_hook
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 
     pub fn status(&self) -> watch::Receiver<Status> {
@@ -763,12 +887,6 @@ fn is_licence_rejection(message: &str) -> bool {
         .any(|rejection| message.starts_with(rejection))
 }
 
-/// The text of a line FXServer printed on `channel`, whose name it right-aligns in brackets.
-fn on_channel<'a>(line: &'a str, channel: &str) -> Option<&'a str> {
-    let (name, text) = line.strip_prefix('[')?.split_once("] ")?;
-    (name.trim_start() == channel).then_some(text)
-}
-
 /// One spawn of FXServer, from its start until its tree is empty.
 struct Run {
     generation: u32,
@@ -787,6 +905,10 @@ struct Run {
     cancel: CancellationToken,
     tasks: Vec<JoinHandle<()>>,
     health: Health,
+    /// What FXServer says of its start: what shows it going on before the bridge's first report.
+    progress: Arc<Progress>,
+    /// The start as published last, and the instant its `stuck_at_ms` was worked out from.
+    start: Option<(StartStatus, Option<Instant>)>,
     bridge_ready: bool,
     ready_at: Option<Instant>,
     after: Option<After>,
@@ -821,6 +943,7 @@ struct Ready {
     endpoint: Option<SocketAddr>,
     /// The launch settings the spawn goes by, which the spawn's event reports.
     settings: LaunchSettings,
+    plan: start::Plan,
 }
 
 impl Ready {
@@ -832,6 +955,7 @@ impl Ready {
             warnings,
             endpoint,
             scan,
+            plan,
         } = prepared;
         let ready = Self {
             launch,
@@ -840,6 +964,7 @@ impl Ready {
             warnings,
             endpoint,
             settings,
+            plan,
         };
         (ready, scan)
     }
@@ -886,11 +1011,14 @@ enum Wake {
 }
 
 struct Actor {
+    latest_start: LatestStart,
+    latest_hook: LatestHook,
     settings: Settings,
     console: Arc<ConsoleHub>,
     events: broadcast::Sender<Event>,
     processes: broadcast::Sender<TreeEvent>,
     players: broadcast::Sender<PlayerReport>,
+    counts: broadcast::Sender<HookReport>,
     status: watch::Sender<Status>,
     readings: watch::Sender<Readings>,
     requests: mpsc::Receiver<Request>,
@@ -984,6 +1112,9 @@ impl Actor {
             Request::Restart { by, reply } => {
                 let result = self.restart(by).await;
                 let _ = reply.send(result);
+            }
+            Request::ExtendStart { by, reply } => {
+                let _ = reply.send(self.extend_start(&by));
             }
             Request::RestartScheduled { by, reply } => {
                 let _ = reply.send(self.restart_scheduled(by));
@@ -1491,16 +1622,75 @@ impl Actor {
         }
     }
 
-    async fn weigh_health(&mut self, now: Instant) {
-        // The launch settings given last, rather than the spawn's: turning hang detection off, or
-        // giving a big first start more time, must reach the server that is starting now.
-        let limits = match &self.settings.launch {
+    /// The launch settings given last, rather than the spawn's: turning hang detection off, or
+    /// giving a big first start more time, must reach the server that is starting now.
+    fn health_limits(&self) -> HealthLimits {
+        match &self.settings.launch {
             Some(launch) => self.settings.health.under(&launch.settings),
             None => self.settings.health,
-        };
+        }
+    }
+
+    fn extend_start(&mut self, by: &str) -> Result<(), ControlError> {
+        let limits = self.health_limits();
+        let now = Instant::now();
+        match &mut self.run {
+            Some(run) if self.state == State::Starting && !run.health.cfg_ran() => {
+                let stuck = run.health.stuck_at(&limits).map_or(now, |at| at.max(now));
+                run.health.extend(stuck + START_EXTENSION);
+            }
+            _ => return Err(ControlError::NotStarting),
+        }
+        self.note(&format!(
+            "{by} gave this start {} more minutes before it is taken for stuck",
+            START_EXTENSION.as_secs() / 60
+        ));
+        self.follow_start(now, &limits);
+        Ok(())
+    }
+
+    /// Publishes how far the start has come, when that changed since it was last published.
+    fn follow_start(&mut self, now: Instant, limits: &HealthLimits) {
         let Some(run) = &mut self.run else {
             return;
         };
+        if self.state != State::Starting {
+            return;
+        }
+        let stuck = run.health.stuck_at(limits);
+        let stuck_at_ms = match &run.start {
+            Some((status, from)) if *from == stuck => status.stuck_at_ms,
+            _ => stuck.map(|at| {
+                let ahead = i64::try_from(at.saturating_duration_since(now).as_millis()).unwrap_or(i64::MAX);
+                let behind = i64::try_from(now.saturating_duration_since(at).as_millis()).unwrap_or(i64::MAX);
+                now_ms().saturating_add(ahead).saturating_sub(behind)
+            }),
+        };
+        let status = StartStatus {
+            progress: run.progress.snapshot(),
+            stuck_at_ms,
+        };
+        if run
+            .start
+            .as_ref()
+            .is_some_and(|(published, _)| *published == status)
+        {
+            return;
+        }
+        run.start = Some((status, stuck));
+        self.publish_status();
+    }
+
+    async fn weigh_health(&mut self, now: Instant) {
+        let limits = self.health_limits();
+        let Some(run) = &mut self.run else {
+            return;
+        };
+        if !run.health.cfg_ran()
+            && let Some(at) = run.progress.moved()
+        {
+            run.health.progressed(at);
+        }
         let verdict = run.health.verdict(now, &limits);
         let newly_ready = !matches!(verdict, Verdict::Starting | Verdict::Hung(_)) && run.ready_at.is_none();
         if newly_ready {
@@ -1511,7 +1701,7 @@ impl Actor {
             self.recovery.ready();
         }
         match verdict {
-            Verdict::Starting => {}
+            Verdict::Starting => self.follow_start(now, &limits),
             Verdict::Healthy => match self.state {
                 State::Starting => self.set_state(State::Online, Cause::Ready),
                 State::Degraded => self.set_state(State::Online, Cause::Recovered),
@@ -1538,6 +1728,10 @@ impl Actor {
                 if dumping {
                     return;
                 }
+                let why = match &self.run {
+                    Some(run) if !run.health.cfg_ran() => stalled_text(run.progress.last(), now),
+                    _ => hang_text(cause).to_owned(),
+                };
                 if let Some(run) = &mut self.run {
                     run.end(Ending::Hang { cause });
                 }
@@ -1545,15 +1739,13 @@ impl Actor {
                 match self.settings.hang_snapshot {
                     Some(limits) => {
                         self.note(&format!(
-                            "FXServer is not responding ({}); writing {SNAPSHOT} of the hung server before killing it",
-                            hang_text(cause)
+                            "FXServer is not responding ({why}); writing {SNAPSHOT} of the hung server before killing it"
                         ));
                         self.snapshot(limits).await;
                         self.note("killing FXServer's process tree");
                     }
                     None => self.note(&format!(
-                        "FXServer is not responding ({}); killing its process tree",
-                        hang_text(cause)
+                        "FXServer is not responding ({why}); killing its process tree"
                     )),
                 }
                 self.kill();
@@ -1565,6 +1757,16 @@ impl Actor {
         let Some(run) = self.run.as_mut().filter(|run| run.generation == trace.generation) else {
             return;
         };
+        if let Some(report) = hook::Report::from_trace(&trace.kind) {
+            // The bridge is Observer's own: what it counts is not the server's.
+            if report.resource != run.bridge {
+                let _ = self.counts.send(HookReport {
+                    generation: trace.generation,
+                    report,
+                });
+            }
+            return;
+        }
         if let Some(kind) = PlayerReportKind::from_trace(&trace.kind, &run.bridge) {
             let _ = self.players.send(PlayerReport {
                 generation: trace.generation,
@@ -1889,17 +2091,13 @@ impl Actor {
         taken: bool,
     ) -> Result<(Run, SocketAddr, Vec<CfgFinding>, LaunchSettings), SpawnError> {
         let layout = prepared.layout.clone();
-        self.install(&layout, &prepared.bridge).await?;
+        let hook = self.install(&layout, &prepared.bridge).await?;
         let credentials = Credentials::generate().map_err(|error| {
             let message = format!("cannot generate the launch credentials: {error}");
             SpawnError::new(SpawnFailure::Spawn, message)
         })?;
 
-        let generation = if taken {
-            self.generation
-        } else {
-            self.take_generation()
-        };
+        let generation = self.generation_of(taken, hook);
         let spawned = observer_platform::spawn(&prepared.launch)
             .map_err(|error| SpawnError::new(SpawnFailure::Spawn, error.to_string()))?;
         let tree = Arc::new(spawned.tree);
@@ -1919,6 +2117,7 @@ impl Actor {
             .unwrap_or_else(|| SocketAddr::from((Ipv4Addr::LOCALHOST, DEFAULT_PORT)));
         let cancel = CancellationToken::new();
         let (stdin, stdin_task) = StdinWriter::start(spawned.stdin, generation, Arc::clone(&self.console));
+        let progress = self.progress_of(prepared.plan);
         let mut tasks = vec![
             tokio::spawn(read_console(
                 spawned.stdout,
@@ -1926,6 +2125,7 @@ impl Actor {
                 generation,
                 Arc::clone(&self.console),
                 self.signals_tx.clone(),
+                Arc::clone(&progress),
             )),
             tokio::spawn(read_console(
                 spawned.stderr,
@@ -1933,6 +2133,7 @@ impl Actor {
                 generation,
                 Arc::clone(&self.console),
                 self.signals_tx.clone(),
+                Arc::clone(&progress),
             )),
             tokio::spawn(trace::read(
                 spawned.traces,
@@ -1977,6 +2178,8 @@ impl Actor {
             cancel,
             tasks,
             health: Health::new(Instant::now()),
+            progress,
+            start: None,
             bridge_ready: false,
             ready_at: None,
             after: None,
@@ -1986,9 +2189,46 @@ impl Actor {
         Ok((run, probe, prepared.warnings, prepared.settings))
     }
 
-    /// Writes the bridge into the build as `bridge`, and moves away the dumps of a run Observer
-    /// did not see end, such as before Observer itself crashed.
-    async fn install(&mut self, layout: &Layout, bridge: &str) -> Result<(), SpawnError> {
+    /// What a spawn says of its start from now on, kept as the latest start's.
+    fn progress_of(&self, plan: start::Plan) -> Arc<Progress> {
+        let spawned_ms = now_ms();
+        let progress = Arc::new(Progress::new(plan, Instant::now(), spawned_ms));
+        *self.latest_start.lock().unwrap_or_else(PoisonError::into_inner) =
+            Some((spawned_ms, Arc::clone(&progress)));
+        progress
+    }
+
+    /// The generation of the spawn about to happen, taken now unless the pre-launch phase took
+    /// it as it began. What became of the hook is kept for it, and the console says why a start
+    /// that should count counts nothing.
+    fn generation_of(&mut self, taken: bool, hook: Hook) -> u32 {
+        let generation = if taken {
+            self.generation
+        } else {
+            self.take_generation()
+        };
+        let hooked = match hook {
+            Hook::Out => None,
+            Hook::In => Some(None),
+            Hook::Refused(reason) => {
+                warn!(%reason, "this start counts nothing: the build's scheduler was left as it was");
+                let note = format!("Debug counts nothing in this start: {reason}");
+                self.note_as(SUPERVISOR, generation, &note);
+                Some(Some(reason))
+            }
+        };
+        *self.latest_hook.lock().unwrap_or_else(PoisonError::into_inner) =
+            hooked.map(|refused| Hooked { generation, refused });
+        generation
+    }
+
+    /// Writes the bridge into the build as `bridge`, with the hook and its two lines in the
+    /// scheduler when the start counts and without them when it does not, and moves away the
+    /// dumps of a run Observer did not see end, such as before Observer itself crashed. Answers,
+    /// for a start that counts, why the scheduler was left as it was: the server starts all the
+    /// same.
+    async fn install(&mut self, layout: &Layout, bridge: &str) -> Result<Hook, SpawnError> {
+        let counting = self.settings.counting.as_ref().is_some_and(Counting::asked);
         let installing = layout.clone();
         let bridge = bridge.to_owned();
         let dumps = (
@@ -1997,17 +2237,22 @@ impl Actor {
             self.settings.dumps,
         );
         let (installed, moved) = tokio::task::spawn_blocking(move || {
-            let installed = bridge::install(&installing, &bridge);
+            let installed = bridge::install(&installing, &bridge)
+                .map(|()| hook::install(&installing, &bridge, counting).err());
             (installed, crashes::collect(&dumps.0, &dumps.1, dumps.2))
         })
         .await
         .map_err(|error| SpawnError::new(SpawnFailure::Spawn, error.to_string()))?;
-        if let Err(error) = installed {
+        let refused = installed.map_err(|error| {
             let message = format!("cannot install the observer bridge: {error}");
-            return Err(SpawnError::new(SpawnFailure::Bridge, message));
-        }
+            SpawnError::new(SpawnFailure::Bridge, message)
+        })?;
         self.report_dumps(moved);
-        Ok(())
+        Ok(match refused {
+            _ if !counting => Hook::Out,
+            None => Hook::In,
+            Some(refusal) => Hook::Refused(refusal.to_string()),
+        })
     }
 
     async fn exited(&mut self, exit: Exit) {
@@ -2217,6 +2462,10 @@ impl Actor {
             name: self.name.clone(),
             port: self.port,
             bridge: run.map(|run| run.bridge.clone()),
+            start: run
+                .filter(|_| self.state == State::Starting)
+                .and_then(|run| run.start.as_ref())
+                .map(|(status, _)| status.clone()),
         });
     }
 
@@ -2284,6 +2533,7 @@ async fn read_console(
     generation: u32,
     console: Arc<ConsoleHub>,
     signals: mpsc::Sender<(u32, Signal)>,
+    progress: Arc<Progress>,
 ) {
     let mut lines = LineAssembler::default();
     let publish = |assembled: crate::console::Assembled| {
@@ -2293,7 +2543,11 @@ async fn read_console(
             masked: false,
         };
         let line = console.push(generation, kind, None, sanitize(&assembled.text), flags);
-        if let Some(signal) = Signal::read(kind, &plain(&line.text)) {
+        let text = plain(&line.text);
+        if kind == LineKind::Stdout {
+            progress.read(&text, Instant::now(), now_ms());
+        }
+        if let Some(signal) = Signal::read(kind, &text) {
             let _ = signals.try_send((generation, signal));
         }
     };
@@ -2431,6 +2685,23 @@ fn hang_text(cause: HangCause) -> &'static str {
     }
 }
 
+/// Why a start whose cfg never finished is taken for stuck: the last resource it started, and how
+/// long ago.
+fn stalled_text(last: Option<(Instant, String)>, now: Instant) -> String {
+    match last {
+        Some((at, resource)) => {
+            let seconds = now.saturating_duration_since(at).as_secs();
+            let ago = if seconds >= 120 {
+                format!("{} min", seconds / 60)
+            } else {
+                format!("{seconds} s")
+            };
+            format!("its start is stuck: no resource started since {resource}, {ago} ago")
+        }
+        None => "its start is stuck: it started no resource".to_owned(),
+    }
+}
+
 fn now_ms() -> i64 {
     jiff::Timestamp::now().as_millisecond()
 }
@@ -2438,6 +2709,26 @@ fn now_ms() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_stuck_start_names_the_last_resource_started_and_how_long_ago() {
+        let started = Instant::now();
+        let last = || Some((started, "clothes".to_owned()));
+        let after = |seconds| started + Duration::from_secs(seconds);
+
+        assert_eq!(
+            stalled_text(last(), after(371)),
+            "its start is stuck: no resource started since clothes, 6 min ago"
+        );
+        assert_eq!(
+            stalled_text(last(), after(45)),
+            "its start is stuck: no resource started since clothes, 45 s ago"
+        );
+        assert_eq!(
+            stalled_text(None, after(45)),
+            "its start is stuck: it started no resource"
+        );
+    }
 
     #[test]
     fn licence_rejections_are_recognised_on_either_stream() {

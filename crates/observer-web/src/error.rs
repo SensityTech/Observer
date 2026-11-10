@@ -61,8 +61,10 @@ fn status(code: ErrorCode) -> StatusCode {
         | ErrorCode::InvalidSetupToken
         | ErrorCode::OriginMismatch
         | ErrorCode::ContentHidden
-        | ErrorCode::FeatureLocked => StatusCode::FORBIDDEN,
+        | ErrorCode::FeatureLocked
+        | ErrorCode::SftpListenPinned => StatusCode::FORBIDDEN,
         ErrorCode::NotFound
+        | ErrorCode::CfgVersionNotFound
         | ErrorCode::BuildNotListed
         | ErrorCode::CrashNotFound
         | ErrorCode::CrashFileNotFound
@@ -79,6 +81,9 @@ fn status(code: ErrorCode) -> StatusCode {
         | ErrorCode::ServerRunning
         | ErrorCode::ServerNotRunning
         | ErrorCode::ServerStopping
+        | ErrorCode::ServerNotStarting
+        | ErrorCode::CfgNotEditable
+        | ErrorCode::CfgChanged
         | ErrorCode::NothingToSkip
         | ErrorCode::AlreadySkipped
         | ErrorCode::NothingToRestore
@@ -135,6 +140,8 @@ fn status(code: ErrorCode) -> StatusCode {
         | ErrorCode::InvalidLaunchSettings
         | ErrorCode::CommandRefused
         | ErrorCode::InvalidRequest
+        | ErrorCode::InvalidCfgText
+        | ErrorCode::InvalidSftpListen
         | ErrorCode::InvalidSchedule
         | ErrorCode::InvalidArtifactSettings
         | ErrorCode::InvalidImportFolder

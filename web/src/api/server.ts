@@ -3,6 +3,7 @@ import { queryOptions } from '@tanstack/react-query';
 import { getJson, request, send } from './client';
 import type { CommandAck } from './generated/CommandAck';
 import type { LogFile } from './generated/LogFile';
+import type { StartWarnings } from './generated/StartWarnings';
 
 const SERVER = '/servers/default';
 
@@ -10,6 +11,15 @@ const SERVER = '/servers/default';
 export const startServer = () => send('POST', `${SERVER}/start`);
 export const stopServer = () => send('POST', `${SERVER}/stop`);
 export const restartServer = () => send('POST', `${SERVER}/restart`);
+/** Gives the start under way more time before Observer takes it for stuck. */
+export const extendStart = () => send('POST', `${SERVER}/start/extend`);
+
+/** What FXServer warned about as it last started its resources: the tools list it. */
+export const startWarningsQuery = queryOptions({
+    queryKey: ['start-warnings'],
+    queryFn: ({ signal }) => getJson<StartWarnings>(`${SERVER}/start/warnings`, signal),
+    staleTime: 10_000,
+});
 
 /** Audited before FXServer gets it; the answer says whether FXServer read it yet. */
 export const sendCommand = (line: string) => send<CommandAck>('POST', `${SERVER}/console`, { line });

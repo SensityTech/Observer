@@ -135,7 +135,7 @@
         gap: 2px;
         min-height: 0;
         margin: 8px calc(-1 * var(--rail-pad)) 0;
-        padding: 0 var(--rail-pad) 16px;
+        padding: 0 var(--rail-pad) 6px;
         overflow-y: auto;
         overscroll-behavior: contain;
         scrollbar-width: thin;
@@ -146,7 +146,7 @@
         display: flex;
         align-items: center;
         gap: 11px;
-        min-height: 34px;
+        min-height: 32px;
         padding: 0 10px;
         border-radius: 9px;
         font-size: 13.5px;
@@ -179,7 +179,9 @@
         display: flex;
         align-items: center;
         gap: 10px;
-        padding: 14px 10px 6px;
+        /* Five groups: tight enough for every entry to show on a 900 px screen without scrolling,
+           while Debug is folded. */
+        padding: 7px 10px 3px;
         font-family: var(--mono);
         font-size: 10.5px;
         font-weight: 500;
@@ -194,6 +196,23 @@
         height: 1px;
         margin-right: calc(-1 * var(--rail-pad));
         background: var(--line);
+    }
+    /* A group that folds: its heading is the button that opens it. */
+    button.nav-group {
+        width: 100%;
+        gap: 6px;
+        text-align: left;
+        cursor: pointer;
+    }
+    button.nav-group:hover {
+        color: var(--ink-2);
+    }
+    button.nav-group > svg {
+        flex: none;
+        transition: transform 0.12s;
+    }
+    button.nav-group[aria-expanded='true'] > svg {
+        transform: rotate(90deg);
     }
 
     .rail-foot {

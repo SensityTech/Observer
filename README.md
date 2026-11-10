@@ -21,8 +21,11 @@ what to do with them.
   probation, and a return to the last healthy build.
 - **Statistics and diagnostics.** Players, tick times, CPU and memory of FXServer and the host,
   FXServer's threads and connections, crash dumps and hangs.
-- **Live map.** Where the connected players stand, over a map image you add, coloured by play time,
-  a click away from their profile and a ban.
+- **Live map.** Where the connected players stand, over Rockstar's map of GTA V or an image you add,
+  coloured by play time, a click away from their profile and a ban.
+- **Debug.** What each resource sends and receives, writes into state bags and calls over HTTP,
+  counted inside the resources: the event that floods the clients, the client that sends far more
+  than the others, the resource that calls a host it never called. Off until the owner turns it on.
 - **Bans.** A ban holds a player's licence, other identifiers and hardware tokens, for a time or for
   good. The server refuses a banned player at connection with your message, and drops one banned while
   playing.
@@ -110,6 +113,12 @@ http://localhost:40125/setup#<token>
 Once the owner exists, the panel opens the server setup. Other accounts are added on the **Users**
 page, each with a temporary password that works for 72 hours and is changed at the first sign-in.
 
+The panel's pages are grouped by what one comes for: **Players** (the players, the live map, the
+bans), **Server** (restarts, the cfg, builds, backups, file changes), **Insights** (statistics, drops,
+diagnostics) and **Maintenance** (tools, the audit log). The search button beside the logo, or Ctrl K
+(⌘ K on a Mac) from any page, opens a search of the pages, of the settings by their name, and of the
+connected players by name or ID. Each account finds only what it may open.
+
 From the host, even while Observer runs:
 
 ```sh
@@ -126,9 +135,10 @@ configured, and again from **Server → Run the setup**. It has four steps:
 1. **Server folder.** The full path on the host of the folder that holds `resources` and the cfg, such
    as `C:\FXServer\server-data` or `/srv/fxserver/server-data`. Network paths are not supported.
    FXServer runs from this folder. Observer copies nothing into it, and writes there only what people
-   upload over [SFTP](#file-access-over-sftp) and the fixes of the [server tools](#server-tools) the
-   owner runs or turns on: the **Tools** page lists each fix with its backup.
-2. **Config file.** The cfg FXServer executes, relative to the folder, such as `server.cfg`. Observer
+   upload over [SFTP](#file-access-over-sftp), the fixes of the [server tools](#server-tools) the
+   owner runs or turns on, which the **Tools** page lists each with its backup, and the cfg when the
+   owner saves it from the [server.cfg page](#editing-servercfg).
+2. **Config file.** The cfg FXServer executes, relative to the folder, such as `server.cfg`. The setup
    reads it and the cfgs it runs in turn, never changes them, and lists what it finds with file and line:
    blocking problems, warnings and notes, and what the cfg sets (game, endpoints, slots, OneSync,
    hostname, whether a licence key is set). Fix your files, then **Check again**; only a blocking problem
@@ -157,16 +167,37 @@ server whose heartbeat or HTTP is late when those minutes end passes only once i
 hang that began within them fails the probation however long the [hang delay](#hang-detection). With
 hang detection off, only a crash fails it, and a silent server still waits to answer before it passes.
 
+### Following a start
+
+While FXServer starts, the Overview shows how far it has come: how many resources are up, the
+command of the cfg it is at (`ensure [clothes]`, `server.cfg` line 226, 12 of its 150 resources
+up), the last resource started and how long ago, the resources that did not start, and the five
+slowest so far. The status bar above every page counts them too.
+
+Observer reads this from FXServer's own console: FXServer prints `Started resource <name>` once a
+resource is up, and nothing while it starts one. The command it is at is worked out from the
+resources each `ensure` and `start` of the cfg starts, a category being every resource under the
+folder of that name. When Observer cannot read every command of the cfg, as when it executes a
+file inside a resource, the page says so rather than guess.
+
+Once no resource has started for half a minute, the card says how long Observer still waits
+before it takes the start for stuck (see hang detection below). Whoever may start and stop the
+server can give that start 15 minutes more, as often as needed; the audit log keeps who did. The
+hang delay itself is not changed.
+
 ### Hang detection
 
 Observer watches two signals while FXServer runs: the heartbeat of its bridge resource, which only
 comes while the main loop turns, and FXServer's HTTP endpoints. Once the server is up, one of them
 silent for 10 seconds marks it degraded. Silent for the delay under **Server → Hang detection**, 6
-minutes by default and counted from the start until the first answer, the server is hung: Observer
-writes a dump of it (a report of its threads on Linux), kills its process tree and starts it again.
+minutes by default, the server is hung: Observer writes a dump of it (a report of its threads on Linux),
+kills its process tree and starts it again.
 
-A big server's first start can keep its main loop busy for minutes while resources build their caches of
-clothing and vehicles, which reads as a hang. Raise the delay, from 1 to 60 minutes, or turn hang detection
+A start gives no heartbeat: FXServer runs its cfg before any thread of a resource, the bridge's included.
+Until the cfg has run, each resource FXServer starts counts in its place, so a start is hung once it has
+started no resource for the delay, however long it takes in all, and the console names the last resource
+it started. One resource alone can take minutes on a big server's first start, such as a clothing pack
+whose files are read for the first time. Raise the delay, from 1 to 60 minutes, or turn hang detection
 off: FXServer is then left running however long it stays silent, until someone restarts it. Either change
 applies at once, to a server already starting too, and the delay then counts from the change: turning
 detection back on never kills a server that was silent before. A crash is another matter: whenever
@@ -240,7 +271,8 @@ trusted_proxies = []
 # A tracing filter, such as "debug" or "info,observer_web=debug".
 level = "info"
 
-# File access over SFTP stays off until this section exists (see "File access over SFTP").
+# Where SFTP listens. Without this section the owner gives the address in the panel instead; with
+# it, the panel cannot change it (see "File access over SFTP").
 # [sftp]
 # listen = "0.0.0.0:40126"
 
@@ -299,7 +331,7 @@ The backups are complete snapshots of the state database:
 | Port | What |
 |---|---|
 | 40125/TCP (`http.listen`) | The panel, its API and its websocket (`/api/ws`). |
-| 40126/TCP (`sftp.listen`), when set | File access over SFTP. Off unless `[sftp]` is in `observer.toml` and SFTP is not [turned off](#turning-features-off). |
+| 40126/TCP, or the port the owner gives | File access over SFTP. Closed until the owner gives its address in the panel or `[sftp]` names it in `observer.toml`, and while SFTP is [turned off](#turning-features-off). |
 | The cfg's endpoints, such as 30120 TCP and UDP | FXServer's own. Observer reads FXServer's HTTP endpoint (`/dynamic.json`, `/info.json`, `/perf/`, `/players.json`) on the cfg's first `endpoint_add_tcp`, through loopback when that one listens on every interface. |
 
 ### Outbound connections
@@ -318,6 +350,10 @@ nothing else.
 | `runtime.fivem.net` | the build listings of each branch, and the archives |
 | `api.github.com` | Observer's latest release, without an account: 60 checks an hour per address |
 | `github.com`, `release-assets.githubusercontent.com`, `objects.githubusercontent.com` | a release's archive, its checksums and their signature |
+
+The panel, in the browser, loads everything from Observer, with one exception: the [live map](#live-map)
+loads Rockstar's map of GTA V from `s.rsg.sc` unless its settings say **My image** or **Grid**. Observer
+itself never talks to that host.
 
 Cfx.re's [Platform License Agreement](https://fivem.net/terms) covers the server builds you download.
 
@@ -441,21 +477,68 @@ When the public address carries a port, such as `https://panel.example.com:8443`
 Observer pings the websocket every 20 seconds, well within nginx's default 60-second
 `proxy_read_timeout`. The panel opens `wss://` by itself when the page is HTTPS.
 
+## Editing server.cfg
+
+**Server → server.cfg**, for the owner alone, edits the cfg of the launch settings in two views of the
+same text.
+
+- **Guided** gives a field to the lines most servers change: the server name, the project name and
+  description, the tags, the language, the slots, the game build, the game address, the licence key
+  and the Steam Web API key. Each field names the line it is written on, or says that a save adds
+  one. Below them, every line that starts a resource or a category has a switch: off comments the
+  line out, on puts it back, and the order stays the order of the file. A line that starts something
+  neither the server folder nor the build holds is flagged.
+- **File** is the whole text, with line numbers, and the checks of the [server setup](#the-server-setup-page)
+  read again as you type: what blocks a start, what FXServer will skip, with the file and the line.
+
+A save rewrites only what you changed: comments, blank lines, order, line ends and a byte order mark
+stay as they were. It asks for your password, applies at the next start of FXServer, and is refused
+when the file on disk is no longer the one you started from. **See the changes** shows the lines a
+save would change before you save.
+
+Secrets never reach the browser. The values of `sv_licenseKey`, `mysql_connection_string`,
+`rcon_password`, `sv_tebexSecret`, `steam_webApiKey`, a Discord webhook's token and anything else the
+[file changes](#what-changed-since-the-last-start) hide stand in the text as `<<secret-1>>`,
+`<<secret-2>>`. A save puts each one back where its mark still is; typing over a mark replaces the
+secret. The comparisons show them as `[REDACTED]`.
+
+Before each save, Observer keeps the file as it was in its own database: the latest 20 versions,
+with who replaced each and when, secrets included as the file held them. **Earlier versions** compares
+any of them with the file and puts one back, which keeps the current file as a version too. The audit
+log records each save and each version put back with the number of lines added and removed, never
+their text.
+
+The page edits a plain UTF-8 file of at most 512 KiB. It refuses a link, a read-only file, a file in
+another encoding, which a save would damage, and the files the cfg runs with `exec`: those are edited on the host or
+over SFTP, and the checks still read them.
+
 ## File access over SFTP
 
 Observer can let people and CI pipelines read and change chosen parts of the server folder over SFTP,
-the file transfer of SSH. It is off until the owner adds this to `observer.toml` and restarts Observer:
+the file transfer of SSH. Its port stays closed until it has an address to listen on, which the owner
+gives in the panel, under **Settings → File access**, with the password again: every address of the
+host, the host itself only (for a tunnel), or one of its addresses, and a port. The port opens, moves
+and closes at once, without a restart of Observer or of FXServer, and each change is in the audit log.
+A port that does not open, because another program holds it for one, never stops Observer: the panel
+says what the host answered, and SFTP waits until the address is given again or changed.
+
+A host that wants the address out of the panel's reach names it in `observer.toml`:
 
 ```toml
 [sftp]
 listen = "0.0.0.0:40126"
 ```
 
-At that first start Observer makes the server's SSH host key and logs its fingerprint
-(`SFTP listening ... fingerprint=SHA256:...`); clients compare it on their first connection. Expose the
-port directly: behind a TCP proxy every client would share the proxy's address, which the lockouts and
-the pipelines' allowed networks rely on. Allow TCP 40126 in the firewall only for the networks that
-need it.
+The panel then shows that address and cannot change it; it is read at Observer's start, which stops if
+the port is taken. `GET /api/settings/sftp` (**View settings**) says where SFTP listens, whether the
+file names the address, whether the port is open and the fingerprint of its host key;
+`PUT /api/settings/sftp` is the owner's.
+
+The first time the port opens, Observer makes the server's SSH host key. Its fingerprint is beside the
+address in the panel and in the log (`SFTP listening ... fingerprint=SHA256:...`); clients compare it on
+their first connection. Expose the port directly: behind a TCP proxy every client would share the
+proxy's address, which the lockouts and the pipelines' allowed networks rely on. Allow the port in the
+firewall only for the networks that need it.
 
 In the panel, under **Files**:
 
@@ -514,11 +597,35 @@ files changed while its version did not. Text files (Lua, JS, JSON, cfg, YAML an
 
 ## Server tools
 
-Server tools look in the server's resources for problems FXServer does not report, and repair those
-they can without changing what players see. The first one finds duplicate archetypes. A tool runs when
-the owner asks, on the **Tools** page or from the [command line](#command-line), and before every
-start of FXServer once the owner turns that on. Nothing is written into the server folder until the
-owner runs a fix or turns fixes on.
+Server tools look in the server's resources for problems FXServer does not report, or reports where
+nobody reads, and repair those they can without changing what players see. A tool runs when the
+owner asks, on the **Tools** page or from the [command line](#command-line), and before every start
+of FXServer once the owner turns that on. Nothing is written into the server folder until the owner
+runs a fix, stages one or turns fixes on.
+
+The **Tools** page, the owner's, gives each tool a card: what it found last, when, and the way in.
+**Needs attention** and **Never run** filter them. Beside the cards:
+
+- **Staged for the next restart**: the fix that waits for the next start of FXServer, with the way
+  to drop it.
+- **Before each start**: what each tool does before FXServer starts, changed in place.
+- **Latest runs**: the last run of each tool; every run that wrote is in the audit log.
+
+Four tools are listed:
+
+- **Duplicate archetypes**, below, which scans, fixes and undoes.
+- **cfg check**: the checks of the [server.cfg page](#editing-servercfg), counted, with the way to
+  the editor.
+- **Heavy assets**: the streamed models and textures FXServer warned about as it last started their
+  resource, heaviest first, with the size it measured and whether it called them oversized.
+  Observer does not rewrite textures: the list is what to work from in a texture editor.
+- **Missing files**: the files a manifest names that its resource does not hold, with the manifest
+  and the line that name each.
+
+The last two are read from FXServer's console as it starts its resources, and kept in memory
+until the next start: they are empty until Observer has started FXServer once. FXServer prints
+these warnings before the line that says a resource started, which is how each is given its
+resource.
 
 ### Duplicate archetypes
 
@@ -623,6 +730,17 @@ back by hand. **Fix**, **Undo**, **Undo all** and the settings ask for the owner
 and the three buttons run only while FXServer is stopped. Writes and settings changes are in the
 audit log, those of a run that Observer's stop cut short at its next start; report runs are not.
 
+While FXServer runs, the plan on screen can be **staged for the next restart** instead. Before the
+next start that is not a recovery from a crash, Observer scans the folder again: it writes the fix
+if the scan plans exactly what was staged, and writes nothing if it plans anything else, saying so
+in the console. Either way the staged fix is gone after that start, and so it is once any run has
+changed files. Staging and dropping a staged fix ask for the password and are in the audit log.
+With **At start** on **Fix** there is nothing to stage: every start fixes.
+
+The tool's page counts the duplicates it leaves by reason, with a switch for the two the owner
+decides: **Change escrowed resources** and **Fix them too, keeping the latest copy** are the
+settings below, saved and followed by a new scan.
+
 Before a start, FXServer waits for the tool. Past 60 seconds, the tool is told to stop between two
 files, and FXServer starts once it has; a stop in the meantime cancels the start. FXServer never
 starts while a tool writes: a start asked during a fix or an undo waits for it to end, even past 60
@@ -690,14 +808,70 @@ use the **Tools** page.
   holds two stream files of the same name, which one FXServer sends may differ from the prediction.
   The report notes it, and such files are never changed.
 
+## Debug
+
+The **Debug** group of the panel counts what the server's resources do, inside the resources
+themselves: the events they send and receive, the state bags they write and the HTTP requests they
+send out. It answers which event floods the clients, which client sends far more than the others,
+which key is written sixty times a second, and which resource started calling a host it never
+called. It is off until the owner turns it on, on any of its pages or on the Settings page
+(**Features**), and it counts from the next start of FXServer.
+
+**What turning it on changes.** At each start of FXServer, Observer adds one line at the top and one
+at the end of the build's `citizen/scripting/lua/scheduler.lua`, the file every server Lua runtime
+runs first, and keeps the file as it was beside it, as `scheduler.lua.original`. The first line
+loads `hook.lua` from the bridge's folder into the resource; the last hands it the scheduler's event
+handlers. Nothing is added to the server's resources. Once Debug is off, Observer stops reading the
+counts at once, and the next start takes the two lines out: the file is byte for byte what it was.
+Until that start, the resources of the server that runs still count. A build whose scheduler
+Observer does not recognise is left as it is: FXServer starts all the same, and the pages say why
+nothing is counted. The lines only count in a server Observer started: the same build run by hand
+counts nothing.
+
+**What is counted.** Names, counts and sizes, sent once a second by each resource on the channel
+the bridge already reports on: an event's name with how often it passed, its size and the time its
+handlers took; a state bag key with how often it was written and whether the write goes out to
+clients; a request's method and host. Never an event's payload, a state bag's value, or the path,
+query, body or answer of a request. The counts stay in memory for fifteen minutes and go with the
+server's run; only the hosts each resource called are stored, with the time of the first call.
+
+- **Events**: the traffic with clients over the last 1, 5 or 15 minutes, and each event by name
+  with its way (from clients, to one client, to everyone, between resources, from the engine), its
+  rate, its size and what it weighs. An event opens on the time its handlers take and the clients
+  that send it most, each a click away from their profile. **Refused** lists what clients sent to
+  an event a resource handles without having opened it to the network: FXServer drops those, and
+  the list says who tried.
+- **State bags**: each key with the kind of bag it is written in, the resource that writes it, its
+  rate, its size and the share of its writes that go out to clients, and the largest single writes.
+- **HTTP requests**: each host with the method, the resource, the rate and the size sent. A host a
+  resource calls for the first time is marked new until the owner says they know it, which the
+  audit log records. For the first 24 hours Debug counts, every host is taken as known.
+
+The pages are read with **View diagnostics**; turning Debug on or off and saying a host is known
+are the owner's.
+
+**Limits.**
+
+- **Server-side Lua only.** A resource counts where it runs Lua on the server. Maps, clothes and
+  client-only resources have nothing to count there; resources written in JavaScript or C# are not
+  counted yet, nor is anything that happens on the clients. Each page says how many started
+  resources report, and names the others.
+- **A cost.** Each resource does a little more work on every event it sends or receives. Observer
+  has not measured it on a busy server: turn Debug on to answer a question, then off again.
+- **Sizes are what the resources hand over,** before FXServer packs and sends them: they compare
+  events with one another, they are not the server's bandwidth. What a state bag sends to clients
+  is worked out from the share of its writes that are replicated.
+- **Latent events** count with the events sent to clients.
+
 ## Turning features off
 
 File access over SFTP (`sftp`), file changes (`changes`), the server tools (`tools`), the diagnostics
-(`diagnostics`), the statistics (`metrics`), the players (`players`), the player drops (`drops`) and
-the update checks (`updates`) can each be turned off. A feature that is off runs none of its code: Observer does not open its port, start
-its tasks or open its database, and its API routes answer `feature_disabled`. What it recorded stays on
-disk, and its retention waits until it runs again. Supervision, the console, accounts, the audit log,
-the restart schedule and FXServer's builds are always on.
+(`diagnostics`), the statistics (`metrics`), the players (`players`), the player drops (`drops`), the
+update checks (`updates`) and Debug (`debug`) can each be turned off; Debug alone starts off. A
+feature that is off runs none of its code: Observer does not open its port, start its tasks or open
+its database, and its API routes answer `feature_disabled`. What it recorded stays on disk, and its
+retention waits until it runs again. Supervision, the console, accounts, the audit log, the restart
+schedule and FXServer's builds are always on.
 
 `GET /api/features` (**View settings**) says for each feature whether it runs, what holds it off, and
 what it opens: its port, its tasks, its files, its routes. Only the owner turns one on or off, with
@@ -706,8 +880,8 @@ what it opens: its port, its tasks, its files, its routes. Only the owner turns 
 - **Off applies at once.** By the time the API answers, the port is closed, the SFTP sessions have
   ended and the feature's tasks have stopped. Turning the players or the statistics off turns the drops
   off too: they are drawn from the players' sessions and from the runs the statistics record.
-- **On applies at the next start of Observer,** which restarts FXServer, except for the server tools,
-  which apply from the next start of FXServer. A port only opens when the host restarts Observer.
+- **On applies at the next start of Observer,** which restarts FXServer, with three exceptions: the
+  server tools and Debug apply from the next start of FXServer, and SFTP opens its port at once.
 - **What a feature left behind is still finished.** With SFTP off, the failed logins it counted still
   reach the audit log, and the uploads a crash cut short still leave the server folder at Observer's
   start. While a fix of the server tools is applied, the work before each start still puts back what it
@@ -812,12 +986,28 @@ shape too, and the settings' Live map category moves the thresholds. A click on 
 play time, session, ping and position, a link to their profile and, with **Ban players**, a ban. Seeing
 the map takes **See the live map**.
 
-Observer ships no map: GTA V's belongs to Rockstar Games. The owner gives, in the settings, the path of
-an image on the host they have the right to use, such as GTA V's atlas from their own copy of the game:
-PNG, JPEG or WebP, up to 16,384 pixels a side and 64 MB. Observer keeps a copy in its data folder
-(`map/`) and serves it only to accounts that see the map. To place it in the game, stand at two spots
-you know on the image, far apart, pick yourself in the list and click where you stand, or type the game
-coordinates of the image's four edges. Without an image, the page shows a grid of game coordinates.
+**On the map** lists the players placed, by name, with their ping: a click centres the map on one, and
+the search narrows the list by name or ID. **Follow**, on the selected player, keeps the map on them at
+each new position. **Trails, 5 min** draws where each player went over the last five minutes: the
+places this page received since it was opened, kept in the browser and gone with the page. Observer
+stores no position, so a trail starts when the page opens.
+
+Under the players, the page draws Rockstar's own map of GTA V, as the game draws it (**Atlas**), seen
+from the sky (**Satellite**) or as a road map (**Roads**): the settings' Live map category chooses
+the one a browser opens on, and each viewer switches between the three on the map itself, a choice
+their browser remembers. The switch shows only while the owner's choice is one of Rockstar's maps.
+Observer ships no map and keeps none, GTA V's belongs to Rockstar Games: each browser that opens the
+page loads the map's tiles from Rockstar's servers (`s.rsg.sc`), which then see that browser's address,
+and nothing else of it: no referrer, no cookie of Observer's. It is the one thing the panel loads from
+elsewhere than Observer; the two other choices load nothing from outside.
+
+**My image** is for another map, a custom island or RedM's for one: the owner gives the path of an image
+on the host they have the right to use, PNG, JPEG or WebP, up to 16,384 pixels a side and 64 MB.
+Observer keeps a copy in its data folder (`map/`) and serves it only to accounts that see the map. To
+place it in the game, stand at two spots you know on the image, far apart, pick yourself in the list and
+click where you stand, or type the game coordinates of the image's four edges. **Grid** draws a grid of
+game coordinates, which also stands in for an image not placed yet and for tiles Rockstar's servers did
+not send.
 
 Positions come from the bridge, which reads them from OneSync: without OneSync there are none. The
 server sends them every 1, 2 or 5 seconds, only while someone has the page open, and stops within 30

@@ -9,7 +9,7 @@ import type { Topic } from "./Topic";
  */
 export type FeatureReach = { 
 /**
- * The addresses it listens on, as `observer.toml` gives them.
+ * The addresses it listens on.
  */
 listens: Array<string>, tasks: Array<FeatureTaskRun>, whileOff: Array<FeatureTaskRun>, files: Array<FeatureFile>, serverFolder: ServerFolder, 
 /**

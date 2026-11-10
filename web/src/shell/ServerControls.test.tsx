@@ -25,6 +25,7 @@ const status = (state: ServerState, launch: LaunchReadiness = 'ready') => ({
     players: null,
     restartAt: null,
     launch,
+    start: null,
 });
 
 /** The controls of an operator who may start and stop FXServer, in `state`. */

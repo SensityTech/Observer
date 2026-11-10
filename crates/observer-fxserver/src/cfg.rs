@@ -857,7 +857,7 @@ impl Scanner<'_> {
 }
 
 /// The names of a build's system resources, in lower case.
-fn system_resources(folder: &Path) -> HashSet<String> {
+pub(crate) fn system_resources(folder: &Path) -> HashSet<String> {
     let Ok(entries) = fs::read_dir(folder) else {
         return HashSet::new();
     };

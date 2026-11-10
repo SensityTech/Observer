@@ -9,7 +9,9 @@ mod audit;
 mod auth;
 mod backups;
 mod bans;
+mod cfg;
 mod changes;
+mod debug;
 mod diagnostics;
 mod drops;
 mod features;
@@ -122,6 +124,8 @@ pub(crate) fn routes() -> Vec<Route> {
     // A feature turned on may open a port or read the host's folders: the owner's alone, as the
     // launch settings are.
     let read_features = Permission(P::SETTINGS_VIEW);
+    let read_debug = Permission(P::DIAGNOSTICS_VIEW);
+    let judge_hosts = Owner;
     let switch_features = ReauthenticatedOwner;
     // A backup is the whole game database. Seeing the backups and starting one are permissions;
     // taking one out takes the critical one and the password again. The settings and destinations
@@ -181,7 +185,16 @@ pub(crate) fn routes() -> Vec<Route> {
         route(M::POST,   "/servers/default/setup/cfg/text", read_launch, servers::cfg_text),
         route(M::POST,   "/servers/default/setup/discover", read_launch, servers::discover),
         route(M::PUT,    "/servers/default/setup",        edit_launch, servers::save_setup),
+        route(M::GET,    "/servers/default/cfg",          read_launch, cfg::document),
+        route(M::PUT,    "/servers/default/cfg",          edit_launch, cfg::save),
+        route(M::POST,   "/servers/default/cfg/check",    read_launch, cfg::check),
+        route(M::POST,   "/servers/default/cfg/diff",     read_launch, cfg::diff),
+        route(M::GET,    "/servers/default/cfg/versions", read_launch, cfg::versions),
+        route(M::GET,    "/servers/default/cfg/versions/{id}",         read_launch, cfg::version_diff),
+        route(M::POST,   "/servers/default/cfg/versions/{id}/restore", edit_launch, cfg::restore),
         route(M::POST,   "/servers/default/start",      control,      servers::start),
+        route(M::POST,   "/servers/default/start/extend", control,    servers::extend_start),
+        route(M::GET,    "/servers/default/start/warnings", read_tools, servers::start_warnings),
         route(M::POST,   "/servers/default/stop",       control,      servers::stop),
         route(M::POST,   "/servers/default/restart",    control,      servers::restart),
         route(M::POST,   "/servers/default/console",    command,      servers::command),
@@ -265,10 +278,19 @@ pub(crate) fn routes() -> Vec<Route> {
         route(M::POST,   "/tools/duplicate-archetypes/scan",         read_tools,   tools::scan),
         route(M::POST,   "/tools/duplicate-archetypes/fix",          change_tools, tools::fix),
         route(M::POST,   "/tools/duplicate-archetypes/undo",         change_tools, tools::undo),
+        route(M::POST,   "/tools/duplicate-archetypes/stage",        change_tools, tools::stage),
+        route(M::DELETE, "/tools/duplicate-archetypes/stage",        change_tools, tools::unstage),
         route(M::PUT,    "/tools/duplicate-archetypes/settings",     change_tools, tools::change_settings),
         route(M::GET,    "/settings/observer",                       read_bootstrap, settings::observer),
         route(M::GET,    "/features",           read_features,   features::list),
         route(M::PUT,    "/features/{feature}", switch_features, features::switch),
+        route(M::GET,    "/settings/sftp",      read_features,   features::sftp_listen),
+        route(M::PUT,    "/settings/sftp",      switch_features, features::set_sftp_listen),
+        route(M::GET,    "/debug/status",       read_debug,      debug::status),
+        route(M::GET,    "/debug/events",       read_debug,      debug::events),
+        route(M::GET,    "/debug/bags",         read_debug,      debug::bags),
+        route(M::GET,    "/debug/http",         read_debug,      debug::http),
+        route(M::POST,   "/debug/http/known",   judge_hosts,     debug::know_host),
         route(M::GET,    "/servers/default/backups",                      read_backups,     backups::view),
         route(M::PUT,    "/servers/default/backups/settings",             change_backups,   backups::change_settings),
         route(M::POST,   "/servers/default/backups/source/test",          test_backups,     backups::test_source),

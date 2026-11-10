@@ -44,6 +44,20 @@ const ServerSetupPage = lazyCode(() =>
     import('./pages/ServerSetupPage').then((page) => ({ default: page.ServerSetupPage })),
 );
 const ToolsPage = lazyCode(() => import('./pages/ToolsPage').then((page) => ({ default: page.ToolsPage })));
+const CfgPage = lazyCode(() => import('./pages/CfgPage').then((page) => ({ default: page.CfgPage })));
+const ArchetypesPage = lazyCode(() =>
+    import('./pages/ArchetypesPage').then((page) => ({ default: page.ArchetypesPage })),
+);
+const HeavyAssetsPage = lazyCode(() =>
+    import('./pages/ToolWarningsPage').then((page) => ({
+        default: () => <page.ToolWarningsPage kind="heavy" />,
+    })),
+);
+const MissingFilesPage = lazyCode(() =>
+    import('./pages/ToolWarningsPage').then((page) => ({
+        default: () => <page.ToolWarningsPage kind="missing" />,
+    })),
+);
 const BackupsPage = lazyCode(() =>
     import('./pages/BackupsPage').then((page) => ({ default: page.BackupsPage })),
 );
@@ -51,6 +65,15 @@ const AuditPage = lazyCode(() => import('./pages/AuditPage').then((page) => ({ d
 const AboutPage = lazyCode(() => import('./pages/AboutPage').then((page) => ({ default: page.AboutPage })));
 const DiagnosticsPage = lazyCode(() =>
     import('./pages/DiagnosticsPage').then((page) => ({ default: page.DiagnosticsPage })),
+);
+const DebugEventsPage = lazyCode(() =>
+    import('./pages/DebugEventsPage').then((page) => ({ default: page.DebugEventsPage })),
+);
+const DebugBagsPage = lazyCode(() =>
+    import('./pages/DebugBagsPage').then((page) => ({ default: page.DebugBagsPage })),
+);
+const DebugHttpPage = lazyCode(() =>
+    import('./pages/DebugHttpPage').then((page) => ({ default: page.DebugHttpPage })),
 );
 const PlayersPage = lazyCode(() =>
     import('./pages/PlayersPage').then((page) => ({ default: page.PlayersPage })),
@@ -231,6 +254,37 @@ const diagnosticsRoute = createRoute({
     ),
 });
 
+// What the resources count reads like the diagnostics: the same permission opens both.
+const debugEventsRoute = createRoute({
+    getParentRoute: () => panelRoute,
+    path: '/debug/events',
+    component: () => (
+        <RequirePermission name="DiagnosticsView">
+            <DebugEventsPage />
+        </RequirePermission>
+    ),
+});
+
+const debugBagsRoute = createRoute({
+    getParentRoute: () => panelRoute,
+    path: '/debug/state-bags',
+    component: () => (
+        <RequirePermission name="DiagnosticsView">
+            <DebugBagsPage />
+        </RequirePermission>
+    ),
+});
+
+const debugHttpRoute = createRoute({
+    getParentRoute: () => panelRoute,
+    path: '/debug/http',
+    component: () => (
+        <RequirePermission name="DiagnosticsView">
+            <DebugHttpPage />
+        </RequirePermission>
+    ),
+});
+
 const playersRoute = createRoute({
     getParentRoute: () => panelRoute,
     path: '/players',
@@ -328,6 +382,47 @@ const toolsRoute = createRoute({
     ),
 });
 
+const archetypesRoute = createRoute({
+    getParentRoute: () => panelRoute,
+    path: '/tools/duplicate-archetypes',
+    component: () => (
+        <RequireOwner>
+            <ArchetypesPage />
+        </RequireOwner>
+    ),
+});
+
+const heavyAssetsRoute = createRoute({
+    getParentRoute: () => panelRoute,
+    path: '/tools/heavy-assets',
+    component: () => (
+        <RequireOwner>
+            <HeavyAssetsPage />
+        </RequireOwner>
+    ),
+});
+
+const missingFilesRoute = createRoute({
+    getParentRoute: () => panelRoute,
+    path: '/tools/missing-files',
+    component: () => (
+        <RequireOwner>
+            <MissingFilesPage />
+        </RequireOwner>
+    ),
+});
+
+// The cfg holds the server's secrets and decides what it runs: the owner's, as the launch settings are.
+const cfgRoute = createRoute({
+    getParentRoute: () => panelRoute,
+    path: '/cfg',
+    component: () => (
+        <RequireOwner>
+            <CfgPage />
+        </RequireOwner>
+    ),
+});
+
 const backupsRoute = createRoute({
     getParentRoute: () => panelRoute,
     path: '/backups',
@@ -412,6 +507,9 @@ const routeTree = rootRoute.addChildren([
         scheduleRoute,
         artifactsRoute,
         diagnosticsRoute,
+        debugEventsRoute,
+        debugBagsRoute,
+        debugHttpRoute,
         playersRoute,
         playerRoute,
         mapRoute,
@@ -421,6 +519,10 @@ const routeTree = rootRoute.addChildren([
         dropsRoute,
         serverRoute,
         toolsRoute,
+        archetypesRoute,
+        heavyAssetsRoute,
+        missingFilesRoute,
+        cfgRoute,
         backupsRoute,
         usersRoute,
         filesRoute,

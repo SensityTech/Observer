@@ -14,6 +14,7 @@ use observer_domain::server_data::{
 };
 
 use crate::cfg::{self, ReadError};
+use crate::cfg_edit::merged;
 use crate::changes::mask;
 
 const MAX_ENTRIES: usize = 500;
@@ -223,19 +224,6 @@ fn is_cfg(name: &str) -> bool {
         && name
             .get(name.len() - 4..)
             .is_some_and(|end| end.eq_ignore_ascii_case(".cfg"))
-}
-
-/// The secrets in order, those that touch or overlap made one.
-fn merged(mut secrets: Vec<Range<usize>>) -> Vec<Range<usize>> {
-    secrets.sort_by_key(|secret| secret.start);
-    let mut out: Vec<Range<usize>> = Vec::with_capacity(secrets.len());
-    for secret in secrets {
-        match out.last_mut() {
-            Some(last) if secret.start <= last.end => last.end = last.end.max(secret.end),
-            _ => out.push(secret),
-        }
-    }
-    out
 }
 
 /// The line `line` of `text`, cut at each secret: text between them, and an empty span where each

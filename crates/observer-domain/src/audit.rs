@@ -37,6 +37,15 @@ pub enum AuditAction {
     ServerStarted,
     ServerStopped,
     ServerRestarted,
+    /// Someone gave a start more time before Observer takes it for stuck. `details` holds the
+    /// `minutes` given.
+    ServerStartExtended,
+    /// The owner saved the launch's cfg from the panel. The target is the file; `details` holds
+    /// the lines `added` and `removed`, never their text.
+    ServerCfgChanged,
+    /// The owner put an earlier version of the cfg back. `details` holds the `version` and the
+    /// lines `added` and `removed`.
+    ServerCfgRestored,
     /// Written before the command reaches FXServer, with the `command` as the console shows it,
     /// secrets masked. `observer_cmd` is denied, with its `refusal`.
     ConsoleCommandSent,
@@ -173,10 +182,22 @@ pub enum AuditAction {
     /// tool; `details` holds the `run`, the `reason` (`heal` or `undo`), the `files` (a capped
     /// list) and their `count`.
     ToolFilesRestored,
+    /// The owner staged a tool's fix for the next start of FXServer. The target is the tool;
+    /// `details` holds the `fixes` it plans.
+    ToolFixStaged,
+    /// A staged fix was dropped: by the owner, or by Observer when the scan before the start
+    /// planned another fix than the one staged (`planChanged`).
+    ToolFixUnstaged,
     /// The owner turned an optional feature on or off. The target is the feature; `details`
     /// holds `enabled` and when it `applies` (`now` or `nextStart`). A refusal by the host's
     /// lock in `observer.toml` is `denied`.
     FeatureChanged,
+    /// The owner said where SFTP listens, or took its address back. `details` holds `listen` and
+    /// `previous`, each an address or null.
+    SftpListenChanged,
+    /// The owner said they know why a resource calls a host, which Debug then no longer shows as
+    /// new. The target is the resource; `details` holds the `host`.
+    DebugHostKnown,
     /// `details` holds each changed setting with its value before and after, and
     /// `passwordChanged` when the manual source's password was replaced, never the password.
     BackupSettingsChanged,
@@ -220,7 +241,7 @@ pub enum AuditAction {
 }
 
 impl AuditAction {
-    pub const ALL: [Self; 104] = [
+    pub const ALL: [Self; 111] = [
         Self::SetupCompleted,
         Self::SetupLinkCreated,
         Self::LoginSucceeded,
@@ -240,6 +261,9 @@ impl AuditAction {
         Self::ServerStarted,
         Self::ServerStopped,
         Self::ServerRestarted,
+        Self::ServerStartExtended,
+        Self::ServerCfgChanged,
+        Self::ServerCfgRestored,
         Self::ConsoleCommandSent,
         Self::ConsoleLogDownloaded,
         Self::ServerCrashLoop,
@@ -310,7 +334,11 @@ impl AuditAction {
         Self::ToolSettingsChanged,
         Self::ToolFilesChanged,
         Self::ToolFilesRestored,
+        Self::ToolFixStaged,
+        Self::ToolFixUnstaged,
         Self::FeatureChanged,
+        Self::SftpListenChanged,
+        Self::DebugHostKnown,
         Self::BackupSettingsChanged,
         Self::BackupDestinationCreated,
         Self::BackupDestinationChanged,
@@ -349,6 +377,9 @@ impl AuditAction {
             Self::ServerStarted => "server_started",
             Self::ServerStopped => "server_stopped",
             Self::ServerRestarted => "server_restarted",
+            Self::ServerStartExtended => "server_start_extended",
+            Self::ServerCfgChanged => "server_cfg_changed",
+            Self::ServerCfgRestored => "server_cfg_restored",
             Self::ConsoleCommandSent => "console_command_sent",
             Self::ConsoleLogDownloaded => "console_log_downloaded",
             Self::ServerCrashLoop => "server_crash_loop",
@@ -419,7 +450,11 @@ impl AuditAction {
             Self::ToolSettingsChanged => "tool_settings_changed",
             Self::ToolFilesChanged => "tool_files_changed",
             Self::ToolFilesRestored => "tool_files_restored",
+            Self::ToolFixStaged => "tool_fix_staged",
+            Self::ToolFixUnstaged => "tool_fix_unstaged",
             Self::FeatureChanged => "feature_changed",
+            Self::SftpListenChanged => "sftp_listen_changed",
+            Self::DebugHostKnown => "debug_host_known",
             Self::BackupSettingsChanged => "backup_settings_changed",
             Self::BackupDestinationCreated => "backup_destination_created",
             Self::BackupDestinationChanged => "backup_destination_changed",

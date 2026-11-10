@@ -150,6 +150,125 @@ pub struct PlayerCount {
     pub max: Option<u64>,
 }
 
+/// The last resource FXServer said it started.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct StartedResource {
+    pub name: String,
+    pub at: Timestamp,
+    /// What FXServer counted after its name as it started.
+    pub warnings: u32,
+}
+
+/// The command of the cfg a start is at.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct StartCommand {
+    /// The cfg file the command is written in, named from the server folder.
+    pub file: String,
+    pub line: u32,
+    /// Its argument as written: a resource, or a category in brackets.
+    pub target: String,
+    /// When FXServer came to it.
+    pub since: Timestamp,
+    /// How many of the resources it starts are up or refused to start, out of `of`.
+    pub done: u32,
+    pub of: u32,
+    /// The resource whose server scripts FXServer is loading, when it said so.
+    pub resource: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SlowResource {
+    pub name: String,
+    /// From the resource started before it to this one.
+    pub ms: u32,
+}
+
+/// How far the start under way has come, read from what FXServer prints while it runs its cfg:
+/// each resource once it is up, and nothing of the one it is starting.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct StartProgress {
+    /// Resources FXServer said it started.
+    pub started: u32,
+    /// Resources it could not start.
+    pub failed: u32,
+    /// How many the server folder holds, once FXServer has said.
+    pub found: Option<u32>,
+    /// How many the cfg's commands start. Null when Observer could not read them all.
+    pub planned: Option<u32>,
+    pub last: Option<StartedResource>,
+    /// Worked out from the resources each command starts. Null before the first command and
+    /// after the last, and when Observer could not read every command.
+    pub at: Option<StartCommand>,
+    /// The five slowest, the slowest first.
+    pub slowest: Vec<SlowResource>,
+    /// When Observer takes the start for stuck and restarts it, should FXServer start no resource
+    /// until then. Null with hang detection off, and once the cfg has run.
+    pub stuck_at: Option<Timestamp>,
+    /// What `POST /servers/default/start/extend` adds to `stuckAt`, in minutes.
+    pub extension_minutes: u32,
+}
+
+/// The memory FXServer measures a streamed file by.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum AssetMemory {
+    Physical,
+    Virtual,
+}
+
+/// A streamed file FXServer said is heavy as it started the file's resource.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct HeavyAsset {
+    pub resource: String,
+    /// Within the resource, as FXServer names it.
+    pub file: String,
+    /// In tenths of a MiB, as FXServer prints it.
+    pub tenths: u32,
+    pub memory: AssetMemory,
+    /// FXServer says it can keep models from loading.
+    pub oversized: bool,
+}
+
+/// A file a manifest names that its resource does not hold, as FXServer said when it started the
+/// resource.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct MissingFile {
+    pub resource: String,
+    /// What the manifest asks for it as: `client_script`, `file`.
+    pub kind: String,
+    pub file: String,
+    /// The manifest and the line that name it.
+    pub manifest: String,
+    pub line: u32,
+}
+
+/// `GET /api/servers/default/start/warnings`: what FXServer warned about as it started its
+/// resources, the latest time Observer started it. Read from its console, kept in memory.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct StartWarnings {
+    /// Null when Observer has not started FXServer since it started itself.
+    pub started_at: Option<Timestamp>,
+    pub heavy: Vec<HeavyAsset>,
+    pub missing: Vec<MissingFile>,
+    /// FXServer warned of more than Observer keeps.
+    pub truncated: bool,
+}
+
 /// The `server.status` topic.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -174,6 +293,8 @@ pub struct ServerStatus {
     pub name: Option<String>,
     /// The game port, as of the last run.
     pub port: Option<u16>,
+    /// Only while FXServer is starting, from its first second.
+    pub start: Option<StartProgress>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]

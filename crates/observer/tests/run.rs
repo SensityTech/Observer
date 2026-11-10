@@ -12,6 +12,8 @@ use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
+use observer_fxserver::hook;
+use observer_fxserver::layout::{Flavour, Layout};
 use observer_store::Database;
 use observer_store::artifacts::{self, ArtifactState};
 use serde_json::{Value, json};
@@ -513,6 +515,79 @@ fn sftp_turned_off_in_the_panel_closes_its_port_at_once_and_at_the_next_start() 
     );
 }
 
+/// Without `[sftp]` in `observer.toml`, the owner gives SFTP its address in the panel: the port
+/// opens at once and moves with the address. A port another program holds is held against SFTP,
+/// never against Observer, and the address outlives Observer until it is taken back.
+#[test]
+fn sftp_takes_its_address_from_the_panel_and_its_port_follows_without_a_restart() {
+    let (mut observer, owner) = Observer::start();
+    let panel = observer.port;
+    let give = |port: u16| {
+        let listen = json!({ "listen": format!("127.0.0.1:{port}") });
+        call(panel, "PUT", "/settings/sftp", Some(&owner), Some(listen))
+    };
+    let (first, second) = (free_port(), free_port());
+
+    let waiting = call(panel, "GET", "/settings/sftp", Some(&owner), None);
+    let given = give(first);
+    let opened = TcpStream::connect(("127.0.0.1", first)).is_ok();
+    let moved = give(second);
+
+    assert_eq!(
+        waiting.body,
+        json!({ "listen": null, "pinned": false, "open": false, "fingerprint": null, "refused": null })
+    );
+    assert_eq!(given.status, 200, "{}", given.body);
+    assert_eq!(given.body["open"], true, "{}", given.body);
+    let fingerprint = given.body["fingerprint"].as_str().unwrap();
+    assert!(fingerprint.starts_with("SHA256:"), "{fingerprint}");
+    assert!(observer.log().contains(fingerprint), "the log names the same key");
+    assert!(opened, "{}", observer.log());
+    assert_eq!(moved.body["open"], true, "{}", moved.body);
+    assert_eq!(
+        moved.body["fingerprint"], fingerprint,
+        "the key stays, wherever the port is"
+    );
+    assert!(TcpStream::connect(("127.0.0.1", second)).is_ok());
+    assert!(
+        TcpListener::bind(("127.0.0.1", first)).is_ok(),
+        "the port it left is free by the time the panel hears back"
+    );
+
+    let held = TcpListener::bind("127.0.0.1:0").unwrap();
+    let taken = held.local_addr().unwrap().port();
+    let refused = give(taken);
+    let switches = call(panel, "GET", "/features", Some(&owner), None);
+    drop(held);
+    let again = give(taken);
+
+    assert_eq!(refused.status, 200, "{}", refused.body);
+    assert_eq!(refused.body["open"], false, "{}", refused.body);
+    assert!(refused.body["refused"].is_string(), "{}", refused.body);
+    let sftp = &switches.body["features"][0];
+    assert_eq!(
+        (&sftp["running"], &sftp["held"]),
+        (&json!(false), &json!("portRefused"))
+    );
+    assert_eq!(again.body["open"], true, "{}", again.body);
+    assert_eq!(again.body["refused"], Value::Null);
+
+    observer.respawn();
+    wait_for(
+        "SFTP listening where the owner said, after a restart of Observer",
+        || TcpStream::connect(("127.0.0.1", taken)).is_ok(),
+    );
+    let back = json!({ "listen": null });
+    let taken_back = call(observer.port, "PUT", "/settings/sftp", Some(&owner), Some(back));
+
+    assert_eq!(taken_back.status, 200, "{}", taken_back.body);
+    assert_eq!(taken_back.body["listen"], Value::Null);
+    assert!(
+        TcpListener::bind(("127.0.0.1", taken)).is_ok(),
+        "the port is closed by the time the panel hears back"
+    );
+}
+
 /// `[features] sftp = "off"` keeps SFTP's port closed though `[sftp]` names it, and even the
 /// owner's session cannot open it: the refusal is audited.
 #[test]
@@ -546,4 +621,86 @@ fn a_feature_observer_toml_turns_off_never_runs_and_the_panel_cannot_turn_it_on(
         log.contains("optional features off") && !log.contains("SFTP listening"),
         "{log}"
     );
+}
+
+/// The owner turns Debug on: the next start puts Observer's two lines into the build's scheduler,
+/// what a resource counts reads on the Events page, and a started resource that runs no Lua on the
+/// server is named as one that does not report. The bridge, Observer's own, is neither.
+#[test]
+fn debug_turned_on_in_the_panel_counts_from_the_next_start_and_reads_on_its_pages() {
+    let (observer, owner) = Observer::start();
+    let (build, data) = observer.lay_out_fake();
+    let scheduler = hook::scheduler(&Layout::new(&build, Flavour::HOST));
+    fs::create_dir_all(scheduler.parent().unwrap()).unwrap();
+    fs::write(
+        &scheduler,
+        "Citizen.SetEventRoutine(function() end)
+",
+    )
+    .unwrap();
+    for resource in ["chat", "clothes"] {
+        let folder = data.join("resources").join(resource);
+        fs::create_dir_all(&folder).unwrap();
+        fs::write(
+            folder.join("fxmanifest.lua"),
+            "fx_version 'cerulean'
+game 'gta5'
+",
+        )
+        .unwrap();
+    }
+    fs::write(
+        data.join("d.cfg"),
+        "exec server.cfg
+set fake_debug_silent clothes
+ensure chat
+ensure clothes
+         fake_print running d.cfg
+",
+    )
+    .unwrap();
+    observer.select(35245);
+    observer.save(&owner, &data, "d.cfg");
+    let get = |path: &str| call(observer.port, "GET", path, Some(&owner), None);
+    let post = |path: &str, body: Option<Value>| call(observer.port, "POST", path, Some(&owner), body);
+
+    let off = get("/debug/status");
+    let on = json!({ "enabled": true });
+    let turned_on = call(observer.port, "PUT", "/features/debug", Some(&owner), Some(on));
+    assert_eq!(turned_on.status, 200, "{}", turned_on.body);
+    let started = post("/servers/default/start", None);
+    assert_eq!(started.status, 204, "{}", started.body);
+    wait_for("the resources' first reports", || {
+        let status = get("/debug/status").body;
+        status["reporting"] == 1 && status["silentCount"] == 1
+    });
+    let row = json!({ "line": "fake_debug chat ev toA chat:addMessage 4 1240 310 0" });
+    let typed = post("/servers/default/console", Some(row));
+    assert_eq!(typed.status, 200, "{}", typed.body);
+    wait_for("the chat's event on the page", || {
+        get("/debug/events?window=1m").body["events"][0]["name"] == "chat:addMessage"
+    });
+
+    assert_eq!(off.status, 404, "{}", off.body);
+    assert_eq!(off.body["code"], "feature_disabled");
+    let counted = fs::read_to_string(&scheduler).unwrap();
+    assert!(counted.starts_with("--[[obs:hook:head "), "{counted}");
+    let page = get("/debug/events?window=1m").body;
+    assert_eq!(page["status"]["state"], "counting", "{page}");
+    assert_eq!(
+        page["status"]["silent"],
+        json!(["clothes"]),
+        "the bridge is no resource of the server's"
+    );
+    let event = &page["events"][0];
+    assert_eq!(
+        (
+            &event["way"],
+            &event["resources"],
+            &event["count"],
+            &event["bytes"]
+        ),
+        (&json!("toAll"), &json!(["chat"]), &json!(4), &json!(1240))
+    );
+    assert_eq!(page["totals"]["toClients"], json!({ "count": 4, "bytes": 1240 }));
 }

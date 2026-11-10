@@ -101,6 +101,13 @@ const serve = (answer: (body: { enabled: boolean }) => FeatureList | Response = 
     return asked;
 };
 
+/** What a route of SFTP answers while `observer.toml` gives it no address. */
+const refused = () =>
+    Response.json(
+        { code: 'feature_disabled', params: { feature: 'sftp', held: 'notConfigured' } },
+        { status: 403 },
+    );
+
 /** The card of a feature, by its name. */
 const card = (feature: keyof typeof items) => {
     const section = document.getElementById(`setting-${feature}`);
@@ -181,7 +188,7 @@ describe('Features settings', () => {
         fireEvent.click(card('switchPlayers').getByRole('switch', { name: items.switchPlayers.label }));
 
         await waitFor(() =>
-            getByText(words.turnedOnLater(items.switchPlayers.label, words.states.observerRestart)),
+            getByText(words.turnedOnLater(items.switchPlayers.label, words.states.pending.observerRestart)),
         );
     });
 
@@ -200,6 +207,93 @@ describe('Features settings', () => {
 
         expect(getByText(words.readOnly)).not.toBeNull();
         expect((card('switchMetrics').getByRole('switch') as HTMLInputElement).disabled).toBe(true);
+    });
+
+    it('should say SFTP waits for its address, and lead the owner to the form that opens its port', async () => {
+        const address = en.settings.sftpAddress;
+        const waiting: FeatureList = {
+            features: [
+                view('sftp', { running: false, held: 'notConfigured', turnOn: 'now' }),
+                view('changes'),
+            ],
+        };
+        const sent: unknown[] = [];
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(async (input: string, init: RequestInit) => {
+                const route = `${init.method ?? 'GET'} ${String(input).replace(/^\/api/, '')}`;
+                if (route === 'GET /features') {
+                    return Response.json(waiting);
+                }
+                if (route === 'GET /servers/default/files/groups' || route === 'GET /files/accesses') {
+                    return refused();
+                }
+                if (route === 'GET /settings/sftp') {
+                    return Response.json({
+                        listen: null,
+                        pinned: false,
+                        open: false,
+                        fingerprint: null,
+                        refused: null,
+                    });
+                }
+                if (route === 'PUT /settings/sftp') {
+                    sent.push(typeof init.body === 'string' ? JSON.parse(init.body) : undefined);
+                    return Response.json({
+                        listen: '0.0.0.0:40126',
+                        pinned: false,
+                        open: true,
+                        fingerprint: 'SHA256:c29tZSBob3N0IGtleQ',
+                        refused: null,
+                    });
+                }
+                return Response.json({ code: 'not_found', params: {} }, { status: 404 });
+            }),
+        );
+        const { findByText, findByRole, getByLabelText, queryByText } =
+            await openSettings('/settings/features');
+
+        const sftp = card('switchSftp');
+        expect(sftp.getByText(words.states.notConfigured)).not.toBeNull();
+        expect(sftp.getByText(address.waits)).not.toBeNull();
+        expect(card('switchChanges').queryByText(address.waits)).toBeNull();
+        fireEvent.click(sftp.getByRole('link', { name: address.give }));
+
+        // The page it leads to holds the form, on the address and the port Observer suggests.
+        expect(await findByText(address.none)).not.toBeNull();
+        expect((getByLabelText(address.port) as HTMLInputElement).value).toBe('40126');
+        expect(queryByText(en.files.intro)).toBeNull();
+        expect(
+            queryByText(en.errors.feature_disabled({ feature: 'sftp', held: 'notConfigured' })),
+        ).toBeNull();
+        fireEvent.click(await findByRole('button', { name: address.open }));
+
+        expect(await findByText(address.listening('0.0.0.0:40126'))).not.toBeNull();
+        expect(sent).toEqual([{ listen: '0.0.0.0:40126' }]);
+        cleanup();
+
+        // An account that only views settings reads what it waits for, without the way to a page it cannot open.
+        await openSettings('/settings/features', { me: VIEWER });
+        expect(card('switchSftp').getByText(address.waits)).not.toBeNull();
+        expect(card('switchSftp').queryByRole('link', { name: address.give })).toBeNull();
+    });
+
+    it('should say the port of SFTP did not open, and where to see why', async () => {
+        const address = en.settings.sftpAddress;
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(async () =>
+                Response.json({
+                    features: [view('sftp', { running: false, held: 'portRefused', turnOn: 'now' })],
+                } satisfies FeatureList),
+            ),
+        );
+        await openSettings('/settings/features');
+
+        const sftp = card('switchSftp');
+        expect(sftp.getByText(words.states.portRefused)).not.toBeNull();
+        expect(sftp.getByText(address.refusedShort)).not.toBeNull();
+        expect(sftp.getByRole('link', { name: address.see })).not.toBeNull();
     });
 
     it('should count the features left on beside their category', async () => {

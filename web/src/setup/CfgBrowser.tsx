@@ -213,7 +213,7 @@ function EntryRow({ entry, depth, ...props }: TreeProps & { entry: FileEntry; de
     );
 }
 
-const TOKEN_CLASS = {
+export const TOKEN_CLASS = {
     command: 'text-accent-ink',
     string: 'text-[color:var(--term-green)]',
     number: 'text-warning',

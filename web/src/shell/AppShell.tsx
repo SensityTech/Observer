@@ -1,28 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
-import { Link, Outlet } from '@tanstack/react-router';
-import {
-    Ban,
-    CalendarClock,
-    ChartLine,
-    Contact,
-    DatabaseBackup,
-    GitCompare,
-    LayoutDashboard,
-    Map as MapIcon,
-    Menu as MenuIcon,
-    Package,
-    ScrollText,
-    Server,
-    Settings,
-    SquareTerminal,
-    Stethoscope,
-    TriangleAlert,
-    Unplug,
-    Wrench,
-    X,
-    type LucideIcon,
-} from 'lucide-react';
-import { Suspense, useCallback, useEffect, useState } from 'react';
+import { Link, Outlet, useRouter, useRouterState } from '@tanstack/react-router';
+import { ChevronRight, Menu as MenuIcon, Search, Server, TriangleAlert, X } from 'lucide-react';
+import { Suspense, useCallback, useEffect, useRef, useState } from 'react';
 
 import { meQuery } from '../api/auth';
 import { Permission } from '../api/generated/Permission';
@@ -42,50 +21,23 @@ import { ServerControls } from './ServerControls';
 import { SignedIn } from './SignedIn';
 import { StatusBar } from './StatusBar';
 import { UpdateSignal } from '../updates/UpdateSignal';
+import { CommandPalette } from './CommandPalette';
+import { navSections, opensEntry, type NavEntry } from './nav';
 import { UserMenu } from './UserMenu';
-
-type NavEntry = {
-    to:
-        | '/'
-        | '/statistics'
-        | '/console'
-        | '/schedule'
-        | '/artifacts'
-        | '/diagnostics'
-        | '/players'
-        | '/map'
-        | '/bans'
-        | '/changes'
-        | '/drops'
-        | '/settings'
-        | '/tools'
-        | '/backups'
-        | '/audit';
-    label: string;
-    icon: LucideIcon;
-    /**
-     * A permission, any one of a list, the owner alone for what no permission grants, or every
-     * account.
-     */
-    access: bigint | bigint[] | 'owner' | 'everyone';
-    /** Shows how many alerts are live. */
-    alerts?: boolean;
-    /**
-     * Stays current on the pages under it, as a player's profile is under the players and a resource
-     * under the changes, and whatever its address holds, as the drops' filters.
-     */
-    nested?: boolean;
-};
 
 export function AppShell() {
     const { t } = useI18n();
     const { data: me } = useQuery(meQuery);
     const [menuOpen, setMenuOpen] = useState(false);
     const [playersOpen, setPlayersOpen] = useState(false);
+    const [paletteOpen, setPaletteOpen] = useState(false);
+    const openPalette = useCallback(() => setPaletteOpen(true), []);
+    const closePalette = useCallback(() => setPaletteOpen(false), []);
     const closeMenu = () => setMenuOpen(false);
     const openPlayers = useCallback(() => setPlayersOpen(true), []);
     const closePlayers = useCallback(() => setPlayersOpen(false), []);
     const phone = useMedia(PHONE);
+    const nav = useCurrentEntryInSight();
 
     useEffect(() => {
         if (!menuOpen && !playersOpen) {
@@ -116,48 +68,7 @@ export function AppShell() {
     }
     const players = allows(me, Permission.PlayersView);
 
-    const main: NavEntry[] = [
-        { to: '/', label: t.nav.overview, icon: LayoutDashboard, access: Permission.DashboardView },
-        { to: '/console', label: t.nav.console, icon: SquareTerminal, access: Permission.ConsoleView },
-    ];
-    const operations: NavEntry[] = [
-        {
-            to: '/schedule',
-            label: t.nav.schedule,
-            icon: CalendarClock,
-            access: [Permission.DashboardView, Permission.ScheduleManage, Permission.ServerControl],
-        },
-        { to: '/players', label: t.nav.players, icon: Contact, access: Permission.PlayersView, nested: true },
-        { to: '/map', label: t.nav.map, icon: MapIcon, access: Permission.PlayersMap },
-        { to: '/bans', label: t.nav.bans, icon: Ban, access: Permission.BansView },
-        { to: '/statistics', label: t.nav.statistics, icon: ChartLine, access: Permission.DashboardView },
-        {
-            to: '/diagnostics',
-            label: t.nav.diagnostics,
-            icon: Stethoscope,
-            access: Permission.DiagnosticsView,
-            alerts: true,
-        },
-        {
-            to: '/changes',
-            label: t.nav.changes,
-            icon: GitCompare,
-            access: Permission.ChangesView,
-            nested: true,
-        },
-        { to: '/drops', label: t.nav.drops, icon: Unplug, access: Permission.DropsView, nested: true },
-    ];
-    const maintenance: NavEntry[] = [
-        { to: '/artifacts', label: t.nav.artifacts, icon: Package, access: Permission.ArtifactsView },
-        { to: '/backups', label: t.nav.backups, icon: DatabaseBackup, access: Permission.BackupsView },
-        { to: '/tools', label: t.nav.tools, icon: Wrench, access: 'owner' },
-        { to: '/audit', label: t.nav.audit, icon: ScrollText, access: Permission.AuditView },
-    ];
-    // At the foot, beside the account: every account opens its own settings, and the categories
-    // its permissions open, the users and the file access among them.
-    const settings: NavEntry[] = [
-        { to: '/settings', label: t.nav.settings, icon: Settings, access: 'everyone', nested: true },
-    ];
+    const sections = navSections(t);
 
     return (
         <SignedIn>
@@ -176,10 +87,21 @@ export function AppShell() {
                             <Logo />
                             <button
                                 type="button"
-                                className={cn(
-                                    buttonVariants({ tone: 'ghost', size: 'icon' }),
-                                    'ml-auto xl:hidden',
-                                )}
+                                className="ml-auto inline-flex h-8 items-center gap-2 rounded-control border border-line bg-surface-2 px-2 text-ink-3 hover:text-ink max-md:h-11"
+                                aria-label={t.palette.label}
+                                aria-keyshortcuts="Control+K"
+                                title={t.palette.label}
+                                onClick={() => {
+                                    closeMenu();
+                                    openPalette();
+                                }}
+                            >
+                                <Search size={14} strokeWidth={1.5} aria-hidden="true" />
+                                <kbd className="font-mono text-micro">Ctrl K</kbd>
+                            </button>
+                            <button
+                                type="button"
+                                className={cn(buttonVariants({ tone: 'ghost', size: 'icon' }), 'xl:hidden')}
                                 aria-label={t.nav.close}
                                 onClick={closeMenu}
                             >
@@ -187,24 +109,42 @@ export function AppShell() {
                             </button>
                         </div>
                         <ServerTile />
-                        <nav className="nav" aria-label={t.nav.sections}>
-                            <NavEntries me={me} entries={main} onNavigate={closeMenu} />
+                        <nav ref={nav} className="nav" aria-label={t.nav.sections}>
+                            <NavEntries me={me} entries={sections.main} onNavigate={closeMenu} />
                             <NavEntries
                                 me={me}
-                                entries={operations}
-                                group={t.nav.operations}
+                                entries={sections.people}
+                                group={t.nav.groupPlayers}
                                 onNavigate={closeMenu}
                             />
                             <NavEntries
                                 me={me}
-                                entries={maintenance}
+                                entries={sections.server}
+                                group={t.nav.groupServer}
+                                onNavigate={closeMenu}
+                            />
+                            <NavEntries
+                                me={me}
+                                entries={sections.insights}
+                                group={t.nav.groupInsights}
+                                onNavigate={closeMenu}
+                            />
+                            <NavFold
+                                me={me}
+                                entries={sections.debug}
+                                group={t.nav.groupDebug}
+                                onNavigate={closeMenu}
+                            />
+                            <NavEntries
+                                me={me}
+                                entries={sections.maintenance}
                                 group={t.nav.maintenance}
                                 onNavigate={closeMenu}
                             />
                         </nav>
                         <div className="rail-foot">
                             {me.isOwner && <UpdateSignal onNavigate={closeMenu} />}
-                            <NavEntries me={me} entries={settings} onNavigate={closeMenu} />
+                            <NavEntries me={me} entries={sections.settings} onNavigate={closeMenu} />
                             <UserMenu me={me} onNavigate={closeMenu} />
                         </div>
                     </div>
@@ -241,10 +181,41 @@ export function AppShell() {
                 </div>
 
                 {players && <OnlineColumn open={playersOpen} onOpen={openPlayers} onClose={closePlayers} />}
+                <CommandPalette me={me} open={paletteOpen} onOpen={openPalette} onClose={closePalette} />
             </div>
         </SignedIn>
     );
 }
+
+/** What is left between the rail's edge and an entry scrolled back into sight. */
+const ENTRY_MARGIN = 8;
+
+/**
+ * Keeps the current page's entry in sight: with every group open, a short window's rail scrolls,
+ * and a page reached from the search or a link may have its entry out of it.
+ */
+const useCurrentEntryInSight = () => {
+    const nav = useRef<HTMLElement>(null);
+    const router = useRouter();
+    useEffect(() => {
+        const place = () => {
+            const list = nav.current;
+            const entry = list?.querySelector('[aria-current="page"]');
+            if (list === null || entry === null || entry === undefined) {
+                return;
+            }
+            const [box, row] = [list.getBoundingClientRect(), entry.getBoundingClientRect()];
+            if (row.top < box.top) {
+                list.scrollTop -= box.top - row.top + ENTRY_MARGIN;
+            } else if (row.bottom > box.bottom) {
+                list.scrollTop += row.bottom - box.bottom + ENTRY_MARGIN;
+            }
+        };
+        place();
+        return router.subscribe('onRendered', place);
+    }, [router]);
+    return nav;
+};
 
 /**
  * The server Observer runs, by the name and port it last ran with. A tile, not a switcher: Observer
@@ -297,13 +268,7 @@ function NavEntries({
     group?: string;
     onNavigate: () => void;
 }) {
-    const allowed = entries.filter(({ access }) =>
-        access === 'everyone'
-            ? true
-            : access === 'owner'
-              ? me.isOwner
-              : (Array.isArray(access) ? access : [access]).some((permission) => allows(me, permission)),
-    );
+    const allowed = entries.filter((entry) => opensEntry(me, entry));
     if (allowed.length === 0) {
         return null;
     }
@@ -323,6 +288,64 @@ function NavEntries({
                     {alerts === true && <AlertCount />}
                 </Link>
             ))}
+        </>
+    );
+}
+
+/** Whether the Debug group was left open, kept in this browser. */
+const FOLD_KEY = 'observer.navDebug';
+
+const leftOpen = () => {
+    try {
+        return localStorage.getItem(FOLD_KEY) === 'open';
+    } catch {
+        return false;
+    }
+};
+
+/**
+ * A group that stays one line until it is opened: its pages are for the day something misbehaves.
+ * It is open while one of them is the current page.
+ */
+function NavFold({
+    me,
+    entries,
+    group,
+    onNavigate,
+}: {
+    me: Me;
+    entries: NavEntry[];
+    group: string;
+    onNavigate: () => void;
+}) {
+    const inside = useRouterState({
+        select: (state) => entries.some((entry) => state.location.pathname.startsWith(entry.to)),
+    });
+    const [open, setOpen] = useState(leftOpen);
+    const allowed = entries.filter((entry) => opensEntry(me, entry));
+    if (allowed.length === 0) {
+        return null;
+    }
+    const shown = open || inside;
+    return (
+        <>
+            <button
+                type="button"
+                className="nav-group"
+                aria-expanded={shown}
+                onClick={() => {
+                    setOpen(!shown);
+                    try {
+                        localStorage.setItem(FOLD_KEY, shown ? 'folded' : 'open');
+                    } catch {
+                        // Private browsing: the group folds again with the page.
+                    }
+                }}
+            >
+                <ChevronRight size={12} strokeWidth={2} aria-hidden="true" />
+                {group}
+            </button>
+            {shown && <NavEntries me={me} entries={allowed} onNavigate={onNavigate} />}
         </>
     );
 }

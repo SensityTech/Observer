@@ -64,6 +64,7 @@ const ONLINE = {
     players: null,
     restartAt: null,
     launch: 'ready',
+    start: null,
 };
 
 /** The text of what a field is described by, element by element. */

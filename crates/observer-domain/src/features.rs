@@ -13,7 +13,7 @@ use crate::live::Topic;
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
 pub enum Feature {
-    /// File access over SFTP, on the port `[sftp] listen` of `observer.toml` names.
+    /// File access over SFTP, on the address the owner gives in the panel or `observer.toml` pins.
     Sftp,
     /// What changed in the server folder from one start of FXServer to the next.
     Changes,
@@ -29,6 +29,10 @@ pub enum Feature {
     Drops,
     /// Checks GitHub for a newer release of Observer, which the owner installs from the panel.
     Updates,
+    /// What the server's resources send and receive, counted by the resources themselves: events,
+    /// state bag writes and outgoing HTTP requests. Off until the owner turns it on, since it adds
+    /// two lines to the build's Lua scheduler.
+    Debug,
 }
 
 /// When a change of a switch takes effect.
@@ -50,8 +54,10 @@ pub enum Applies {
 pub enum FeatureHold {
     /// `observer.toml` turns it off, which the panel cannot undo.
     Host,
-    /// It needs a setting `observer.toml` does not give: SFTP's `listen`.
+    /// It needs a setting nobody gave: the address SFTP listens on.
     NotConfigured,
+    /// Its port did not open: another program holds it, or the host refuses the address.
+    PortRefused,
     /// It works on what a feature in `requires` collects, which does not run.
     Requires,
 }
@@ -98,6 +104,11 @@ pub enum FeatureTask {
     UpdateCheck,
     /// After an install, settles whether the new version started, or puts the previous one back.
     UpdateProbation,
+    /// The two lines in the build's Lua scheduler: put in while Debug is on, taken out while it
+    /// is off.
+    HookLines,
+    /// Reads and totals what the resources count.
+    HookCounts,
 }
 
 /// When a task of a feature runs.
@@ -138,7 +149,7 @@ pub enum ServerFolder {
 }
 
 impl Feature {
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::Sftp,
         Self::Changes,
         Self::Tools,
@@ -147,6 +158,7 @@ impl Feature {
         Self::Players,
         Self::Drops,
         Self::Updates,
+        Self::Debug,
     ];
 
     /// The name on the wire, in the store and in `observer.toml`.
@@ -160,7 +172,14 @@ impl Feature {
             Self::Players => "players",
             Self::Drops => "drops",
             Self::Updates => "updates",
+            Self::Debug => "debug",
         }
+    }
+
+    /// Whether it is on until the owner says otherwise. Debug alone waits to be asked for: it
+    /// changes a file of the build.
+    pub const fn on_by_default(self) -> bool {
+        !matches!(self, Self::Debug)
     }
 
     pub fn from_name(name: &str) -> Option<Self> {
@@ -176,12 +195,13 @@ impl Feature {
         }
     }
 
-    /// When turning it on takes effect. The tools' hook reads the switch before every start;
-    /// the others follow FXServer from Observer's start, and a port opens only when the host
-    /// restarts Observer.
+    /// When turning it on takes effect. SFTP's port opens and closes while Observer runs; the
+    /// tools' hook reads the switch before every start; the others follow FXServer from
+    /// Observer's start.
     pub const fn turn_on(self) -> Applies {
         match self {
-            Self::Tools => Applies::NextServerStart,
+            Self::Sftp => Applies::Now,
+            Self::Tools | Self::Debug => Applies::NextServerStart,
             _ => Applies::ObserverRestart,
         }
     }
@@ -227,6 +247,10 @@ impl Feature {
             run(T::UpdateCheck, C::Every { seconds: 6 * 3600 }),
             run(T::UpdateProbation, C::ObserverStart),
         ];
+        const DEBUG: &[FeatureTaskRun] = &[
+            run(T::HookLines, C::ServerStart),
+            run(T::HookCounts, C::Continuous),
+        ];
         match self {
             Self::Sftp => SFTP,
             Self::Changes => CHANGES,
@@ -236,6 +260,7 @@ impl Feature {
             Self::Players => PLAYERS,
             Self::Drops => DROPS,
             Self::Updates => UPDATES,
+            Self::Debug => DEBUG,
         }
     }
 
@@ -266,6 +291,11 @@ impl Feature {
                 task: FeatureTask::UpdateProbation,
                 cadence: Cadence::ObserverStart,
             }],
+            // The two lines a start put into the scheduler come out at the next one.
+            Self::Debug => &[FeatureTaskRun {
+                task: FeatureTask::HookLines,
+                cadence: Cadence::ServerStart,
+            }],
             _ => &[],
         }
     }
@@ -273,7 +303,7 @@ impl Feature {
     /// The files and folders it keeps, under Observer's data folder.
     pub const fn files(self) -> &'static [&'static str] {
         match self {
-            Self::Sftp => &[],
+            Self::Sftp | Self::Debug => &[],
             Self::Changes => &["changes.sqlite3"],
             Self::Tools => &["tools/backups"],
             Self::Diagnostics => &["crashes"],
@@ -286,7 +316,7 @@ impl Feature {
         match self {
             Self::Sftp | Self::Tools => ServerFolder::Writes,
             Self::Changes => ServerFolder::Reads,
-            Self::Diagnostics | Self::Metrics | Self::Players | Self::Drops | Self::Updates => {
+            Self::Diagnostics | Self::Metrics | Self::Players | Self::Drops | Self::Updates | Self::Debug => {
                 ServerFolder::Untouched
             }
         }
@@ -303,6 +333,7 @@ impl Feature {
             Self::Players => &["/servers/default/players"],
             Self::Drops => &["/servers/default/drops"],
             Self::Updates => &["/updates"],
+            Self::Debug => &["/debug"],
         }
     }
 
@@ -312,7 +343,7 @@ impl Feature {
             Self::Diagnostics => &[Topic::ServerDiagnostics, Topic::ServerAlerts],
             Self::Metrics => &[Topic::MetricsLive],
             Self::Players => &[Topic::ServerMap],
-            Self::Sftp | Self::Tools | Self::Drops | Self::Updates => &[],
+            Self::Sftp | Self::Tools | Self::Drops | Self::Updates | Self::Debug => &[],
         }
     }
 
@@ -364,7 +395,7 @@ pub struct FeatureView {
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
 pub struct FeatureReach {
-    /// The addresses it listens on, as `observer.toml` gives them.
+    /// The addresses it listens on.
     pub listens: Vec<String>,
     pub tasks: Vec<FeatureTaskRun>,
     pub while_off: Vec<FeatureTaskRun>,
@@ -413,6 +444,31 @@ impl FeatureReach {
 #[ts(export)]
 pub struct FeatureSwitch {
     pub enabled: bool,
+}
+
+/// `GET /api/settings/sftp`, and the answer to a change: where SFTP listens, and who says so.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SftpListen {
+    /// The address in force, such as `0.0.0.0:40126`; `None` until someone gives one.
+    pub listen: Option<String>,
+    /// Whether `observer.toml` names it, which the panel cannot change.
+    pub pinned: bool,
+    /// Whether the port is open on that address now.
+    pub open: bool,
+    /// The fingerprint of the host key a client is shown on the open port.
+    pub fingerprint: Option<String>,
+    /// Why the port did not open, in the host's words.
+    pub refused: Option<String>,
+}
+
+/// `PUT /api/settings/sftp`. No address closes the port and forgets the one there was.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+#[ts(export)]
+pub struct SftpListenChange {
+    pub listen: Option<String>,
 }
 
 #[cfg(test)]

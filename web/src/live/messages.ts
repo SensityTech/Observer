@@ -176,6 +176,11 @@ const AUDIT_ACTIONS = {
     server_started: true,
     server_stopped: true,
     server_restarted: true,
+    server_start_extended: true,
+    server_cfg_changed: true,
+    server_cfg_restored: true,
+    tool_fix_staged: true,
+    tool_fix_unstaged: true,
     console_command_sent: true,
     console_log_downloaded: true,
     server_crash_loop: true,
@@ -247,6 +252,8 @@ const AUDIT_ACTIONS = {
     tool_files_changed: true,
     tool_files_restored: true,
     feature_changed: true,
+    sftp_listen_changed: true,
+    debug_host_known: true,
     backup_settings_changed: true,
     backup_destination_created: true,
     backup_destination_changed: true,
@@ -437,6 +444,31 @@ const isCause = (value: unknown): value is StateCause => {
 
 const isPlayers = (value: unknown) => isRecord(value) && isCount(value.online) && orNull(isCount)(value.max);
 
+const isStartProgress = (value: unknown) =>
+    isRecord(value) &&
+    isCount(value.started) &&
+    isCount(value.failed) &&
+    orNull(isCount)(value.found) &&
+    orNull(isCount)(value.planned) &&
+    (value.last === null ||
+        (isRecord(value.last) &&
+            isText(value.last.name) &&
+            isTimestamp(value.last.at) &&
+            isCount(value.last.warnings))) &&
+    (value.at === null ||
+        (isRecord(value.at) &&
+            isText(value.at.file) &&
+            isCount(value.at.line) &&
+            isText(value.at.target) &&
+            isTimestamp(value.at.since) &&
+            isCount(value.at.done) &&
+            isCount(value.at.of) &&
+            orNull(isText)(value.at.resource))) &&
+    Array.isArray(value.slowest) &&
+    value.slowest.every((slow) => isRecord(slow) && isText(slow.name) && isCount(slow.ms)) &&
+    orNull(isTimestamp)(value.stuckAt) &&
+    isCount(value.extensionMinutes);
+
 export const isServerStatus = (value: unknown): value is ServerStatus =>
     isRecord(value) &&
     oneOf<ServerState>(SERVER_STATES)(value.state) &&
@@ -448,7 +480,8 @@ export const isServerStatus = (value: unknown): value is ServerStatus =>
     orNull(isCount)(value.build) &&
     (value.players === null || isPlayers(value.players)) &&
     orNull(isTimestamp)(value.restartAt) &&
-    oneOf<LaunchReadiness>(READINESS)(value.launch);
+    oneOf<LaunchReadiness>(READINESS)(value.launch) &&
+    (value.start === null || isStartProgress(value.start));
 
 const isCounts = (value: unknown): value is number[] => Array.isArray(value) && value.every(isCount);
 

@@ -6,6 +6,7 @@
 use std::fs;
 use std::net::{SocketAddr, TcpListener, UdpSocket};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -20,12 +21,15 @@ use observer_fxserver::console::{ConsoleHub, LineKind, plain};
 use observer_fxserver::crashes::analysis;
 use observer_fxserver::crashes::{HangSnapshotLimits, SnapshotFailure};
 use observer_fxserver::health::{HangCause, HealthLimits, Problem};
+use observer_fxserver::hook::{self, Way};
 use observer_fxserver::launch::ServerLaunch;
+use observer_fxserver::layout::{Flavour, Layout};
 use observer_fxserver::perf::Thread;
 use observer_fxserver::recovery::RecoveryPolicy;
 use observer_fxserver::stdin::{StdinError, UserCommand};
 use observer_fxserver::supervisor::{
-    Cause, ControlError, Event, EventKind, ProcessChange, Settings, State, StopTimings, Supervisor, TreeEvent,
+    Cause, ControlError, Counting, Event, EventKind, Hooked, ProcessChange, START_EXTENSION, Settings,
+    StartStatus, State, StopTimings, Supervisor, TreeEvent,
 };
 use observer_platform::{ProcessInfo, Protocol, Socket, SocketState};
 use tempfile::TempDir;
@@ -245,6 +249,27 @@ impl Lab {
 
     fn generation(&self) -> u32 {
         self.supervisor.status().borrow().generation
+    }
+
+    /// The start under way once it is as `wanted`, as the status publishes it.
+    async fn start_until(&self, wanted: impl Fn(&StartStatus) -> bool) -> StartStatus {
+        let mut status = self.supervisor.status();
+        let found = timeout(WAIT, async {
+            loop {
+                let start = status.borrow_and_update().start.clone();
+                if let Some(start) = start.filter(&wanted) {
+                    return start;
+                }
+                status.changed().await.unwrap();
+            }
+        })
+        .await;
+        found.unwrap_or_else(|_| {
+            panic!(
+                "the start never came to that: {:#?}",
+                self.supervisor.status().borrow().start
+            )
+        })
     }
 
     /// The bridge's name in the server that runs now.
@@ -853,6 +878,261 @@ async fn a_hung_main_loop_is_detected_and_the_server_restarted() {
     );
     assert_eq!(lab.state(State::Starting).await, Cause::Recovery);
     lab.state(State::Online).await;
+    lab.shut_down(false).await;
+}
+
+/// Adds `lines` to the lab's cfg, with a folder for each resource they start.
+fn extend_cfg(lab: &Lab, resources: &[&str], lines: &[&str]) {
+    let data = lab.dir.path().join("server-data");
+    for resource in resources {
+        let folder = data.join("resources").join(resource);
+        fs::create_dir_all(&folder).unwrap();
+        fs::write(
+            folder.join("fxmanifest.lua"),
+            "fx_version 'cerulean'\ngame 'gta5'\n",
+        )
+        .unwrap();
+    }
+    let cfg = data.join("server.cfg");
+    let added: String = resources
+        .iter()
+        .map(|resource| format!("ensure {resource}\n"))
+        .chain(lines.iter().map(|line| format!("{line}\n")))
+        .collect();
+    fs::write(&cfg, fs::read_to_string(&cfg).unwrap() + &added).unwrap();
+}
+
+#[tokio::test]
+async fn a_start_longer_than_the_hang_delay_goes_online_while_it_keeps_starting_resources() {
+    // Eight resources of 600 ms each: a start of five seconds, under limits that take a server
+    // silent for two for hung.
+    let mut lab = Lab::new(&[("fake_start_ms", "600")]).await;
+    extend_cfg(
+        &lab,
+        &[
+            "maps", "clothes", "vehicles", "weapons", "props", "peds", "sounds", "core",
+        ],
+        &[],
+    );
+
+    lab.supervisor.start("test").await.unwrap();
+
+    assert_eq!(lab.state(State::Online).await, Cause::Ready);
+    assert!(
+        !lab.seen.iter().any(hung_or_exited),
+        "the start was taken for a hang: {:#?}",
+        lab.seen
+    );
+    assert_eq!(lab.generation(), 1);
+    lab.console_until("Started resource core").await;
+    lab.shut_down(false).await;
+}
+
+#[tokio::test]
+async fn a_start_that_stops_starting_resources_is_hung_and_says_where_it_stopped() {
+    let mut lab = Lab::new(&[("fake_start_ms", "300")]).await;
+    // The cfg sticks after its second resource, before any thread of the bridge runs.
+    extend_cfg(&lab, &["maps", "clothes"], &["fake_hang"]);
+
+    lab.supervisor.start("test").await.unwrap();
+
+    assert_eq!(
+        lab.state(State::Hung).await,
+        Cause::Hang {
+            cause: HangCause::NoHeartbeat
+        }
+    );
+    let stopped = lab.console_until("Started resource clothes").await;
+    let note = lab
+        .console_until("its start is stuck: no resource started since clothes, ")
+        .await;
+    assert!(stopped < note);
+    assert_eq!(
+        lab.state(State::Crashed).await.clone(),
+        Cause::Hang {
+            cause: HangCause::NoHeartbeat
+        }
+    );
+    lab.supervisor.stop("test").await.ok();
+    lab.shut_down(false).await;
+}
+
+#[tokio::test]
+async fn a_start_is_followed_through_the_commands_of_its_cfg() {
+    // Each resource outlasts a tick, so that every command shows in a status.
+    let mut lab = Lab::tuned(&[("fake_start_ms", "1800")], |settings| {
+        settings.health.heartbeat_fatal = Duration::from_secs(30);
+    })
+    .await;
+    extend_cfg(&lab, &["maps", "clothes", "core"], &[]);
+    assert_eq!(lab.supervisor.status().borrow().start, None);
+
+    lab.supervisor.start("test").await.unwrap();
+
+    let start = lab
+        .start_until(|start| {
+            start
+                .progress
+                .at
+                .as_ref()
+                .is_some_and(|at| at.target == "clothes")
+        })
+        .await;
+    let progress = start.progress;
+    let at = progress.at.unwrap();
+    assert_eq!(
+        (at.file.as_str(), at.line, at.done, at.of),
+        ("server.cfg", 6, 0, 1)
+    );
+    let last = progress.last.unwrap();
+    assert_eq!(last.name, "maps");
+    assert_eq!(at.since_ms, last.at_ms, "FXServer came to clothes as maps was up");
+    assert_eq!(
+        (
+            progress.started,
+            progress.failed,
+            progress.planned,
+            progress.found
+        ),
+        (2, 0, Some(3), Some(4)),
+        "the bridge and maps, of the three the cfg starts"
+    );
+    assert!(
+        progress.slowest.iter().all(|slow| slow.ms >= 1800),
+        "{:?}",
+        progress.slowest
+    );
+    assert!(start.stuck_at_ms.is_some_and(|stuck| stuck > last.at_ms));
+
+    let start = lab
+        .start_until(|start| start.progress.at.as_ref().is_some_and(|at| at.target == "core"))
+        .await;
+    assert_eq!(start.progress.started, 3);
+    assert_eq!(lab.state(State::Online).await, Cause::Ready);
+    assert_eq!(
+        lab.supervisor.status().borrow().start,
+        None,
+        "a start is over once online"
+    );
+    lab.shut_down(false).await;
+}
+
+#[tokio::test]
+async fn a_category_of_the_cfg_is_followed_as_the_resources_under_it() {
+    let mut lab = Lab::tuned(&[("fake_start_ms", "1800")], |settings| {
+        settings.health.heartbeat_fatal = Duration::from_secs(30);
+    })
+    .await;
+    // Created as `resources/[maps]/docks` and `resources/[maps]/pier`, started by one command.
+    extend_cfg(&lab, &[], &["set fake_fail_start pier"]);
+    extend_cfg(&lab, &["[maps]/docks", "[maps]/pier"], &[]);
+    let cfg = lab.dir.path().join("server-data/server.cfg");
+    let text = fs::read_to_string(&cfg)
+        .unwrap()
+        .replace("ensure [maps]/docks\nensure [maps]/pier\n", "ensure [maps]\n");
+    fs::write(&cfg, text).unwrap();
+
+    lab.supervisor.start("test").await.unwrap();
+
+    let start = lab
+        .start_until(|start| start.progress.at.as_ref().is_some_and(|at| at.target == "[maps]"))
+        .await;
+    let at = start.progress.at.unwrap();
+    assert_eq!((at.line, at.of), (6, 2));
+    assert_eq!(start.progress.planned, Some(2));
+    assert_eq!(lab.state(State::Online).await, Cause::Ready);
+    lab.console_until("Couldn't start resource pier.").await;
+    lab.shut_down(false).await;
+}
+
+#[tokio::test]
+async fn what_fxserver_warns_of_as_it_starts_is_kept_with_the_resource_it_was_starting() {
+    let mut lab = Lab::new(&[]).await;
+    assert_eq!(lab.supervisor.start_warnings(), None, "before the first start");
+    extend_cfg(
+        &lab,
+        &[],
+        &[
+            "set fake_heavy maps,a_long_resource_name",
+            "set fake_missing maps",
+        ],
+    );
+    extend_cfg(&lab, &["chat", "maps", "a_long_resource_name"], &[]);
+
+    lab.supervisor.start("test").await.unwrap();
+    assert_eq!(lab.state(State::Online).await, Cause::Ready);
+
+    lab.console_until("Started resource maps (3 warnings)").await;
+    let (_, warnings) = lab.supervisor.start_warnings().unwrap();
+    let heavy: Vec<(&str, &str, u32, bool)> = warnings
+        .heavy
+        .iter()
+        .map(|asset| {
+            (
+                asset.resource.as_str(),
+                asset.file.as_str(),
+                asset.tenths,
+                asset.oversized,
+            )
+        })
+        .collect();
+    assert_eq!(
+        heavy,
+        [
+            ("maps", "maps_hi.ydr", 495, true),
+            ("maps", "maps.ytd", 162, false),
+            ("a_long_resource_name", "a_long_resource_name_hi.ydr", 495, true),
+            ("a_long_resource_name", "a_long_resource_name.ytd", 162, false),
+        ]
+    );
+    let missing: Vec<(&str, &str, &str, u32)> = warnings
+        .missing
+        .iter()
+        .map(|file| {
+            (
+                file.resource.as_str(),
+                file.kind.as_str(),
+                file.file.as_str(),
+                file.line,
+            )
+        })
+        .collect();
+    assert_eq!(missing, [("maps", "client_script", "client/gone.lua", 9)]);
+    lab.shut_down(false).await;
+}
+
+#[tokio::test]
+async fn a_start_given_more_time_is_not_taken_for_stuck() {
+    // The bridge alone takes longer to start than the two seconds a start may say nothing.
+    let mut lab = Lab::new(&[("fake_start_ms", "3500")]).await;
+    assert_eq!(
+        lab.supervisor.extend_start("test").await,
+        Err(ControlError::NotStarting)
+    );
+    lab.supervisor.start("test").await.unwrap();
+    let before = lab.start_until(|start| start.stuck_at_ms.is_some()).await;
+
+    lab.supervisor.extend_start("ada").await.unwrap();
+
+    let extended = lab
+        .start_until(|start| start.stuck_at_ms != before.stuck_at_ms)
+        .await;
+    let given = extended.stuck_at_ms.unwrap() - before.stuck_at_ms.unwrap();
+    let extension = i64::try_from(START_EXTENSION.as_millis()).unwrap();
+    assert!((extension - 1000..=extension + 1000).contains(&given), "{given}");
+    assert_eq!(lab.state(State::Online).await, Cause::Ready);
+    assert!(
+        !lab.seen.iter().any(hung_or_exited),
+        "the start was taken for a hang: {:#?}",
+        lab.seen
+    );
+    lab.console_until("ada gave this start 15 more minutes before it is taken for stuck")
+        .await;
+    assert_eq!(
+        lab.supervisor.extend_start("test").await,
+        Err(ControlError::NotStarting),
+        "its cfg has run"
+    );
     lab.shut_down(false).await;
 }
 
@@ -1735,4 +2015,92 @@ async fn a_detached_child_with_an_environment_of_its_own_is_not_ended_while_it_r
         ended.is_err() || !alive,
         "{process:?} was reported ended while it ran"
     );
+}
+
+/// A start that counts puts the hook and its two lines into the build and reads what each
+/// resource reports under the name FXServer gives it; the next start that does not count takes
+/// the lines out again.
+#[tokio::test]
+async fn a_start_that_counts_hooks_the_build_and_the_next_that_does_not_restores_it() {
+    let counting = Arc::new(AtomicBool::new(true));
+    let asked = Arc::clone(&counting);
+    let mut lab = Lab::tuned(&[], |settings| {
+        settings.counting = Some(Counting::new(move || asked.load(Ordering::Relaxed)));
+    })
+    .await;
+    let scheduler = hook::scheduler(&Layout::new(&lab.launch.build, Flavour::HOST));
+    let original = "local yield = coroutine.yield
+Citizen.SetEventRoutine(function() end)
+";
+    fs::create_dir_all(scheduler.parent().unwrap()).unwrap();
+    fs::write(&scheduler, original).unwrap();
+    let mut reports = lab.supervisor.hook_reports();
+
+    lab.supervisor.start("test").await.unwrap();
+    lab.state(State::Online).await;
+
+    let counted = fs::read_to_string(&scheduler).unwrap();
+    let bridge = lab.bridge();
+    assert!(counted.starts_with("--[[obs:hook:head "), "{counted}");
+    assert!(counted.contains(&format!("LoadResourceFile('{bridge}', 'hook.lua')")));
+    assert_eq!(counted.lines().count(), original.lines().count() + 1);
+    assert!(lab.system_resources().join(&bridge).join("hook.lua").is_file());
+    assert_eq!(
+        lab.supervisor.hooked(),
+        Some(Hooked {
+            generation: lab.generation(),
+            refused: None
+        })
+    );
+    // What the bridge itself counts is Observer's, not the server's: it is left out.
+    lab.type_command(
+        &format!("fake_debug {bridge} ev inI playerJoining 1 12 12 15"),
+        "test",
+    )
+    .await;
+    lab.type_command("fake_debug chat ev toA chat:addMessage 4 1240 310 0", "test")
+        .await;
+    let report = timeout(WAIT, reports.recv()).await.unwrap().unwrap();
+    assert_eq!(report.generation, lab.generation());
+    assert_eq!(report.report.resource, "chat");
+    let event = &report.report.events[0];
+    assert_eq!(
+        (
+            event.way,
+            event.name.as_str(),
+            event.count,
+            event.bytes,
+            event.largest
+        ),
+        (Way::ToAll, "chat:addMessage", 4, 1240, 310)
+    );
+
+    counting.store(false, Ordering::Relaxed);
+    lab.supervisor.restart("test").await.unwrap();
+    lab.state(State::Starting).await;
+    lab.state(State::Online).await;
+
+    assert_eq!(fs::read_to_string(&scheduler).unwrap(), original);
+    assert_eq!(lab.supervisor.hooked(), None);
+    lab.shut_down(false).await;
+}
+
+/// A build whose scheduler Observer cannot change starts all the same, counts nothing, and the
+/// console says why.
+#[tokio::test]
+async fn a_build_whose_scheduler_cannot_be_hooked_starts_all_the_same() {
+    let mut lab = Lab::tuned(&[], |settings| {
+        settings.counting = Some(Counting::new(|| true));
+    })
+    .await;
+
+    lab.supervisor.start("test").await.unwrap();
+    lab.state(State::Online).await;
+
+    let hooked = lab.supervisor.hooked().unwrap();
+    assert_eq!(hooked.generation, lab.generation());
+    let reason = hooked.refused.unwrap();
+    assert!(reason.contains("scheduler.lua"), "{reason}");
+    lab.console_until("Debug counts nothing in this start").await;
+    lab.shut_down(false).await;
 }

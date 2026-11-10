@@ -21,7 +21,8 @@ pub struct Config {
     /// started from anywhere finds the same data.
     pub data_dir: PathBuf,
     pub http: HttpConfig,
-    /// SFTP opens a new network service, so it stays off until the owner adds this section.
+    /// Where SFTP listens, for a host that keeps the address out of the panel's reach. Without
+    /// this section the owner gives it in the panel.
     pub sftp: Option<SftpConfig>,
     /// The optional features the host turns off, such as `sftp = "off"`: the panel then cannot
     /// turn them on, even from the owner's account.
@@ -203,7 +204,7 @@ mod tests {
     }
 
     #[test]
-    fn sftp_stays_off_until_its_section_names_where_to_listen() {
+    fn the_sftp_section_is_absent_by_default_and_names_where_to_listen() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("observer.toml");
         assert!(Config::load(&path).unwrap().sftp.is_none());

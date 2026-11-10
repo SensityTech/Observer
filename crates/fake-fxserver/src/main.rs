@@ -13,8 +13,22 @@
 //! - `fake_quit_delay_ms` (500): time between `quit` and the end, which is what FXServer 35245 does:
 //!   exit code 1 on Windows, SIGSEGV on Linux;
 //! - `fake_ignore_quit 1`: `quit` does nothing;
+//! - `fake_start_ms <ms>` (0): how long each resource takes to start, and `fake_start_ms:<name>`
+//!   for one of them. FXServer 38435 prints `Started resource` once a resource is up and nothing
+//!   while it reads its stream files, which took a clothing pack minutes on a first start;
+//! - `fake_fail_start <name>`: that resource does not start, as one whose asset is disabled;
+//! - `fake_heavy <names>`, `fake_missing <names>`, each a list separated by commas: as it starts
+//!   one of them, FXServer warns of two heavy streamed files, one of them oversized, or of a script
+//!   its manifest names and it does not hold, on the channel `resources:<name>:stream` cut at
+//!   twenty characters, and counts the warnings on the line that says the resource started;
 //! - `fake_heartbeat_ms` (3000): the bridge heartbeat period;
 //! - `fake_heap_ms` (10000): how often the bridge reports the JS heap;
+//! - a build whose scheduler loads Observer's hook, which is its first line naming the bridge and
+//!   `hook.lua` in the bridge's folder: every started resource but the bridge prints the hook's
+//!   first report, as each server Lua runtime would, save those of `fake_debug_silent <names>`,
+//!   which run no Lua on the server; with `fake_debug_demo 1`, the resources named `pma-voice`,
+//!   `chat`, `baseevents`, `garage` and `logs` then count each second what a small busy server
+//!   would;
 //! - `fake_players <n>`: `/dynamic.json` counts `n` clients and `/players.json` lists ids 1 to `n`
 //!   with a ping of `20 + 5 × id`, or the anonymised public list without the right token;
 //! - `fake_tick_ms <ms>` (0): how long each svMain tick is observed to take in `/perf/`;
@@ -46,6 +60,8 @@
 //! - on stdin: `fake_move <id> <x> <y> <z>`, which puts a player at a position the bridge reports
 //!   while Observer asks for positions; the others go round a circle. With `onesync off` the bridge
 //!   reports no position, as it reads them from OneSync;
+//! - on stdin: `fake_debug <resource> <list> <fields...>`, one row of a hook's report (`ev`, `np`,
+//!   `un`, `sb`, `sbl` or `http`) printed as that resource;
 //! - on stdin: `fake_crash [code]`, `fake_hang`, `fake_spin` (a busy loop), `fake_print <text>`,
 //!   `fake_trace <type>`, `fake_stall_input <ms>`, which stops reading stdin for a while, as
 //!   FXServer does while its main loop is stuck; `fake_spawn [NAME=value...] <program> <args...>`,
@@ -71,7 +87,7 @@ mod traces;
 use std::collections::HashMap;
 use std::io::{self, BufRead};
 use std::net::{TcpListener, TcpStream, UdpSocket};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{self, Child, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError, mpsc};
@@ -188,6 +204,15 @@ struct Bridge {
     contract: u64,
 }
 
+/// While the build's scheduler loads Observer's hook: every resource counts and reports.
+struct Counting {
+    next: Instant,
+    /// The seconds counted so far, which the demo varies with.
+    second: u64,
+    /// How many of the started resources sent their first report.
+    greeted: usize,
+}
+
 /// While Observer asks for positions: how often the bridge reports them, until when.
 struct Following {
     every: Duration,
@@ -211,6 +236,7 @@ struct Fake {
     traces: Traces,
     endpoint: Option<String>,
     bridge: Option<Bridge>,
+    counting: Option<Counting>,
     /// Every resource started, in order.
     started: Vec<String>,
     quit_at: Option<Instant>,
@@ -218,6 +244,84 @@ struct Fake {
     children: Vec<Child>,
     connections: Vec<TcpStream>,
     datagrams: Vec<UdpSocket>,
+}
+
+/// What a resource of the demo server counts in its `second`, by its name: a voice resource that
+/// talks to clients all the time, with one client far above the others, a chat, a garage that
+/// writes state bags and refuses an event, and a logger that calls a webhook.
+fn demo_counts(resource: &str, second: u64) -> Option<serde_json::Value> {
+    // A slow wave, so that the traffic moves on the page.
+    let wave = (second % 60).abs_diff(30);
+    Some(match resource {
+        "pma-voice" => {
+            let out = 150 + wave;
+            let talkers = [(1, 19), (2, 3), (3, 2)];
+            let sent: u64 = talkers.iter().map(|(_, count)| count).sum();
+            let mut events = vec![
+                json!(["toC", "pma-voice:setTalkingOnRadio", out, out * 41, 44, 0, 0]),
+                json!([
+                    "inN",
+                    "pma-voice:setTalkingOnRadio",
+                    sent,
+                    sent * 38,
+                    40,
+                    sent * 20,
+                    60
+                ]),
+            ];
+            if second.is_multiple_of(3) {
+                events.push(json!(["toC", "pma-voice:syncRadioData", 1, 1200, 3800, 0, 0]));
+            }
+            if second.is_multiple_of(5) {
+                events.push(json!(["inN", "pma-voice:setPlayerRadio", 1, 36, 36, 40, 40]));
+            }
+            json!({
+                "ev": events,
+                "np": talkers
+                    .iter()
+                    .map(|(player, count)| json!(["pma-voice:setTalkingOnRadio", player, count, count * 38]))
+                    .collect::<Vec<_>>(),
+                "sb": [
+                    ["player", "proximity", 28, 252, 9, 28],
+                    ["player", "voiceIntent", 9, 72, 8, 9],
+                    ["player", "radioChannel", 3, 15, 5, 3],
+                ],
+                "sbl": [["player:1", "proximity", 9, 1]],
+            })
+        }
+        "chat" if second.is_multiple_of(4) => json!({
+            "ev": [
+                ["toA", "chat:addMessage", 1, 310, 310, 0, 0],
+                ["inN", "_chat:messageEntered", 1, 120, 120, 90, 90],
+            ],
+            "np": [["_chat:messageEntered", 2, 1, 120]],
+        }),
+        "baseevents" if second.is_multiple_of(10) => json!({
+            "ev": [
+                ["inN", "baseevents:enteredVehicle", 1, 84, 84, 30, 30],
+                ["inI", "playerJoining", 1, 12, 12, 15, 15],
+                ["in", "playerDropped", 1, 48, 48, 20, 20],
+            ],
+            "np": [["baseevents:enteredVehicle", 3, 1, 84]],
+        }),
+        "garage" => {
+            let mut report = json!({
+                "sb": [["entity", "fuel", 4, 1240, 2100, 4], ["global", "weather", 1, 64, 64, 0]],
+                "sbl": [["entity:1042", "fuel", 2100, 1]],
+            });
+            if second.is_multiple_of(20) {
+                report["un"] = json!([["garage:giveVehicle", 1, 1]]);
+                report["ev"] = json!([["inN", "garage:giveVehicle", 1, 60, 60, 0, 0]]);
+                report["np"] = json!([["garage:giveVehicle", 1, 1, 60]]);
+            }
+            if second == 30 {
+                report["http"] = json!([["POST", "paste.example", 1, 2300]]);
+            }
+            report
+        }
+        "logs" if second % 5 < 3 => json!({ "http": [["POST", "discord.com", 1, 400]] }),
+        _ => return None,
+    })
 }
 
 fn main() {
@@ -246,6 +350,7 @@ fn main() {
             last_request: 0,
             endpoint: None,
             bridge: None,
+            counting: None,
             started: Vec::new(),
             quit_at: None,
             children: Vec::new(),
@@ -260,6 +365,33 @@ fn main() {
     // The main loop ends the process itself: it only comes back here if it panicked.
     let _ = main_loop.map(thread::JoinHandle::join);
     process::exit(101);
+}
+
+/// The resources under the folders named `category` of `folder`, in name order, as FXServer
+/// starts every one with that folder on its path.
+fn category_members(folder: &Path, category: &str) -> Vec<String> {
+    let mut members = Vec::new();
+    let mut folders = vec![(folder.to_path_buf(), false)];
+    while let Some((folder, inside)) = folders.pop() {
+        let Ok(entries) = std::fs::read_dir(folder) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+                continue;
+            };
+            if !entry.path().is_dir() {
+                continue;
+            }
+            if name.starts_with('[') && name.ends_with(']') {
+                folders.push((entry.path(), inside || name.eq_ignore_ascii_case(category)));
+            } else if inside {
+                members.push(name);
+            }
+        }
+    }
+    members.sort_unstable();
+    members
 }
 
 impl Fake {
@@ -331,6 +463,7 @@ impl Fake {
             self.admit_unanswered(now);
             self.report_positions(now);
             self.beat(now);
+            self.count(now);
             self.server.tick();
             thread::sleep(TICK);
         }
@@ -348,15 +481,10 @@ impl Fake {
             ("exec", Some(file)) => self.exec(file),
             ("endpoint_add_tcp", Some(address)) => self.endpoint = Some(address.to_owned()),
             ("endpoint_add_udp", _) => {}
-            ("ensure" | "start", Some(resource)) => {
-                let restarted = self.started.iter().any(|started| started == resource);
-                if self.bridge.as_ref().is_some_and(|bridge| bridge.name == resource) {
-                    stop(resource);
-                }
-                self.start(resource);
-                let events: &[&str] = if restarted { &["stop", "start"] } else { &["start"] };
-                self.resources_changed(resource, events);
+            ("ensure" | "start", Some(category)) if category.starts_with('[') && category.ends_with(']') => {
+                self.ensure_category(category);
             }
+            ("ensure" | "start", Some(resource)) => self.ensure(resource),
             ("restart", Some(resource)) => {
                 stop(resource);
                 self.start(resource);
@@ -405,6 +533,7 @@ impl Fake {
                 );
             }
             ("fake_trace", Some(kind)) => self.trace(kind),
+            ("fake_debug", Some(resource)) => self.counted(resource, &args[1..]),
             ("fake_join", _) => self.join(args.first(), args.get(1), args.get(2)),
             ("fake_connecting", _) => self.connecting(args.first(), args.get(1), args.get(2)),
             ("fake_move", Some(id)) => self.place(id, &args[1..]),
@@ -454,14 +583,78 @@ impl Fake {
         }
     }
 
+    fn ensure_category(&mut self, category: &str) {
+        let members = category_members(Path::new("resources"), category);
+        if members.is_empty() {
+            console::line(SERVER, &format!("Couldn't find resource category {category}."));
+        }
+        for member in members {
+            self.ensure(&member);
+        }
+    }
+
+    fn ensure(&mut self, resource: &str) {
+        if self.server.convar("fake_fail_start").as_deref() == Some(resource) {
+            console::line(SERVER, &format!("Couldn't start resource {resource}."));
+            return;
+        }
+        let restarted = self.started.iter().any(|started| started == resource);
+        if self.bridge.as_ref().is_some_and(|bridge| bridge.name == resource) {
+            stop(resource);
+        }
+        self.start(resource);
+        let events: &[&str] = if restarted { &["stop", "start"] } else { &["start"] };
+        self.resources_changed(resource, events);
+    }
+
     fn start(&mut self, resource: &str) {
         console::line(SCRIPTING, &format!("Creating script environments for {resource}"));
-        console::line(RESOURCES, &format!("Started resource {resource}"));
+        let own = self.server.number(&format!("fake_start_ms:{resource}"));
+        if let Some(ms) = own.or_else(|| self.server.number("fake_start_ms")) {
+            thread::sleep(Duration::from_millis(ms));
+        }
+        let listed = |convar: &str| {
+            self.server
+                .convar(convar)
+                .is_some_and(|names| names.split(',').any(|name| name == resource))
+        };
+        let stream = format!("resources:{resource}:stream");
+        let channel = (stream.get(..20).unwrap_or(&stream), 83);
+        let mut warnings = Vec::new();
+        if listed("fake_heavy") {
+            warnings.push(format!(
+                "Asset {resource}/{resource}_hi.ydr uses 49.5 MiB of physical memory. Oversized assets \
+                 can and WILL lead to streaming issues (such as models not loading/rendering)."
+            ));
+            warnings.push(format!(
+                "Asset {resource}/{resource}.ytd uses 16.2 MiB of physical memory."
+            ));
+        }
+        if listed("fake_missing") {
+            warnings.push(
+                "Warning: could not find client_script `client/gone.lua` (defined in fxmanifest.lua:9)"
+                    .to_owned(),
+            );
+        }
+        for warning in &warnings {
+            console::line(channel, warning);
+        }
+        let counted = match warnings.len() {
+            0 => String::new(),
+            1 => " (1 warning)".to_owned(),
+            several => format!(" ({several} warnings)"),
+        };
+        console::line(RESOURCES, &format!("Started resource {resource}{counted}"));
         if !self.started.iter().any(|started| started == resource) {
             self.started.push(resource.to_owned());
         }
         if let Some(contract) = self.bridge_script(resource).as_deref().and_then(contract_version) {
             let heap_period = Duration::from_millis(self.server.number("fake_heap_ms").unwrap_or(10_000));
+            self.counting = self.hooked(resource).then(|| Counting {
+                next: Instant::now(),
+                second: 0,
+                greeted: 0,
+            });
             self.bridge = Some(Bridge {
                 name: resource.to_owned(),
                 next_heartbeat: Instant::now(),
@@ -699,11 +892,91 @@ impl Fake {
 
     /// The script of `resource` if it is Observer's bridge: a folder of the build's
     /// `system_resources` whose script registers `observer_cmd`. Its name changes with each start.
-    fn bridge_script(&self, resource: &str) -> Option<String> {
-        let citizen = self.server.convar("citizen_dir").map(PathBuf::from).or_else(|| {
+    fn citizen(&self) -> Option<PathBuf> {
+        self.server.convar("citizen_dir").map(PathBuf::from).or_else(|| {
             let program = std::env::current_exe().ok()?;
             Some(program.parent()?.join("citizen"))
-        })?;
+        })
+    }
+
+    /// Whether the build's scheduler loads the hook of `bridge`, as the real FXServer would find
+    /// when it runs the scheduler's first line in each resource.
+    fn hooked(&self, bridge: &str) -> bool {
+        let Some(citizen) = self.citizen() else {
+            return false;
+        };
+        let scheduler = citizen.join("scripting").join("lua").join("scheduler.lua");
+        let loads = std::fs::read_to_string(scheduler).is_ok_and(|scheduler| {
+            scheduler
+                .trim_start_matches('\u{feff}')
+                .starts_with("--[[obs:hook:head ")
+                && scheduler.contains(&format!("LoadResourceFile('{bridge}', 'hook.lua')"))
+        });
+        loads
+            && citizen
+                .join("system_resources")
+                .join(bridge)
+                .join("hook.lua")
+                .is_file()
+    }
+
+    /// What the hook prints from every resource: a first report from each, then, with
+    /// `fake_debug_demo`, what a small busy server counts each second.
+    fn count(&mut self, now: Instant) {
+        let Some(counting) = &mut self.counting else {
+            return;
+        };
+        if now < counting.next {
+            return;
+        }
+        counting.next = now + Duration::from_secs(1);
+        counting.second += 1;
+        let second = counting.second;
+        let greeted = std::mem::replace(&mut counting.greeted, self.started.len());
+        let demo = self.server.flag("fake_debug_demo");
+        let silent = self.server.convar("fake_debug_silent").unwrap_or_default();
+        let bridge = self.bridge.as_ref().map(|bridge| bridge.name.as_str());
+        for (index, resource) in self.started.iter().enumerate() {
+            if Some(resource.as_str()) == bridge || silent.split(',').any(|name| name == resource) {
+                continue;
+            }
+            let counted = if demo { demo_counts(resource, second) } else { None };
+            let mut report = match (counted, index >= greeted) {
+                (Some(counted), _) => counted,
+                (None, true) => json!({}),
+                (None, false) => continue,
+            };
+            if index >= greeted {
+                report["hello"] = json!({ "hook": "1", "timer": "nanotime" });
+            }
+            report["type"] = json!("observer_debug");
+            report["v"] = json!(1);
+            report["seq"] = json!(second);
+            report["dur"] = json!(1000);
+            self.traces.script(resource, &report);
+        }
+    }
+
+    /// `fake_debug <resource> <list> <fields>`: one row of the hook's report, as `resource`.
+    fn counted(&self, resource: &str, row: &[String]) {
+        let Some((list, fields)) = row.split_first() else {
+            return;
+        };
+        let fields: Vec<serde_json::Value> = fields
+            .iter()
+            .map(|field| {
+                field
+                    .parse::<i64>()
+                    .map_or_else(|_| json!(field), |number| json!(number))
+            })
+            .collect();
+        let mut report = json!({ "type": "observer_debug", "v": 1, "seq": 1, "dur": 1000 });
+        report[list.as_str()] = json!([fields]);
+        self.traces.script(resource, &report);
+    }
+
+    fn bridge_script(&self, resource: &str) -> Option<String> {
+        let citizen = self.citizen()?;
         let script = citizen.join("system_resources").join(resource).join("server.lua");
         std::fs::read_to_string(script)
             .ok()

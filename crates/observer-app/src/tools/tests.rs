@@ -91,6 +91,7 @@ impl Lab {
             launch: LaunchReadiness::Ready,
             name: None,
             port: None,
+            start: None,
         });
         let tools = Tools::new(ToolsSetup {
             db: db.clone(),
@@ -406,6 +407,119 @@ async fn a_fix_of_a_plan_that_changed_since_it_was_shown_writes_nothing_and_hand
     assert_eq!(
         code(&lab.tools.fix(&owner(), "not a digest").await.unwrap_err()),
         Some(ErrorCode::InvalidRequest)
+    );
+}
+
+#[tokio::test]
+async fn a_fix_staged_while_fxserver_runs_is_written_before_its_next_start() {
+    let lab = Lab::new().await;
+    let camp = lab.read(CAMP);
+    lab.set_state(ServerState::Online);
+    let shown = lab.tools.scan(&owner()).await.unwrap();
+
+    let view = lab
+        .tools
+        .stage(&owner(), shown.plan.as_deref().unwrap())
+        .await
+        .unwrap();
+
+    let staged = view.tools[0].staged.clone().unwrap();
+    assert_eq!(
+        (staged.plan.as_str(), staged.fixes),
+        (shown.plan.as_deref().unwrap(), 2)
+    );
+    assert_eq!(staged.staged_by, "ada");
+    assert_eq!(lab.read(CAMP), camp, "nothing is written while FXServer runs");
+    let audited = lab.audited(AuditAction::ToolFixStaged).await;
+    assert_eq!(audited, [("user".to_owned(), json!({ "fixes": 2 }))]);
+
+    // A recovery from a crash starts the server as it was: the fix keeps waiting.
+    assert_eq!(lab.start(Cause::Recovery).await, Vec::<String>::new());
+    assert_eq!(lab.read(CAMP), camp);
+    assert!(lab.tools.view().await.unwrap().tools[0].staged.is_some());
+
+    let lines = lab.start(Cause::Requested { by: "ada".to_owned() }).await;
+
+    assert_eq!(lab.archetypes(CAMP), hashes(&["stick", "marshmallow"]));
+    assert!(lines.iter().any(|line| line.contains("2 file")), "{lines:?}");
+    let view = lab.tools.view().await.unwrap();
+    assert_eq!(view.tools[0].staged, None, "read once");
+    let run = view.tools[0].last_run.clone().unwrap();
+    assert_eq!((run.mode, run.trigger), (ToolRunMode::Fix, ToolTrigger::Start));
+    assert_eq!(run.summary.unwrap().files_changed, 2);
+    assert_eq!(lab.audited(AuditAction::ToolFixUnstaged).await, Vec::new());
+}
+
+#[tokio::test]
+async fn a_staged_fix_is_not_written_when_the_scan_before_the_start_plans_another_one() {
+    let lab = Lab::new().await;
+    let camp = lab.read(CAMP);
+    lab.set_state(ServerState::Online);
+    let shown = lab.tools.scan(&owner()).await.unwrap();
+    lab.tools
+        .stage(&owner(), shown.plan.as_deref().unwrap())
+        .await
+        .unwrap();
+    ytyp(&lab.folder(), TENT, &["tent", "tent"]);
+
+    let lines = lab.start(Cause::Requested { by: "ada".to_owned() }).await;
+
+    assert_eq!(lab.read(CAMP), camp);
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("the fix ada staged was not written")),
+        "{lines:?}"
+    );
+    let view = lab.tools.view().await.unwrap();
+    assert_eq!(view.tools[0].staged, None, "to review and stage again");
+    assert_eq!(
+        lab.audited(AuditAction::ToolFixUnstaged).await,
+        [("system".to_owned(), json!({ "planChanged": true }))]
+    );
+    assert_eq!(lab.audited(AuditAction::ToolFilesChanged).await, Vec::new());
+}
+
+#[tokio::test]
+async fn only_the_plan_of_the_latest_report_is_staged_and_a_run_that_writes_drops_it() {
+    let lab = Lab::new().await;
+    let refused = lab.tools.stage(&owner(), &"0".repeat(64)).await.unwrap_err();
+    assert_eq!(code(&refused), Some(ErrorCode::PlanChanged), "no report yet");
+    let shown = lab.tools.scan(&owner()).await.unwrap();
+    let plan = shown.plan.as_deref().unwrap();
+    assert_eq!(
+        code(&lab.tools.stage(&owner(), "not a digest").await.unwrap_err()),
+        Some(ErrorCode::InvalidRequest)
+    );
+    assert_eq!(
+        code(&lab.tools.stage(&owner(), &"0".repeat(64)).await.unwrap_err()),
+        Some(ErrorCode::PlanChanged)
+    );
+
+    lab.tools.stage(&owner(), plan).await.unwrap();
+    let dropped = lab.tools.unstage(&owner()).await.unwrap();
+    assert_eq!(dropped.tools[0].staged, None);
+    assert_eq!(lab.audited(AuditAction::ToolFixUnstaged).await.len(), 1);
+    lab.tools.unstage(&owner()).await.unwrap();
+    assert_eq!(
+        lab.audited(AuditAction::ToolFixUnstaged).await.len(),
+        1,
+        "nothing to drop"
+    );
+
+    lab.tools.stage(&owner(), plan).await.unwrap();
+    lab.tools.fix(&owner(), plan).await.unwrap();
+    assert_eq!(lab.tools.view().await.unwrap().tools[0].staged, None);
+    let fixed = lab.tools.scan(&owner()).await.unwrap();
+    assert_eq!(
+        code(
+            &lab.tools
+                .stage(&owner(), fixed.plan.as_deref().unwrap())
+                .await
+                .unwrap_err()
+        ),
+        Some(ErrorCode::PlanChanged),
+        "a plan that fixes nothing"
     );
 }
 

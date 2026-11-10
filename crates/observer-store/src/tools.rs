@@ -6,9 +6,9 @@
 
 use jiff::Timestamp;
 use observer_domain::tools::{
-    ArchetypeReport, Differences, EscrowPolicy, ToolChange, ToolChangeState, ToolCloseReason, ToolFileFormat,
-    ToolKind, ToolMode, ToolRemoval, ToolRun, ToolRunMode, ToolRunOutcome, ToolRunSummary, ToolSettings,
-    ToolTrigger, sha256_from_hex, sha256_hex,
+    ArchetypeReport, Differences, EscrowPolicy, StagedFix, ToolChange, ToolChangeState, ToolCloseReason,
+    ToolFileFormat, ToolKind, ToolMode, ToolRemoval, ToolRun, ToolRunMode, ToolRunOutcome, ToolRunSummary,
+    ToolSettings, ToolTrigger, sha256_from_hex, sha256_hex,
 };
 use rusqlite::types::{FromSqlError, Type};
 use rusqlite::{Connection, OptionalExtension, Row, Transaction, params};
@@ -55,6 +55,53 @@ pub fn settings(
         || (ToolSettings::default(), None),
         |(settings, version)| (settings, Some(version)),
     ))
+}
+
+/// The fix staged for the next start of FXServer, if there is one.
+pub fn staged(conn: &Connection, server_id: &str, tool: ToolKind) -> Result<Option<StagedFix>, StoreError> {
+    Ok(conn
+        .query_row(
+            "SELECT plan_sha256, fixes, staged_at, staged_by FROM tool_staged
+             WHERE server_id = ?1 AND tool = ?2",
+            params![server_id, tool.as_str()],
+            |row| {
+                let staged_at: Utc = row.get(2)?;
+                Ok(StagedFix {
+                    plan: row.get(0)?,
+                    fixes: row.get(1)?,
+                    staged_at: staged_at.0,
+                    staged_by: row.get(3)?,
+                })
+            },
+        )
+        .optional()?)
+}
+
+/// Stages `fix` for the next start, in the place of any staged before it.
+pub fn stage(conn: &Connection, server_id: &str, tool: ToolKind, fix: &StagedFix) -> Result<(), StoreError> {
+    conn.execute(
+        "INSERT INTO tool_staged (server_id, tool, plan_sha256, fixes, staged_at, staged_by)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+         ON CONFLICT (server_id, tool) DO UPDATE SET plan_sha256 = excluded.plan_sha256,
+             fixes = excluded.fixes, staged_at = excluded.staged_at, staged_by = excluded.staged_by",
+        params![
+            server_id,
+            tool.as_str(),
+            fix.plan,
+            fix.fixes,
+            Utc(fix.staged_at),
+            fix.staged_by
+        ],
+    )?;
+    Ok(())
+}
+
+/// Drops the staged fix. Whether there was one.
+pub fn unstage(conn: &Connection, server_id: &str, tool: ToolKind) -> Result<bool, StoreError> {
+    Ok(conn.execute(
+        "DELETE FROM tool_staged WHERE server_id = ?1 AND tool = ?2",
+        params![server_id, tool.as_str()],
+    )? > 0)
 }
 
 /// Saves a tool's settings over the version they were read at, `None` for settings never saved.

@@ -56,6 +56,17 @@ pub enum ErrorCode {
     ServerNotRunning,
     /// FXServer is stopping; it can be started again once it has.
     ServerStopping,
+    /// Only a start whose cfg still runs can be given more time.
+    ServerNotStarting,
+    /// The launch's cfg is not edited from the panel. Params: `reason`, a
+    /// [`CfgRefusal`](crate::cfg::CfgRefusal).
+    CfgNotEditable,
+    /// The cfg is no longer the file the edit started from: it is read again before a save.
+    CfgChanged,
+    /// The text is not written as a cfg. Params: `reason`, `unknownMark` for a secret's mark that
+    /// stands for nothing, `control` for a NUL, `tooLarge`.
+    InvalidCfgText,
+    CfgVersionNotFound,
     /// Observer is stopping, and FXServer with it.
     ShuttingDown,
     /// Params: `reason`, a `CommandRefusal`.
@@ -201,6 +212,11 @@ pub enum ErrorCode {
     FeatureDisabled,
     /// `observer.toml` turns the feature off, which only the host can undo. Params: `feature`.
     FeatureLocked,
+    /// `observer.toml` names where SFTP listens, which only the host changes.
+    SftpListenPinned,
+    /// Not an address SFTP can listen on. Params: `reason`, `address` when it is not an IP address
+    /// with a port, `port` when the port is 0.
+    InvalidSftpListen,
     /// A backup of the server's database is under way: one at a time.
     BackupRunning,
     /// Params: `issues`, a list of `BackupSettingsIssue`.

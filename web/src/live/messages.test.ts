@@ -16,6 +16,7 @@ const STATUS = {
     players: null,
     restartAt: '2026-10-28T14:02:17Z',
     launch: 'ready',
+    start: null,
 };
 
 const ONLINE = {
@@ -26,6 +27,33 @@ const ONLINE = {
     build: 35245,
     players: { online: 187, max: 256 },
     restartAt: null,
+};
+
+const STARTING = {
+    ...ONLINE,
+    state: 'starting',
+    cause: { kind: 'requested', by: 'ada' },
+    build: null,
+    players: null,
+    start: {
+        started: 152,
+        failed: 1,
+        found: 391,
+        planned: 380,
+        last: { name: 'core', at: '2026-10-28T14:04:10Z', warnings: 1 },
+        at: {
+            file: 'server.cfg',
+            line: 226,
+            target: '[clothes]',
+            since: '2026-10-28T14:04:10Z',
+            done: 12,
+            of: 150,
+            resource: null,
+        },
+        slowest: [{ name: 'maps', ms: 5700 }],
+        stuckAt: '2026-10-28T14:10:10Z',
+        extensionMinutes: 15,
+    },
 };
 
 const LINE = [1_761_660_127_000_001, 1_761_660_127_123, 3, 'command', 'ada', 'ensure chat', 0];
@@ -80,6 +108,22 @@ describe('parseServerMessage', () => {
             { type: 'snapshot', topic: 'audit', data: { latestId: null } },
             { type: 'snapshot', topic: 'server.status', data: STATUS },
             { type: 'event', topic: 'server.status', data: ONLINE },
+            { type: 'event', topic: 'server.status', data: STARTING },
+            {
+                type: 'event',
+                topic: 'server.status',
+                data: {
+                    ...STARTING,
+                    start: {
+                        ...STARTING.start,
+                        found: null,
+                        planned: null,
+                        last: null,
+                        at: null,
+                        stuckAt: null,
+                    },
+                },
+            },
             {
                 type: 'event',
                 topic: 'server.status',
@@ -152,6 +196,16 @@ describe('parseServerMessage', () => {
                 data: { ...SAMPLE, children: [{ ...SAMPLE.children[0], workingSet: -1 }] },
             },
             { type: 'snapshot', topic: 'server.status', data: { ...STATUS, state: 'exploded' } },
+            {
+                type: 'event',
+                topic: 'server.status',
+                data: { ...STARTING, start: { ...STARTING.start, slowest: [{ name: 'maps' }] } },
+            },
+            {
+                type: 'event',
+                topic: 'server.status',
+                data: { ...STARTING, start: { ...STARTING.start, at: { file: 'server.cfg' } } },
+            },
             { type: 'snapshot', topic: 'server.status', data: { ...STATUS, cause: { kind: 'exited' } } },
             {
                 type: 'snapshot',

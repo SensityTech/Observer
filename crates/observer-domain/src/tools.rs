@@ -827,6 +827,23 @@ pub struct ToolView {
     pub closed: Vec<ToolChange>,
     /// What the backups of these changes take on the disk.
     pub backup_bytes: u64,
+    /// The fix that waits for the next start of FXServer.
+    pub staged: Option<StagedFix>,
+}
+
+/// A fix the owner prepared while FXServer ran. Before the next start that is not a recovery from
+/// a crash, a fresh scan runs: the fix is written if it plans exactly what the owner saw, and
+/// dropped either way.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct StagedFix {
+    /// The `plan` of the report the owner saw.
+    pub plan: String,
+    /// The groups it fixes.
+    pub fixes: u32,
+    pub staged_at: Timestamp,
+    pub staged_by: String,
 }
 
 /// The owner's change of a tool's settings.

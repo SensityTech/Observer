@@ -14,7 +14,7 @@ use observer_domain::server_data::{CfgFinding, Severity};
 use observer_platform::Launch;
 
 use crate::layout::{Flavour, Layout};
-use crate::{bridge, cfg, server_data};
+use crate::{bridge, cfg, server_data, start};
 
 /// What a spawn starts: a build folder, and how FXServer runs from it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -38,6 +38,8 @@ pub struct Prepared {
     /// The whole scan of the cfg, which the warnings and the endpoint come from: the pre-launch
     /// hook reads the commands that start resources in it, rather than scan the cfg again.
     pub scan: cfg::Scan,
+    /// The commands of the cfg that start resources, which the start is followed along.
+    pub plan: start::Plan,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -188,6 +190,7 @@ pub fn prepare(launch: &ServerLaunch, flavour: Flavour, bridge: &str) -> Result<
         .cloned()
         .collect();
     let endpoint = scan.endpoint;
+    let plan = start::Plan::new(&scan, &resources);
 
     Ok(Prepared {
         launch: Launch {
@@ -200,6 +203,7 @@ pub fn prepare(launch: &ServerLaunch, flavour: Flavour, bridge: &str) -> Result<
         warnings,
         endpoint,
         scan,
+        plan,
     })
 }
 

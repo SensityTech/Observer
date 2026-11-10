@@ -26,6 +26,7 @@ import { useI18n } from '../i18n/I18nProvider';
 import { cn } from '../lib/cn';
 import { anchorOf } from './catalog';
 import { CategoryHead } from './Row';
+import { SftpAddress, sftpNotListening } from './SftpAddress';
 
 type Open =
     | { dialog: 'group'; group: FileGroup | null }
@@ -50,11 +51,23 @@ export function FilesSettings() {
         void queryClient.invalidateQueries({ queryKey: ['files'] });
     };
     const names = new Map((groups.data ?? []).map((group) => [group.id, group.name]));
+    // Without its address or its port SFTP answers nothing: its address takes the place of three
+    // failed cards.
+    if (sftpNotListening(groups.error) || sftpNotListening(accesses.error)) {
+        return (
+            <>
+                <CategoryHead category="files" />
+                {!me.isOwner && <Notice tone="warning">{t.settings.sftpAddress.ownerGives}</Notice>}
+                <SftpAddress />
+            </>
+        );
+    }
 
     return (
         <>
             <CategoryHead category="files" />
             <Notice tone="neutral">{t.files.intro}</Notice>
+            <SftpAddress />
 
             <Card
                 id={anchorOf('fileGroups')}

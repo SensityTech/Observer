@@ -8,11 +8,11 @@ use axum::Router;
 use jiff::tz::TimeZone;
 use observer_app::{
     Accounts, Artifacts, ArtifactsSetup, ArtifactsTask, AuditLog, Backups, BackupsHook, BackupsSetup, Bans,
-    BansSetup, BeforeSpawn, Changes, ChangesSetup, Clock, DatabaseFiles, Diagnostics, DiagnosticsSetup,
-    Drops, DropsSetup, Features, FeaturesSetup, LiveMap, MapSetup, Metrics, MetricsSetup, OwnPaths,
-    PRE_LAUNCH_LIMIT, PasswordCost, Players, PlayersSetup, Running, Schedule, ScheduleSetup, ScheduleTask,
-    Servers, Setup, Sources, Statistics, Supervision, Switched, Takeover, Tools, ToolsHook, ToolsSetup,
-    Updates, UpdatesSetup,
+    BansSetup, BeforeSpawn, Changes, ChangesSetup, Clock, DatabaseFiles, DebugCounts, DebugSetup,
+    Diagnostics, DiagnosticsSetup, Drops, DropsSetup, Features, FeaturesSetup, LiveMap, MapSetup, Metrics,
+    MetricsSetup, OwnPaths, PRE_LAUNCH_LIMIT, PasswordCost, Players, PlayersSetup, Running, Schedule,
+    ScheduleSetup, ScheduleTask, Servers, Setup, Sources, Statistics, Supervision, Switched, Takeover, Tools,
+    ToolsHook, ToolsSetup, Updates, UpdatesSetup,
 };
 use observer_artifacts::Http;
 use observer_artifacts::catalog::Catalog;
@@ -20,6 +20,7 @@ use observer_artifacts::releases::{ReleaseKey, Releases};
 use observer_domain::audit::StopSource;
 use observer_domain::features::Feature;
 use observer_fxserver::console::{ConsoleLog, LogLimits};
+use observer_fxserver::supervisor::Counting;
 use observer_store::{BackupKind, ChangesDatabase, Database};
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
@@ -30,7 +31,7 @@ use tracing::{error, info, warn};
 use crate::config::{Config, DataPaths, HttpConfig};
 use crate::shutdown::{Signals, StopRequest};
 use crate::update::{self, Arrival, Probation, Relaunch, Returned};
-use crate::{BUILD, lock, logging, setup};
+use crate::{BUILD, lock, logging, setup, sftp};
 
 /// In a build with the `test-catalog` feature, the version this Observer takes itself for, so
 /// that the test release is newer; the Observer it starts does not inherit it.
@@ -161,6 +162,8 @@ async fn run_until_stopped(
                 backups: backups_hook.clone(),
             }));
             settings.pre_launch_limit = PRE_LAUNCH_LIMIT;
+            let switches = features.clone();
+            settings.counting = Some(Counting::new(move || switches.runs(Feature::Debug)));
             // A hung server's snapshot is the diagnostics' to read.
             if !diagnosing_at_start {
                 settings.hang_snapshot = None;
@@ -310,6 +313,14 @@ async fn run_until_stopped(
         _ => (None, None),
     };
 
+    // Before FXServer boots, so that a start that counts is read from its first report.
+    let (debug, debugging) = DebugCounts::start(DebugSetup {
+        db: db.clone(),
+        clock: clock.clone(),
+        supervision: supervision.clone(),
+        features: features.clone(),
+    })
+    .await?;
     // Before FXServer boots, so that no player gets past the bans.
     let (bans, banning) = Bans::start(BansSetup {
         db: db.clone(),
@@ -345,21 +356,21 @@ async fn run_until_stopped(
     if let Err(error) = observer_sftp::sweep_uploads(&files).await {
         warn!(%error, "the temporary SFTP uploads could not all be removed");
     }
-    // Right after the panel's port, so that a port taken stops Observer before FXServer starts.
-    let sftp_listener = match &config.sftp {
+    let sftp_port = sftp::Port {
+        features: features.clone(),
+        files: files.clone(),
+        refused: own_paths.paths().to_vec(),
+    };
+    // Right after the panel's port, so that a port `observer.toml` names and another program
+    // holds stops Observer before FXServer starts. An address given in the panel is opened by
+    // the port's keeper instead: taken, it holds SFTP back, never Observer.
+    let sftp_pinned = match &config.sftp {
         Some(sftp) if features.runs(Feature::Sftp) => {
-            let host_key = observer_sftp::host_key(&files)
-                .await
-                .context("cannot read or create the SFTP host key")?;
-            let listener = TcpListener::bind(sftp.listen)
+            let serving = sftp_port
+                .open(sftp.listen)
                 .await
                 .with_context(|| format!("cannot listen for SFTP on {}", sftp.listen))?;
-            info!(
-                listen = %sftp.listen,
-                fingerprint = %host_key.fingerprint(observer_sftp::FINGERPRINT),
-                "SFTP listening"
-            );
-            Some((listener, host_key))
+            Some(serving)
         }
         _ => None,
     };
@@ -383,6 +394,7 @@ async fn run_until_stopped(
         files: files.clone(),
         tools: tools.clone(),
         features: features.clone(),
+        debug,
         diagnostics,
         metrics: metrics.clone(),
         players,
@@ -431,24 +443,7 @@ async fn run_until_stopped(
         files.clone(),
         stop.clone(),
     ));
-    let sftp = sftp_listener.map(|(listener, host_key)| {
-        let closing = CancellationToken::new();
-        let task = tokio::spawn(observer_sftp::serve(
-            listener,
-            files.clone(),
-            host_key,
-            own_paths.paths().to_vec(),
-            closing.clone(),
-        ));
-        features.switched(Feature::Sftp, move || async move {
-            closing.cancel();
-            match task.await {
-                Ok(Ok(())) => {}
-                Ok(Err(error)) => error!(%error, "the SFTP server stopped with an error"),
-                Err(error) => error!(%error, "the SFTP server task failed"),
-            }
-        })
-    });
+    let sftp = tokio::spawn(sftp::keep(sftp_port, sftp_pinned, stop.clone()));
     let audit_feed = tokio::spawn(publish_audit(audit.clone(), stop.clone()));
     let host = Host::start(HostSetup {
         args,
@@ -521,12 +516,15 @@ async fn run_until_stopped(
     close(dropping).await;
     // After the supervision: the bridge answers no one once FXServer is down.
     banning.close().await;
+    debugging.close().await;
     // After the supervision: a stop of FXServer ends a snapshot's job, which this joins.
     close(following).await;
     // After the supervision, so that FXServer's stop is in the statistics.
     close(sampling).await;
     stop.cancel();
-    close(sftp).await;
+    if let Err(error) = sftp.await {
+        error!(%error, "the task that keeps SFTP's port failed");
+    }
     live.shutdown().await;
 
     join(server, [backups, upkeep, audit_feed]).await?;

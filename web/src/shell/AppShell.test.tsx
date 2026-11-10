@@ -7,7 +7,7 @@ import {
     createRouter,
     RouterProvider,
 } from '@tanstack/react-router';
-import { cleanup, render, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { meQuery } from '../api/auth';
@@ -22,6 +22,8 @@ import { Realtime } from '../live/realtime';
 import { AppShell } from './AppShell';
 
 const OWNER: Me = { id: 1, username: 'ada', isOwner: true, permissions: 'fff', mustChangePassword: false };
+
+const rect = (top: number, bottom: number) => ({ top, bottom }) as DOMRect;
 
 /** The signed-in shell around an Overview that stands in by its heading, its socket never answering. */
 const shell = (me: Me = OWNER) => {
@@ -90,28 +92,94 @@ describe('AppShell', () => {
         expect(moderator.getByRole('button', { name: en.online.show('0') })).not.toBeNull();
     });
 
-    it('should list the sections in their groups, the map, the bans and the statistics after the players', async () => {
+    it('should list the sections by what one comes for: a player, the server, what it did, its upkeep', async () => {
         const every = Object.values(Permission).reduce((mask, permission) => mask | permission, 0n);
         const { findByRole, getByRole } = shell({ ...OWNER, permissions: formatPermissions(every) });
         await findByRole('heading', { name: 'Overview' });
 
-        const sections = within(getByRole('navigation', { name: en.nav.sections }));
-        expect(sections.getAllByRole('link').map((link) => link.textContent)).toEqual([
+        const nav = getByRole('navigation', { name: en.nav.sections });
+        expect(
+            within(nav)
+                .getAllByRole('link')
+                .map((link) => link.textContent),
+        ).toEqual([
             en.nav.overview,
             en.nav.console,
-            en.nav.schedule,
             en.nav.players,
             en.nav.map,
             en.nav.bans,
-            en.nav.statistics,
-            en.nav.diagnostics,
-            en.nav.changes,
-            en.nav.drops,
+            en.nav.schedule,
+            en.nav.cfg,
             en.nav.artifacts,
             en.nav.backups,
+            en.nav.changes,
+            en.nav.statistics,
+            en.nav.drops,
+            en.nav.diagnostics,
             en.nav.tools,
             en.nav.audit,
         ]);
+        expect([...nav.querySelectorAll('.nav-group')].map((group) => group.textContent)).toEqual([
+            en.nav.groupPlayers,
+            en.nav.groupServer,
+            en.nav.groupInsights,
+            en.nav.groupDebug,
+            en.nav.maintenance,
+        ]);
+    });
+
+    it("should scroll the rail to the current page's entry when a short window hides it", async () => {
+        // A rail 300 px tall whose current entry lies 52 px under its edge, and moves as it scrolls.
+        vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
+            if (this.matches('nav')) {
+                return rect(100, 400);
+            }
+            const scrolled = this.closest('nav')?.scrollTop ?? 0;
+            return this.getAttribute('aria-current') === 'page'
+                ? rect(420 - scrolled, 452 - scrolled)
+                : rect(0, 0);
+        });
+
+        const { findByRole, getByRole } = shell();
+        await findByRole('heading', { name: 'Overview' });
+
+        expect(getByRole('link', { name: en.nav.overview }).getAttribute('aria-current')).toBe('page');
+        expect(getByRole('navigation', { name: en.nav.sections }).scrollTop).toBe(60);
+        vi.restoreAllMocks();
+    });
+
+    it('should keep the Debug pages folded under one line until it is opened, and remember that', async () => {
+        const every = Object.values(Permission).reduce((mask, permission) => mask | permission, 0n);
+        const me = { ...OWNER, permissions: formatPermissions(every) };
+        const first = shell(me);
+        await first.findByRole('heading', { name: 'Overview' });
+        const nav = within(first.getByRole('navigation', { name: en.nav.sections }));
+        const fold = nav.getByRole('button', { name: en.nav.groupDebug });
+
+        expect(fold.getAttribute('aria-expanded')).toBe('false');
+        expect(nav.queryByRole('link', { name: en.nav.debugEvents })).toBeNull();
+        fireEvent.click(fold);
+
+        expect(fold.getAttribute('aria-expanded')).toBe('true');
+        expect(
+            [en.nav.debugEvents, en.nav.debugBags, en.nav.debugHttp].map((name) =>
+                nav.getByRole('link', { name }).getAttribute('href'),
+            ),
+        ).toEqual(['/debug/events', '/debug/state-bags', '/debug/http']);
+        cleanup();
+
+        // The same browser, later: it was left open.
+        const again = shell(me);
+        await again.findByRole('heading', { name: 'Overview' });
+        expect(again.getByRole('link', { name: en.nav.debugEvents })).not.toBeNull();
+        fireEvent.click(again.getByRole('button', { name: en.nav.groupDebug }));
+        expect(again.queryByRole('link', { name: en.nav.debugEvents })).toBeNull();
+        cleanup();
+
+        // An account without the diagnostics permission has no Debug group at all.
+        const without = shell({ ...OWNER, id: 2, isOwner: false, permissions: '1' });
+        await without.findByRole('heading', { name: 'Overview' });
+        expect(without.queryByRole('button', { name: en.nav.groupDebug })).toBeNull();
     });
 
     it('should keep the settings at the foot of the rail, for every account', async () => {

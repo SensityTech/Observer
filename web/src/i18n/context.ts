@@ -18,6 +18,8 @@ export type I18n = {
         milliseconds: (ms: number) => string;
         dateTime: (date: Date, options?: Intl.DateTimeFormatOptions) => string;
         duration: (seconds: number) => string;
+        /** A running time, to the second under an hour: `2 min 32 s`. */
+        elapsed: (seconds: number) => string;
         /** Play time, in hours past the first: `2h 14m`, `312h`; a `signed` difference `+2h 14m`. */
         playTime: (ms: number, options?: { signed?: boolean }) => string;
         /** An API timestamp (RFC 3339) as tables show it, in local time. */

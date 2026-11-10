@@ -28,6 +28,16 @@ export const scanArchetypes = () => send<ToolRun>('POST', `${PATH}/scan`);
 export const fixArchetypes = (plan: string) =>
     send<ToolRun>('POST', `${PATH}/fix`, { plan } satisfies ToolFixRequest);
 
+/**
+ * Keeps the plan for the next start of FXServer, which writes it before FXServer starts if a
+ * fresh scan plans exactly that. Refused with `plan_changed` when the plan is not the latest report's.
+ */
+export const stageArchetypes = (plan: string) =>
+    send<ToolsView>('POST', `${PATH}/stage`, { plan } satisfies ToolFixRequest);
+
+/** Drops the fix staged for the next start. */
+export const unstageArchetypes = () => send<ToolsView>('DELETE', `${PATH}/stage`);
+
 /** Puts back what the scope names, with FXServer stopped. */
 export const undoArchetypes = (scope: ToolUndoScope) =>
     send<ToolRun>('POST', `${PATH}/undo`, { scope } satisfies ToolUndoRequest);

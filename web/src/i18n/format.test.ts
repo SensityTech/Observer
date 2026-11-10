@@ -7,6 +7,7 @@ import {
     formatClock,
     formatDay,
     formatDuration,
+    formatElapsed,
     formatMilliseconds,
     formatNumber,
     formatPercent,
@@ -122,6 +123,18 @@ describe('formatMilliseconds', () => {
 describe('formatNumber', () => {
     it('should group thousands for the locale', () => {
         expect(formatNumber('en', 1284)).toBe('1,284');
+    });
+});
+
+describe('formatElapsed', () => {
+    it('should count a running time to the second under an hour, never ahead of it', () => {
+        expect(formatElapsed('en', 0.9)).toBe('0 s');
+        expect(formatElapsed('en', 59.9)).toBe('59 s');
+        expect(formatElapsed('en', 152)).toBe('2 min 32 s');
+        expect(formatElapsed('en', 360)).toBe('6 min');
+        expect(formatElapsed('en', 3599)).toBe('59 min 59 s');
+        expect(formatElapsed('en', 2 * 3600 + 14 * 60)).toBe('2h 14m');
+        expect(formatElapsed('en', -5)).toBe('0 s');
     });
 });
 

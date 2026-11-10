@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Lock } from 'lucide-react';
+import { Link } from '@tanstack/react-router';
+import { ArrowRight, Lock } from 'lucide-react';
 import { useId, useState } from 'react';
 
 import { featuresQuery, switchFeature } from '../api/features';
@@ -13,7 +14,7 @@ import type { Messages } from '../i18n/en';
 import { errorMessage } from '../i18n/errors';
 import { useI18n } from '../i18n/I18nProvider';
 import { cn } from '../lib/cn';
-import { anchorOf, SWITCH_OF } from './catalog';
+import { anchorOf, CATEGORIES, opens, SWITCH_OF } from './catalog';
 import { CategoryHead } from './Row';
 
 type Outcome = { tone: 'success' | 'danger'; message: string };
@@ -38,16 +39,16 @@ const stateOf = (t: Messages, view: FeatureView): { led: string; text: string } 
     if (view.held === 'notConfigured') {
         return { led: 'led-warning', text: words.notConfigured };
     }
+    if (view.held === 'portRefused') {
+        return { led: 'led-down', text: words.portRefused };
+    }
     if (view.held === 'requires') {
         return {
             led: 'led-warning',
             text: words.requires(view.requires.map((feature) => t.settings.items[SWITCH_OF[feature]].label)),
         };
     }
-    return {
-        led: 'led-pending',
-        text: view.turnOn === 'nextServerStart' ? words.nextServerStart : words.observerRestart,
-    };
+    return { led: 'led-pending', text: words.pending[view.turnOn] };
 };
 
 /**
@@ -134,6 +135,29 @@ export function FeatureSettings() {
     );
 }
 
+/** What keeps SFTP from listening, in a line, and the way to its address for who may open that page. */
+function SftpWaits({ refused }: { refused: boolean }) {
+    const { t } = useI18n();
+    const me = useMe();
+    const words = t.settings.sftpAddress;
+    const files = CATEGORIES.find((category) => category.id === 'files');
+    return (
+        <p className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-box bg-warning-soft px-3 py-2 text-small text-warning">
+            {refused ? words.refusedShort : words.waits}
+            {files !== undefined && opens(me, files) && (
+                <Link
+                    to="/settings/$category"
+                    params={{ category: 'files' }}
+                    className="inline-flex items-center gap-1 font-medium underline underline-offset-2 max-md:min-h-11"
+                >
+                    {refused ? words.see : words.give}
+                    <ArrowRight size={14} strokeWidth={1.5} aria-hidden="true" />
+                </Link>
+            )}
+        </p>
+    );
+}
+
 function FeatureCard({
     view,
     canSwitch,
@@ -197,15 +221,23 @@ function FeatureCard({
                     </li>
                 ))}
             </ul>
+            {view.feature === 'sftp' &&
+                view.enabled &&
+                (view.held === 'notConfigured' || view.held === 'portRefused') && (
+                    <SftpWaits refused={view.held === 'portRefused'} />
+                )}
             {reach.whileOff.length > 0 && !view.enabled && (
                 <p className="text-small text-ink-3">
                     {words.whileOff(reach.whileOff.map(({ task }) => words.tasks[task]))}
                 </p>
             )}
             <p className="mt-auto flex flex-wrap items-center gap-x-2 gap-y-1 border-t border-line pt-2.5 text-small">
-                <span className={cn('led', state.led)} aria-hidden="true" />
-                <span id={`${id}-state`} className={view.enabled ? 'text-ink-2' : 'text-ink-3'}>
-                    {state.text}
+                {/* The LED stays beside the first line of a state that takes two. */}
+                <span className="flex min-w-0 items-start gap-2">
+                    <span className={cn('led mt-1.25', state.led)} aria-hidden="true" />
+                    <span id={`${id}-state`} className={view.enabled ? 'text-ink-2' : 'text-ink-3'}>
+                        {state.text}
+                    </span>
                 </span>
                 <span className="ml-auto text-ink-3">
                     {view.enabled ? words.turnOff[view.turnOff] : words.turnOn[view.turnOn]}

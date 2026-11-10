@@ -5,6 +5,7 @@ import { useState, type MouseEvent } from 'react';
 
 import type { MapBounds } from '../api/generated/MapBounds';
 import type { MapImage } from '../api/generated/MapImage';
+import type { MapImagery } from '../api/generated/MapImagery';
 import type { MapPlayer } from '../api/generated/MapPlayer';
 import type { MapSettings } from '../api/generated/MapSettings';
 import type { MapView } from '../api/generated/MapView';
@@ -30,6 +31,7 @@ type Outcome = { tone: 'success' | 'danger'; message: string };
 type Way = 'players' | 'edges';
 type Edges = Record<keyof MapBounds, string>;
 const EDGES: (keyof MapBounds)[] = ['west', 'east', 'south', 'north'];
+const IMAGERIES: MapImagery[] = ['atlas', 'satellite', 'roads', 'image', 'grid'];
 const WAYS: Way[] = ['players', 'edges'];
 
 /** The live map's image, where it sits in the game, its colours and how often positions come. */
@@ -111,6 +113,7 @@ function MapForm({ view }: { view: MapView }) {
     const client = useQueryClient();
     const canManage = allows(me, Permission.SettingsManage);
     const stored = view.settings;
+    const [imagery, setImagery] = useState(stored.imagery);
     const [edges, setEdges] = useState<Edges>(edgesOf(stored.bounds));
     const [hours, setHours] = useState({
         newHours: String(stored.newHours),
@@ -130,6 +133,7 @@ function MapForm({ view }: { view: MapView }) {
         newHours < 1 ||
         veteranHours <= newHours;
     const changed = [
+        ...(imagery !== stored.imagery ? (['mapImagery'] as const) : []),
         ...(JSON.stringify(bounds) !== JSON.stringify(stored.bounds) ? (['mapBounds'] as const) : []),
         ...(newHours !== stored.newHours || veteranHours !== stored.veteranHours
             ? (['mapTiers'] as const)
@@ -137,7 +141,7 @@ function MapForm({ view }: { view: MapView }) {
         ...(every !== stored.everySeconds ? (['mapCadence'] as const) : []),
     ];
     const save = useMutation({
-        mutationFn: () => saveMapSettings({ bounds, newHours, veteranHours, everySeconds: every }),
+        mutationFn: () => saveMapSettings({ imagery, bounds, newHours, veteranHours, everySeconds: every }),
         onMutate: () => setOutcome(null),
         onSuccess: (saved) => {
             client.setQueryData(mapQuery.queryKey, { ...view, settings: saved });
@@ -148,6 +152,7 @@ function MapForm({ view }: { view: MapView }) {
         onError: (error) => setOutcome({ tone: 'danger', message: errorMessage(t, error) }),
     });
     const reset = (settings: MapSettings) => {
+        setImagery(settings.imagery);
         setEdges(edgesOf(settings.bounds));
         setHours({ newHours: String(settings.newHours), veteranHours: String(settings.veteranHours) });
         setEvery(settings.everySeconds);
@@ -173,6 +178,19 @@ function MapForm({ view }: { view: MapView }) {
             {!canManage && <Notice>{words.readOnly}</Notice>}
             {outcome !== null && <Notice tone={outcome.tone}>{outcome.message}</Notice>}
             <SettingsGroup title={t.settings.categories.map.name}>
+                <fieldset disabled={!canManage} className="contents">
+                    <SettingRow id="mapImagery" changed={canManage && changed.includes('mapImagery')}>
+                        {() => (
+                            <Segmented
+                                label={t.settings.items.mapImagery.label}
+                                choices={IMAGERIES}
+                                value={imagery}
+                                words={words.imagery}
+                                onChange={setImagery}
+                            />
+                        )}
+                    </SettingRow>
+                </fieldset>
                 <SettingRow id="mapImage">{() => <ImageRow image={view.image} />}</SettingRow>
                 <fieldset disabled={!canManage} className="contents">
                     <SettingRow id="mapBounds" changed={canManage && changed.includes('mapBounds')}>

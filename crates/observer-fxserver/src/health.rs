@@ -1,7 +1,8 @@
 //! How Observer tells a running FXServer from a stuck one: its HTTP endpoints, answered off the
 //! main thread, the main thread's tick count in `/perf/`, and the bridge's heartbeat, which only
-//! comes while the main loop runs. The same probes feed the statistics: `/perf/` and
-//! `/players.json` are read in the middle of each five-second slot, once for both.
+//! comes while the main loop runs. Until the cfg has run, the resources FXServer starts stand in for
+//! the heartbeat. The same probes feed the statistics: `/perf/` and `/players.json` are read in the
+//! middle of each five-second slot, once for both.
 
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
@@ -127,6 +128,10 @@ pub enum Verdict {
 pub struct Health {
     spawned: Instant,
     heartbeat: Option<Instant>,
+    /// When the bridge first reported in, which it does once the cfg has run.
+    cfg_ran: Option<Instant>,
+    /// When FXServer last started a resource of its cfg.
+    progress: Option<Instant>,
     http: Option<Instant>,
     /// The last `svMain` tick count, and whether it moved since the read before.
     ticks: Option<u64>,
@@ -138,6 +143,8 @@ pub struct Health {
     bark: bool,
     /// When hang detection was last turned on, or given another delay, during this run.
     armed: Option<Instant>,
+    /// Until when a start is borne with however silent: someone said it needs longer.
+    extended: Option<Instant>,
 }
 
 impl Health {
@@ -145,6 +152,8 @@ impl Health {
         Self {
             spawned,
             heartbeat: None,
+            cfg_ran: None,
+            progress: None,
             http: None,
             ticks: None,
             stalled: false,
@@ -152,6 +161,7 @@ impl Health {
             refusals: 0,
             bark: false,
             armed: None,
+            extended: None,
         }
     }
 
@@ -165,8 +175,41 @@ impl Health {
     }
 
     pub fn heartbeat(&mut self, now: Instant) {
+        self.cfg_ran.get_or_insert(now);
         self.heartbeat = Some(now);
         self.bark = false;
+    }
+
+    /// FXServer started a resource at `at`. It runs its cfg before any thread of the bridge, so no
+    /// heartbeat comes during a start however long it takes: a resource started is what shows the
+    /// start going on.
+    pub fn progressed(&mut self, at: Instant) {
+        self.progress = self.progress.max(Some(at));
+    }
+
+    /// Whether the bridge has reported in since the spawn: the cfg has run.
+    pub fn cfg_ran(&self) -> bool {
+        self.cfg_ran.is_some()
+    }
+
+    /// The start is not taken for stuck before `until`, whatever its silence.
+    pub fn extend(&mut self, until: Instant) {
+        self.extended = self.extended.max(Some(until));
+    }
+
+    /// When the start is taken for stuck, should FXServer start no resource until then. None once
+    /// the cfg has run, which leaves the watch to the heartbeat, and with no limit to a silence.
+    pub fn stuck_at(&self, limits: &HealthLimits) -> Option<Instant> {
+        if self.cfg_ran.is_some() {
+            return None;
+        }
+        let silent_since = self
+            .progress
+            .max(self.armed)
+            .map_or(self.spawned, |last| last.max(self.spawned));
+        let stuck = silent_since.checked_add(limits.heartbeat_fatal)?;
+        let grace = self.spawned.checked_add(limits.boot_grace)?;
+        Some(stuck.max(grace).max(self.extended.unwrap_or(stuck)))
     }
 
     pub fn bark(&mut self) {
@@ -210,10 +253,19 @@ impl Health {
             .armed
             .map_or(Duration::MAX, |armed| now.saturating_duration_since(armed));
         if now.saturating_duration_since(self.spawned) >= limits.boot_grace {
-            if heartbeat.min(armed) >= limits.heartbeat_fatal {
+            // A start is stuck once it starts no resource for that long, not once it took that long.
+            let stuck = match self.cfg_ran {
+                Some(_) => heartbeat.min(armed) >= limits.heartbeat_fatal,
+                None => self.stuck_at(limits).is_some_and(|at| now >= at),
+            };
+            if stuck {
                 return Verdict::Hung(HangCause::NoHeartbeat);
             }
-            if http.min(armed) >= limits.http_fatal {
+            // The cfg opens the HTTP endpoint when it comes to that line: HTTP is owed once it ran.
+            let unanswered = self
+                .cfg_ran
+                .map(|ran| silent(Some(self.http.map_or(ran, |http| http.max(ran)))));
+            if unanswered.is_some_and(|unanswered| unanswered.min(armed) >= limits.http_fatal) {
                 return Verdict::Hung(HangCause::NoHttp);
             }
         }
@@ -696,6 +748,126 @@ mod tests {
         assert_eq!(
             health.verdict(start + secs(60), &LIMITS),
             Verdict::Hung(HangCause::NoHeartbeat)
+        );
+    }
+
+    #[test]
+    fn a_start_is_hung_once_it_starts_no_resource_for_the_delay_however_long_it_takes() {
+        let limits = HealthLimits::default().under(&launch(true, 360));
+        let start = Instant::now();
+        let mut health = Health::new(start);
+        // Twenty minutes of resources, the slowest one five minutes on a cold cache.
+        for second in [15, 120, 420, 700, 1000, 1200] {
+            health.progressed(start + secs(second));
+            assert_eq!(
+                health.verdict(start + secs(second + 299), &limits),
+                Verdict::Starting,
+                "{second}"
+            );
+        }
+
+        // Told late, an earlier one takes nothing back: the latest counts.
+        health.progressed(start + secs(900));
+        assert_eq!(health.verdict(start + secs(1559), &limits), Verdict::Starting);
+        assert_eq!(
+            health.verdict(start + secs(1560), &limits),
+            Verdict::Hung(HangCause::NoHeartbeat)
+        );
+    }
+
+    #[test]
+    fn a_start_given_more_time_is_not_hung_before_that_runs_out() {
+        let limits = HealthLimits::default().under(&launch(true, 360));
+        let start = Instant::now();
+        let mut health = Health::new(start);
+        health.progressed(start + secs(100));
+        assert_eq!(health.stuck_at(&limits), Some(start + secs(460)));
+
+        health.extend(start + secs(1360));
+        health.extend(start + secs(900));
+        assert_eq!(health.stuck_at(&limits), Some(start + secs(1360)));
+        assert_eq!(health.verdict(start + secs(1359), &limits), Verdict::Starting);
+        assert_eq!(
+            health.verdict(start + secs(1360), &limits),
+            Verdict::Hung(HangCause::NoHeartbeat)
+        );
+
+        // A resource started late in the time given: its own silence counts from there.
+        health.progressed(start + secs(1300));
+        assert_eq!(health.stuck_at(&limits), Some(start + secs(1660)));
+        assert_eq!(health.verdict(start + secs(1659), &limits), Verdict::Starting);
+    }
+
+    #[test]
+    fn when_a_start_is_stuck_is_said_only_while_its_cfg_runs_under_hang_detection() {
+        let start = Instant::now();
+        let mut health = Health::new(start);
+        let off = HealthLimits::default().under(&launch(false, 360));
+        let short = HealthLimits::default().under(&launch(true, 60));
+        let limits = HealthLimits::default().under(&launch(true, 360));
+
+        assert_eq!(health.stuck_at(&off), None);
+        assert_eq!(health.stuck_at(&limits), Some(start + secs(360)));
+        assert_eq!(
+            health.stuck_at(&HealthLimits {
+                boot_grace: secs(90),
+                ..short
+            }),
+            Some(start + secs(90)),
+            "never during the grace of a start"
+        );
+        health.arm(start + secs(200));
+        assert_eq!(health.stuck_at(&limits), Some(start + secs(560)));
+
+        health.heartbeat(start + secs(210));
+        assert_eq!(health.stuck_at(&limits), None, "the heartbeat watches from here");
+    }
+
+    #[test]
+    fn once_the_cfg_has_run_only_the_heartbeat_tells_the_main_loop_runs() {
+        let limits = HealthLimits::default().under(&launch(true, 360));
+        let start = Instant::now();
+        let mut health = Health::new(start);
+        health.probed(&http_ok(), start + secs(10));
+        health.progressed(start + secs(300));
+        health.heartbeat(start + secs(600));
+        assert!(health.cfg_ran());
+        for second in (600..1200).step_by(3) {
+            health.probed(&http_ok(), start + secs(second));
+        }
+        // A resource restarted from the console, which the main loop runs before it sticks.
+        health.progressed(start + secs(900));
+
+        assert_eq!(
+            health.verdict(start + secs(959), &limits),
+            Verdict::Degraded(vec![Problem::HeartbeatLate])
+        );
+        assert_eq!(
+            health.verdict(start + secs(960), &limits),
+            Verdict::Hung(HangCause::NoHeartbeat)
+        );
+    }
+
+    #[test]
+    fn http_is_owed_from_the_end_of_the_cfg_which_opens_its_endpoint() {
+        let limits = HealthLimits::default().under(&launch(true, 360));
+        let start = Instant::now();
+        let mut health = Health::new(start);
+        // A long start whose cfg adds the endpoint last: HTTP never answered meanwhile.
+        for second in (60..=1200).step_by(60) {
+            health.progressed(start + secs(second));
+            assert_eq!(health.verdict(start + secs(second), &limits), Verdict::Starting);
+        }
+        health.heartbeat(start + secs(1200));
+        for second in (1200..1600).step_by(3) {
+            health.heartbeat(start + secs(second));
+        }
+
+        assert_eq!(health.verdict(start + secs(1201), &limits), Verdict::Starting);
+        assert_eq!(health.verdict(start + secs(1559), &limits), Verdict::Starting);
+        assert_eq!(
+            health.verdict(start + secs(1560), &limits),
+            Verdict::Hung(HangCause::NoHttp)
         );
     }
 

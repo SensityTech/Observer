@@ -2,7 +2,7 @@
 //! setup's checks of a folder and of its cfg, which read and never write. Observer writes into the
 //! folder only SFTP uploads and the fixes of the server tools the owner runs or turns on.
 
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::ffi::OsStr;
 use std::fs;
 use std::io;
@@ -42,6 +42,9 @@ pub struct Resources {
     categories: HashSet<String>,
     /// Resources with their manifest.
     manifested: u32,
+    /// The categories each resource with a manifest lies under, outermost first: FXServer starts
+    /// those and no other folder. Of two folders of one name, the first found.
+    under: HashMap<String, Vec<String>>,
     pub summary: ResourceSummary,
 }
 
@@ -50,6 +53,28 @@ impl Resources {
     pub fn holds(&self, name: &str) -> bool {
         let name = name.to_ascii_lowercase();
         self.names.contains(&name) || self.categories.contains(&name)
+    }
+
+    /// The resources `ensure <target>` starts, in lower case and in name order: the one of that
+    /// name, or every one under the category `[target]`. None when the folder holds no such
+    /// resource, as for one of the build's own.
+    pub fn started_by(&self, target: &str) -> Vec<String> {
+        let target = target.to_ascii_lowercase();
+        let mut started: Vec<String> = if target.starts_with('[') && target.ends_with(']') {
+            self.under
+                .iter()
+                .filter(|(_, categories)| categories.contains(&target))
+                .map(|(name, _)| name.clone())
+                .collect()
+        } else {
+            self.under
+                .get_key_value(&target)
+                .map(|(name, _)| name.clone())
+                .into_iter()
+                .collect()
+        };
+        started.sort_unstable();
+        started
     }
 
     /// How many resources hold `fxmanifest.lua` or `__resource.lua`.
@@ -100,6 +125,10 @@ pub fn walk(data: &Path) -> Resources {
             let manifest = MANIFESTS.iter().any(|manifest| path.join(manifest).is_file());
             if manifest {
                 resources.manifested += 1;
+                resources
+                    .under
+                    .entry(lower.clone())
+                    .or_insert_with(|| relative.split('/').skip(1).map(str::to_ascii_lowercase).collect());
             }
             if !manifest && resources.summary.without_manifest.len() < MAX_UNMANIFESTED {
                 resources.summary.without_manifest.push(name.clone());
@@ -468,6 +497,30 @@ mod tests {
         }
         assert!(!resources.holds("local"));
         assert!(!resources.holds("README.md"));
+    }
+
+    #[test]
+    fn a_command_starts_the_resource_of_its_name_or_every_one_under_its_category() {
+        let dir = data(&[
+            "chat",
+            "[Maps]/docks",
+            "[Maps]/[interiors]/Bank",
+            "[Maps]/drafts!",
+            "[jobs]/police",
+        ]);
+
+        let resources = walk(dir.path());
+
+        assert_eq!(resources.started_by("[maps]"), ["bank", "docks"]);
+        assert_eq!(resources.started_by("[Interiors]"), ["bank"]);
+        assert_eq!(resources.started_by("Chat"), ["chat"]);
+        assert_eq!(
+            resources.started_by("drafts"),
+            Vec::<String>::new(),
+            "no manifest"
+        );
+        assert_eq!(resources.started_by("sessionmanager"), Vec::<String>::new());
+        assert_eq!(resources.started_by("[gone]"), Vec::<String>::new());
     }
 
     #[test]

@@ -2,6 +2,7 @@
 //! selected build, the status the panel shows of it, the console it fills, the commands operators
 //! send it, the console log files, and the server setup's checks of a folder and its cfg.
 
+mod cfg;
 mod setup;
 
 use std::collections::{HashMap, VecDeque};
@@ -18,14 +19,16 @@ use observer_domain::launch::{Platform, StoredLaunch};
 use observer_domain::permissions::Permissions;
 use observer_domain::schedule::RestartSource;
 use observer_domain::server::{
-    CommandAck, CommandRefusal, ConsoleLine, ConsoleSnapshot, Delivery, HangCause, HealthProblem,
-    LINE_MASKED, LINE_NO_EOL, LINE_TRUNCATED, LaunchReadiness, LineKind, LogFile, PlayerCount, ServerState,
-    ServerStatus, StateCause,
+    AssetMemory, CommandAck, CommandRefusal, ConsoleLine, ConsoleSnapshot, Delivery, HangCause,
+    HealthProblem, HeavyAsset, LINE_MASKED, LINE_NO_EOL, LINE_TRUNCATED, LaunchReadiness, LineKind, LogFile,
+    MissingFile, PlayerCount, ServerState, ServerStatus, SlowResource, StartCommand, StartProgress,
+    StartWarnings, StartedResource, StateCause,
 };
 use observer_fxserver::bridge::BridgeEvent;
 use observer_fxserver::console::{self as fx_console, ConsoleHub, ConsoleLog, LineFlags};
 use observer_fxserver::health;
 use observer_fxserver::launch::ServerLaunch;
+use observer_fxserver::start as fx_start;
 use observer_fxserver::stdin::{self, StdinError, UserCommand};
 use observer_fxserver::supervisor::{
     self as fx, Cause, ControlError, EventKind, Settings, State, Supervisor,
@@ -49,6 +52,9 @@ use crate::{Accounts, Caller, Clock, Error, Servers};
 const OBSERVER: &str = "observer";
 /// Who they name for someone at the host's own window, who signs in to nothing.
 const LOCAL: &str = "local";
+/// What a start is given when someone says it needs longer.
+#[expect(clippy::cast_possible_truncation, reason = "a quarter of an hour")]
+const EXTENSION_MINUTES: u32 = (fx::START_EXTENSION.as_secs() / 60) as u32;
 /// Who the console names for the schedule's notes.
 const SCHEDULE: &str = "schedule";
 /// Commands one user may send within a window.
@@ -384,6 +390,57 @@ impl Supervision {
     pub async fn stop_server(&self, caller: &Caller) -> Result<(), Error> {
         self.stop_by(&caller.username, Record::by(caller, AuditAction::ServerStopped))
             .await
+    }
+
+    /// What FXServer warned about as it started its resources, the latest time it was started.
+    pub fn start_warnings(&self) -> StartWarnings {
+        let Some((spawned_ms, warnings)) = self.inner.supervisor.start_warnings() else {
+            return StartWarnings {
+                started_at: None,
+                heavy: Vec::new(),
+                missing: Vec::new(),
+                truncated: false,
+            };
+        };
+        StartWarnings {
+            started_at: Timestamp::from_millisecond(spawned_ms).ok(),
+            heavy: warnings
+                .heavy
+                .into_iter()
+                .map(|asset| HeavyAsset {
+                    resource: asset.resource,
+                    file: asset.file,
+                    tenths: asset.tenths,
+                    memory: match asset.memory {
+                        fx_start::Memory::Physical => AssetMemory::Physical,
+                        fx_start::Memory::Virtual => AssetMemory::Virtual,
+                    },
+                    oversized: asset.oversized,
+                })
+                .collect(),
+            missing: warnings
+                .missing
+                .into_iter()
+                .map(|file| MissingFile {
+                    resource: file.resource,
+                    kind: file.kind,
+                    file: file.file,
+                    manifest: file.manifest,
+                    line: file.line,
+                })
+                .collect(),
+            truncated: warnings.truncated,
+        }
+    }
+
+    /// Gives the start under way more time before it is taken for stuck: a first start, or one
+    /// with a resource that takes longer than the hang delay, without changing the delay itself.
+    pub async fn extend_start(&self, caller: &Caller) -> Result<(), Error> {
+        let extended = self.inner.supervisor.extend_start(&caller.username).await;
+        let record = Record::by(caller, AuditAction::ServerStartExtended)
+            .details(json!({ "minutes": EXTENSION_MINUTES }));
+        self.record_control(record, &extended).await?;
+        extended.map_err(control_error)
     }
 
     /// Stops FXServer gracefully and starts it again with the stored settings, which must be fit
@@ -890,6 +947,39 @@ fn server_status(
         launch,
         name: status.name.clone(),
         port: status.port,
+        start: status.start.as_ref().map(|start| {
+            let progress = &start.progress;
+            StartProgress {
+                started: progress.started,
+                failed: progress.failed,
+                found: progress.found,
+                planned: progress.planned,
+                last: progress.last.as_ref().map(|last| StartedResource {
+                    name: last.name.clone(),
+                    at: at(last.at_ms),
+                    warnings: last.warnings,
+                }),
+                at: progress.at.as_ref().map(|command| StartCommand {
+                    file: command.file.clone(),
+                    line: command.line,
+                    target: command.target.clone(),
+                    since: at(command.since_ms),
+                    done: command.done,
+                    of: command.of,
+                    resource: command.resource.clone(),
+                }),
+                slowest: progress
+                    .slowest
+                    .iter()
+                    .map(|slow| SlowResource {
+                        name: slow.name.clone(),
+                        ms: u32::try_from(slow.ms).unwrap_or(u32::MAX),
+                    })
+                    .collect(),
+                stuck_at: start.stuck_at_ms.map(at),
+                extension_minutes: EXTENSION_MINUTES,
+            }
+        }),
     }
 }
 
@@ -993,6 +1083,7 @@ fn control_error(error: ControlError) -> Error {
             ErrorCode::ServerNotRunning.into()
         }
         ControlError::Stopping => ErrorCode::ServerStopping.into(),
+        ControlError::NotStarting => ErrorCode::ServerNotStarting.into(),
         ControlError::ShuttingDown => ErrorCode::ShuttingDown.into(),
         ControlError::Launch(error) => ApiError::new(ErrorCode::LaunchFailed)
             .with("reason", serde_json::to_value(error.failure).unwrap_or_default())

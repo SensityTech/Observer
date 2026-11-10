@@ -4,7 +4,9 @@
 mod artifacts;
 mod backups;
 mod bans;
+mod cfg;
 mod changes;
+mod debug;
 mod diagnostics;
 mod drops;
 mod features;
@@ -79,6 +81,7 @@ struct Server {
     _playing: PlayersTask,
     _dropping: DropsTask,
     _banning: BansTask,
+    _debugging: observer_app::DebugTask,
     _mapping: MapTask,
     _following: ChangesTask,
     _backing_up: BackupsTask,
@@ -138,12 +141,23 @@ impl Server {
         Self::reached_from(SocketAddr::from(([10, 0, 0, 2], 50_000)), &proxies).await
     }
 
-    /// A server whose every connection comes from `peer`, believing the proxies listed.
+    /// A server whose every connection comes from `peer`, believing the proxies listed. SFTP's
+    /// address is `observer.toml`'s, though nothing listens on it here.
+    async fn reached_from(peer: SocketAddr, proxies: &[TrustedProxy]) -> Self {
+        let sftp = SocketAddr::from(([127, 0, 0, 1], 41976));
+        Self::built(peer, proxies, Some(sftp)).await
+    }
+
+    /// A server whose `observer.toml` leaves SFTP's address to the panel.
+    async fn unpinned() -> Self {
+        Self::built(SocketAddr::from(([203, 0, 113, 7], 50_000)), &[], None).await
+    }
+
     #[expect(
         clippy::too_many_lines,
         reason = "every service the API stands on, started as Observer starts them"
     )]
-    async fn reached_from(peer: SocketAddr, proxies: &[TrustedProxy]) -> Self {
+    async fn built(peer: SocketAddr, proxies: &[TrustedProxy], sftp: Option<SocketAddr>) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let db = Database::open(dir.path().join("observer.sqlite3"), dir.path().join("backups"))
             .await
@@ -255,13 +269,20 @@ impl Server {
             schedule: schedule.status(),
         });
         let instance_id = db.instance_id().await.unwrap();
-        // Every feature on, SFTP's address given though nothing listens on it here.
         let features = Features::load(FeaturesSetup {
             db: db.clone(),
             clock: clock.clone(),
             host_off: BTreeSet::new(),
-            sftp: Some(SocketAddr::from(([127, 0, 0, 1], 41976))),
+            sftp,
             data_dir: dir.path().join("data"),
+        })
+        .await
+        .unwrap();
+        let (debug, debugging) = observer_app::DebugCounts::start(observer_app::DebugSetup {
+            db: db.clone(),
+            clock: clock.clone(),
+            supervision: supervision.clone(),
+            features: features.clone(),
         })
         .await
         .unwrap();
@@ -315,6 +336,7 @@ impl Server {
             files,
             tools,
             features,
+            debug,
             diagnostics: Some(diagnostics),
             metrics: Some(metrics.clone()),
             players: Some(players),
@@ -357,6 +379,7 @@ impl Server {
             _playing: playing,
             _dropping: dropping,
             _banning: banning,
+            _debugging: debugging,
             _mapping: mapping,
             _following: following,
             _backing_up: backing_up,
@@ -645,6 +668,9 @@ async fn every_response_carries_the_security_headers() {
     let csp = reply.headers[header::CONTENT_SECURITY_POLICY].to_str().unwrap();
     assert!(csp.contains("script-src 'self'"));
     assert!(csp.contains("frame-ancestors 'none'"));
+    // Images alone come from elsewhere, and from one host: the live map's tiles.
+    assert!(csp.contains("img-src 'self' data: blob: https://s.rsg.sc;"));
+    assert_eq!(csp.matches("https://").count(), 1);
     assert_eq!(reply.headers[header::X_CONTENT_TYPE_OPTIONS], "nosniff");
     assert_eq!(reply.headers[header::REFERRER_POLICY], "no-referrer");
     assert_eq!(reply.headers[header::CACHE_CONTROL], "no-store");
