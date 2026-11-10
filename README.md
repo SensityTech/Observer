@@ -268,7 +268,8 @@ trusted_proxies = []
 # A tracing filter, such as "debug" or "info,observer_web=debug".
 level = "info"
 
-# File access over SFTP stays off until this section exists (see "File access over SFTP").
+# Where SFTP listens. Without this section the owner gives the address in the panel instead; with
+# it, the panel cannot change it (see "File access over SFTP").
 # [sftp]
 # listen = "0.0.0.0:40126"
 
@@ -327,7 +328,7 @@ The backups are complete snapshots of the state database:
 | Port | What |
 |---|---|
 | 40125/TCP (`http.listen`) | The panel, its API and its websocket (`/api/ws`). |
-| 40126/TCP (`sftp.listen`), when set | File access over SFTP. Off unless `[sftp]` is in `observer.toml` and SFTP is not [turned off](#turning-features-off). |
+| 40126/TCP, or the port the owner gives | File access over SFTP. Closed until the owner gives its address in the panel or `[sftp]` names it in `observer.toml`, and while SFTP is [turned off](#turning-features-off). |
 | The cfg's endpoints, such as 30120 TCP and UDP | FXServer's own. Observer reads FXServer's HTTP endpoint (`/dynamic.json`, `/info.json`, `/perf/`, `/players.json`) on the cfg's first `endpoint_add_tcp`, through loopback when that one listens on every interface. |
 
 ### Outbound connections
@@ -511,18 +512,30 @@ over SFTP, and the checks still read them.
 ## File access over SFTP
 
 Observer can let people and CI pipelines read and change chosen parts of the server folder over SFTP,
-the file transfer of SSH. It is off until the owner adds this to `observer.toml` and restarts Observer:
+the file transfer of SSH. Its port stays closed until it has an address to listen on, which the owner
+gives in the panel, under **Settings → File access**, with the password again: every address of the
+host, the host itself only (for a tunnel), or one of its addresses, and a port. The port opens, moves
+and closes at once, without a restart of Observer or of FXServer, and each change is in the audit log.
+A port that does not open, because another program holds it for one, never stops Observer: the panel
+says what the host answered, and SFTP waits until the address is given again or changed.
+
+A host that wants the address out of the panel's reach names it in `observer.toml`:
 
 ```toml
 [sftp]
 listen = "0.0.0.0:40126"
 ```
 
-At that first start Observer makes the server's SSH host key and logs its fingerprint
-(`SFTP listening ... fingerprint=SHA256:...`); clients compare it on their first connection. Expose the
-port directly: behind a TCP proxy every client would share the proxy's address, which the lockouts and
-the pipelines' allowed networks rely on. Allow TCP 40126 in the firewall only for the networks that
-need it.
+The panel then shows that address and cannot change it; it is read at Observer's start, which stops if
+the port is taken. `GET /api/settings/sftp` (**View settings**) says where SFTP listens, whether the
+file names the address, whether the port is open and the fingerprint of its host key;
+`PUT /api/settings/sftp` is the owner's.
+
+The first time the port opens, Observer makes the server's SSH host key. Its fingerprint is beside the
+address in the panel and in the log (`SFTP listening ... fingerprint=SHA256:...`); clients compare it on
+their first connection. Expose the port directly: behind a TCP proxy every client would share the
+proxy's address, which the lockouts and the pipelines' allowed networks rely on. Allow the port in the
+firewall only for the networks that need it.
 
 In the panel, under **Files**:
 
@@ -808,8 +821,8 @@ what it opens: its port, its tasks, its files, its routes. Only the owner turns 
 - **Off applies at once.** By the time the API answers, the port is closed, the SFTP sessions have
   ended and the feature's tasks have stopped. Turning the players or the statistics off turns the drops
   off too: they are drawn from the players' sessions and from the runs the statistics record.
-- **On applies at the next start of Observer,** which restarts FXServer, except for the server tools,
-  which apply from the next start of FXServer. A port only opens when the host restarts Observer.
+- **On applies at the next start of Observer,** which restarts FXServer, with two exceptions: the
+  server tools apply from the next start of FXServer, and SFTP opens its port at once.
 - **What a feature left behind is still finished.** With SFTP off, the failed logins it counted still
   reach the audit log, and the uploads a crash cut short still leave the server folder at Observer's
   start. While a fix of the server tools is applied, the work before each start still puts back what it

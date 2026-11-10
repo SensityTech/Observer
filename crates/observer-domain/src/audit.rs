@@ -192,6 +192,9 @@ pub enum AuditAction {
     /// holds `enabled` and when it `applies` (`now` or `nextStart`). A refusal by the host's
     /// lock in `observer.toml` is `denied`.
     FeatureChanged,
+    /// The owner said where SFTP listens, or took its address back. `details` holds `listen` and
+    /// `previous`, each an address or null.
+    SftpListenChanged,
     /// `details` holds each changed setting with its value before and after, and
     /// `passwordChanged` when the manual source's password was replaced, never the password.
     BackupSettingsChanged,
@@ -235,7 +238,7 @@ pub enum AuditAction {
 }
 
 impl AuditAction {
-    pub const ALL: [Self; 109] = [
+    pub const ALL: [Self; 110] = [
         Self::SetupCompleted,
         Self::SetupLinkCreated,
         Self::LoginSucceeded,
@@ -331,6 +334,7 @@ impl AuditAction {
         Self::ToolFixStaged,
         Self::ToolFixUnstaged,
         Self::FeatureChanged,
+        Self::SftpListenChanged,
         Self::BackupSettingsChanged,
         Self::BackupDestinationCreated,
         Self::BackupDestinationChanged,
@@ -445,6 +449,7 @@ impl AuditAction {
             Self::ToolFixStaged => "tool_fix_staged",
             Self::ToolFixUnstaged => "tool_fix_unstaged",
             Self::FeatureChanged => "feature_changed",
+            Self::SftpListenChanged => "sftp_listen_changed",
             Self::BackupSettingsChanged => "backup_settings_changed",
             Self::BackupDestinationCreated => "backup_destination_created",
             Self::BackupDestinationChanged => "backup_destination_changed",

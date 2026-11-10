@@ -2,6 +2,8 @@
 //! off, and what runs in this Observer. A feature that is off when Observer starts is never built.
 //! Turning one off stops it at once: its routes and topics refuse, and the tasks handed to
 //! [`Features::switched`] close. Turning one on takes effect when [`Feature::turn_on`] says.
+//! SFTP alone also takes an address, from `observer.toml` or from the owner in the panel, and its
+//! port follows both the switch and the address while Observer runs.
 
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
@@ -15,7 +17,9 @@ use std::time::Duration;
 use jiff::Timestamp;
 use observer_domain::audit::{AuditAction, Outcome};
 use observer_domain::error::{ApiError, ErrorCode};
-use observer_domain::features::{Applies, Feature, FeatureHold, FeatureList, FeatureReach, FeatureView};
+use observer_domain::features::{
+    Applies, Feature, FeatureHold, FeatureList, FeatureReach, FeatureView, SftpListen,
+};
 use observer_store::Database;
 use observer_store::features as store;
 use serde_json::json;
@@ -29,6 +33,8 @@ use crate::{Caller, Clock, Error};
 
 /// How long turning a feature off waits for its tasks to close before it answers all the same.
 const CLOSE_WAIT: Duration = Duration::from_secs(20);
+/// How long a change waits to learn what became of SFTP's port before it answers all the same.
+const PORT_WAIT: Duration = Duration::from_secs(10);
 
 /// What [`Features::load`] works with.
 pub struct FeaturesSetup {
@@ -36,10 +42,36 @@ pub struct FeaturesSetup {
     pub clock: Clock,
     /// What `observer.toml` turns off: the panel cannot turn these on.
     pub host_off: BTreeSet<Feature>,
-    /// Where SFTP listens, when `observer.toml` says.
+    /// Where SFTP listens, when `observer.toml` says: the panel then cannot change it.
     pub sftp: Option<SocketAddr>,
     /// Observer's data folder, which holds the features' files.
     pub data_dir: PathBuf,
+}
+
+/// SFTP's address, and what became of its port.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct Sftp {
+    /// What `observer.toml` names.
+    pinned: Option<SocketAddr>,
+    /// What the owner gave in the panel.
+    chosen: Option<SocketAddr>,
+    /// The address the port is open on.
+    open: Option<SocketAddr>,
+    /// The fingerprint of the host key served on the open port.
+    fingerprint: Option<String>,
+    /// Why the port did not open on the address in force.
+    refused: Option<String>,
+}
+
+impl Sftp {
+    fn listen(&self) -> Option<SocketAddr> {
+        self.pinned.or(self.chosen)
+    }
+
+    /// Whether the port is where the address in force wants it, or was refused there.
+    fn settled(&self) -> bool {
+        self.refused.is_some() || self.open == self.listen()
+    }
 }
 
 /// The feature switches. Clones share them.
@@ -52,9 +84,11 @@ struct Inner {
     db: Database,
     clock: Clock,
     host_off: BTreeSet<Feature>,
-    sftp: Option<SocketAddr>,
+    sftp: watch::Sender<Sftp>,
+    /// The address in force as it changes, for whoever keeps the port.
+    sftp_listen: watch::Sender<Option<SocketAddr>>,
     data_dir: PathBuf,
-    /// What the owner chose and when; a feature missing keeps its default, on.
+    /// What the owner chose and when; a feature missing keeps its default.
     chosen: Mutex<BTreeMap<Feature, (bool, Timestamp)>>,
     /// What runs in this Observer: decided at its start, then narrowed by every feature turned
     /// off, and widened only by those whose switch applies at once.
@@ -75,11 +109,17 @@ impl Features {
             .into_iter()
             .map(|switch| (switch.feature, (switch.enabled, switch.changed_at)))
             .collect();
+        let sftp = Sftp {
+            pinned: setup.sftp,
+            chosen: setup.db.read(store::sftp_listen).await?,
+            ..Sftp::default()
+        };
         let inner = Inner {
             db: setup.db,
             clock: setup.clock,
             host_off: setup.host_off,
-            sftp: setup.sftp,
+            sftp_listen: watch::Sender::new(sftp.listen()),
+            sftp: watch::Sender::new(sftp),
             data_dir: setup.data_dir,
             chosen: Mutex::new(chosen),
             running: watch::Sender::new(BTreeSet::new()),
@@ -133,11 +173,12 @@ impl Features {
         .await
         .unwrap_or_default();
         let running = self.inner.running.borrow().clone();
+        let listen = self.inner.sftp.borrow().listen();
         let chosen = self.inner.chosen.lock().unwrap_or_else(PoisonError::into_inner);
         let features = Feature::ALL
             .into_iter()
             .map(|feature| {
-                let listens = match (feature, self.inner.sftp) {
+                let listens = match (feature, listen) {
                     (Feature::Sftp, Some(listen)) => vec![listen.to_string()],
                     _ => Vec::new(),
                 };
@@ -196,6 +237,12 @@ impl Features {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .insert(feature, (enabled, now));
+        if feature == Feature::Sftp {
+            // The switch turned on again gives a refused port another try.
+            self.inner
+                .sftp
+                .send_if_modified(|sftp| sftp.refused.take().is_some());
+        }
         let mut stopped = Vec::new();
         self.inner.running.send_if_modified(|running| {
             if enabled {
@@ -223,7 +270,148 @@ impl Features {
                 "turned off, but its tasks have not stopped yet"
             );
         }
+        if enabled && feature == Feature::Sftp && self.runs(Feature::Sftp) {
+            self.port_settled().await;
+        }
         Ok(self.view().await)
+    }
+
+    /// Where SFTP listens, who says so, and whether its port is open.
+    pub fn sftp(&self) -> SftpListen {
+        let sftp = self.inner.sftp.borrow();
+        let listen = sftp.listen();
+        let open = listen.is_some() && sftp.open == listen;
+        SftpListen {
+            listen: listen.map(|listen| listen.to_string()),
+            pinned: sftp.pinned.is_some(),
+            open,
+            fingerprint: sftp.fingerprint.clone().filter(|_| open),
+            refused: sftp.refused.clone(),
+        }
+    }
+
+    /// Gives SFTP its address for the owner, or takes it back, and audits it. The port follows
+    /// at once while the feature is on, and the answer says what became of it. The same address
+    /// given again tries a refused port anew. `observer.toml` refuses when it names the address.
+    pub async fn set_sftp_listen(
+        &self,
+        caller: &Caller,
+        listen: Option<SocketAddr>,
+    ) -> Result<SftpListen, Error> {
+        let _changing = self.inner.changing.lock().await;
+        let (previous, refused) = {
+            let sftp = self.inner.sftp.borrow();
+            if sftp.pinned.is_some() {
+                return Err(ApiError::new(ErrorCode::SftpListenPinned).into());
+            }
+            (sftp.chosen, sftp.refused.is_some())
+        };
+        if listen.is_some_and(|listen| listen.port() == 0) {
+            return Err(ApiError::new(ErrorCode::InvalidSftpListen)
+                .with("reason", "port")
+                .into());
+        }
+        if previous == listen && !refused {
+            return Ok(self.sftp());
+        }
+        if previous != listen {
+            let now = self.inner.clock.now();
+            let record = Record::by(caller, AuditAction::SftpListenChanged)
+                .target(Feature::Sftp.as_str())
+                .details(json!({
+                    "listen": listen.map(|listen| listen.to_string()),
+                    "previous": previous.map(|previous| previous.to_string()),
+                }));
+            self.inner
+                .db
+                .write(move |tx| -> Result<(), Error> {
+                    store::set_sftp_listen(tx, listen)?;
+                    record.write(tx, now)?;
+                    Ok(())
+                })
+                .await?;
+        }
+        self.inner.sftp.send_modify(|sftp| {
+            sftp.chosen = listen;
+            sftp.refused = None;
+        });
+        let mut closing = false;
+        self.inner.running.send_if_modified(|running| {
+            if self.inner.enabled(Feature::Sftp) && self.inner.hold(Feature::Sftp, running).is_none() {
+                running.insert(Feature::Sftp)
+            } else {
+                closing = running.remove(&Feature::Sftp);
+                closing
+            }
+        });
+        self.inner.sftp_listen.send_replace(listen);
+        if closing {
+            if tokio::time::timeout(CLOSE_WAIT, closed(self.inner.open.subscribe(), &[Feature::Sftp]))
+                .await
+                .is_err()
+            {
+                warn!("SFTP lost its address, but its port has not closed yet");
+            }
+        } else if self.runs(Feature::Sftp) {
+            self.port_settled().await;
+        }
+        Ok(self.sftp())
+    }
+
+    /// The address SFTP listens on, as it changes. Whoever keeps the port follows it together
+    /// with [`Features::running`], and says what became of the port.
+    pub fn sftp_listen(&self) -> watch::Receiver<Option<SocketAddr>> {
+        self.inner.sftp_listen.subscribe()
+    }
+
+    /// The port is open on `listen`, where clients are shown the host key of `fingerprint`.
+    pub fn sftp_opened(&self, listen: SocketAddr, fingerprint: String) {
+        self.inner.sftp.send_modify(|sftp| {
+            sftp.open = Some(listen);
+            sftp.fingerprint = Some(fingerprint);
+        });
+    }
+
+    /// The port is closed.
+    pub fn sftp_closed(&self) {
+        self.inner.sftp.send_if_modified(|sftp| {
+            sftp.fingerprint = None;
+            sftp.open.take().is_some()
+        });
+    }
+
+    /// `listen` did not open. SFTP stops running until its address is given again or its switch
+    /// is turned on again, which is when the port is tried anew.
+    pub fn sftp_refused(&self, listen: SocketAddr, error: String) {
+        let in_force = self.inner.sftp.send_if_modified(|sftp| {
+            if sftp.listen() != Some(listen) {
+                return false;
+            }
+            sftp.open = None;
+            sftp.fingerprint = None;
+            sftp.refused = Some(error);
+            true
+        });
+        if in_force {
+            self.inner
+                .running
+                .send_if_modified(|running| running.remove(&Feature::Sftp));
+        }
+    }
+
+    /// Waits a while for the port to open or be refused on the address in force. Nobody keeps
+    /// the port in a build without SFTP's server, and then there is nothing to wait for.
+    async fn port_settled(&self) {
+        if self.inner.sftp_listen.receiver_count() == 0 {
+            return;
+        }
+        let mut sftp = self.inner.sftp.subscribe();
+        if tokio::time::timeout(PORT_WAIT, sftp.wait_for(Sftp::settled))
+            .await
+            .is_err()
+        {
+            warn!("SFTP's port has neither opened nor been refused yet");
+        }
     }
 
     /// Hands over a feature's task: `close` runs as soon as the feature stops running, or when
@@ -240,6 +428,9 @@ impl Features {
             let stopping = stopping.clone();
             async move {
                 let turned_off = tokio::select! {
+                    // Whoever keeps the task may close it as it sees the feature stop running:
+                    // it is still the switch that ended it, and the log says so.
+                    biased;
                     () = turned_off(running, feature) => true,
                     () = stopping.cancelled() => false,
                 };
@@ -273,18 +464,22 @@ impl Inner {
     /// Why `feature` cannot run beside `running`, whatever the owner chose.
     fn hold(&self, feature: Feature, running: &BTreeSet<Feature>) -> Option<FeatureHold> {
         if self.host_off.contains(&feature) {
-            Some(FeatureHold::Host)
-        } else if feature == Feature::Sftp && self.sftp.is_none() {
-            Some(FeatureHold::NotConfigured)
-        } else if feature
+            return Some(FeatureHold::Host);
+        }
+        if feature == Feature::Sftp {
+            let sftp = self.sftp.borrow();
+            if sftp.listen().is_none() {
+                return Some(FeatureHold::NotConfigured);
+            }
+            if sftp.refused.is_some() {
+                return Some(FeatureHold::PortRefused);
+            }
+        }
+        feature
             .requires()
             .iter()
             .any(|required| !running.contains(required))
-        {
-            Some(FeatureHold::Requires)
-        } else {
-            None
-        }
+            .then_some(FeatureHold::Requires)
     }
 }
 
@@ -647,5 +842,238 @@ mod tests {
 
         assert_eq!(view(&features.view().await, Feature::Metrics).changed_at, None);
         assert_eq!(lab.audited().await, []);
+    }
+
+    /// The switches as Observer loads them when `observer.toml` leaves SFTP's address to the panel.
+    async fn unpinned(lab: &Lab) -> Features {
+        Features::load(FeaturesSetup {
+            db: lab.db.clone(),
+            clock: lab.clock.clone(),
+            host_off: BTreeSet::new(),
+            sftp: None,
+            data_dir: lab.dir.path().join("data"),
+        })
+        .await
+        .unwrap()
+    }
+
+    /// Stands for whoever keeps the port: each address it is asked to open, `answer` opens or
+    /// refuses.
+    fn keeper(
+        features: &Features,
+        answer: impl Fn(SocketAddr) -> Result<(), String> + Send + 'static,
+    ) -> JoinHandle<()> {
+        let features = features.clone();
+        let mut running = features.running();
+        let mut listen = features.sftp_listen();
+        tokio::spawn(async move {
+            let mut open = None;
+            loop {
+                let on = running.borrow_and_update().contains(&Feature::Sftp);
+                let at = *listen.borrow_and_update();
+                let wanted = if on { at } else { None };
+                if open != wanted {
+                    if open.take().is_some() {
+                        features.sftp_closed();
+                    }
+                    match wanted.map(|at| (at, answer(at))) {
+                        Some((at, Ok(()))) => {
+                            open = Some(at);
+                            features.sftp_opened(at, "SHA256:host-key".to_owned());
+                        }
+                        Some((at, Err(error))) => features.sftp_refused(at, error),
+                        None => {}
+                    }
+                }
+                tokio::select! {
+                    changed = running.changed() => if changed.is_err() { return },
+                    changed = listen.changed() => if changed.is_err() { return },
+                }
+            }
+        })
+    }
+
+    fn address(listen: &str) -> SocketAddr {
+        listen.parse().unwrap()
+    }
+
+    #[tokio::test]
+    async fn the_owner_gives_sftp_its_address_which_outlives_observer_and_takes_it_back() {
+        let lab = Lab::new().await;
+        let features = unpinned(&lab).await;
+        let _keeper = keeper(&features, |_| Ok(()));
+
+        let given = features
+            .set_sftp_listen(&owner(), Some(address("127.0.0.1:40126")))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            given,
+            SftpListen {
+                listen: Some("127.0.0.1:40126".to_owned()),
+                pinned: false,
+                open: true,
+                fingerprint: Some("SHA256:host-key".to_owned()),
+                refused: None,
+            }
+        );
+        assert!(features.runs(Feature::Sftp));
+        let sftp = view(&features.view().await, Feature::Sftp);
+        assert_eq!(sftp.turn_on, Applies::Now);
+        assert_eq!(sftp.reach.listens, ["127.0.0.1:40126"]);
+        let restarted = unpinned(&lab).await;
+        assert!(restarted.runs(Feature::Sftp));
+        assert_eq!(restarted.sftp().listen.as_deref(), Some("127.0.0.1:40126"));
+
+        let taken_back = features.set_sftp_listen(&owner(), None).await.unwrap();
+
+        assert_eq!((taken_back.listen, taken_back.open), (None, false));
+        assert_eq!(taken_back.fingerprint, None);
+        assert!(!features.runs(Feature::Sftp));
+        let sftp = view(&features.view().await, Feature::Sftp);
+        assert_eq!(sftp.held, Some(FeatureHold::NotConfigured));
+        assert!(!unpinned(&lab).await.runs(Feature::Sftp));
+    }
+
+    #[tokio::test]
+    async fn a_new_address_moves_the_port_and_the_same_one_changes_nothing() {
+        let lab = Lab::new().await;
+        let features = unpinned(&lab).await;
+        let _keeper = keeper(&features, |_| Ok(()));
+        let listened = |features: &Features| features.sftp().listen;
+        features
+            .set_sftp_listen(&owner(), Some(address("127.0.0.1:40126")))
+            .await
+            .unwrap();
+
+        let same = features
+            .set_sftp_listen(&owner(), Some(address("127.0.0.1:40126")))
+            .await
+            .unwrap();
+        let moved = features
+            .set_sftp_listen(&owner(), Some(address("0.0.0.0:2022")))
+            .await
+            .unwrap();
+
+        assert!(same.open);
+        assert!(
+            moved.open,
+            "the answer waits for the port to open on the new address"
+        );
+        assert_eq!(listened(&features).as_deref(), Some("0.0.0.0:2022"));
+        let changes = lab
+            .db
+            .read(|conn| -> Result<i64, StoreError> {
+                Ok(conn.query_row(
+                    "SELECT count(*) FROM audit_log WHERE action = 'sftp_listen_changed'",
+                    [],
+                    |row| row.get(0),
+                )?)
+            })
+            .await
+            .unwrap();
+        assert_eq!(changes, 2, "the same address given again is no change");
+    }
+
+    #[tokio::test]
+    async fn a_port_that_does_not_open_holds_sftp_until_its_address_is_given_again() {
+        let lab = Lab::new().await;
+        let features = unpinned(&lab).await;
+        let tries = Arc::new(Mutex::new(Vec::new()));
+        let _keeper = keeper(&features, {
+            let tries = Arc::clone(&tries);
+            move |at| {
+                tries.lock().unwrap().push(at.port());
+                if at.port() == 40126 {
+                    Err("the port is taken".to_owned())
+                } else {
+                    Ok(())
+                }
+            }
+        });
+
+        let refused = features
+            .set_sftp_listen(&owner(), Some(address("127.0.0.1:40126")))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            refused.listen.as_deref(),
+            Some("127.0.0.1:40126"),
+            "the address is kept"
+        );
+        assert_eq!(
+            (refused.open, refused.refused.as_deref()),
+            (false, Some("the port is taken"))
+        );
+        assert!(!features.runs(Feature::Sftp));
+        let sftp = view(&features.view().await, Feature::Sftp);
+        assert_eq!(sftp.held, Some(FeatureHold::PortRefused));
+
+        let again = features
+            .set_sftp_listen(&owner(), Some(address("127.0.0.1:40126")))
+            .await
+            .unwrap();
+        let elsewhere = features
+            .set_sftp_listen(&owner(), Some(address("127.0.0.1:40127")))
+            .await
+            .unwrap();
+
+        assert_eq!(again.refused.as_deref(), Some("the port is taken"));
+        assert!(elsewhere.open && elsewhere.refused.is_none());
+        assert!(features.runs(Feature::Sftp));
+        assert_eq!(*tries.lock().unwrap(), [40126, 40126, 40127]);
+    }
+
+    #[tokio::test]
+    async fn the_switch_of_sftp_opens_and_closes_its_port_while_observer_runs() {
+        let lab = Lab::new().await;
+        let features = lab.features(&[]).await;
+        let _keeper = keeper(&features, |_| Ok(()));
+        // The keeper opens the port of a feature that runs from Observer's start.
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !features.sftp().open {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+
+        features.set(&owner(), Feature::Sftp, false).await.unwrap();
+        tokio::task::yield_now().await;
+        let off = features.sftp();
+        let list = features.set(&owner(), Feature::Sftp, true).await.unwrap();
+
+        assert!(!off.open);
+        assert!(view(&list, Feature::Sftp).running);
+        assert!(
+            features.sftp().open,
+            "turned on, it listens without a restart of Observer"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_address_observer_toml_names_is_not_the_panels_and_a_port_takes_a_number() {
+        let lab = Lab::new().await;
+        let pinned = lab.features(&[]).await;
+
+        let refused = pinned
+            .set_sftp_listen(&owner(), Some(address("127.0.0.1:2022")))
+            .await
+            .unwrap_err();
+        let no_port = unpinned(&lab)
+            .await
+            .set_sftp_listen(&owner(), Some(address("127.0.0.1:0")))
+            .await
+            .unwrap_err();
+
+        assert_eq!(refused.code(), Some(ErrorCode::SftpListenPinned));
+        let shown = pinned.sftp();
+        assert_eq!(
+            (shown.listen.as_deref(), shown.pinned),
+            (Some("0.0.0.0:40126"), true)
+        );
+        assert_eq!(no_port.code(), Some(ErrorCode::InvalidSftpListen));
     }
 }

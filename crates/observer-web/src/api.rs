@@ -281,6 +281,8 @@ pub(crate) fn routes() -> Vec<Route> {
         route(M::GET,    "/settings/observer",                       read_bootstrap, settings::observer),
         route(M::GET,    "/features",           read_features,   features::list),
         route(M::PUT,    "/features/{feature}", switch_features, features::switch),
+        route(M::GET,    "/settings/sftp",      read_features,   features::sftp_listen),
+        route(M::PUT,    "/settings/sftp",      switch_features, features::set_sftp_listen),
         route(M::GET,    "/servers/default/backups",                      read_backups,     backups::view),
         route(M::PUT,    "/servers/default/backups/settings",             change_backups,   backups::change_settings),
         route(M::POST,   "/servers/default/backups/source/test",          test_backups,     backups::test_source),

@@ -1,12 +1,18 @@
 //! The switches of Observer's optional features, as the owner set them. A feature without a row
 //! keeps its default; a row of a feature this build does not know is left alone.
 
+use std::net::SocketAddr;
+
 use jiff::Timestamp;
 use observer_domain::features::Feature;
 use rusqlite::{Connection, params};
 
 use crate::database::StoreError;
+use crate::settings;
 use crate::time::Utc;
+
+/// Where SFTP listens, once the owner said so in the panel.
+const SFTP_LISTEN: &str = "sftp.listen";
 
 /// A switch the owner set, and when.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -46,10 +52,39 @@ pub fn set(conn: &Connection, feature: Feature, enabled: bool, now: Timestamp) -
     Ok(())
 }
 
+/// The address the owner gave SFTP. `None`: never given, or taken back.
+pub fn sftp_listen(conn: &Connection) -> Result<Option<SocketAddr>, StoreError> {
+    Ok(settings::get(conn, SFTP_LISTEN)?.and_then(|listen| listen.parse().ok()))
+}
+
+pub fn set_sftp_listen(conn: &Connection, listen: Option<SocketAddr>) -> Result<(), StoreError> {
+    if let Some(listen) = listen {
+        return settings::set(conn, SFTP_LISTEN, &listen.to_string());
+    }
+    conn.execute("DELETE FROM settings WHERE key = ?1", [SFTP_LISTEN])?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::database::memory;
+
+    #[test]
+    fn the_address_of_sftp_is_kept_until_it_is_taken_back() {
+        let conn = memory();
+        assert_eq!(sftp_listen(&conn).unwrap(), None);
+
+        let listen: SocketAddr = "0.0.0.0:40126".parse().unwrap();
+        set_sftp_listen(&conn, Some(listen)).unwrap();
+        assert_eq!(sftp_listen(&conn).unwrap(), Some(listen));
+        let v6: SocketAddr = "[::1]:2022".parse().unwrap();
+        set_sftp_listen(&conn, Some(v6)).unwrap();
+        assert_eq!(sftp_listen(&conn).unwrap(), Some(v6));
+
+        set_sftp_listen(&conn, None).unwrap();
+        assert_eq!(sftp_listen(&conn).unwrap(), None);
+    }
 
     #[test]
     fn a_switch_is_replaced_on_save_and_unknown_keys_are_skipped() {

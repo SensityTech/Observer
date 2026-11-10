@@ -4454,7 +4454,7 @@ export const en = {
         },
     },
     files: {
-        intro: 'Groups say which parts of the server folder an access reaches. People log in with their own SSH keys; pipelines with a key Observer makes. Nothing connects until the owner adds an [sftp] section to observer.toml.',
+        intro: 'Groups say which parts of the server folder an access reaches. People log in with their own SSH keys; pipelines with a key Observer makes. Nothing connects until SFTP has an address to listen on.',
         groups: 'Groups',
         newGroup: 'New group',
         noGroups: 'No group yet. A group lists what it allows and denies, folder by folder.',
@@ -4942,6 +4942,10 @@ export const en = {
                 label: 'Accounts and permissions',
                 about: 'Add an account, change what it may do, reset its password or sign it out everywhere.',
             },
+            sftpAddress: {
+                label: 'SFTP address',
+                about: 'Where SFTP listens: the address and the port people and pipelines connect to.',
+            },
             fileGroups: {
                 label: 'Groups',
                 about: 'Which folders of the server an SFTP access reaches, rule by rule.',
@@ -5200,10 +5204,14 @@ export const en = {
                 on: 'On',
                 off: 'Off',
                 locked: 'Locked off in observer.toml',
-                notConfigured: 'On, but it waits for its address in observer.toml',
+                notConfigured: 'On, but it waits for its address',
+                portRefused: 'On, but its port did not open',
                 requires: (names: string[]) => `On, but waits for ${list(names)}`,
-                nextServerStart: 'On from the next start of FXServer',
-                observerRestart: 'On from the next start of Observer',
+                pending: {
+                    now: 'On, starting',
+                    nextServerStart: 'On from the next start of FXServer',
+                    observerRestart: 'On from the next start of Observer',
+                } satisfies Record<Applies, string>,
             },
             turnOn: {
                 now: 'Turning it on applies at once',
@@ -5255,18 +5263,44 @@ export const en = {
             turnedOnLater: (name: string, state: string) => `${name}: ${state}.`,
             turnedOff: (name: string) => `${name} is off: its tasks have stopped.`,
         },
-        sftpSetup: {
-            short: 'It needs two lines in observer.toml on the host, then a restart of Observer.',
-            how: 'How to set it up',
-            title: 'SFTP waits for its address',
-            add: 'Someone with access to the host adds these lines to observer.toml, next to Observer, creating the file if it is not there.',
-            addTo: (file: string) =>
-                `Add these lines to ${file} on the host, creating the file if it is not there.`,
-            lines: 'Lines to add',
-            restart:
-                'Restart Observer: it reads the file as it starts, opens the port and logs the fingerprint of its SSH host key.',
-            next: 'Then give people and pipelines their groups under File access.',
-            why: 'SFTP opens a port on the host, so the host names it and the panel never does. 0.0.0.0 listens on every interface; 40126 is the port Observer suggests, and any free one will do.',
+        sftpAddress: {
+            waits: 'It waits for its address, which the owner gives under File access.',
+            refusedShort: 'Its port did not open on the address it was given.',
+            give: 'Give it its address',
+            see: 'See why',
+            ownerGives: 'SFTP is on, but it waits for its address: the owner gives it on this page.',
+            none: 'No address yet: SFTP listens nowhere, and nobody connects.',
+            listening: (listen: string) => `Listening on ${listen}`,
+            closed: (listen: string) => `Not listening. Its address is ${listen}.`,
+            off: (listen: string) =>
+                `SFTP is turned off under Features. Turned on, it listens on ${listen} at once.`,
+            locked: (listen: string) =>
+                `observer.toml turns SFTP off, so it listens nowhere. Its address is ${listen}.`,
+            refused: (listen: string) => `The port did not open on ${listen}.`,
+            said: (reason: string) => `The host said: ${reason}`,
+            key: 'Host key',
+            copyKey: 'Copy the fingerprint of the host key',
+            pinned: 'observer.toml names this address, so it is changed in that file, followed by a restart of Observer. Without its [sftp] section, the address is given here.',
+            reach: 'Who reaches the port',
+            reaches: {
+                every: 'Other machines',
+                local: 'This machine only',
+                other: 'One address',
+            },
+            reachAbout: {
+                every: "Listens on every address of the host (0.0.0.0). The port also has to be let through the host's firewall, and your provider's if it has one.",
+                local: 'Listens on 127.0.0.1: for an SSH tunnel, or a program on the host itself. No other machine reaches it.',
+                other: "Listens on one of the host's own addresses, a private network's for one.",
+            },
+            host: 'Address',
+            hostHint: 'An IP address of the host, not a name.',
+            port: 'Port',
+            portHint: '1 to 65535. Observer suggests 40126.',
+            open: 'Open the port',
+            move: 'Move the port',
+            again: 'Try again',
+            close: 'Close the port',
+            applies: 'Applies at once: neither Observer nor FXServer restarts.',
         },
         panel: {
             file: (path: string) => `Read from ${path} when Observer starts.`,
@@ -5397,6 +5431,7 @@ export const en = {
             tool_files_changed: 'Files changed by a tool',
             tool_files_restored: 'Files restored by a tool',
             feature_changed: 'Feature turned on or off',
+            sftp_listen_changed: 'SFTP address changed',
             backup_settings_changed: 'Backup settings changed',
             backup_destination_created: 'Backup destination added',
             backup_destination_changed: 'Backup destination changed',
@@ -6041,7 +6076,9 @@ export const en = {
                 case 'host':
                     return `${name} is turned off in observer.toml on the host.`;
                 case 'notConfigured':
-                    return `${name} is not set up: it needs its address in observer.toml on the host.`;
+                    return `${name} waits for its address, which the owner gives in Settings, under File access.`;
+                case 'portRefused':
+                    return `${name} does not listen: its port did not open. The owner changes its address in Settings, under File access.`;
                 case 'requires':
                     return `${name} needs another part of Observer that does not run.`;
                 default:
@@ -6053,6 +6090,12 @@ export const en = {
             const name = isFeature(key) ? features[key] : 'This part of Observer';
             return `${name} is turned off in observer.toml on the host: only a change there turns it back on.`;
         },
+        sftp_listen_pinned:
+            'observer.toml names where SFTP listens: it is changed in that file, on the host.',
+        invalid_sftp_listen: (params) =>
+            stringParam(params, 'reason') === 'port'
+                ? 'The port is a number from 1 to 65535.'
+                : 'That is not an IP address with a port, such as 0.0.0.0:40126. A name cannot be listened on.',
         backup_running: 'A backup is already under way. Wait for it to end, or cancel it.',
         invalid_backup_settings: 'Some settings need fixing. Each one says why next to its field.',
         invalid_backup_destination: 'This destination needs fixing. Each field says why.',

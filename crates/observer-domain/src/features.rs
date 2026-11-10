@@ -13,7 +13,7 @@ use crate::live::Topic;
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
 pub enum Feature {
-    /// File access over SFTP, on the port `[sftp] listen` of `observer.toml` names.
+    /// File access over SFTP, on the address the owner gives in the panel or `observer.toml` pins.
     Sftp,
     /// What changed in the server folder from one start of FXServer to the next.
     Changes,
@@ -50,8 +50,10 @@ pub enum Applies {
 pub enum FeatureHold {
     /// `observer.toml` turns it off, which the panel cannot undo.
     Host,
-    /// It needs a setting `observer.toml` does not give: SFTP's `listen`.
+    /// It needs a setting nobody gave: the address SFTP listens on.
     NotConfigured,
+    /// Its port did not open: another program holds it, or the host refuses the address.
+    PortRefused,
     /// It works on what a feature in `requires` collects, which does not run.
     Requires,
 }
@@ -176,11 +178,12 @@ impl Feature {
         }
     }
 
-    /// When turning it on takes effect. The tools' hook reads the switch before every start;
-    /// the others follow FXServer from Observer's start, and a port opens only when the host
-    /// restarts Observer.
+    /// When turning it on takes effect. SFTP's port opens and closes while Observer runs; the
+    /// tools' hook reads the switch before every start; the others follow FXServer from
+    /// Observer's start.
     pub const fn turn_on(self) -> Applies {
         match self {
+            Self::Sftp => Applies::Now,
             Self::Tools => Applies::NextServerStart,
             _ => Applies::ObserverRestart,
         }
@@ -364,7 +367,7 @@ pub struct FeatureView {
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
 pub struct FeatureReach {
-    /// The addresses it listens on, as `observer.toml` gives them.
+    /// The addresses it listens on.
     pub listens: Vec<String>,
     pub tasks: Vec<FeatureTaskRun>,
     pub while_off: Vec<FeatureTaskRun>,
@@ -413,6 +416,31 @@ impl FeatureReach {
 #[ts(export)]
 pub struct FeatureSwitch {
     pub enabled: bool,
+}
+
+/// `GET /api/settings/sftp`, and the answer to a change: where SFTP listens, and who says so.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SftpListen {
+    /// The address in force, such as `0.0.0.0:40126`; `None` until someone gives one.
+    pub listen: Option<String>,
+    /// Whether `observer.toml` names it, which the panel cannot change.
+    pub pinned: bool,
+    /// Whether the port is open on that address now.
+    pub open: bool,
+    /// The fingerprint of the host key a client is shown on the open port.
+    pub fingerprint: Option<String>,
+    /// Why the port did not open, in the host's words.
+    pub refused: Option<String>,
+}
+
+/// `PUT /api/settings/sftp`. No address closes the port and forgets the one there was.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+#[ts(export)]
+pub struct SftpListenChange {
+    pub listen: Option<String>,
 }
 
 #[cfg(test)]

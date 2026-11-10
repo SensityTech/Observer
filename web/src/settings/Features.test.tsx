@@ -188,7 +188,7 @@ describe('Features settings', () => {
         fireEvent.click(card('switchPlayers').getByRole('switch', { name: items.switchPlayers.label }));
 
         await waitFor(() =>
-            getByText(words.turnedOnLater(items.switchPlayers.label, words.states.observerRestart)),
+            getByText(words.turnedOnLater(items.switchPlayers.label, words.states.pending.observerRestart)),
         );
     });
 
@@ -209,60 +209,91 @@ describe('Features settings', () => {
         expect((card('switchMetrics').getByRole('switch') as HTMLInputElement).disabled).toBe(true);
     });
 
-    it('should tell what SFTP still needs when observer.toml gives it no address, and spell it out under File access', async () => {
-        const setup = en.settings.sftpSetup;
+    it('should say SFTP waits for its address, and lead the owner to the form that opens its port', async () => {
+        const address = en.settings.sftpAddress;
         const waiting: FeatureList = {
-            features: [view('sftp', { running: false, held: 'notConfigured' }), view('changes')],
+            features: [
+                view('sftp', { running: false, held: 'notConfigured', turnOn: 'now' }),
+                view('changes'),
+            ],
         };
-        const asked: string[] = [];
+        const sent: unknown[] = [];
         vi.stubGlobal(
             'fetch',
             vi.fn(async (input: string, init: RequestInit) => {
                 const route = `${init.method ?? 'GET'} ${String(input).replace(/^\/api/, '')}`;
-                asked.push(route);
                 if (route === 'GET /features') {
                     return Response.json(waiting);
                 }
                 if (route === 'GET /servers/default/files/groups' || route === 'GET /files/accesses') {
                     return refused();
                 }
-                if (route === 'GET /settings/observer') {
+                if (route === 'GET /settings/sftp') {
                     return Response.json({
-                        configFile: 'C:\\observer\\observer.toml',
-                        listen: '0.0.0.0:40125',
-                        hosts: [],
-                        trustedProxies: [],
-                        statistics: { samples: 86_400, minutes: 2_592_000 },
+                        listen: null,
+                        pinned: false,
+                        open: false,
+                        fingerprint: null,
+                        refused: null,
+                    });
+                }
+                if (route === 'PUT /settings/sftp') {
+                    sent.push(typeof init.body === 'string' ? JSON.parse(init.body) : undefined);
+                    return Response.json({
+                        listen: '0.0.0.0:40126',
+                        pinned: false,
+                        open: true,
+                        fingerprint: 'SHA256:c29tZSBob3N0IGtleQ',
+                        refused: null,
                     });
                 }
                 return Response.json({ code: 'not_found', params: {} }, { status: 404 });
             }),
         );
-        const { findByText, getByLabelText, getByText, queryByText } =
+        const { findByText, findByRole, getByLabelText, queryByText } =
             await openSettings('/settings/features');
 
         const sftp = card('switchSftp');
         expect(sftp.getByText(words.states.notConfigured)).not.toBeNull();
-        expect(sftp.getByText(setup.short)).not.toBeNull();
-        expect(card('switchChanges').queryByText(setup.short)).toBeNull();
-        fireEvent.click(sftp.getByRole('link', { name: setup.how }));
+        expect(sftp.getByText(address.waits)).not.toBeNull();
+        expect(card('switchChanges').queryByText(address.waits)).toBeNull();
+        fireEvent.click(sftp.getByRole('link', { name: address.give }));
 
-        // The page it leads to holds the lines, the file's place on the host and what comes next.
-        expect(await findByText(setup.addTo('C:\\observer\\observer.toml'))).not.toBeNull();
-        expect((getByLabelText(setup.lines) as HTMLTextAreaElement).value).toBe(
-            '[sftp]\nlisten = "0.0.0.0:40126"',
-        );
-        expect(getByText(setup.restart)).not.toBeNull();
+        // The page it leads to holds the form, on the address and the port Observer suggests.
+        expect(await findByText(address.none)).not.toBeNull();
+        expect((getByLabelText(address.port) as HTMLInputElement).value).toBe('40126');
         expect(queryByText(en.files.intro)).toBeNull();
         expect(
             queryByText(en.errors.feature_disabled({ feature: 'sftp', held: 'notConfigured' })),
         ).toBeNull();
+        fireEvent.click(await findByRole('button', { name: address.open }));
+
+        expect(await findByText(address.listening('0.0.0.0:40126'))).not.toBeNull();
+        expect(sent).toEqual([{ listen: '0.0.0.0:40126' }]);
         cleanup();
 
         // An account that only views settings reads what it waits for, without the way to a page it cannot open.
         await openSettings('/settings/features', { me: VIEWER });
-        expect(card('switchSftp').getByText(setup.short)).not.toBeNull();
-        expect(card('switchSftp').queryByRole('link', { name: setup.how })).toBeNull();
+        expect(card('switchSftp').getByText(address.waits)).not.toBeNull();
+        expect(card('switchSftp').queryByRole('link', { name: address.give })).toBeNull();
+    });
+
+    it('should say the port of SFTP did not open, and where to see why', async () => {
+        const address = en.settings.sftpAddress;
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(async () =>
+                Response.json({
+                    features: [view('sftp', { running: false, held: 'portRefused', turnOn: 'now' })],
+                } satisfies FeatureList),
+            ),
+        );
+        await openSettings('/settings/features');
+
+        const sftp = card('switchSftp');
+        expect(sftp.getByText(words.states.portRefused)).not.toBeNull();
+        expect(sftp.getByText(address.refusedShort)).not.toBeNull();
+        expect(sftp.getByRole('link', { name: address.see })).not.toBeNull();
     });
 
     it('should count the features left on beside their category', async () => {

@@ -139,12 +139,23 @@ impl Server {
         Self::reached_from(SocketAddr::from(([10, 0, 0, 2], 50_000)), &proxies).await
     }
 
-    /// A server whose every connection comes from `peer`, believing the proxies listed.
+    /// A server whose every connection comes from `peer`, believing the proxies listed. SFTP's
+    /// address is `observer.toml`'s, though nothing listens on it here.
+    async fn reached_from(peer: SocketAddr, proxies: &[TrustedProxy]) -> Self {
+        let sftp = SocketAddr::from(([127, 0, 0, 1], 41976));
+        Self::built(peer, proxies, Some(sftp)).await
+    }
+
+    /// A server whose `observer.toml` leaves SFTP's address to the panel.
+    async fn unpinned() -> Self {
+        Self::built(SocketAddr::from(([203, 0, 113, 7], 50_000)), &[], None).await
+    }
+
     #[expect(
         clippy::too_many_lines,
         reason = "every service the API stands on, started as Observer starts them"
     )]
-    async fn reached_from(peer: SocketAddr, proxies: &[TrustedProxy]) -> Self {
+    async fn built(peer: SocketAddr, proxies: &[TrustedProxy], sftp: Option<SocketAddr>) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let db = Database::open(dir.path().join("observer.sqlite3"), dir.path().join("backups"))
             .await
@@ -256,12 +267,11 @@ impl Server {
             schedule: schedule.status(),
         });
         let instance_id = db.instance_id().await.unwrap();
-        // Every feature on, SFTP's address given though nothing listens on it here.
         let features = Features::load(FeaturesSetup {
             db: db.clone(),
             clock: clock.clone(),
             host_off: BTreeSet::new(),
-            sftp: Some(SocketAddr::from(([127, 0, 0, 1], 41976))),
+            sftp,
             data_dir: dir.path().join("data"),
         })
         .await

@@ -72,6 +72,7 @@ export type SettingId =
     | 'hosts'
     | 'trustedProxies'
     | 'accounts'
+    | 'sftpAddress'
     | 'fileGroups'
     | 'filePeople'
     | 'filePipelines'
@@ -250,7 +251,12 @@ export const CATEGORIES: readonly Category[] = [
         id: 'files',
         group: 'people',
         access: ['FilesManage'],
-        settings: [{ id: 'fileGroups' }, { id: 'filePeople' }, { id: 'filePipelines' }],
+        settings: [
+            { id: 'sftpAddress' },
+            { id: 'fileGroups' },
+            { id: 'filePeople' },
+            { id: 'filePipelines' },
+        ],
     },
     {
         id: 'account',

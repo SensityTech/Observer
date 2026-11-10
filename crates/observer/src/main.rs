@@ -8,6 +8,7 @@ mod lock;
 mod logging;
 mod run;
 mod setup;
+mod sftp;
 mod shutdown;
 #[cfg(target_os = "linux")]
 mod systemd;

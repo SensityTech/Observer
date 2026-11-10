@@ -212,6 +212,11 @@ pub enum ErrorCode {
     FeatureDisabled,
     /// `observer.toml` turns the feature off, which only the host can undo. Params: `feature`.
     FeatureLocked,
+    /// `observer.toml` names where SFTP listens, which only the host changes.
+    SftpListenPinned,
+    /// Not an address SFTP can listen on. Params: `reason`, `address` when it is not an IP address
+    /// with a port, `port` when the port is 0.
+    InvalidSftpListen,
     /// A backup of the server's database is under way: one at a time.
     BackupRunning,
     /// Params: `issues`, a list of `BackupSettingsIssue`.

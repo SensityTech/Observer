@@ -3,4 +3,4 @@
 /**
  * Why a feature does not run although the owner left it on.
  */
-export type FeatureHold = "host" | "notConfigured" | "requires";
+export type FeatureHold = "host" | "notConfigured" | "portRefused" | "requires";

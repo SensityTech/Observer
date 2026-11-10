@@ -39,16 +39,16 @@ const stateOf = (t: Messages, view: FeatureView): { led: string; text: string } 
     if (view.held === 'notConfigured') {
         return { led: 'led-warning', text: words.notConfigured };
     }
+    if (view.held === 'portRefused') {
+        return { led: 'led-down', text: words.portRefused };
+    }
     if (view.held === 'requires') {
         return {
             led: 'led-warning',
             text: words.requires(view.requires.map((feature) => t.settings.items[SWITCH_OF[feature]].label)),
         };
     }
-    return {
-        led: 'led-pending',
-        text: view.turnOn === 'nextServerStart' ? words.nextServerStart : words.observerRestart,
-    };
+    return { led: 'led-pending', text: words.pending[view.turnOn] };
 };
 
 /**
@@ -135,22 +135,22 @@ export function FeatureSettings() {
     );
 }
 
-/** What SFTP waits for, in a line, and the way to the page that spells it out for who may open it. */
-function SftpWaits() {
+/** What keeps SFTP from listening, in a line, and the way to its address for who may open that page. */
+function SftpWaits({ refused }: { refused: boolean }) {
     const { t } = useI18n();
     const me = useMe();
-    const words = t.settings.sftpSetup;
+    const words = t.settings.sftpAddress;
     const files = CATEGORIES.find((category) => category.id === 'files');
     return (
         <p className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-box bg-warning-soft px-3 py-2 text-small text-warning">
-            {words.short}
+            {refused ? words.refusedShort : words.waits}
             {files !== undefined && opens(me, files) && (
                 <Link
                     to="/settings/$category"
                     params={{ category: 'files' }}
                     className="inline-flex items-center gap-1 font-medium underline underline-offset-2 max-md:min-h-11"
                 >
-                    {words.how}
+                    {refused ? words.see : words.give}
                     <ArrowRight size={14} strokeWidth={1.5} aria-hidden="true" />
                 </Link>
             )}
@@ -221,7 +221,11 @@ function FeatureCard({
                     </li>
                 ))}
             </ul>
-            {view.feature === 'sftp' && view.enabled && view.held === 'notConfigured' && <SftpWaits />}
+            {view.feature === 'sftp' &&
+                view.enabled &&
+                (view.held === 'notConfigured' || view.held === 'portRefused') && (
+                    <SftpWaits refused={view.held === 'portRefused'} />
+                )}
             {reach.whileOff.length > 0 && !view.enabled && (
                 <p className="text-small text-ink-3">
                     {words.whileOff(reach.whileOff.map(({ task }) => words.tasks[task]))}

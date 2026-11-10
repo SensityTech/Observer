@@ -513,6 +513,79 @@ fn sftp_turned_off_in_the_panel_closes_its_port_at_once_and_at_the_next_start() 
     );
 }
 
+/// Without `[sftp]` in `observer.toml`, the owner gives SFTP its address in the panel: the port
+/// opens at once and moves with the address. A port another program holds is held against SFTP,
+/// never against Observer, and the address outlives Observer until it is taken back.
+#[test]
+fn sftp_takes_its_address_from_the_panel_and_its_port_follows_without_a_restart() {
+    let (mut observer, owner) = Observer::start();
+    let panel = observer.port;
+    let give = |port: u16| {
+        let listen = json!({ "listen": format!("127.0.0.1:{port}") });
+        call(panel, "PUT", "/settings/sftp", Some(&owner), Some(listen))
+    };
+    let (first, second) = (free_port(), free_port());
+
+    let waiting = call(panel, "GET", "/settings/sftp", Some(&owner), None);
+    let given = give(first);
+    let opened = TcpStream::connect(("127.0.0.1", first)).is_ok();
+    let moved = give(second);
+
+    assert_eq!(
+        waiting.body,
+        json!({ "listen": null, "pinned": false, "open": false, "fingerprint": null, "refused": null })
+    );
+    assert_eq!(given.status, 200, "{}", given.body);
+    assert_eq!(given.body["open"], true, "{}", given.body);
+    let fingerprint = given.body["fingerprint"].as_str().unwrap();
+    assert!(fingerprint.starts_with("SHA256:"), "{fingerprint}");
+    assert!(observer.log().contains(fingerprint), "the log names the same key");
+    assert!(opened, "{}", observer.log());
+    assert_eq!(moved.body["open"], true, "{}", moved.body);
+    assert_eq!(
+        moved.body["fingerprint"], fingerprint,
+        "the key stays, wherever the port is"
+    );
+    assert!(TcpStream::connect(("127.0.0.1", second)).is_ok());
+    assert!(
+        TcpListener::bind(("127.0.0.1", first)).is_ok(),
+        "the port it left is free by the time the panel hears back"
+    );
+
+    let held = TcpListener::bind("127.0.0.1:0").unwrap();
+    let taken = held.local_addr().unwrap().port();
+    let refused = give(taken);
+    let switches = call(panel, "GET", "/features", Some(&owner), None);
+    drop(held);
+    let again = give(taken);
+
+    assert_eq!(refused.status, 200, "{}", refused.body);
+    assert_eq!(refused.body["open"], false, "{}", refused.body);
+    assert!(refused.body["refused"].is_string(), "{}", refused.body);
+    let sftp = &switches.body["features"][0];
+    assert_eq!(
+        (&sftp["running"], &sftp["held"]),
+        (&json!(false), &json!("portRefused"))
+    );
+    assert_eq!(again.body["open"], true, "{}", again.body);
+    assert_eq!(again.body["refused"], Value::Null);
+
+    observer.respawn();
+    wait_for(
+        "SFTP listening where the owner said, after a restart of Observer",
+        || TcpStream::connect(("127.0.0.1", taken)).is_ok(),
+    );
+    let back = json!({ "listen": null });
+    let taken_back = call(observer.port, "PUT", "/settings/sftp", Some(&owner), Some(back));
+
+    assert_eq!(taken_back.status, 200, "{}", taken_back.body);
+    assert_eq!(taken_back.body["listen"], Value::Null);
+    assert!(
+        TcpListener::bind(("127.0.0.1", taken)).is_ok(),
+        "the port is closed by the time the panel hears back"
+    );
+}
+
 /// `[features] sftp = "off"` keeps SFTP's port closed though `[sftp]` names it, and even the
 /// owner's session cannot open it: the refusal is audited.
 #[test]
