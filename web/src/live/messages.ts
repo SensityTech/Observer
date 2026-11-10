@@ -177,6 +177,8 @@ const AUDIT_ACTIONS = {
     server_stopped: true,
     server_restarted: true,
     server_start_extended: true,
+    server_cfg_changed: true,
+    server_cfg_restored: true,
     console_command_sent: true,
     console_log_downloaded: true,
     server_crash_loop: true,

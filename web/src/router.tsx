@@ -44,6 +44,7 @@ const ServerSetupPage = lazyCode(() =>
     import('./pages/ServerSetupPage').then((page) => ({ default: page.ServerSetupPage })),
 );
 const ToolsPage = lazyCode(() => import('./pages/ToolsPage').then((page) => ({ default: page.ToolsPage })));
+const CfgPage = lazyCode(() => import('./pages/CfgPage').then((page) => ({ default: page.CfgPage })));
 const BackupsPage = lazyCode(() =>
     import('./pages/BackupsPage').then((page) => ({ default: page.BackupsPage })),
 );
@@ -328,6 +329,17 @@ const toolsRoute = createRoute({
     ),
 });
 
+// The cfg holds the server's secrets and decides what it runs: the owner's, as the launch settings are.
+const cfgRoute = createRoute({
+    getParentRoute: () => panelRoute,
+    path: '/cfg',
+    component: () => (
+        <RequireOwner>
+            <CfgPage />
+        </RequireOwner>
+    ),
+});
+
 const backupsRoute = createRoute({
     getParentRoute: () => panelRoute,
     path: '/backups',
@@ -421,6 +433,7 @@ const routeTree = rootRoute.addChildren([
         dropsRoute,
         serverRoute,
         toolsRoute,
+        cfgRoute,
         backupsRoute,
         usersRoute,
         filesRoute,

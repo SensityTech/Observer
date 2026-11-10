@@ -1,7 +1,7 @@
 //! The server setup: checks of an existing server's folder and cfg, read where they are, and the
 //! save that follows them. The setup never writes into that folder; the owner fixes what blocks.
-//! Observer writes there only SFTP uploads and the fixes of the server tools the owner runs or
-//! turns on.
+//! Observer writes there only SFTP uploads, the fixes of the server tools the owner runs or turns
+//! on, and the cfg the owner saves from its page.
 
 use std::io;
 use std::time::Duration;
@@ -165,7 +165,7 @@ impl Supervision {
             .await
     }
 
-    async fn cfg_context(&self, onesync: OneSync) -> Result<Context, Error> {
+    pub(super) async fn cfg_context(&self, onesync: OneSync) -> Result<Context, Error> {
         let (_, state) = read_launch(&self.inner.db).await?;
         let system_resources = state.selected.map(|build| {
             Layout::new(self.inner.artifacts.join(build.to_string()), Flavour::HOST).system_resources()
@@ -181,7 +181,9 @@ impl Supervision {
     }
 }
 
-async fn blocking<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) -> Result<T, Error> {
+pub(super) async fn blocking<T: Send + 'static>(
+    work: impl FnOnce() -> T + Send + 'static,
+) -> Result<T, Error> {
     Ok(tokio::task::spawn_blocking(work)
         .await
         .map_err(io::Error::other)?)

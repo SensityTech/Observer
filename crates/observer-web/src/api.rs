@@ -9,6 +9,7 @@ mod audit;
 mod auth;
 mod backups;
 mod bans;
+mod cfg;
 mod changes;
 mod diagnostics;
 mod drops;
@@ -181,6 +182,13 @@ pub(crate) fn routes() -> Vec<Route> {
         route(M::POST,   "/servers/default/setup/cfg/text", read_launch, servers::cfg_text),
         route(M::POST,   "/servers/default/setup/discover", read_launch, servers::discover),
         route(M::PUT,    "/servers/default/setup",        edit_launch, servers::save_setup),
+        route(M::GET,    "/servers/default/cfg",          read_launch, cfg::document),
+        route(M::PUT,    "/servers/default/cfg",          edit_launch, cfg::save),
+        route(M::POST,   "/servers/default/cfg/check",    read_launch, cfg::check),
+        route(M::POST,   "/servers/default/cfg/diff",     read_launch, cfg::diff),
+        route(M::GET,    "/servers/default/cfg/versions", read_launch, cfg::versions),
+        route(M::GET,    "/servers/default/cfg/versions/{id}",         read_launch, cfg::version_diff),
+        route(M::POST,   "/servers/default/cfg/versions/{id}/restore", edit_launch, cfg::restore),
         route(M::POST,   "/servers/default/start",      control,      servers::start),
         route(M::POST,   "/servers/default/start/extend", control,    servers::extend_start),
         route(M::POST,   "/servers/default/stop",       control,      servers::stop),

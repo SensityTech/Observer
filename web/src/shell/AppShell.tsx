@@ -6,6 +6,7 @@ import {
     ChartLine,
     Contact,
     DatabaseBackup,
+    FileCog,
     GitCompare,
     LayoutDashboard,
     Map as MapIcon,
@@ -59,6 +60,7 @@ type NavEntry = {
         | '/drops'
         | '/settings'
         | '/tools'
+        | '/cfg'
         | '/backups'
         | '/audit';
     label: string;
@@ -133,6 +135,7 @@ export function AppShell() {
             icon: CalendarClock,
             access: [Permission.DashboardView, Permission.ScheduleManage, Permission.ServerControl],
         },
+        { to: '/cfg', label: t.nav.cfg, icon: FileCog, access: 'owner' },
         { to: '/artifacts', label: t.nav.artifacts, icon: Package, access: Permission.ArtifactsView },
         { to: '/backups', label: t.nav.backups, icon: DatabaseBackup, access: Permission.BackupsView },
         {

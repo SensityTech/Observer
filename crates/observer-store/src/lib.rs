@@ -7,6 +7,7 @@ pub mod audit;
 mod backup;
 pub mod backups;
 pub mod bans;
+pub mod cfg_versions;
 pub mod changes;
 mod database;
 pub mod diagnostics;

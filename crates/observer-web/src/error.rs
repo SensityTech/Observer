@@ -63,6 +63,7 @@ fn status(code: ErrorCode) -> StatusCode {
         | ErrorCode::ContentHidden
         | ErrorCode::FeatureLocked => StatusCode::FORBIDDEN,
         ErrorCode::NotFound
+        | ErrorCode::CfgVersionNotFound
         | ErrorCode::BuildNotListed
         | ErrorCode::CrashNotFound
         | ErrorCode::CrashFileNotFound
@@ -80,6 +81,8 @@ fn status(code: ErrorCode) -> StatusCode {
         | ErrorCode::ServerNotRunning
         | ErrorCode::ServerStopping
         | ErrorCode::ServerNotStarting
+        | ErrorCode::CfgNotEditable
+        | ErrorCode::CfgChanged
         | ErrorCode::NothingToSkip
         | ErrorCode::AlreadySkipped
         | ErrorCode::NothingToRestore
@@ -136,6 +139,7 @@ fn status(code: ErrorCode) -> StatusCode {
         | ErrorCode::InvalidLaunchSettings
         | ErrorCode::CommandRefused
         | ErrorCode::InvalidRequest
+        | ErrorCode::InvalidCfgText
         | ErrorCode::InvalidSchedule
         | ErrorCode::InvalidArtifactSettings
         | ErrorCode::InvalidImportFolder

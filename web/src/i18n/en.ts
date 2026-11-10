@@ -14,6 +14,7 @@ import type { BackupError } from '../api/generated/BackupError';
 import type { BackupPhase } from '../api/generated/BackupPhase';
 import type { BanFilter } from '../api/generated/BanFilter';
 import type { BanState } from '../api/generated/BanState';
+import type { CfgRefusal } from '../api/generated/CfgRefusal';
 import type { BeforeRestarts } from '../api/generated/BeforeRestarts';
 import type { BuildPlatform } from '../api/generated/BuildPlatform';
 import type { CfgFileProblem } from '../api/generated/CfgFileProblem';
@@ -473,6 +474,7 @@ export const en = {
         drops: 'Drops',
         changes: 'File changes',
         tools: 'Tools',
+        cfg: 'server.cfg',
         backups: 'Backups',
         alertCount: (value: number) => count(value, { one: 'alert', other: 'alerts' }),
     },
@@ -552,6 +554,141 @@ export const en = {
         myAccount: 'My account',
         signOut: 'Sign out',
         about: 'About Observer',
+    },
+    cfg: {
+        title: 'server.cfg',
+        meta: (lines: number, started: number) =>
+            `${count(lines, { one: 'line', other: 'lines' })} · ${count(started, { one: 'starts', other: 'start' })} a resource`,
+        modified: (when: string) => `last changed ${when}`,
+        viewLabel: 'How to edit',
+        views: { guided: 'Guided', file: 'File' },
+        intro: 'Each field is a line of your file, and says which. A save rewrites only what you changed, keeps your comments and their order, and keeps the file as it was. Anything not shown here is edited under File.',
+        secrets: (secrets: number) =>
+            `${count(secrets, { one: 'secret of the file is', other: 'secrets of the file are' })} never shown: each stands in the text as <<secret-1>>, and stays as it is unless you type over it.`,
+        reading: 'Reading the text again…',
+        done: {
+            saved: 'Saved. FXServer reads its cfg when it starts: the change applies at its next start.',
+            restored: 'The version is back in place. It applies at the next start of FXServer.',
+        },
+        conflict:
+            'The file changed on disk since it was read here, so nothing was saved. Copy what you need from the File view, then read the file again.',
+        readAgain: 'Read the file again',
+        failed: (reason: string) => `Nothing was saved. ${reason}`,
+        openSetup: 'Open the server setup',
+        refused: {
+            notConfigured:
+                'FXServer has no launch settings yet: the server setup points Observer at your server folder and its cfg.',
+            missing: 'The cfg of the launch settings is not in the server folder.',
+            notAFile:
+                'The cfg of the launch settings is a link or a folder: Observer writes a plain file only.',
+            unreadable: 'Observer cannot read the cfg of the launch settings.',
+            readOnly:
+                'The cfg is marked read-only on the host, so a save could not write it. Clear that mark, then read it again.',
+            tooLarge: 'The cfg is over 512 KiB, more than this page edits: change it on the host.',
+            notUtf8:
+                'The cfg is not UTF-8 text, so a save from here would change its accented letters. Save it as UTF-8 on the host, then read it again.',
+            holdsMarks:
+                'The cfg holds text written like the marks that stand for its secrets here (<<secret-1>>), so this page could not tell them apart. Change that line on the host.',
+        } satisfies Record<CfgRefusal, string>,
+        guided: {
+            list: 'What players see in the server list',
+            access: 'Slots, address and keys',
+            fields: {
+                sv_hostname: 'Server name',
+                sv_projectName: 'Project name',
+                sv_projectDesc: 'Description',
+                tags: 'Tags',
+                locale: 'Language',
+                sv_maxclients: 'Slots',
+                sv_enforceGameBuild: 'Game build',
+                sv_licenseKey: 'Licence key',
+                steam_webApiKey: 'Steam Web API key',
+            },
+            at: (written: string, line: string) => `${written} · line ${line}`,
+            lastOf: (written: string, line: string, times: number) =>
+                `${written} · line ${line}, the last of ${formatNumber('en', times)}, which FXServer keeps`,
+            absent: (line: string) => `not in the file: a save adds a ${line} line`,
+            unwritable:
+                'A cfg cannot hold a double quote or a line break in a value. Edit this line under File.',
+            secretKept: 'Set in the file, and never shown.',
+            replace: 'Replace',
+            keepSecret: 'Keep the one in the file',
+            endpoint: 'Game address',
+            endpointAt: (tcp: string, udp: string) =>
+                `endpoint_add_tcp, endpoint_add_udp · lines ${tcp} and ${udp}`,
+            endpointLine: (protocol: string, address: string, line: string) =>
+                `${protocol} ${address} · line ${line}`,
+            noEndpoint: 'The file opens no address.',
+            endpointsInFile:
+                'One field edits the address when the file opens the same one on TCP and UDP, once each. Any other set is edited under File.',
+            resources: 'Resources it starts, in order',
+            resourcesHint: 'Off comments the line out.',
+            missing: 'Not in the server folder',
+            starts: (name: string) => `Start ${name}`,
+            shared: 'This line holds more than one command: edit it under File.',
+            added: 'Added',
+            remove: (name: string) => `Do not add ${name}`,
+            noResource: 'The file starts no resource.',
+            missingCount: (missing: number) =>
+                missing === 1
+                    ? 'One line starts something the server folder does not hold: FXServer skips it at each start.'
+                    : `${formatNumber('en', missing)} lines start something the server folder does not hold: FXServer skips them at each start.`,
+            truncated: 'The file has more lines than are listed here.',
+            add: 'Start another resource',
+            addHint: 'chat, or [maps]',
+            addAction: 'Add',
+            notAName: 'A resource is named without a space, a quote, a semicolon or a comment sign.',
+            alreadyStarted: (name: string) => `${name} is started already.`,
+        },
+        file: {
+            label: 'The file',
+            text: (file: string) => `Text of ${file}`,
+            caret: (line: string, column: string) => `line ${line}, column ${column}`,
+            find: 'Find',
+            notFound: 'Not found',
+        },
+        checks: {
+            title: 'Checks',
+            hint: 'Read again as you type.',
+            checking: 'Reading…',
+            commentOut: 'Comment the line out',
+            summary: (findings: number) =>
+                `${count(findings, { one: 'check', other: 'checks' })} to look at in the File view`,
+        },
+        bar: {
+            unchanged: 'No change yet',
+            changed: (lines: number) => `${count(lines, { one: 'line', other: 'lines' })} changed`,
+            pending: 'Changes not saved',
+            applies:
+                'A save applies at the next start of FXServer, asks for your password, and keeps the file as it was.',
+            changes: 'See the changes',
+            discard: 'Discard',
+            versions: (kept: number) =>
+                kept === 0 ? 'Earlier versions' : `Earlier versions · ${formatNumber('en', kept)}`,
+            save: 'Save',
+        },
+        changes: {
+            title: 'What a save changes',
+            none: 'Nothing: the file already holds this text.',
+            lineEnds: 'Only the line ends differ.',
+            summary: (added: number, removed: number) =>
+                `${count(added, { one: 'line', other: 'lines' })} added, ${formatNumber('en', removed)} removed. Secrets show as [REDACTED].`,
+            more: 'More changes follow, which are not shown here.',
+            lines: 'Lines changed',
+        },
+        versions: {
+            title: 'Earlier versions',
+            intro: 'The file as it was before each save from this page, the latest 20. Putting one back keeps the file as it is now as a version too.',
+            none: 'None yet: the first save keeps the file as it is now.',
+            row: (by: string, lines: number, size: string) =>
+                `replaced by ${by} · ${count(lines, { one: 'line', other: 'lines' })} · ${size}`,
+            compare: 'Compare with the file',
+            hide: 'Hide',
+            putBack: 'Put back',
+            dirty: 'Save or discard your changes before putting a version back.',
+            failed: (reason: string) => `The version was not put back. ${reason}`,
+            lines: 'Lines putting it back changes',
+        },
     },
     overview: {
         title: 'Overview',
@@ -5006,6 +5143,8 @@ export const en = {
             server_stopped: 'Server stopped',
             server_restarted: 'Server restarted',
             server_start_extended: 'Start given more time',
+            server_cfg_changed: 'server.cfg saved',
+            server_cfg_restored: 'server.cfg version put back',
             console_command_sent: 'Console command',
             console_log_downloaded: 'Console log downloaded',
             server_crash_loop: 'Crash loop: restarts stopped',
@@ -5543,6 +5682,18 @@ export const en = {
         server_not_running: 'FXServer is not running.',
         server_stopping: 'FXServer is stopping. Start it again once it has stopped.',
         server_not_starting: 'FXServer is no longer starting.',
+        cfg_not_editable: 'The cfg is not edited from the panel.',
+        cfg_changed: 'The cfg changed on disk since it was read.',
+        invalid_cfg_text: (params) => {
+            const reason = stringParam(params, 'reason');
+            if (reason === 'unknownMark') {
+                return 'The text holds a mark that stands for no secret of the file. Only the marks the file came with, written <<secret-1>>, are put back.';
+            }
+            return reason === 'tooLarge'
+                ? 'The text is over 512 KiB.'
+                : 'The text holds a character no cfg can hold.';
+        },
+        cfg_version_not_found: 'That version is no longer kept.',
         shutting_down: 'Observer is stopping, and FXServer with it.',
         command_refused: (params) => {
             const reason = stringParam(params, 'reason');

@@ -58,6 +58,15 @@ pub enum ErrorCode {
     ServerStopping,
     /// Only a start whose cfg still runs can be given more time.
     ServerNotStarting,
+    /// The launch's cfg is not edited from the panel. Params: `reason`, a
+    /// [`CfgRefusal`](crate::cfg::CfgRefusal).
+    CfgNotEditable,
+    /// The cfg is no longer the file the edit started from: it is read again before a save.
+    CfgChanged,
+    /// The text is not written as a cfg. Params: `reason`, `unknownMark` for a secret's mark that
+    /// stands for nothing, `control` for a NUL, `tooLarge`.
+    InvalidCfgText,
+    CfgVersionNotFound,
     /// Observer is stopping, and FXServer with it.
     ShuttingDown,
     /// Params: `reason`, a `CommandRefusal`.

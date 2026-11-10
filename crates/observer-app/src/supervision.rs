@@ -2,6 +2,7 @@
 //! selected build, the status the panel shows of it, the console it fills, the commands operators
 //! send it, the console log files, and the server setup's checks of a folder and its cfg.
 
+mod cfg;
 mod setup;
 
 use std::collections::{HashMap, VecDeque};

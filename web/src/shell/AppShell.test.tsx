@@ -107,6 +107,7 @@ describe('AppShell', () => {
             en.nav.map,
             en.nav.bans,
             en.nav.schedule,
+            en.nav.cfg,
             en.nav.artifacts,
             en.nav.backups,
             en.nav.changes,

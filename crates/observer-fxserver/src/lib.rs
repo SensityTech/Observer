@@ -2,6 +2,7 @@
 
 pub mod bridge;
 pub mod cfg;
+pub mod cfg_edit;
 pub mod changes;
 pub mod command;
 pub mod console;

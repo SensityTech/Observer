@@ -4,6 +4,7 @@
 mod artifacts;
 mod backups;
 mod bans;
+mod cfg;
 mod changes;
 mod diagnostics;
 mod drops;

@@ -389,8 +389,26 @@ const keyed = (findings: CfgFinding[]) => {
     });
 };
 
-/** The findings grouped blocking, warning, note: each its severity, its sentence and where it is written. */
-function Findings({ findings, onOpen }: { findings: CfgFinding[]; onOpen: (finding: CfgFinding) => void }) {
+/** What can be done about a finding where it is listed. */
+export type FindingFix = {
+    label: string;
+    applies: (finding: CfgFinding) => boolean;
+    onFix: (finding: CfgFinding) => void;
+};
+
+/**
+ * The findings grouped blocking, warning, note: each its severity, its sentence and where it is
+ * written, with the `fix` offered for those it applies to.
+ */
+export function Findings({
+    findings,
+    onOpen,
+    fix,
+}: {
+    findings: CfgFinding[];
+    onOpen: (finding: CfgFinding) => void;
+    fix?: FindingFix;
+}) {
     const { t, format } = useI18n();
     const words = t.serverSetup.cfg;
     const groups = groupFindings(findings);
@@ -430,6 +448,11 @@ function Findings({ findings, onOpen }: { findings: CfgFinding[]; onOpen: (findi
                                         ? finding.file
                                         : `${finding.file}:${format.number(finding.line, { useGrouping: false })}`}
                                 </button>
+                                {fix?.applies(finding) === true && (
+                                    <Button size="sm" onClick={() => fix.onFix(finding)}>
+                                        {fix.label}
+                                    </Button>
+                                )}
                             </li>
                         ))}
                     </ul>

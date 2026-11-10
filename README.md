@@ -126,9 +126,10 @@ configured, and again from **Server → Run the setup**. It has four steps:
 1. **Server folder.** The full path on the host of the folder that holds `resources` and the cfg, such
    as `C:\FXServer\server-data` or `/srv/fxserver/server-data`. Network paths are not supported.
    FXServer runs from this folder. Observer copies nothing into it, and writes there only what people
-   upload over [SFTP](#file-access-over-sftp) and the fixes of the [server tools](#server-tools) the
-   owner runs or turns on: the **Tools** page lists each fix with its backup.
-2. **Config file.** The cfg FXServer executes, relative to the folder, such as `server.cfg`. Observer
+   upload over [SFTP](#file-access-over-sftp), the fixes of the [server tools](#server-tools) the
+   owner runs or turns on, which the **Tools** page lists each with its backup, and the cfg when the
+   owner saves it from the [server.cfg page](#editing-servercfg).
+2. **Config file.** The cfg FXServer executes, relative to the folder, such as `server.cfg`. The setup
    reads it and the cfgs it runs in turn, never changes them, and lists what it finds with file and line:
    blocking problems, warnings and notes, and what the cfg sets (game, endpoints, slots, OneSync,
    hostname, whether a licence key is set). Fix your files, then **Check again**; only a blocking problem
@@ -465,6 +466,41 @@ When the public address carries a port, such as `https://panel.example.com:8443`
 `proxy_set_header Host $http_host;`: `$host` drops the port, and the origin would no longer match.
 Observer pings the websocket every 20 seconds, well within nginx's default 60-second
 `proxy_read_timeout`. The panel opens `wss://` by itself when the page is HTTPS.
+
+## Editing server.cfg
+
+**Server → server.cfg**, for the owner alone, edits the cfg of the launch settings in two views of the
+same text.
+
+- **Guided** gives a field to the lines most servers change: the server name, the project name and
+  description, the tags, the language, the slots, the game build, the game address, the licence key
+  and the Steam Web API key. Each field names the line it is written on, or says that a save adds
+  one. Below them, every line that starts a resource or a category has a switch: off comments the
+  line out, on puts it back, and the order stays the order of the file. A line that starts something
+  neither the server folder nor the build holds is flagged.
+- **File** is the whole text, with line numbers, and the checks of the [server setup](#the-server-setup-page)
+  read again as you type: what blocks a start, what FXServer will skip, with the file and the line.
+
+A save rewrites only what you changed: comments, blank lines, order, line ends and a byte order mark
+stay as they were. It asks for your password, applies at the next start of FXServer, and is refused
+when the file on disk is no longer the one you started from. **See the changes** shows the lines a
+save would change before you save.
+
+Secrets never reach the browser. The values of `sv_licenseKey`, `mysql_connection_string`,
+`rcon_password`, `sv_tebexSecret`, `steam_webApiKey`, a Discord webhook's token and anything else the
+[file changes](#what-changed-since-the-last-start) hide stand in the text as `<<secret-1>>`,
+`<<secret-2>>`. A save puts each one back where its mark still is; typing over a mark replaces the
+secret. The comparisons show them as `[REDACTED]`.
+
+Before each save, Observer keeps the file as it was in its own database: the latest 20 versions,
+with who replaced each and when, secrets included as the file held them. **Earlier versions** compares
+any of them with the file and puts one back, which keeps the current file as a version too. The audit
+log records each save and each version put back with the number of lines added and removed, never
+their text.
+
+The page edits a plain UTF-8 file of at most 512 KiB. It refuses a link, a read-only file, a file in
+another encoding, which a save would damage, and the files the cfg runs with `exec`: those are edited on the host or
+over SFTP, and the checks still read them.
 
 ## File access over SFTP
 

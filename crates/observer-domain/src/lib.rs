@@ -11,6 +11,7 @@ pub mod artifacts;
 pub mod audit;
 pub mod backups;
 pub mod bans;
+pub mod cfg;
 pub mod changes;
 pub mod convars;
 pub mod delegation;
