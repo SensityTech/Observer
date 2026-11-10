@@ -3472,10 +3472,10 @@ export const en = {
         unhealthy: (problems: string[]) => `Degraded: ${list(problems)}.`,
         problems: healthProblems,
         hangNoHeartbeat:
-            'Not responding: the observer bridge stopped reporting in, so its main loop is stuck.',
+            'Not responding: the observer bridge does not report in. Its main loop is stuck, or its start stopped starting resources.',
         hangNoHttp: 'Not responding: its HTTP endpoint stopped answering.',
         hangAdvice: (minutes: number) =>
-            `FXServer stayed silent for ${count(minutes, { one: 'minute', other: 'minutes' })}, the delay set under Server → Hang detection. A first start that builds its caches of clothing and vehicles can take longer: raise the delay there, or turn hang detection off for that start.`,
+            `FXServer stayed silent for ${count(minutes, { one: 'minute', other: 'minutes' })}, the delay set under Server → Hang detection. While it starts, each resource it starts counts as a sign of life, and the console names the last one. A resource that takes longer than the delay, as a clothing pack can on a first start, needs it raised there, or hang detection turned off for that start.`,
         openHang: 'Open hang detection',
         exited: (description: string) => `FXServer exited: ${description}.`,
         fatalError: (message: string) => `FXServer reported a fatal error: ${message}`,
@@ -4379,7 +4379,7 @@ export const en = {
             },
             hangTimeout: {
                 label: 'Wait before restarting',
-                about: 'Minutes of silence, from 1 to 60, 6 by default. Raise it if a first start is slow while resources build their caches of clothing and vehicles.',
+                about: 'Minutes of silence, from 1 to 60, 6 by default. While FXServer starts, each resource it starts counts as a sign of life: raise the delay if one resource alone takes longer, as a clothing pack can on a first start.',
             },
             extraArguments: {
                 label: 'Convars',

@@ -856,6 +856,82 @@ async fn a_hung_main_loop_is_detected_and_the_server_restarted() {
     lab.shut_down(false).await;
 }
 
+/// Adds `lines` to the lab's cfg, with a folder for each resource they start.
+fn extend_cfg(lab: &Lab, resources: &[&str], lines: &[&str]) {
+    let data = lab.dir.path().join("server-data");
+    for resource in resources {
+        let folder = data.join("resources").join(resource);
+        fs::create_dir_all(&folder).unwrap();
+        fs::write(
+            folder.join("fxmanifest.lua"),
+            "fx_version 'cerulean'\ngame 'gta5'\n",
+        )
+        .unwrap();
+    }
+    let cfg = data.join("server.cfg");
+    let added: String = resources
+        .iter()
+        .map(|resource| format!("ensure {resource}\n"))
+        .chain(lines.iter().map(|line| format!("{line}\n")))
+        .collect();
+    fs::write(&cfg, fs::read_to_string(&cfg).unwrap() + &added).unwrap();
+}
+
+#[tokio::test]
+async fn a_start_longer_than_the_hang_delay_goes_online_while_it_keeps_starting_resources() {
+    // Eight resources of 600 ms each: a start of five seconds, under limits that take a server
+    // silent for two for hung.
+    let mut lab = Lab::new(&[("fake_start_ms", "600")]).await;
+    extend_cfg(
+        &lab,
+        &[
+            "maps", "clothes", "vehicles", "weapons", "props", "peds", "sounds", "core",
+        ],
+        &[],
+    );
+
+    lab.supervisor.start("test").await.unwrap();
+
+    assert_eq!(lab.state(State::Online).await, Cause::Ready);
+    assert!(
+        !lab.seen.iter().any(hung_or_exited),
+        "the start was taken for a hang: {:#?}",
+        lab.seen
+    );
+    assert_eq!(lab.generation(), 1);
+    lab.console_until("Started resource core").await;
+    lab.shut_down(false).await;
+}
+
+#[tokio::test]
+async fn a_start_that_stops_starting_resources_is_hung_and_says_where_it_stopped() {
+    let mut lab = Lab::new(&[("fake_start_ms", "300")]).await;
+    // The cfg sticks after its second resource, before any thread of the bridge runs.
+    extend_cfg(&lab, &["maps", "clothes"], &["fake_hang"]);
+
+    lab.supervisor.start("test").await.unwrap();
+
+    assert_eq!(
+        lab.state(State::Hung).await,
+        Cause::Hang {
+            cause: HangCause::NoHeartbeat
+        }
+    );
+    let stopped = lab.console_until("Started resource clothes").await;
+    let note = lab
+        .console_until("its start is stuck: no resource started since clothes, ")
+        .await;
+    assert!(stopped < note);
+    assert_eq!(
+        lab.state(State::Crashed).await.clone(),
+        Cause::Hang {
+            cause: HangCause::NoHeartbeat
+        }
+    );
+    lab.supervisor.stop("test").await.ok();
+    lab.shut_down(false).await;
+}
+
 /// Launch settings with hang detection off; the lab's own launch keeps it on.
 fn without_hang_detection(settings: &mut Settings) {
     if let Some(launch) = &mut settings.launch {

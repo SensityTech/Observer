@@ -162,11 +162,14 @@ hang detection off, only a crash fails it, and a silent server still waits to an
 Observer watches two signals while FXServer runs: the heartbeat of its bridge resource, which only
 comes while the main loop turns, and FXServer's HTTP endpoints. Once the server is up, one of them
 silent for 10 seconds marks it degraded. Silent for the delay under **Server → Hang detection**, 6
-minutes by default and counted from the start until the first answer, the server is hung: Observer
-writes a dump of it (a report of its threads on Linux), kills its process tree and starts it again.
+minutes by default, the server is hung: Observer writes a dump of it (a report of its threads on Linux),
+kills its process tree and starts it again.
 
-A big server's first start can keep its main loop busy for minutes while resources build their caches of
-clothing and vehicles, which reads as a hang. Raise the delay, from 1 to 60 minutes, or turn hang detection
+A start gives no heartbeat: FXServer runs its cfg before any thread of a resource, the bridge's included.
+Until the cfg has run, each resource FXServer starts counts in its place, so a start is hung once it has
+started no resource for the delay, however long it takes in all, and the console names the last resource
+it started. One resource alone can take minutes on a big server's first start, such as a clothing pack
+whose files are read for the first time. Raise the delay, from 1 to 60 minutes, or turn hang detection
 off: FXServer is then left running however long it stays silent, until someone restarts it. Either change
 applies at once, to a server already starting too, and the delay then counts from the change: turning
 detection back on never kills a server that was silent before. A crash is another matter: whenever

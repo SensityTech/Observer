@@ -13,6 +13,9 @@
 //! - `fake_quit_delay_ms` (500): time between `quit` and the end, which is what FXServer 35245 does:
 //!   exit code 1 on Windows, SIGSEGV on Linux;
 //! - `fake_ignore_quit 1`: `quit` does nothing;
+//! - `fake_start_ms <ms>` (0): how long each resource takes to start. FXServer 38435 prints
+//!   `Started resource` once a resource is up and nothing while it reads its stream files, which
+//!   took a clothing pack minutes on a first start;
 //! - `fake_heartbeat_ms` (3000): the bridge heartbeat period;
 //! - `fake_heap_ms` (10000): how often the bridge reports the JS heap;
 //! - `fake_players <n>`: `/dynamic.json` counts `n` clients and `/players.json` lists ids 1 to `n`
@@ -456,6 +459,9 @@ impl Fake {
 
     fn start(&mut self, resource: &str) {
         console::line(SCRIPTING, &format!("Creating script environments for {resource}"));
+        if let Some(ms) = self.server.number("fake_start_ms") {
+            thread::sleep(Duration::from_millis(ms));
+        }
         console::line(RESOURCES, &format!("Started resource {resource}"));
         if !self.started.iter().any(|started| started == resource) {
             self.started.push(resource.to_owned());

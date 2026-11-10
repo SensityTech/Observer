@@ -31,8 +31,9 @@ use super::plan::{self, Chain, ListingInput, ListingPass, Planned, Read, Slot};
 use super::{SERVER, Shared};
 use crate::Error;
 
-/// Hashing waits for the server to be online, or this long after the spawn.
-const ONLINE_WAIT: Duration = Duration::from_mins(3);
+/// Hashing waits for the server to be online, or this long after the spawn: a start reads the same
+/// files, and a big server's first one takes minutes that hashing beside it only adds to.
+const ONLINE_WAIT: Duration = Duration::from_mins(30);
 /// Below this much free space on the data folder's volume, digests only are kept.
 const DISK_FLOOR: u64 = 2_000_000_000;
 /// Files read in one go of the hashing pass, between which progress is written.
@@ -60,7 +61,7 @@ pub(crate) enum Ended {
 }
 
 /// Takes the snapshot of a start: the listing at once, the hashing once `status` says the run is
-/// online, or three minutes later.
+/// online, or half an hour later.
 pub(crate) async fn start(
     shared: Arc<Shared>,
     settings: ChangesSettings,
@@ -517,7 +518,7 @@ impl Work {
         Ok(())
     }
 
-    /// Waits for the run to be online, for three minutes at most. A run that ended frees the disk,
+    /// Waits for the run to be online, for half an hour at most. A run that ended frees the disk,
     /// so hashing starts at once.
     async fn wait_online(
         &self,

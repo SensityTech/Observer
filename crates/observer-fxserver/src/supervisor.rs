@@ -9,7 +9,7 @@ use std::collections::{HashMap, HashSet};
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Weak};
+use std::sync::{Arc, Mutex, PoisonError, Weak};
 use std::time::{Duration, Instant};
 
 use observer_domain::diagnostics::ProcessKind;
@@ -769,6 +769,32 @@ fn on_channel<'a>(line: &'a str, channel: &str) -> Option<&'a str> {
     (name.trim_start() == channel).then_some(text)
 }
 
+/// The resource a line of FXServer's console says it started, as its `resources` channel prints it
+/// once the resource is up, with its warnings counted after the name.
+fn started_resource(line: &str) -> Option<&str> {
+    on_channel(line, "resources")?
+        .strip_prefix("Started resource ")?
+        .split_whitespace()
+        .next()
+}
+
+/// The last resource FXServer said it started in one run, and when: what shows a start going on
+/// before the bridge's first report.
+#[derive(Debug, Default)]
+struct StartProgress {
+    last: Mutex<Option<(Instant, String)>>,
+}
+
+impl StartProgress {
+    fn started(&self, resource: &str, at: Instant) {
+        *self.last.lock().unwrap_or_else(PoisonError::into_inner) = Some((at, resource.to_owned()));
+    }
+
+    fn last(&self) -> Option<(Instant, String)> {
+        self.last.lock().unwrap_or_else(PoisonError::into_inner).clone()
+    }
+}
+
 /// One spawn of FXServer, from its start until its tree is empty.
 struct Run {
     generation: u32,
@@ -787,6 +813,7 @@ struct Run {
     cancel: CancellationToken,
     tasks: Vec<JoinHandle<()>>,
     health: Health,
+    progress: Arc<StartProgress>,
     bridge_ready: bool,
     ready_at: Option<Instant>,
     after: Option<After>,
@@ -1501,6 +1528,11 @@ impl Actor {
         let Some(run) = &mut self.run else {
             return;
         };
+        if !run.health.cfg_ran()
+            && let Some((at, _)) = run.progress.last()
+        {
+            run.health.progressed(at);
+        }
         let verdict = run.health.verdict(now, &limits);
         let newly_ready = !matches!(verdict, Verdict::Starting | Verdict::Hung(_)) && run.ready_at.is_none();
         if newly_ready {
@@ -1538,6 +1570,10 @@ impl Actor {
                 if dumping {
                     return;
                 }
+                let why = match &self.run {
+                    Some(run) if !run.health.cfg_ran() => stalled_text(run.progress.last(), now),
+                    _ => hang_text(cause).to_owned(),
+                };
                 if let Some(run) = &mut self.run {
                     run.end(Ending::Hang { cause });
                 }
@@ -1545,15 +1581,13 @@ impl Actor {
                 match self.settings.hang_snapshot {
                     Some(limits) => {
                         self.note(&format!(
-                            "FXServer is not responding ({}); writing {SNAPSHOT} of the hung server before killing it",
-                            hang_text(cause)
+                            "FXServer is not responding ({why}); writing {SNAPSHOT} of the hung server before killing it"
                         ));
                         self.snapshot(limits).await;
                         self.note("killing FXServer's process tree");
                     }
                     None => self.note(&format!(
-                        "FXServer is not responding ({}); killing its process tree",
-                        hang_text(cause)
+                        "FXServer is not responding ({why}); killing its process tree"
                     )),
                 }
                 self.kill();
@@ -1919,6 +1953,7 @@ impl Actor {
             .unwrap_or_else(|| SocketAddr::from((Ipv4Addr::LOCALHOST, DEFAULT_PORT)));
         let cancel = CancellationToken::new();
         let (stdin, stdin_task) = StdinWriter::start(spawned.stdin, generation, Arc::clone(&self.console));
+        let progress = Arc::new(StartProgress::default());
         let mut tasks = vec![
             tokio::spawn(read_console(
                 spawned.stdout,
@@ -1926,6 +1961,7 @@ impl Actor {
                 generation,
                 Arc::clone(&self.console),
                 self.signals_tx.clone(),
+                Arc::clone(&progress),
             )),
             tokio::spawn(read_console(
                 spawned.stderr,
@@ -1933,6 +1969,7 @@ impl Actor {
                 generation,
                 Arc::clone(&self.console),
                 self.signals_tx.clone(),
+                Arc::clone(&progress),
             )),
             tokio::spawn(trace::read(
                 spawned.traces,
@@ -1977,6 +2014,7 @@ impl Actor {
             cancel,
             tasks,
             health: Health::new(Instant::now()),
+            progress,
             bridge_ready: false,
             ready_at: None,
             after: None,
@@ -2284,6 +2322,7 @@ async fn read_console(
     generation: u32,
     console: Arc<ConsoleHub>,
     signals: mpsc::Sender<(u32, Signal)>,
+    progress: Arc<StartProgress>,
 ) {
     let mut lines = LineAssembler::default();
     let publish = |assembled: crate::console::Assembled| {
@@ -2293,7 +2332,13 @@ async fn read_console(
             masked: false,
         };
         let line = console.push(generation, kind, None, sanitize(&assembled.text), flags);
-        if let Some(signal) = Signal::read(kind, &plain(&line.text)) {
+        let text = plain(&line.text);
+        if kind == LineKind::Stdout
+            && let Some(resource) = started_resource(&text)
+        {
+            progress.started(resource, Instant::now());
+        }
+        if let Some(signal) = Signal::read(kind, &text) {
             let _ = signals.try_send((generation, signal));
         }
     };
@@ -2431,6 +2476,23 @@ fn hang_text(cause: HangCause) -> &'static str {
     }
 }
 
+/// Why a start whose cfg never finished is taken for stuck: the last resource it started, and how
+/// long ago.
+fn stalled_text(last: Option<(Instant, String)>, now: Instant) -> String {
+    match last {
+        Some((at, resource)) => {
+            let seconds = now.saturating_duration_since(at).as_secs();
+            let ago = if seconds >= 120 {
+                format!("{} min", seconds / 60)
+            } else {
+                format!("{seconds} s")
+            };
+            format!("its start is stuck: no resource started since {resource}, {ago} ago")
+        }
+        None => "its start is stuck: it started no resource".to_owned(),
+    }
+}
+
 fn now_ms() -> i64 {
     jiff::Timestamp::now().as_millisecond()
 }
@@ -2438,6 +2500,51 @@ fn now_ms() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_started_resource_is_read_from_fxservers_own_channel_only() {
+        // As FXServer 38435 prints them.
+        assert_eq!(
+            started_resource("[           resources] Started resource Pata_BathroomProps"),
+            Some("Pata_BathroomProps")
+        );
+        assert_eq!(
+            started_resource("[           resources] Started resource Pata_Christmas2 (3 warnings)"),
+            Some("Pata_Christmas2")
+        );
+        for line in [
+            "[           resources] Scanning resources.",
+            "[           resources] Found 391 resources.",
+            "[    c-scripting-core] Creating script environments for prompt_vfd_4bays",
+            "[ citizen-server-impl] Couldn't start resource Pata_toddler.",
+            "[resources:Pata_Jap:s] Asset Pata_Jap/pata_jap81.ydr uses 32.0 MiB of physical memory.",
+            "[         script:chat] [           resources] Started resource fake",
+            "[         script:chat] Started resource fake",
+            "Started resource fake",
+        ] {
+            assert_eq!(started_resource(line), None, "{line}");
+        }
+    }
+
+    #[test]
+    fn a_stuck_start_names_the_last_resource_started_and_how_long_ago() {
+        let started = Instant::now();
+        let last = || Some((started, "clothes".to_owned()));
+        let after = |seconds| started + Duration::from_secs(seconds);
+
+        assert_eq!(
+            stalled_text(last(), after(371)),
+            "its start is stuck: no resource started since clothes, 6 min ago"
+        );
+        assert_eq!(
+            stalled_text(last(), after(45)),
+            "its start is stuck: no resource started since clothes, 45 s ago"
+        );
+        assert_eq!(
+            stalled_text(None, after(45)),
+            "its start is stuck: it started no resource"
+        );
+    }
 
     #[test]
     fn licence_rejections_are_recognised_on_either_stream() {
