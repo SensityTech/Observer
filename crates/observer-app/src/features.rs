@@ -184,7 +184,9 @@ impl Features {
                 };
                 FeatureView {
                     feature,
-                    enabled: chosen.get(&feature).is_none_or(|&(enabled, _)| enabled),
+                    enabled: chosen
+                        .get(&feature)
+                        .map_or(feature.on_by_default(), |&(enabled, _)| enabled),
                     running: running.contains(&feature),
                     held: self.inner.hold(feature, &running),
                     requires: feature.requires().to_vec(),
@@ -458,7 +460,7 @@ impl Inner {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .get(&feature)
-            .is_none_or(|&(enabled, _)| enabled)
+            .map_or(feature.on_by_default(), |&(enabled, _)| enabled)
     }
 
     /// Why `feature` cannot run beside `running`, whatever the owner chose.
@@ -641,7 +643,17 @@ mod tests {
     async fn every_feature_runs_by_default_and_sftp_waits_for_its_address() {
         let lab = Lab::new().await;
         let features = lab.features(&[]).await;
-        assert!(Feature::ALL.into_iter().all(|feature| features.runs(feature)));
+        let running: Vec<Feature> = Feature::ALL
+            .into_iter()
+            .filter(|&feature| features.runs(feature))
+            .collect();
+        let default_on: Vec<Feature> = Feature::ALL
+            .into_iter()
+            .filter(|feature| feature.on_by_default())
+            .collect();
+        assert_eq!(running, default_on);
+        assert!(!features.runs(Feature::Debug), "Debug waits to be asked for");
+        assert!(!view(&features.view().await, Feature::Debug).enabled);
 
         let unconfigured = Features::load(FeaturesSetup {
             db: lab.db.clone(),

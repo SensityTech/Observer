@@ -10,6 +10,7 @@ pub mod crashes;
 pub mod exit;
 pub mod folders;
 pub mod health;
+pub mod hook;
 pub mod launch;
 pub mod layout;
 pub mod perf;

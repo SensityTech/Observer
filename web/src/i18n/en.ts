@@ -14,7 +14,10 @@ import type { BackupError } from '../api/generated/BackupError';
 import type { BackupPhase } from '../api/generated/BackupPhase';
 import type { BanFilter } from '../api/generated/BanFilter';
 import type { BanState } from '../api/generated/BanState';
+import type { BagKind } from '../api/generated/BagKind';
 import type { CfgRefusal } from '../api/generated/CfgRefusal';
+import type { DebugWindow } from '../api/generated/DebugWindow';
+import type { EventWay } from '../api/generated/EventWay';
 import type { BeforeRestarts } from '../api/generated/BeforeRestarts';
 import type { BuildPlatform } from '../api/generated/BuildPlatform';
 import type { CfgFileProblem } from '../api/generated/CfgFileProblem';
@@ -231,6 +234,7 @@ const features = {
     players: 'Players',
     drops: 'Player drops',
     updates: 'Updates',
+    debug: 'Debug',
 } satisfies Record<Feature, string>;
 
 const isFeature = (key: string): key is Feature => Object.hasOwn(features, key);
@@ -462,6 +466,10 @@ export const en = {
         groupPlayers: 'Players',
         groupServer: 'Server',
         groupInsights: 'Insights',
+        groupDebug: 'Debug',
+        debugEvents: 'Events',
+        debugBags: 'State bags',
+        debugHttp: 'HTTP requests',
         maintenance: 'Maintenance',
         settings: 'Settings',
         schedule: 'Restarts',
@@ -564,6 +572,250 @@ export const en = {
         setting: (category: string) => `Setting · ${category}`,
         player: (netId: number) => `Player online · #${netId}`,
         none: 'Nothing matches.',
+    },
+    debug: {
+        counting: (since: string, reporting: number) =>
+            `counting since ${since} · ${count(reporting, { one: 'resource reports', other: 'resources report' })}`,
+        silent: (resources: number) =>
+            `${count(resources, { one: 'started resource does', other: 'started resources do' })} not`,
+        silentAbout:
+            'A resource counts where it runs Lua on the server. Maps, clothes and client-only resources have nothing to count there, and resources in JavaScript or C# do not count yet.',
+        silentMore: (more: number) => `and ${formatNumber('en', more)} more`,
+        window: 'Window',
+        windows: { '1m': '1 min', '5m': '5 min', '15m': '15 min' } satisfies Record<DebugWindow, string>,
+        pause: 'Pause',
+        resume: 'Resume',
+        paused: 'Paused: this page stopped refreshing. The server keeps counting.',
+        truncated:
+            'There was more than Observer keeps apart: the busiest rows are here, and the rest was left out.',
+        loadFailed: 'The counts could not be read.',
+        aSecond: 'a second',
+        aMinute: 'a minute',
+        rate: (value: string) => `${value} a second`,
+        underTenth: '< 0.1',
+        bytesRate: (bytes: string) => `${bytes}/s`,
+        sizes: (each: string, largest: string) => `${each} · ${largest}`,
+        resources: (names: string[], more: number) =>
+            more === 0 ? list(names) : `${names[0]} and ${count(more, { one: 'other', other: 'others' })}`,
+        resourceCount: (resources: number) => count(resources, { one: 'resource', other: 'resources' }),
+        player: (netId: number) => `#${netId}`,
+        unnamed: 'Unnamed',
+        left: 'no longer online',
+        search: 'Find',
+        noMatch: 'Nothing matches.',
+        off: {
+            title: 'Debug is off',
+            about: 'Events, state bags and HTTP requests are counted inside each resource. Nothing counts until you turn this on.',
+            turnOn: 'Turn on at the next start',
+            ownerOnly: 'The owner turns it on, here or in Settings, under Features.',
+            locked: 'observer.toml turns Debug off on this host: only a change there turns it on.',
+            changes: 'What turning it on changes',
+            points: [
+                {
+                    title: 'Two lines in the build',
+                    text: "At each start, Observer adds one line at the top and one at the end of the build's citizen/scripting/lua/scheduler.lua, and keeps the original beside it. Turned off, the file is the original again at the next start.",
+                },
+                {
+                    title: 'Each resource counts for itself',
+                    text: "Names, counts and sizes, sent once a second on the channel the bridge already reports on. Nothing is added to your resources' folders.",
+                },
+                {
+                    title: 'Never the content',
+                    text: 'No event payload, no state bag value, no path, query or body of a request. Observer keeps names and numbers.',
+                },
+                {
+                    title: 'Fifteen minutes, in memory',
+                    text: 'The pages show the last 1, 5 or 15 minutes and forget the rest. Only the hosts each resource has called are written down, to mark the new ones.',
+                },
+                {
+                    title: 'A cost to watch',
+                    text: 'Each resource does a little more on every event it sends or receives. See what that makes on your server, and turn Debug off once you have your answer: the resources stop counting at the next start of FXServer.',
+                },
+                {
+                    title: 'Lua first',
+                    text: 'Resources in JavaScript or C# do not count yet. Each page says how many started resources do not report.',
+                },
+            ],
+        },
+        waiting: {
+            title: 'On, waiting for a start',
+            running:
+                'FXServer started before Debug was on, so its resources do not count yet. They will from its next start: restart it from the bar above when it suits you.',
+            stopped: 'FXServer is not running. Its resources count from its next start.',
+            turnOff: 'Turn off',
+        },
+        refused: {
+            title: 'On, but the build refused it',
+            about: "Observer left the build's scheduler as it was at this start, so nothing is counted. FXServer started all the same.",
+            said: (reason: string) => `What happened: ${reason}`,
+        },
+        events: {
+            title: 'Events',
+            lead: 'What each resource sends and receives, counted inside the resources themselves. Names, counts and sizes: never what an event carries.',
+            totals: {
+                toClients: 'To clients',
+                fromClients: 'From clients',
+                local: 'Between resources',
+                localAbout: 'stay on the server',
+                handlers: 'In handlers',
+                handlersUnit: 'ms a second',
+                handlersAbout: 'of the main thread',
+                refused: 'Refused',
+                refusedIn: (window: string) => `in ${window}`,
+                refusedBy: (players: number) =>
+                    players === 0 ? 'none' : `from ${count(players, { one: 'client', other: 'clients' })}`,
+            },
+            traffic: (window: string) => `Traffic with clients, last ${window}`,
+            trafficTo: 'to clients',
+            trafficFrom: 'from clients',
+            trafficLabel: (to: string, from: string) =>
+                `Bytes a second with clients over the window: ${to} to clients and ${from} from clients at the end.`,
+            view: 'Group by',
+            views: { events: 'By event', resources: 'By resource', players: 'By player', refused: 'Refused' },
+            find: 'Event or resource',
+            none: 'No event in this window.',
+            columns: {
+                event: 'Event',
+                way: 'Way',
+                resource: 'Resource',
+                rate: 'A second',
+                sizes: 'Size, each · largest',
+                clients: 'With clients',
+                toClients: 'To clients',
+                fromClients: 'From clients',
+                local: 'From the server',
+                handlers: 'In handlers',
+                player: 'Player',
+                sent: 'Sent',
+                top: 'Sends most',
+                times: 'Times',
+            },
+            ways: {
+                fromClients: 'from clients',
+                toClient: 'to one client',
+                toAll: 'to everyone',
+                local: 'between resources',
+                fromEngine: 'from the engine',
+            } satisfies Record<EventWay, string>,
+            staysHere: 'stays on the server',
+            msEach: (ms: string) => `${ms} ms each`,
+            msASecond: (ms: string) => `${ms} ms a second`,
+            picked: {
+                rate: 'Rate',
+                size: 'Size',
+                sizeValue: (each: string, largest: string) => `${each} each · ${largest} at most`,
+                handler: 'In its handler',
+                senders: 'Sent most by',
+                sendersAbout:
+                    'Counted, never read. A client far above the others is worth a look: a click opens their profile, with their history and the ban.',
+            },
+            refusedCard: {
+                title: (refused: number, window: string) =>
+                    `Refused, ${formatNumber('en', refused)} in ${window}`,
+                about: 'Events a client sent that no resource opened to clients. FXServer dropped them: this is who tried.',
+                all: 'See them all',
+                none: 'No client sent an event that no resource opened to clients.',
+                unknown: 'unknown client',
+            },
+        },
+        bags: {
+            title: 'State bags',
+            lead: 'What resources write into state bags, and how much of it goes out to clients. Keys, counts and sizes: never the values.',
+            totals: {
+                writes: 'Writes',
+                writesBy: (resources: number) =>
+                    `by ${count(resources, { one: 'resource', other: 'resources' })}`,
+                written: 'Written',
+                writtenAbout: 'in all bags',
+                sent: 'Sent to clients',
+                sentShare: (share: string) => `${share} of what is written`,
+                keys: 'Keys',
+                keysUnit: 'written',
+                keysIn: (window: string) => `in the last ${window}`,
+            },
+            view: 'Group by',
+            views: { keys: 'By key', resources: 'By resource' },
+            find: 'Key or resource',
+            none: 'No state bag was written in this window.',
+            columns: {
+                key: 'Key',
+                bag: 'Bag',
+                by: 'Written by',
+                rate: 'A second',
+                sizes: 'Size, each · largest',
+                sent: 'Sent to clients',
+                resource: 'Resource',
+                written: 'Written',
+                keys: 'Keys',
+            },
+            kinds: {
+                global: 'global',
+                player: 'player',
+                entity: 'entity',
+                localEntity: 'local entity',
+                other: 'other',
+            } satisfies Record<BagKind, string>,
+            every: 'every write',
+            some: (share: string) => `${share} of the writes`,
+            staysHere: 'stays on the server',
+            largest: 'Largest single writes',
+            largestOf: (bag: string, key: string) => `${bag} · ${key}`,
+            toClients: 'sent to clients',
+            reading: 'How to read it',
+            readingAbout:
+                'A key written often and sent to clients is traffic for every player in range of its bag. Watch the rate and what is sent together: a resource that writes a value that did not change sends it all the same.',
+        },
+        http: {
+            title: 'HTTP requests',
+            lead: 'The requests resources send out of the server. Observer keeps the host and nothing else of the address: a path or a query often holds a webhook token or a key.',
+            totals: {
+                requests: 'Requests',
+                requestsBy: (resources: number) =>
+                    `by ${count(resources, { one: 'resource', other: 'resources' })}`,
+                sent: 'Sent',
+                sentAbout: 'in request bodies',
+                hosts: 'Hosts',
+                hostsUnit: 'called',
+                hostsNew: (hosts: number) =>
+                    hosts === 0 ? 'all called before' : `${formatNumber('en', hosts)} never called before`,
+                resources: 'Resources',
+                resourcesUnit: 'call out',
+                resourcesOf: (reporting: number) => `of ${formatNumber('en', reporting)} that report`,
+            },
+            view: 'Show',
+            views: {
+                all: (hosts: number) => `All hosts ${formatNumber('en', hosts)}`,
+                fresh: (hosts: number) => `New hosts ${formatNumber('en', hosts)}`,
+            },
+            find: 'Host or resource',
+            none: 'No resource sent a request in this window.',
+            noneNew: 'No new host in this window.',
+            columns: {
+                host: 'Host',
+                method: 'Method',
+                resource: 'Resource',
+                rate: 'A minute',
+                sent: 'Sent, each',
+                first: 'First called',
+            },
+            noBody: 'no body',
+            isNew: (when: string) => `${when} · new`,
+            fresh: {
+                title: (hosts: number) =>
+                    hosts === 1 ? 'One host is new' : `${formatNumber('en', hosts)} hosts are new`,
+                about: (resource: string, host: string, when: string) =>
+                    `${resource} called ${host} for the first time ${when}. A resource that starts calling a host it never called is how a backdoor shows.`,
+                know: 'I know this host',
+                knowNamed: (host: string) => `I know ${host}`,
+                changes: 'See its file changes',
+                failed: 'The host could not be marked as known.',
+            },
+            kept: 'What is kept',
+            keptAbout:
+                'The list of hosts each resource has called, with the day of its first call, so that a new one stands out. No path, no query, no body, no answer.',
+            learning: (until: string) =>
+                `Observer is learning the hosts your resources call until ${until}: every host seen before then is taken as known.`,
+        },
     },
     cfg: {
         title: 'server.cfg',
@@ -4838,6 +5090,10 @@ export const en = {
                 label: 'Player drops',
                 about: "Why players leave: crashes, timeouts and kicks, and the signatures behind them, read from the players' sessions.",
             },
+            switchDebug: {
+                label: 'Debug',
+                about: "Counts the events, state bag writes and HTTP requests of every Lua resource, for the Debug pages. It adds two lines to the build's Lua scheduler at each start while it is on, and takes them out when it is off.",
+            },
             switchUpdates: {
                 label: 'Updates',
                 about: 'Every 6 hours, Observer asks GitHub for a newer release, which the owner installs from the About page. Off, Observer never contacts GitHub.',
@@ -5258,6 +5514,8 @@ export const en = {
                 dropsWorker: 'the analysis of drops',
                 updateCheck: 'the check for a newer release',
                 updateProbation: 'settling an update once Observer restarted',
+                hookLines: "the two lines in the build's Lua scheduler",
+                hookCounts: 'reading what the resources count',
             } satisfies Record<FeatureTask, string>,
             turnedOn: (name: string) => `${name} is on.`,
             turnedOnLater: (name: string, state: string) => `${name}: ${state}.`,
@@ -5432,6 +5690,7 @@ export const en = {
             tool_files_restored: 'Files restored by a tool',
             feature_changed: 'Feature turned on or off',
             sftp_listen_changed: 'SFTP address changed',
+            debug_host_known: 'Host marked as known in Debug',
             backup_settings_changed: 'Backup settings changed',
             backup_destination_created: 'Backup destination added',
             backup_destination_changed: 'Backup destination changed',

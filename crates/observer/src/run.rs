@@ -8,11 +8,11 @@ use axum::Router;
 use jiff::tz::TimeZone;
 use observer_app::{
     Accounts, Artifacts, ArtifactsSetup, ArtifactsTask, AuditLog, Backups, BackupsHook, BackupsSetup, Bans,
-    BansSetup, BeforeSpawn, Changes, ChangesSetup, Clock, DatabaseFiles, Diagnostics, DiagnosticsSetup,
-    Drops, DropsSetup, Features, FeaturesSetup, LiveMap, MapSetup, Metrics, MetricsSetup, OwnPaths,
-    PRE_LAUNCH_LIMIT, PasswordCost, Players, PlayersSetup, Running, Schedule, ScheduleSetup, ScheduleTask,
-    Servers, Setup, Sources, Statistics, Supervision, Switched, Takeover, Tools, ToolsHook, ToolsSetup,
-    Updates, UpdatesSetup,
+    BansSetup, BeforeSpawn, Changes, ChangesSetup, Clock, DatabaseFiles, DebugCounts, DebugSetup,
+    Diagnostics, DiagnosticsSetup, Drops, DropsSetup, Features, FeaturesSetup, LiveMap, MapSetup, Metrics,
+    MetricsSetup, OwnPaths, PRE_LAUNCH_LIMIT, PasswordCost, Players, PlayersSetup, Running, Schedule,
+    ScheduleSetup, ScheduleTask, Servers, Setup, Sources, Statistics, Supervision, Switched, Takeover, Tools,
+    ToolsHook, ToolsSetup, Updates, UpdatesSetup,
 };
 use observer_artifacts::Http;
 use observer_artifacts::catalog::Catalog;
@@ -20,6 +20,7 @@ use observer_artifacts::releases::{ReleaseKey, Releases};
 use observer_domain::audit::StopSource;
 use observer_domain::features::Feature;
 use observer_fxserver::console::{ConsoleLog, LogLimits};
+use observer_fxserver::supervisor::Counting;
 use observer_store::{BackupKind, ChangesDatabase, Database};
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
@@ -161,6 +162,8 @@ async fn run_until_stopped(
                 backups: backups_hook.clone(),
             }));
             settings.pre_launch_limit = PRE_LAUNCH_LIMIT;
+            let switches = features.clone();
+            settings.counting = Some(Counting::new(move || switches.runs(Feature::Debug)));
             // A hung server's snapshot is the diagnostics' to read.
             if !diagnosing_at_start {
                 settings.hang_snapshot = None;
@@ -310,6 +313,14 @@ async fn run_until_stopped(
         _ => (None, None),
     };
 
+    // Before FXServer boots, so that a start that counts is read from its first report.
+    let (debug, debugging) = DebugCounts::start(DebugSetup {
+        db: db.clone(),
+        clock: clock.clone(),
+        supervision: supervision.clone(),
+        features: features.clone(),
+    })
+    .await?;
     // Before FXServer boots, so that no player gets past the bans.
     let (bans, banning) = Bans::start(BansSetup {
         db: db.clone(),
@@ -383,6 +394,7 @@ async fn run_until_stopped(
         files: files.clone(),
         tools: tools.clone(),
         features: features.clone(),
+        debug,
         diagnostics,
         metrics: metrics.clone(),
         players,
@@ -504,6 +516,7 @@ async fn run_until_stopped(
     close(dropping).await;
     // After the supervision: the bridge answers no one once FXServer is down.
     banning.close().await;
+    debugging.close().await;
     // After the supervision: a stop of FXServer ends a snapshot's job, which this joins.
     close(following).await;
     // After the supervision, so that FXServer's stop is in the statistics.

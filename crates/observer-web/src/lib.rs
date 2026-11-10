@@ -20,8 +20,8 @@ use std::sync::Arc;
 use axum::extract::Request;
 use axum::{Router, middleware};
 use observer_app::{
-    Accounts, Artifacts, AuditLog, Backups, Bans, Changes, Diagnostics, Drops, Error, Features, Files,
-    LiveMap, Metrics, Players, Schedule, Servers, Statistics, Supervision, Tools, Updates,
+    Accounts, Artifacts, AuditLog, Backups, Bans, Changes, DebugCounts, Diagnostics, Drops, Error, Features,
+    Files, LiveMap, Metrics, Players, Schedule, Servers, Statistics, Supervision, Tools, Updates,
 };
 use observer_domain::about::Build;
 use observer_domain::features::Feature;
@@ -51,6 +51,7 @@ pub struct AppState {
     pub tools: Tools,
     pub statistics: Statistics,
     pub features: Features,
+    pub debug: DebugCounts,
     /// The services of the features Observer started without are absent. Their routes and topics
     /// are refused before anything reaches for them, through the accessors below.
     diagnostics: Option<Diagnostics>,
@@ -91,6 +92,7 @@ pub struct Services {
     pub tools: Tools,
     pub statistics: Statistics,
     pub features: Features,
+    pub debug: DebugCounts,
     /// `None` for each feature that does not run at Observer's start.
     pub diagnostics: Option<Diagnostics>,
     pub metrics: Option<Metrics>,
@@ -122,6 +124,7 @@ impl AppState {
             files,
             tools,
             features,
+            debug,
             diagnostics,
             metrics,
             players,
@@ -144,6 +147,7 @@ impl AppState {
             files,
             tools,
             features,
+            debug,
             diagnostics,
             metrics,
             players,

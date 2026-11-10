@@ -108,6 +108,7 @@ function Palette({ me, onClose }: { me: Me; onClose: () => void }) {
         ...sections.people,
         ...sections.server,
         ...sections.insights,
+        ...sections.debug,
         ...sections.maintenance,
         ...sections.settings,
     ]

@@ -14,6 +14,7 @@ pub mod bans;
 pub mod cfg;
 pub mod changes;
 pub mod convars;
+pub mod debug;
 pub mod delegation;
 pub mod diagnostics;
 pub mod drops;

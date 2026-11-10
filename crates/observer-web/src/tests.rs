@@ -6,6 +6,7 @@ mod backups;
 mod bans;
 mod cfg;
 mod changes;
+mod debug;
 mod diagnostics;
 mod drops;
 mod features;
@@ -80,6 +81,7 @@ struct Server {
     _playing: PlayersTask,
     _dropping: DropsTask,
     _banning: BansTask,
+    _debugging: observer_app::DebugTask,
     _mapping: MapTask,
     _following: ChangesTask,
     _backing_up: BackupsTask,
@@ -276,6 +278,14 @@ impl Server {
         })
         .await
         .unwrap();
+        let (debug, debugging) = observer_app::DebugCounts::start(observer_app::DebugSetup {
+            db: db.clone(),
+            clock: clock.clone(),
+            supervision: supervision.clone(),
+            features: features.clone(),
+        })
+        .await
+        .unwrap();
         let files = observer_app::Files::new(db.clone(), clock.clone(), accounts.clone());
         let tools = Tools::new(ToolsSetup {
             db: db.clone(),
@@ -326,6 +336,7 @@ impl Server {
             files,
             tools,
             features,
+            debug,
             diagnostics: Some(diagnostics),
             metrics: Some(metrics.clone()),
             players: Some(players),
@@ -368,6 +379,7 @@ impl Server {
             _playing: playing,
             _dropping: dropping,
             _banning: banning,
+            _debugging: debugging,
             _mapping: mapping,
             _following: following,
             _backing_up: backing_up,

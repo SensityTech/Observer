@@ -11,6 +11,7 @@ mod backups;
 mod bans;
 mod cfg;
 mod changes;
+mod debug;
 mod diagnostics;
 mod drops;
 mod features;
@@ -123,6 +124,8 @@ pub(crate) fn routes() -> Vec<Route> {
     // A feature turned on may open a port or read the host's folders: the owner's alone, as the
     // launch settings are.
     let read_features = Permission(P::SETTINGS_VIEW);
+    let read_debug = Permission(P::DIAGNOSTICS_VIEW);
+    let judge_hosts = Owner;
     let switch_features = ReauthenticatedOwner;
     // A backup is the whole game database. Seeing the backups and starting one are permissions;
     // taking one out takes the critical one and the password again. The settings and destinations
@@ -283,6 +286,11 @@ pub(crate) fn routes() -> Vec<Route> {
         route(M::PUT,    "/features/{feature}", switch_features, features::switch),
         route(M::GET,    "/settings/sftp",      read_features,   features::sftp_listen),
         route(M::PUT,    "/settings/sftp",      switch_features, features::set_sftp_listen),
+        route(M::GET,    "/debug/status",       read_debug,      debug::status),
+        route(M::GET,    "/debug/events",       read_debug,      debug::events),
+        route(M::GET,    "/debug/bags",         read_debug,      debug::bags),
+        route(M::GET,    "/debug/http",         read_debug,      debug::http),
+        route(M::POST,   "/debug/http/known",   judge_hosts,     debug::know_host),
         route(M::GET,    "/servers/default/backups",                      read_backups,     backups::view),
         route(M::PUT,    "/servers/default/backups/settings",             change_backups,   backups::change_settings),
         route(M::POST,   "/servers/default/backups/source/test",          test_backups,     backups::test_source),

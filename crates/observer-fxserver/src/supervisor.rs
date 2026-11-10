@@ -6,6 +6,7 @@
 //! once it has ended. A stop or a shutdown meanwhile tells it to end, waits, and spawns nothing.
 
 use std::collections::{HashMap, HashSet};
+use std::fmt;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -29,6 +30,7 @@ use crate::console::{ConsoleHub, LineAssembler, LineFlags, LineKind, on_channel,
 use crate::crashes::{self, Collected, DumpLimits, HangSnapshotLimits, SnapshotFailure};
 use crate::exit;
 use crate::health::{self, HangCause, Health, HealthLimits, PlayerList, Players, Probe, Problem, Verdict};
+use crate::hook;
 use crate::launch::{self, ServerLaunch};
 use crate::layout::{Flavour, Layout};
 use crate::perf::TickReport;
@@ -58,6 +60,8 @@ const EVENTS: usize = 256;
 const PROCESS_EVENTS: usize = 1024;
 /// A restart of a full server reports a join or a drop for each of its players at once.
 const PLAYER_REPORTS: usize = 8192;
+/// Every resource of a server that counts reports each second it had something to count.
+const HOOK_REPORTS: usize = 8192;
 /// How often the tree's members are compared with what its notifications said.
 const RECONCILE_EVERY: Duration = Duration::from_secs(5);
 /// A member younger than this is the notifications' to report: a fork may not have run its program
@@ -93,6 +97,53 @@ pub enum State {
     CrashLoop,
 }
 
+/// Whether the next start counts what its resources send and receive, asked at each spawn.
+#[derive(Clone)]
+pub struct Counting(Arc<dyn Fn() -> bool + Send + Sync>);
+
+impl Counting {
+    pub fn new(asked: impl Fn() -> bool + Send + Sync + 'static) -> Self {
+        Self(Arc::new(asked))
+    }
+
+    fn asked(&self) -> bool {
+        (self.0)()
+    }
+}
+
+impl fmt::Debug for Counting {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("Counting")
+    }
+}
+
+/// What became of the hook at a start that was to count.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Hooked {
+    /// The start it was for.
+    pub generation: u32,
+    /// Why the build's scheduler was left as it was, and that start counts nothing.
+    pub refused: Option<String>,
+}
+
+type LatestHook = Arc<Mutex<Option<Hooked>>>;
+
+/// What a start did with the hook.
+enum Hook {
+    /// The start does not count: the scheduler is the build's own.
+    Out,
+    In,
+    /// The start was to count, and the scheduler was left as it was.
+    Refused(String),
+}
+
+/// What one resource counted, with the start it is of.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HookReport {
+    pub generation: u32,
+    pub report: hook::Report,
+}
+
 #[derive(Debug, Clone)]
 pub struct Settings {
     /// What the next spawn launches, none until [`Supervisor::configure`] gives it.
@@ -118,6 +169,8 @@ pub struct Settings {
     pub pre_launch: Option<Arc<dyn PreLaunch>>,
     /// How long that work gets before it is told to end. The spawn still waits until it has.
     pub pre_launch_limit: Duration,
+    /// Whether a start counts what its resources send and receive; `None` never does.
+    pub counting: Option<Counting>,
 }
 
 impl Settings {
@@ -135,6 +188,7 @@ impl Settings {
             drop_first_tree_change: false,
             pre_launch: None,
             pre_launch_limit: pre_launch::DEFAULT_LIMIT,
+            counting: None,
         }
     }
 }
@@ -481,10 +535,12 @@ type LatestStart = Arc<Mutex<Option<(i64, Arc<Progress>)>>>;
 #[derive(Clone)]
 pub struct Supervisor {
     latest_start: LatestStart,
+    latest_hook: LatestHook,
     requests: mpsc::Sender<Request>,
     events: broadcast::Sender<Event>,
     processes: broadcast::Sender<TreeEvent>,
     players: broadcast::Sender<PlayerReport>,
+    counts: broadcast::Sender<HookReport>,
     status: watch::Receiver<Status>,
     readings: watch::Receiver<Readings>,
 }
@@ -497,6 +553,7 @@ impl Supervisor {
         let events = broadcast::channel(EVENTS).0;
         let processes = broadcast::channel(PROCESS_EVENTS).0;
         let players = broadcast::channel(PLAYER_REPORTS).0;
+        let counts = broadcast::channel(HOOK_REPORTS).0;
         let initial = Status {
             state: State::Stopped,
             generation: 0,
@@ -518,8 +575,11 @@ impl Supervisor {
         let (signals_tx, signals) = mpsc::channel(CHANNEL);
         let (probes_tx, probes) = mpsc::channel(CHANNEL);
         let latest_start = LatestStart::default();
+        let latest_hook = LatestHook::default();
         let actor = Actor {
             latest_start: Arc::clone(&latest_start),
+            latest_hook: Arc::clone(&latest_hook),
+            counts: counts.clone(),
             recovery: Recovery::new(settings.recovery.clone()),
             settings,
             console,
@@ -554,10 +614,12 @@ impl Supervisor {
         (
             Self {
                 latest_start,
+                latest_hook,
                 requests,
                 events,
                 processes,
                 players,
+                counts,
                 status,
                 readings,
             },
@@ -693,6 +755,20 @@ impl Supervisor {
     /// logged, since a join carries the player's address.
     pub fn player_reports(&self) -> broadcast::Receiver<PlayerReport> {
         self.players.subscribe()
+    }
+
+    /// What the resources of a start that counts report, each second. Off the event bus too:
+    /// there are hundreds a second.
+    pub fn hook_reports(&self) -> broadcast::Receiver<HookReport> {
+        self.counts.subscribe()
+    }
+
+    /// What became of the hook at the latest start, if that start was to count.
+    pub fn hooked(&self) -> Option<Hooked> {
+        self.latest_hook
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 
     pub fn status(&self) -> watch::Receiver<Status> {
@@ -936,11 +1012,13 @@ enum Wake {
 
 struct Actor {
     latest_start: LatestStart,
+    latest_hook: LatestHook,
     settings: Settings,
     console: Arc<ConsoleHub>,
     events: broadcast::Sender<Event>,
     processes: broadcast::Sender<TreeEvent>,
     players: broadcast::Sender<PlayerReport>,
+    counts: broadcast::Sender<HookReport>,
     status: watch::Sender<Status>,
     readings: watch::Sender<Readings>,
     requests: mpsc::Receiver<Request>,
@@ -1679,6 +1757,16 @@ impl Actor {
         let Some(run) = self.run.as_mut().filter(|run| run.generation == trace.generation) else {
             return;
         };
+        if let Some(report) = hook::Report::from_trace(&trace.kind) {
+            // The bridge is Observer's own: what it counts is not the server's.
+            if report.resource != run.bridge {
+                let _ = self.counts.send(HookReport {
+                    generation: trace.generation,
+                    report,
+                });
+            }
+            return;
+        }
         if let Some(kind) = PlayerReportKind::from_trace(&trace.kind, &run.bridge) {
             let _ = self.players.send(PlayerReport {
                 generation: trace.generation,
@@ -2003,17 +2091,13 @@ impl Actor {
         taken: bool,
     ) -> Result<(Run, SocketAddr, Vec<CfgFinding>, LaunchSettings), SpawnError> {
         let layout = prepared.layout.clone();
-        self.install(&layout, &prepared.bridge).await?;
+        let hook = self.install(&layout, &prepared.bridge).await?;
         let credentials = Credentials::generate().map_err(|error| {
             let message = format!("cannot generate the launch credentials: {error}");
             SpawnError::new(SpawnFailure::Spawn, message)
         })?;
 
-        let generation = if taken {
-            self.generation
-        } else {
-            self.take_generation()
-        };
+        let generation = self.generation_of(taken, hook);
         let spawned = observer_platform::spawn(&prepared.launch)
             .map_err(|error| SpawnError::new(SpawnFailure::Spawn, error.to_string()))?;
         let tree = Arc::new(spawned.tree);
@@ -2114,9 +2198,37 @@ impl Actor {
         progress
     }
 
-    /// Writes the bridge into the build as `bridge`, and moves away the dumps of a run Observer
-    /// did not see end, such as before Observer itself crashed.
-    async fn install(&mut self, layout: &Layout, bridge: &str) -> Result<(), SpawnError> {
+    /// The generation of the spawn about to happen, taken now unless the pre-launch phase took
+    /// it as it began. What became of the hook is kept for it, and the console says why a start
+    /// that should count counts nothing.
+    fn generation_of(&mut self, taken: bool, hook: Hook) -> u32 {
+        let generation = if taken {
+            self.generation
+        } else {
+            self.take_generation()
+        };
+        let hooked = match hook {
+            Hook::Out => None,
+            Hook::In => Some(None),
+            Hook::Refused(reason) => {
+                warn!(%reason, "this start counts nothing: the build's scheduler was left as it was");
+                let note = format!("Debug counts nothing in this start: {reason}");
+                self.note_as(SUPERVISOR, generation, &note);
+                Some(Some(reason))
+            }
+        };
+        *self.latest_hook.lock().unwrap_or_else(PoisonError::into_inner) =
+            hooked.map(|refused| Hooked { generation, refused });
+        generation
+    }
+
+    /// Writes the bridge into the build as `bridge`, with the hook and its two lines in the
+    /// scheduler when the start counts and without them when it does not, and moves away the
+    /// dumps of a run Observer did not see end, such as before Observer itself crashed. Answers,
+    /// for a start that counts, why the scheduler was left as it was: the server starts all the
+    /// same.
+    async fn install(&mut self, layout: &Layout, bridge: &str) -> Result<Hook, SpawnError> {
+        let counting = self.settings.counting.as_ref().is_some_and(Counting::asked);
         let installing = layout.clone();
         let bridge = bridge.to_owned();
         let dumps = (
@@ -2125,17 +2237,22 @@ impl Actor {
             self.settings.dumps,
         );
         let (installed, moved) = tokio::task::spawn_blocking(move || {
-            let installed = bridge::install(&installing, &bridge);
+            let installed = bridge::install(&installing, &bridge)
+                .map(|()| hook::install(&installing, &bridge, counting).err());
             (installed, crashes::collect(&dumps.0, &dumps.1, dumps.2))
         })
         .await
         .map_err(|error| SpawnError::new(SpawnFailure::Spawn, error.to_string()))?;
-        if let Err(error) = installed {
+        let refused = installed.map_err(|error| {
             let message = format!("cannot install the observer bridge: {error}");
-            return Err(SpawnError::new(SpawnFailure::Bridge, message));
-        }
+            SpawnError::new(SpawnFailure::Bridge, message)
+        })?;
         self.report_dumps(moved);
-        Ok(())
+        Ok(match refused {
+            _ if !counting => Hook::Out,
+            None => Hook::In,
+            Some(refusal) => Hook::Refused(refusal.to_string()),
+        })
     }
 
     async fn exited(&mut self, exit: Exit) {

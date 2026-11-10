@@ -6,6 +6,7 @@
 use std::fs;
 use std::net::{SocketAddr, TcpListener, UdpSocket};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -20,13 +21,15 @@ use observer_fxserver::console::{ConsoleHub, LineKind, plain};
 use observer_fxserver::crashes::analysis;
 use observer_fxserver::crashes::{HangSnapshotLimits, SnapshotFailure};
 use observer_fxserver::health::{HangCause, HealthLimits, Problem};
+use observer_fxserver::hook::{self, Way};
 use observer_fxserver::launch::ServerLaunch;
+use observer_fxserver::layout::{Flavour, Layout};
 use observer_fxserver::perf::Thread;
 use observer_fxserver::recovery::RecoveryPolicy;
 use observer_fxserver::stdin::{StdinError, UserCommand};
 use observer_fxserver::supervisor::{
-    Cause, ControlError, Event, EventKind, ProcessChange, START_EXTENSION, Settings, StartStatus, State,
-    StopTimings, Supervisor, TreeEvent,
+    Cause, ControlError, Counting, Event, EventKind, Hooked, ProcessChange, START_EXTENSION, Settings,
+    StartStatus, State, StopTimings, Supervisor, TreeEvent,
 };
 use observer_platform::{ProcessInfo, Protocol, Socket, SocketState};
 use tempfile::TempDir;
@@ -2012,4 +2015,92 @@ async fn a_detached_child_with_an_environment_of_its_own_is_not_ended_while_it_r
         ended.is_err() || !alive,
         "{process:?} was reported ended while it ran"
     );
+}
+
+/// A start that counts puts the hook and its two lines into the build and reads what each
+/// resource reports under the name FXServer gives it; the next start that does not count takes
+/// the lines out again.
+#[tokio::test]
+async fn a_start_that_counts_hooks_the_build_and_the_next_that_does_not_restores_it() {
+    let counting = Arc::new(AtomicBool::new(true));
+    let asked = Arc::clone(&counting);
+    let mut lab = Lab::tuned(&[], |settings| {
+        settings.counting = Some(Counting::new(move || asked.load(Ordering::Relaxed)));
+    })
+    .await;
+    let scheduler = hook::scheduler(&Layout::new(&lab.launch.build, Flavour::HOST));
+    let original = "local yield = coroutine.yield
+Citizen.SetEventRoutine(function() end)
+";
+    fs::create_dir_all(scheduler.parent().unwrap()).unwrap();
+    fs::write(&scheduler, original).unwrap();
+    let mut reports = lab.supervisor.hook_reports();
+
+    lab.supervisor.start("test").await.unwrap();
+    lab.state(State::Online).await;
+
+    let counted = fs::read_to_string(&scheduler).unwrap();
+    let bridge = lab.bridge();
+    assert!(counted.starts_with("--[[obs:hook:head "), "{counted}");
+    assert!(counted.contains(&format!("LoadResourceFile('{bridge}', 'hook.lua')")));
+    assert_eq!(counted.lines().count(), original.lines().count() + 1);
+    assert!(lab.system_resources().join(&bridge).join("hook.lua").is_file());
+    assert_eq!(
+        lab.supervisor.hooked(),
+        Some(Hooked {
+            generation: lab.generation(),
+            refused: None
+        })
+    );
+    // What the bridge itself counts is Observer's, not the server's: it is left out.
+    lab.type_command(
+        &format!("fake_debug {bridge} ev inI playerJoining 1 12 12 15"),
+        "test",
+    )
+    .await;
+    lab.type_command("fake_debug chat ev toA chat:addMessage 4 1240 310 0", "test")
+        .await;
+    let report = timeout(WAIT, reports.recv()).await.unwrap().unwrap();
+    assert_eq!(report.generation, lab.generation());
+    assert_eq!(report.report.resource, "chat");
+    let event = &report.report.events[0];
+    assert_eq!(
+        (
+            event.way,
+            event.name.as_str(),
+            event.count,
+            event.bytes,
+            event.largest
+        ),
+        (Way::ToAll, "chat:addMessage", 4, 1240, 310)
+    );
+
+    counting.store(false, Ordering::Relaxed);
+    lab.supervisor.restart("test").await.unwrap();
+    lab.state(State::Starting).await;
+    lab.state(State::Online).await;
+
+    assert_eq!(fs::read_to_string(&scheduler).unwrap(), original);
+    assert_eq!(lab.supervisor.hooked(), None);
+    lab.shut_down(false).await;
+}
+
+/// A build whose scheduler Observer cannot change starts all the same, counts nothing, and the
+/// console says why.
+#[tokio::test]
+async fn a_build_whose_scheduler_cannot_be_hooked_starts_all_the_same() {
+    let mut lab = Lab::tuned(&[], |settings| {
+        settings.counting = Some(Counting::new(|| true));
+    })
+    .await;
+
+    lab.supervisor.start("test").await.unwrap();
+    lab.state(State::Online).await;
+
+    let hooked = lab.supervisor.hooked().unwrap();
+    assert_eq!(hooked.generation, lab.generation());
+    let reason = hooked.refused.unwrap();
+    assert!(reason.contains("scheduler.lua"), "{reason}");
+    lab.console_until("Debug counts nothing in this start").await;
+    lab.shut_down(false).await;
 }

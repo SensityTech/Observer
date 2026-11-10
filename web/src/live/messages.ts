@@ -253,6 +253,7 @@ const AUDIT_ACTIONS = {
     tool_files_restored: true,
     feature_changed: true,
     sftp_listen_changed: true,
+    debug_host_known: true,
     backup_settings_changed: true,
     backup_destination_created: true,
     backup_destination_changed: true,

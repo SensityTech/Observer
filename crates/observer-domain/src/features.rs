@@ -29,6 +29,10 @@ pub enum Feature {
     Drops,
     /// Checks GitHub for a newer release of Observer, which the owner installs from the panel.
     Updates,
+    /// What the server's resources send and receive, counted by the resources themselves: events,
+    /// state bag writes and outgoing HTTP requests. Off until the owner turns it on, since it adds
+    /// two lines to the build's Lua scheduler.
+    Debug,
 }
 
 /// When a change of a switch takes effect.
@@ -100,6 +104,11 @@ pub enum FeatureTask {
     UpdateCheck,
     /// After an install, settles whether the new version started, or puts the previous one back.
     UpdateProbation,
+    /// The two lines in the build's Lua scheduler: put in while Debug is on, taken out while it
+    /// is off.
+    HookLines,
+    /// Reads and totals what the resources count.
+    HookCounts,
 }
 
 /// When a task of a feature runs.
@@ -140,7 +149,7 @@ pub enum ServerFolder {
 }
 
 impl Feature {
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::Sftp,
         Self::Changes,
         Self::Tools,
@@ -149,6 +158,7 @@ impl Feature {
         Self::Players,
         Self::Drops,
         Self::Updates,
+        Self::Debug,
     ];
 
     /// The name on the wire, in the store and in `observer.toml`.
@@ -162,7 +172,14 @@ impl Feature {
             Self::Players => "players",
             Self::Drops => "drops",
             Self::Updates => "updates",
+            Self::Debug => "debug",
         }
+    }
+
+    /// Whether it is on until the owner says otherwise. Debug alone waits to be asked for: it
+    /// changes a file of the build.
+    pub const fn on_by_default(self) -> bool {
+        !matches!(self, Self::Debug)
     }
 
     pub fn from_name(name: &str) -> Option<Self> {
@@ -184,7 +201,7 @@ impl Feature {
     pub const fn turn_on(self) -> Applies {
         match self {
             Self::Sftp => Applies::Now,
-            Self::Tools => Applies::NextServerStart,
+            Self::Tools | Self::Debug => Applies::NextServerStart,
             _ => Applies::ObserverRestart,
         }
     }
@@ -230,6 +247,10 @@ impl Feature {
             run(T::UpdateCheck, C::Every { seconds: 6 * 3600 }),
             run(T::UpdateProbation, C::ObserverStart),
         ];
+        const DEBUG: &[FeatureTaskRun] = &[
+            run(T::HookLines, C::ServerStart),
+            run(T::HookCounts, C::Continuous),
+        ];
         match self {
             Self::Sftp => SFTP,
             Self::Changes => CHANGES,
@@ -239,6 +260,7 @@ impl Feature {
             Self::Players => PLAYERS,
             Self::Drops => DROPS,
             Self::Updates => UPDATES,
+            Self::Debug => DEBUG,
         }
     }
 
@@ -269,6 +291,11 @@ impl Feature {
                 task: FeatureTask::UpdateProbation,
                 cadence: Cadence::ObserverStart,
             }],
+            // The two lines a start put into the scheduler come out at the next one.
+            Self::Debug => &[FeatureTaskRun {
+                task: FeatureTask::HookLines,
+                cadence: Cadence::ServerStart,
+            }],
             _ => &[],
         }
     }
@@ -276,7 +303,7 @@ impl Feature {
     /// The files and folders it keeps, under Observer's data folder.
     pub const fn files(self) -> &'static [&'static str] {
         match self {
-            Self::Sftp => &[],
+            Self::Sftp | Self::Debug => &[],
             Self::Changes => &["changes.sqlite3"],
             Self::Tools => &["tools/backups"],
             Self::Diagnostics => &["crashes"],
@@ -289,7 +316,7 @@ impl Feature {
         match self {
             Self::Sftp | Self::Tools => ServerFolder::Writes,
             Self::Changes => ServerFolder::Reads,
-            Self::Diagnostics | Self::Metrics | Self::Players | Self::Drops | Self::Updates => {
+            Self::Diagnostics | Self::Metrics | Self::Players | Self::Drops | Self::Updates | Self::Debug => {
                 ServerFolder::Untouched
             }
         }
@@ -306,6 +333,7 @@ impl Feature {
             Self::Players => &["/servers/default/players"],
             Self::Drops => &["/servers/default/drops"],
             Self::Updates => &["/updates"],
+            Self::Debug => &["/debug"],
         }
     }
 
@@ -315,7 +343,7 @@ impl Feature {
             Self::Diagnostics => &[Topic::ServerDiagnostics, Topic::ServerAlerts],
             Self::Metrics => &[Topic::MetricsLive],
             Self::Players => &[Topic::ServerMap],
-            Self::Sftp | Self::Tools | Self::Drops | Self::Updates => &[],
+            Self::Sftp | Self::Tools | Self::Drops | Self::Updates | Self::Debug => &[],
         }
     }
 

@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
-import { Link, Outlet } from '@tanstack/react-router';
-import { Menu as MenuIcon, Search, Server, TriangleAlert, X } from 'lucide-react';
-import { Suspense, useCallback, useEffect, useState } from 'react';
+import { Link, Outlet, useRouter, useRouterState } from '@tanstack/react-router';
+import { ChevronRight, Menu as MenuIcon, Search, Server, TriangleAlert, X } from 'lucide-react';
+import { Suspense, useCallback, useEffect, useRef, useState } from 'react';
 
 import { meQuery } from '../api/auth';
 import { Permission } from '../api/generated/Permission';
@@ -37,6 +37,7 @@ export function AppShell() {
     const openPlayers = useCallback(() => setPlayersOpen(true), []);
     const closePlayers = useCallback(() => setPlayersOpen(false), []);
     const phone = useMedia(PHONE);
+    const nav = useCurrentEntryInSight();
 
     useEffect(() => {
         if (!menuOpen && !playersOpen) {
@@ -108,7 +109,7 @@ export function AppShell() {
                             </button>
                         </div>
                         <ServerTile />
-                        <nav className="nav" aria-label={t.nav.sections}>
+                        <nav ref={nav} className="nav" aria-label={t.nav.sections}>
                             <NavEntries me={me} entries={sections.main} onNavigate={closeMenu} />
                             <NavEntries
                                 me={me}
@@ -126,6 +127,12 @@ export function AppShell() {
                                 me={me}
                                 entries={sections.insights}
                                 group={t.nav.groupInsights}
+                                onNavigate={closeMenu}
+                            />
+                            <NavFold
+                                me={me}
+                                entries={sections.debug}
+                                group={t.nav.groupDebug}
                                 onNavigate={closeMenu}
                             />
                             <NavEntries
@@ -179,6 +186,36 @@ export function AppShell() {
         </SignedIn>
     );
 }
+
+/** What is left between the rail's edge and an entry scrolled back into sight. */
+const ENTRY_MARGIN = 8;
+
+/**
+ * Keeps the current page's entry in sight: with every group open, a short window's rail scrolls,
+ * and a page reached from the search or a link may have its entry out of it.
+ */
+const useCurrentEntryInSight = () => {
+    const nav = useRef<HTMLElement>(null);
+    const router = useRouter();
+    useEffect(() => {
+        const place = () => {
+            const list = nav.current;
+            const entry = list?.querySelector('[aria-current="page"]');
+            if (list === null || entry === null || entry === undefined) {
+                return;
+            }
+            const [box, row] = [list.getBoundingClientRect(), entry.getBoundingClientRect()];
+            if (row.top < box.top) {
+                list.scrollTop -= box.top - row.top + ENTRY_MARGIN;
+            } else if (row.bottom > box.bottom) {
+                list.scrollTop += row.bottom - box.bottom + ENTRY_MARGIN;
+            }
+        };
+        place();
+        return router.subscribe('onRendered', place);
+    }, [router]);
+    return nav;
+};
 
 /**
  * The server Observer runs, by the name and port it last ran with. A tile, not a switcher: Observer
@@ -251,6 +288,64 @@ function NavEntries({
                     {alerts === true && <AlertCount />}
                 </Link>
             ))}
+        </>
+    );
+}
+
+/** Whether the Debug group was left open, kept in this browser. */
+const FOLD_KEY = 'observer.navDebug';
+
+const leftOpen = () => {
+    try {
+        return localStorage.getItem(FOLD_KEY) === 'open';
+    } catch {
+        return false;
+    }
+};
+
+/**
+ * A group that stays one line until it is opened: its pages are for the day something misbehaves.
+ * It is open while one of them is the current page.
+ */
+function NavFold({
+    me,
+    entries,
+    group,
+    onNavigate,
+}: {
+    me: Me;
+    entries: NavEntry[];
+    group: string;
+    onNavigate: () => void;
+}) {
+    const inside = useRouterState({
+        select: (state) => entries.some((entry) => state.location.pathname.startsWith(entry.to)),
+    });
+    const [open, setOpen] = useState(leftOpen);
+    const allowed = entries.filter((entry) => opensEntry(me, entry));
+    if (allowed.length === 0) {
+        return null;
+    }
+    const shown = open || inside;
+    return (
+        <>
+            <button
+                type="button"
+                className="nav-group"
+                aria-expanded={shown}
+                onClick={() => {
+                    setOpen(!shown);
+                    try {
+                        localStorage.setItem(FOLD_KEY, shown ? 'folded' : 'open');
+                    } catch {
+                        // Private browsing: the group folds again with the page.
+                    }
+                }}
+            >
+                <ChevronRight size={12} strokeWidth={2} aria-hidden="true" />
+                {group}
+            </button>
+            {shown && <NavEntries me={me} entries={allowed} onNavigate={onNavigate} />}
         </>
     );
 }

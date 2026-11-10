@@ -66,6 +66,15 @@ const AboutPage = lazyCode(() => import('./pages/AboutPage').then((page) => ({ d
 const DiagnosticsPage = lazyCode(() =>
     import('./pages/DiagnosticsPage').then((page) => ({ default: page.DiagnosticsPage })),
 );
+const DebugEventsPage = lazyCode(() =>
+    import('./pages/DebugEventsPage').then((page) => ({ default: page.DebugEventsPage })),
+);
+const DebugBagsPage = lazyCode(() =>
+    import('./pages/DebugBagsPage').then((page) => ({ default: page.DebugBagsPage })),
+);
+const DebugHttpPage = lazyCode(() =>
+    import('./pages/DebugHttpPage').then((page) => ({ default: page.DebugHttpPage })),
+);
 const PlayersPage = lazyCode(() =>
     import('./pages/PlayersPage').then((page) => ({ default: page.PlayersPage })),
 );
@@ -241,6 +250,37 @@ const diagnosticsRoute = createRoute({
     component: () => (
         <RequirePermission name="DiagnosticsView">
             <DiagnosticsPage />
+        </RequirePermission>
+    ),
+});
+
+// What the resources count reads like the diagnostics: the same permission opens both.
+const debugEventsRoute = createRoute({
+    getParentRoute: () => panelRoute,
+    path: '/debug/events',
+    component: () => (
+        <RequirePermission name="DiagnosticsView">
+            <DebugEventsPage />
+        </RequirePermission>
+    ),
+});
+
+const debugBagsRoute = createRoute({
+    getParentRoute: () => panelRoute,
+    path: '/debug/state-bags',
+    component: () => (
+        <RequirePermission name="DiagnosticsView">
+            <DebugBagsPage />
+        </RequirePermission>
+    ),
+});
+
+const debugHttpRoute = createRoute({
+    getParentRoute: () => panelRoute,
+    path: '/debug/http',
+    component: () => (
+        <RequirePermission name="DiagnosticsView">
+            <DebugHttpPage />
         </RequirePermission>
     ),
 });
@@ -467,6 +507,9 @@ const routeTree = rootRoute.addChildren([
         scheduleRoute,
         artifactsRoute,
         diagnosticsRoute,
+        debugEventsRoute,
+        debugBagsRoute,
+        debugHttpRoute,
         playersRoute,
         playerRoute,
         mapRoute,

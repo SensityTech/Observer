@@ -12,6 +12,8 @@ use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
+use observer_fxserver::hook;
+use observer_fxserver::layout::{Flavour, Layout};
 use observer_store::Database;
 use observer_store::artifacts::{self, ArtifactState};
 use serde_json::{Value, json};
@@ -619,4 +621,86 @@ fn a_feature_observer_toml_turns_off_never_runs_and_the_panel_cannot_turn_it_on(
         log.contains("optional features off") && !log.contains("SFTP listening"),
         "{log}"
     );
+}
+
+/// The owner turns Debug on: the next start puts Observer's two lines into the build's scheduler,
+/// what a resource counts reads on the Events page, and a started resource that runs no Lua on the
+/// server is named as one that does not report. The bridge, Observer's own, is neither.
+#[test]
+fn debug_turned_on_in_the_panel_counts_from_the_next_start_and_reads_on_its_pages() {
+    let (observer, owner) = Observer::start();
+    let (build, data) = observer.lay_out_fake();
+    let scheduler = hook::scheduler(&Layout::new(&build, Flavour::HOST));
+    fs::create_dir_all(scheduler.parent().unwrap()).unwrap();
+    fs::write(
+        &scheduler,
+        "Citizen.SetEventRoutine(function() end)
+",
+    )
+    .unwrap();
+    for resource in ["chat", "clothes"] {
+        let folder = data.join("resources").join(resource);
+        fs::create_dir_all(&folder).unwrap();
+        fs::write(
+            folder.join("fxmanifest.lua"),
+            "fx_version 'cerulean'
+game 'gta5'
+",
+        )
+        .unwrap();
+    }
+    fs::write(
+        data.join("d.cfg"),
+        "exec server.cfg
+set fake_debug_silent clothes
+ensure chat
+ensure clothes
+         fake_print running d.cfg
+",
+    )
+    .unwrap();
+    observer.select(35245);
+    observer.save(&owner, &data, "d.cfg");
+    let get = |path: &str| call(observer.port, "GET", path, Some(&owner), None);
+    let post = |path: &str, body: Option<Value>| call(observer.port, "POST", path, Some(&owner), body);
+
+    let off = get("/debug/status");
+    let on = json!({ "enabled": true });
+    let turned_on = call(observer.port, "PUT", "/features/debug", Some(&owner), Some(on));
+    assert_eq!(turned_on.status, 200, "{}", turned_on.body);
+    let started = post("/servers/default/start", None);
+    assert_eq!(started.status, 204, "{}", started.body);
+    wait_for("the resources' first reports", || {
+        let status = get("/debug/status").body;
+        status["reporting"] == 1 && status["silentCount"] == 1
+    });
+    let row = json!({ "line": "fake_debug chat ev toA chat:addMessage 4 1240 310 0" });
+    let typed = post("/servers/default/console", Some(row));
+    assert_eq!(typed.status, 200, "{}", typed.body);
+    wait_for("the chat's event on the page", || {
+        get("/debug/events?window=1m").body["events"][0]["name"] == "chat:addMessage"
+    });
+
+    assert_eq!(off.status, 404, "{}", off.body);
+    assert_eq!(off.body["code"], "feature_disabled");
+    let counted = fs::read_to_string(&scheduler).unwrap();
+    assert!(counted.starts_with("--[[obs:hook:head "), "{counted}");
+    let page = get("/debug/events?window=1m").body;
+    assert_eq!(page["status"]["state"], "counting", "{page}");
+    assert_eq!(
+        page["status"]["silent"],
+        json!(["clothes"]),
+        "the bridge is no resource of the server's"
+    );
+    let event = &page["events"][0];
+    assert_eq!(
+        (
+            &event["way"],
+            &event["resources"],
+            &event["count"],
+            &event["bytes"]
+        ),
+        (&json!("toAll"), &json!(["chat"]), &json!(4), &json!(1240))
+    );
+    assert_eq!(page["totals"]["toClients"], json!({ "count": 4, "bytes": 1240 }));
 }

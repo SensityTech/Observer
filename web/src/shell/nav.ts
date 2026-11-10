@@ -4,11 +4,14 @@ import {
     ChartLine,
     Contact,
     DatabaseBackup,
+    DatabaseZap,
     FileCog,
     GitCompare,
+    Globe,
     LayoutDashboard,
     Map as MapIcon,
     Package,
+    Radar,
     ScrollText,
     Settings,
     SquareTerminal,
@@ -31,6 +34,9 @@ export type NavEntry = {
         | '/schedule'
         | '/artifacts'
         | '/diagnostics'
+        | '/debug/events'
+        | '/debug/state-bags'
+        | '/debug/http'
         | '/players'
         | '/map'
         | '/bans'
@@ -107,6 +113,17 @@ export const navSections = (t: Messages) => ({
             access: Permission.DiagnosticsView,
             alerts: true,
         },
+    ] satisfies NavEntry[],
+    // For the day something misbehaves: the rail keeps them folded under one line.
+    debug: [
+        { to: '/debug/events', label: t.nav.debugEvents, icon: Radar, access: Permission.DiagnosticsView },
+        {
+            to: '/debug/state-bags',
+            label: t.nav.debugBags,
+            icon: DatabaseZap,
+            access: Permission.DiagnosticsView,
+        },
+        { to: '/debug/http', label: t.nav.debugHttp, icon: Globe, access: Permission.DiagnosticsView },
     ] satisfies NavEntry[],
     maintenance: [
         { to: '/tools', label: t.nav.tools, icon: Wrench, access: 'owner', nested: true },

@@ -10,6 +10,7 @@ pub mod bans;
 pub mod cfg_versions;
 pub mod changes;
 mod database;
+pub mod debug;
 pub mod diagnostics;
 pub mod features;
 pub mod files;

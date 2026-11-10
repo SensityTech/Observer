@@ -23,6 +23,9 @@ what to do with them.
   FXServer's threads and connections, crash dumps and hangs.
 - **Live map.** Where the connected players stand, over Rockstar's map of GTA V or an image you add,
   coloured by play time, a click away from their profile and a ban.
+- **Debug.** What each resource sends and receives, writes into state bags and calls over HTTP,
+  counted inside the resources: the event that floods the clients, the client that sends far more
+  than the others, the resource that calls a host it never called. Off until the owner turns it on.
 - **Bans.** A ban holds a player's licence, other identifiers and hardware tokens, for a time or for
   good. The server refuses a banned player at connection with your message, and drops one banned while
   playing.
@@ -805,14 +808,70 @@ use the **Tools** page.
   holds two stream files of the same name, which one FXServer sends may differ from the prediction.
   The report notes it, and such files are never changed.
 
+## Debug
+
+The **Debug** group of the panel counts what the server's resources do, inside the resources
+themselves: the events they send and receive, the state bags they write and the HTTP requests they
+send out. It answers which event floods the clients, which client sends far more than the others,
+which key is written sixty times a second, and which resource started calling a host it never
+called. It is off until the owner turns it on, on any of its pages or on the Settings page
+(**Features**), and it counts from the next start of FXServer.
+
+**What turning it on changes.** At each start of FXServer, Observer adds one line at the top and one
+at the end of the build's `citizen/scripting/lua/scheduler.lua`, the file every server Lua runtime
+runs first, and keeps the file as it was beside it, as `scheduler.lua.original`. The first line
+loads `hook.lua` from the bridge's folder into the resource; the last hands it the scheduler's event
+handlers. Nothing is added to the server's resources. Once Debug is off, Observer stops reading the
+counts at once, and the next start takes the two lines out: the file is byte for byte what it was.
+Until that start, the resources of the server that runs still count. A build whose scheduler
+Observer does not recognise is left as it is: FXServer starts all the same, and the pages say why
+nothing is counted. The lines only count in a server Observer started: the same build run by hand
+counts nothing.
+
+**What is counted.** Names, counts and sizes, sent once a second by each resource on the channel
+the bridge already reports on: an event's name with how often it passed, its size and the time its
+handlers took; a state bag key with how often it was written and whether the write goes out to
+clients; a request's method and host. Never an event's payload, a state bag's value, or the path,
+query, body or answer of a request. The counts stay in memory for fifteen minutes and go with the
+server's run; only the hosts each resource called are stored, with the time of the first call.
+
+- **Events**: the traffic with clients over the last 1, 5 or 15 minutes, and each event by name
+  with its way (from clients, to one client, to everyone, between resources, from the engine), its
+  rate, its size and what it weighs. An event opens on the time its handlers take and the clients
+  that send it most, each a click away from their profile. **Refused** lists what clients sent to
+  an event a resource handles without having opened it to the network: FXServer drops those, and
+  the list says who tried.
+- **State bags**: each key with the kind of bag it is written in, the resource that writes it, its
+  rate, its size and the share of its writes that go out to clients, and the largest single writes.
+- **HTTP requests**: each host with the method, the resource, the rate and the size sent. A host a
+  resource calls for the first time is marked new until the owner says they know it, which the
+  audit log records. For the first 24 hours Debug counts, every host is taken as known.
+
+The pages are read with **View diagnostics**; turning Debug on or off and saying a host is known
+are the owner's.
+
+**Limits.**
+
+- **Server-side Lua only.** A resource counts where it runs Lua on the server. Maps, clothes and
+  client-only resources have nothing to count there; resources written in JavaScript or C# are not
+  counted yet, nor is anything that happens on the clients. Each page says how many started
+  resources report, and names the others.
+- **A cost.** Each resource does a little more work on every event it sends or receives. Observer
+  has not measured it on a busy server: turn Debug on to answer a question, then off again.
+- **Sizes are what the resources hand over,** before FXServer packs and sends them: they compare
+  events with one another, they are not the server's bandwidth. What a state bag sends to clients
+  is worked out from the share of its writes that are replicated.
+- **Latent events** count with the events sent to clients.
+
 ## Turning features off
 
 File access over SFTP (`sftp`), file changes (`changes`), the server tools (`tools`), the diagnostics
-(`diagnostics`), the statistics (`metrics`), the players (`players`), the player drops (`drops`) and
-the update checks (`updates`) can each be turned off. A feature that is off runs none of its code: Observer does not open its port, start
-its tasks or open its database, and its API routes answer `feature_disabled`. What it recorded stays on
-disk, and its retention waits until it runs again. Supervision, the console, accounts, the audit log,
-the restart schedule and FXServer's builds are always on.
+(`diagnostics`), the statistics (`metrics`), the players (`players`), the player drops (`drops`), the
+update checks (`updates`) and Debug (`debug`) can each be turned off; Debug alone starts off. A
+feature that is off runs none of its code: Observer does not open its port, start its tasks or open
+its database, and its API routes answer `feature_disabled`. What it recorded stays on disk, and its
+retention waits until it runs again. Supervision, the console, accounts, the audit log, the restart
+schedule and FXServer's builds are always on.
 
 `GET /api/features` (**View settings**) says for each feature whether it runs, what holds it off, and
 what it opens: its port, its tasks, its files, its routes. Only the owner turns one on or off, with
@@ -821,8 +880,8 @@ what it opens: its port, its tasks, its files, its routes. Only the owner turns 
 - **Off applies at once.** By the time the API answers, the port is closed, the SFTP sessions have
   ended and the feature's tasks have stopped. Turning the players or the statistics off turns the drops
   off too: they are drawn from the players' sessions and from the runs the statistics record.
-- **On applies at the next start of Observer,** which restarts FXServer, with two exceptions: the
-  server tools apply from the next start of FXServer, and SFTP opens its port at once.
+- **On applies at the next start of Observer,** which restarts FXServer, with three exceptions: the
+  server tools and Debug apply from the next start of FXServer, and SFTP opens its port at once.
 - **What a feature left behind is still finished.** With SFTP off, the failed logins it counted still
   reach the audit log, and the uploads a crash cut short still leave the server folder at Observer's
   start. While a fix of the server tools is applied, the work before each start still puts back what it

@@ -10,6 +10,7 @@ mod backups;
 mod bans;
 mod changes;
 mod clock;
+mod debug;
 mod diagnostics;
 mod drops;
 mod error;
@@ -46,6 +47,7 @@ pub use backups::{
 pub use bans::{Bans, BansSetup, BansTask};
 pub use changes::{Changes, ChangesSetup, ChangesTask, ComparedTo, DiffOptions};
 pub use clock::Clock;
+pub use debug::{DebugCounts, DebugSetup, DebugTask};
 pub use diagnostics::{Diagnostics, DiagnosticsSetup, DiagnosticsTask, MAX_DOWNLOAD};
 pub use drops::{DayRates, Drops, DropsSetup, DropsTask, LogQuery};
 pub use error::Error;

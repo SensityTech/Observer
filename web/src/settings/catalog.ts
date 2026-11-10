@@ -47,6 +47,7 @@ export type SettingId =
     | 'switchPlayers'
     | 'switchDrops'
     | 'switchUpdates'
+    | 'switchDebug'
     | 'changesEnabled'
     | 'startEvent'
     | 'extensions'
@@ -194,6 +195,7 @@ export const CATEGORIES: readonly Category[] = [
             { id: 'switchPlayers' },
             { id: 'switchDrops' },
             { id: 'switchUpdates' },
+            { id: 'switchDebug' },
         ],
     },
     {
@@ -278,6 +280,7 @@ export const SWITCH_OF = {
     players: 'switchPlayers',
     drops: 'switchDrops',
     updates: 'switchUpdates',
+    debug: 'switchDebug',
 } satisfies Record<Feature, SettingId>;
 
 /** When each setting applies, found by its id. */

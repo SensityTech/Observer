@@ -195,6 +195,9 @@ pub enum AuditAction {
     /// The owner said where SFTP listens, or took its address back. `details` holds `listen` and
     /// `previous`, each an address or null.
     SftpListenChanged,
+    /// The owner said they know why a resource calls a host, which Debug then no longer shows as
+    /// new. The target is the resource; `details` holds the `host`.
+    DebugHostKnown,
     /// `details` holds each changed setting with its value before and after, and
     /// `passwordChanged` when the manual source's password was replaced, never the password.
     BackupSettingsChanged,
@@ -238,7 +241,7 @@ pub enum AuditAction {
 }
 
 impl AuditAction {
-    pub const ALL: [Self; 110] = [
+    pub const ALL: [Self; 111] = [
         Self::SetupCompleted,
         Self::SetupLinkCreated,
         Self::LoginSucceeded,
@@ -335,6 +338,7 @@ impl AuditAction {
         Self::ToolFixUnstaged,
         Self::FeatureChanged,
         Self::SftpListenChanged,
+        Self::DebugHostKnown,
         Self::BackupSettingsChanged,
         Self::BackupDestinationCreated,
         Self::BackupDestinationChanged,
@@ -450,6 +454,7 @@ impl AuditAction {
             Self::ToolFixUnstaged => "tool_fix_unstaged",
             Self::FeatureChanged => "feature_changed",
             Self::SftpListenChanged => "sftp_listen_changed",
+            Self::DebugHostKnown => "debug_host_known",
             Self::BackupSettingsChanged => "backup_settings_changed",
             Self::BackupDestinationCreated => "backup_destination_created",
             Self::BackupDestinationChanged => "backup_destination_changed",
