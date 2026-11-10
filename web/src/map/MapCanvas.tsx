@@ -6,6 +6,7 @@ import { Button } from '../components/Button';
 import { useI18n } from '../i18n/I18nProvider';
 import { cn } from '../lib/cn';
 import { GRID_BOUNDS, niceStep, toFraction, type Tier } from './geometry';
+import { SEA, TILES_BOUNDS, TILES_WORLD, tilesIn, type TileStyle } from './tiles';
 
 /** A player as the map draws them: where, in which colour, and what a reader hears. */
 export type Dot = { id: number; x: number; y: number; tier: Tier; name: string; label: string };
@@ -29,10 +30,12 @@ const GRID_WIDTH = 1000;
 type View = { scale: number; x: number; y: number };
 
 /**
- * The map: the owner's image placed in the game, or a grid of game coordinates, dragged and zoomed,
- * with a mark for each player that keeps its size whatever the zoom.
+ * The map: Rockstar's own as tiles, the owner's image placed in the game, or a grid of game
+ * coordinates, dragged and zoomed, with a mark for each player that keeps its size whatever the zoom.
  */
 export function MapCanvas({
+    tiles = null,
+    onTilesFailed,
     image,
     bounds,
     dots,
@@ -43,6 +46,10 @@ export function MapCanvas({
     children,
     className,
 }: {
+    /** The style of Rockstar's map to draw, which comes before the image; null for the image or the grid. */
+    tiles?: TileStyle | null;
+    /** Rockstar's servers did not send the map. */
+    onTilesFailed?: () => void;
     /** A `blob:` address and the image's size in pixels, or null for the grid. */
     image: { url: string; width: number; height: number } | null;
     /** Where the image's edges lie in the game; null draws the grid. */
@@ -61,16 +68,19 @@ export function MapCanvas({
     const words = t.map;
     const box = useRef<HTMLDivElement>(null);
     const [size, setSize] = useState({ width: 0, height: 0 });
-    const placed = image !== null && bounds !== null;
-    const area = placed ? bounds : GRID_BOUNDS;
-    const world = placed
-        ? { width: image.width, height: image.height }
-        : {
-              width: GRID_WIDTH,
-              height:
-                  (GRID_WIDTH * (GRID_BOUNDS.north - GRID_BOUNDS.south)) /
-                  (GRID_BOUNDS.east - GRID_BOUNDS.west),
-          };
+    const placed = tiles === null && image !== null && bounds !== null;
+    const area = tiles !== null ? TILES_BOUNDS : placed ? bounds : GRID_BOUNDS;
+    const world =
+        tiles !== null
+            ? TILES_WORLD
+            : placed
+              ? { width: image.width, height: image.height }
+              : {
+                    width: GRID_WIDTH,
+                    height:
+                        (GRID_WIDTH * (GRID_BOUNDS.north - GRID_BOUNDS.south)) /
+                        (GRID_BOUNDS.east - GRID_BOUNDS.west),
+                };
     const [view, setView] = useState<View | null>(null);
     const drag = useRef<{ pointer: number; x: number; y: number; moved: boolean } | null>(null);
 
@@ -138,15 +148,16 @@ export function MapCanvas({
         );
     }, [dots, framing, size.width, world.width, world.height, worldOf]);
 
-    // The first view shows every player, or the whole map; a new image starts over.
+    // The first view shows every player, or the whole map; another map under them starts over, but
+    // another style of the same one.
     const framedFor = useRef<string | null>(null);
+    const base = tiles !== null ? 'tiles' : placed ? image.url : 'grid';
     useEffect(() => {
-        const key = `${image?.url ?? 'grid'}:${placed}`;
-        if (size.width > 0 && framedFor.current !== key) {
-            framedFor.current = key;
+        if (size.width > 0 && framedFor.current !== base) {
+            framedFor.current = base;
             fit();
         }
-    }, [fit, image?.url, placed, size.width]);
+    }, [fit, base, size.width]);
 
     // Only a new ask moves the map, not each new position: what it reads stays out of the effect's
     // dependencies.
@@ -263,11 +274,17 @@ export function MapCanvas({
         <div
             ref={box}
             className={cn(
-                'relative cursor-grab touch-none overflow-hidden bg-surface-2 select-none active:cursor-grabbing',
+                // Clipped, not hidden: a hidden box still scrolls to a focused mark that lies out of view,
+                // which drags the map from under its controls.
+                'relative cursor-grab touch-none overflow-clip bg-surface-2 select-none active:cursor-grabbing',
                 className,
             )}
+            style={tiles === null ? undefined : { backgroundColor: SEA[tiles] }}
         >
-            {view !== null && (
+            {view !== null && tiles !== null && (
+                <Tiles style={tiles} view={view} size={size} onFailed={onTilesFailed} />
+            )}
+            {view !== null && tiles === null && (
                 <div
                     aria-hidden="true"
                     className="pointer-events-none absolute top-0 left-0 origin-top-left"
@@ -289,7 +306,9 @@ export function MapCanvas({
                     )}
                 </div>
             )}
-            {view !== null && !placed && <Grid view={view} world={world} area={area} size={size} />}
+            {view !== null && tiles === null && !placed && (
+                <Grid view={view} world={world} area={area} size={size} />
+            )}
             {view !== null &&
                 dots.map((dot) => {
                     const { left, top } = screen(dot);
@@ -301,6 +320,21 @@ export function MapCanvas({
                                 aria-label={dot.label}
                                 aria-pressed={isSelected}
                                 className="absolute grid size-6 -translate-1/2 cursor-pointer place-items-center rounded-full focus-visible:outline-2 focus-visible:outline-accent max-md:size-10"
+                                onFocus={() => {
+                                    // The keyboard reaches marks out of view too: the map comes to them.
+                                    if (left < 0 || top < 0 || left > size.width || top > size.height) {
+                                        const point = worldOf(dot);
+                                        setView((current) =>
+                                            current === null
+                                                ? current
+                                                : {
+                                                      ...current,
+                                                      x: size.width / 2 - point.x * current.scale,
+                                                      y: size.height / 2 - point.y * current.scale,
+                                                  },
+                                        );
+                                    }
+                                }}
                                 onClick={() => onSelect(isSelected ? null : dot.id)}
                             >
                                 <span
@@ -356,6 +390,46 @@ export function MapCanvas({
                 </Button>
             </fieldset>
             {children}
+        </div>
+    );
+}
+
+/**
+ * Rockstar's map as its servers hold it: the whole map as one tile under the tiles of the zoom in
+ * view, each loaded by the browser from there. A tile that does not come leaves the one under it.
+ */
+function Tiles({
+    style,
+    view,
+    size,
+    onFailed,
+}: {
+    style: TileStyle;
+    view: View;
+    size: { width: number; height: number };
+    onFailed?: () => void;
+}) {
+    const { under, over } = tilesIn(style, view, size, window.devicePixelRatio || 1);
+    return (
+        <div aria-hidden="true" className="pointer-events-none absolute inset-0">
+            {[under, ...over].map((tile) => (
+                <img
+                    key={tile.key}
+                    src={tile.url}
+                    alt=""
+                    draggable={false}
+                    decoding="async"
+                    referrerPolicy="no-referrer"
+                    className="absolute block max-w-none"
+                    style={{ left: tile.left, top: tile.top, width: tile.width, height: tile.height }}
+                    onError={(event) => {
+                        event.currentTarget.style.visibility = 'hidden';
+                        if (tile === under) {
+                            onFailed?.();
+                        }
+                    }}
+                />
+            ))}
         </div>
     );
 }
@@ -422,13 +496,13 @@ function Scale({ scale, area, world }: { scale: number; area: MapBounds; world: 
     return (
         <div
             aria-hidden="true"
-            className="pointer-events-none absolute bottom-3.5 left-3 flex flex-col gap-1"
+            className="pointer-events-none absolute bottom-3 left-3 flex flex-col gap-1 rounded-xs border border-line-strong bg-surface px-2 pt-2 pb-1 shadow-sm"
         >
             <span
-                className="h-1.5 border-x-[1.5px] border-b-[1.5px] border-ink-3"
+                className="h-1.5 border-x-[1.5px] border-b-[1.5px] border-ink-2"
                 style={{ width: metres * pixelsPerUnit }}
             />
-            <span className="font-mono text-meta text-ink-3">{t.map.scale(metres.toLocaleString('en'))}</span>
+            <span className="font-mono text-meta text-ink-2">{t.map.scale(metres.toLocaleString('en'))}</span>
         </div>
     );
 }

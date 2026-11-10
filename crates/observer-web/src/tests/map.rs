@@ -64,6 +64,7 @@ async fn the_map_opens_to_its_own_permission_and_its_image_to_the_owner() {
     assert_eq!(seen.status, StatusCode::OK, "{}", seen.text);
     assert_eq!(seen.json()["image"], json!(null));
     assert_eq!(seen.json()["settings"]["everySeconds"], 2);
+    assert_eq!(seen.json()["settings"]["imagery"], "atlas");
     assert_eq!(not_owner.status, StatusCode::FORBIDDEN);
     assert_eq!(reauth.status, StatusCode::NO_CONTENT, "{}", reauth.text);
     assert_eq!(added.status, StatusCode::OK, "{}", added.text);
@@ -89,6 +90,7 @@ async fn the_settings_take_the_settings_permission_and_are_checked() {
     let watcher = server.member(&owner, "hopper", PLAYERS_MAP).await;
     let manager = server.member(&owner, "sarah", SETTINGS_MANAGE).await;
     let settings = json!({
+        "imagery": "satellite",
         "bounds": { "west": -5640.0, "east": 6470.0, "south": -4140.0, "north": 7970.0 },
         "newHours": 5,
         "veteranHours": 50,

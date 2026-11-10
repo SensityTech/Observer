@@ -11,10 +11,21 @@ const IMAGE: &str = "map.image";
 
 pub fn settings(conn: &Connection) -> Result<MapSettings, StoreError> {
     Ok(settings::get(conn, SETTINGS)?
-        .and_then(|text| serde_json::from_str::<MapSettings>(&text).ok())
+        .and_then(|text| read(&text))
         // A value edited by hand that the panel could not have saved falls back to the defaults.
         .filter(MapSettings::is_valid)
         .unwrap_or_default())
+}
+
+/// Settings saved before the map could draw Rockstar's name no imagery: an image their owner
+/// placed stays what the map draws.
+fn read(text: &str) -> Option<MapSettings> {
+    let mut value: serde_json::Value = serde_json::from_str(text).ok()?;
+    let fields = value.as_object_mut()?;
+    if !fields.contains_key("imagery") && fields.get("bounds").is_some_and(|bounds| !bounds.is_null()) {
+        fields.insert("imagery".to_owned(), "image".into());
+    }
+    serde_json::from_value(value).ok()
 }
 
 pub fn save_settings(conn: &Connection, saved: &MapSettings) -> Result<(), StoreError> {
@@ -52,15 +63,46 @@ struct Stored {
 #[cfg(test)]
 mod tests {
     use jiff::Timestamp;
-    use observer_domain::map::MapBounds;
+    use observer_domain::map::{MapBounds, MapImagery};
 
     use super::*;
     use crate::database::memory;
 
     #[test]
+    fn settings_saved_before_the_imagery_keep_a_placed_image_and_take_the_default_without_one() {
+        let conn = memory();
+        settings::set(
+            &conn,
+            SETTINGS,
+            r#"{"bounds":{"west":-5640.0,"east":6470.0,"south":-4140.0,"north":7970.0},"newHours":5,"veteranHours":50,"everySeconds":1}"#,
+        )
+        .unwrap();
+        let placed = settings(&conn).unwrap();
+        assert_eq!(placed.imagery, MapImagery::Image);
+        assert_eq!(placed.new_hours, 5);
+
+        settings::set(
+            &conn,
+            SETTINGS,
+            r#"{"bounds":null,"newHours":5,"veteranHours":50,"everySeconds":1}"#,
+        )
+        .unwrap();
+        assert_eq!(settings(&conn).unwrap().imagery, MapImagery::Atlas);
+
+        // What the owner chose since is kept as chosen, bounds or not.
+        let chosen = MapSettings {
+            imagery: MapImagery::Roads,
+            ..placed
+        };
+        save_settings(&conn, &chosen).unwrap();
+        assert_eq!(settings(&conn).unwrap(), chosen);
+    }
+
+    #[test]
     fn settings_and_the_image_round_trip_and_bad_ones_fall_back() {
         let conn = memory();
         let saved = MapSettings {
+            imagery: MapImagery::Image,
             bounds: Some(MapBounds {
                 west: -5640.0,
                 east: 6470.0,

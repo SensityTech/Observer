@@ -21,8 +21,8 @@ what to do with them.
   probation, and a return to the last healthy build.
 - **Statistics and diagnostics.** Players, tick times, CPU and memory of FXServer and the host,
   FXServer's threads and connections, crash dumps and hangs.
-- **Live map.** Where the connected players stand, over a map image you add, coloured by play time,
-  a click away from their profile and a ban.
+- **Live map.** Where the connected players stand, over Rockstar's map of GTA V or an image you add,
+  coloured by play time, a click away from their profile and a ban.
 - **Bans.** A ban holds a player's licence, other identifiers and hardware tokens, for a time or for
   good. The server refuses a banned player at connection with your message, and drops one banned while
   playing.
@@ -321,6 +321,10 @@ nothing else.
 | `runtime.fivem.net` | the build listings of each branch, and the archives |
 | `api.github.com` | Observer's latest release, without an account: 60 checks an hour per address |
 | `github.com`, `release-assets.githubusercontent.com`, `objects.githubusercontent.com` | a release's archive, its checksums and their signature |
+
+The panel, in the browser, loads everything from Observer, with one exception: the [live map](#live-map)
+loads Rockstar's map of GTA V from `s.rsg.sc` unless its settings say **My image** or **Grid**. Observer
+itself never talks to that host.
 
 Cfx.re's [Platform License Agreement](https://fivem.net/terms) covers the server builds you download.
 
@@ -815,12 +819,20 @@ shape too, and the settings' Live map category moves the thresholds. A click on 
 play time, session, ping and position, a link to their profile and, with **Ban players**, a ban. Seeing
 the map takes **See the live map**.
 
-Observer ships no map: GTA V's belongs to Rockstar Games. The owner gives, in the settings, the path of
-an image on the host they have the right to use, such as GTA V's atlas from their own copy of the game:
-PNG, JPEG or WebP, up to 16,384 pixels a side and 64 MB. Observer keeps a copy in its data folder
-(`map/`) and serves it only to accounts that see the map. To place it in the game, stand at two spots
-you know on the image, far apart, pick yourself in the list and click where you stand, or type the game
-coordinates of the image's four edges. Without an image, the page shows a grid of game coordinates.
+Under the players, the page draws Rockstar's own map of GTA V, as the game draws it (**Atlas**), seen
+from the sky (**Satellite**) or as a road map (**Roads**): the settings' Live map category chooses.
+Observer ships no map and keeps none, GTA V's belongs to Rockstar Games: each browser that opens the
+page loads the map's tiles from Rockstar's servers (`s.rsg.sc`), which then see that browser's address,
+and nothing else of it: no referrer, no cookie of Observer's. It is the one thing the panel loads from
+elsewhere than Observer; the two other choices load nothing from outside.
+
+**My image** is for another map, a custom island or RedM's for one: the owner gives the path of an image
+on the host they have the right to use, PNG, JPEG or WebP, up to 16,384 pixels a side and 64 MB.
+Observer keeps a copy in its data folder (`map/`) and serves it only to accounts that see the map. To
+place it in the game, stand at two spots you know on the image, far apart, pick yourself in the list and
+click where you stand, or type the game coordinates of the image's four edges. **Grid** draws a grid of
+game coordinates, which also stands in for an image not placed yet and for tiles Rockstar's servers did
+not send.
 
 Positions come from the bridge, which reads them from OneSync: without OneSync there are none. The
 server sends them every 1, 2 or 5 seconds, only while someone has the page open, and stops within 30

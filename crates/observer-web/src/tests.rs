@@ -645,6 +645,9 @@ async fn every_response_carries_the_security_headers() {
     let csp = reply.headers[header::CONTENT_SECURITY_POLICY].to_str().unwrap();
     assert!(csp.contains("script-src 'self'"));
     assert!(csp.contains("frame-ancestors 'none'"));
+    // Images alone come from elsewhere, and from one host: the live map's tiles.
+    assert!(csp.contains("img-src 'self' data: blob: https://s.rsg.sc;"));
+    assert_eq!(csp.matches("https://").count(), 1);
     assert_eq!(reply.headers[header::X_CONTENT_TYPE_OPTIONS], "nosniff");
     assert_eq!(reply.headers[header::REFERRER_POLICY], "no-referrer");
     assert_eq!(reply.headers[header::CACHE_CONTROL], "no-store");

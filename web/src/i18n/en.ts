@@ -56,6 +56,7 @@ import type { LeaveReason } from '../api/generated/LeaveReason';
 import type { LicenceState } from '../api/generated/LicenceState';
 import type { LineKind } from '../api/generated/LineKind';
 import type { LiveChangeKind } from '../api/generated/LiveChangeKind';
+import type { MapImagery } from '../api/generated/MapImagery';
 import type { ModelInfoKind } from '../api/generated/ModelInfoKind';
 import type { NoticeReason } from '../api/generated/NoticeReason';
 import type { NotWritable } from '../api/generated/NotWritable';
@@ -2055,6 +2056,9 @@ export const en = {
             `Positions every ${count(seconds, { one: 'second', other: 'seconds' })}, sent only while someone has this page open.`,
         updated: (ago: string) => `Updated ${ago} ago`,
         waitingFirst: 'Waiting for the first positions…',
+        tilesUnsent: "Rockstar's servers did not send the map: the grid shows game coordinates.",
+        retry: 'Try again',
+        credit: 'Map © Rockstar Games, loaded from its servers',
         noImage: 'No map image yet: the grid shows game coordinates.',
         notCalibrated: 'The map image is not placed in the game yet: the grid shows game coordinates.',
         addImage: 'Add one in Settings',
@@ -4305,7 +4309,7 @@ export const en = {
             },
             map: {
                 name: 'Live map',
-                about: 'The map image of the Live map page, where it sits in the game, and the colours of the players on it.',
+                about: 'What the Live map draws under the players, your own image and where it sits in the game, and the colours of the players on it.',
             },
             restarts: {
                 name: 'Restarts',
@@ -4601,9 +4605,13 @@ export const en = {
                 label: 'Refusal message',
                 about: 'What a banned player reads when the server refuses them, or drops them: the only text Observer ever shows players. {reason}, {ends}, {id}, {name} and {by} are filled in.',
             },
+            mapImagery: {
+                label: 'Map',
+                about: "What the Live map draws under the players. Atlas, Satellite and Roads are Rockstar's own maps of GTA V: each browser that opens the Live map loads them from Rockstar's servers, which then see its address. Observer neither ships nor keeps them. My image and Grid load nothing from elsewhere.",
+            },
             mapImage: {
-                label: 'Map image',
-                about: "Observer ships no map: GTA V's belongs to Rockstar Games. Give the path of an image on this host that you have the right to use, such as GTA V's atlas from your own copy of the game: PNG, JPEG or WebP, up to 16,384 px a side and 64 MB. Observer keeps a copy in its data folder; only accounts that see the live map load it.",
+                label: 'My image',
+                about: "For another map than Rockstar's, a custom island or RedM's for one: the path of an image on this host that you have the right to use, PNG, JPEG or WebP, up to 16,384 px a side and 64 MB. Observer keeps a copy in its data folder; only accounts that see the live map load it. It shows once Map is set to My image and the image is placed.",
             },
             mapBounds: {
                 label: 'Where the image sits in the game',
@@ -4733,6 +4741,13 @@ export const en = {
         },
         map: {
             openMap: 'Open the Live map',
+            imagery: {
+                atlas: 'Atlas',
+                satellite: 'Satellite',
+                roads: 'Roads',
+                image: 'My image',
+                grid: 'Grid',
+            } satisfies Record<MapImagery, string>,
             path: 'Path on this host',
             use: 'Use this image',
             remove: 'Remove the image',

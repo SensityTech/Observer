@@ -1,6 +1,14 @@
 import { useQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
-import { Ban as BanIcon, ExternalLink, Image as ImageIcon, Map as MapIcon, Search, X } from 'lucide-react';
+import {
+    Ban as BanIcon,
+    ExternalLink,
+    Image as ImageIcon,
+    Map as MapIcon,
+    RotateCw,
+    Search,
+    X,
+} from 'lucide-react';
 import { useMemo, useState, type ReactNode } from 'react';
 
 import type { MapLive } from '../api/generated/MapLive';
@@ -22,9 +30,17 @@ import { useNow } from '../lib/useNow';
 import { useTopic } from '../live/context';
 import { tierOf, type Tier } from '../map/geometry';
 import { MapCanvas, TIER_MARK, type Dot } from '../map/MapCanvas';
+import { isTileStyle } from '../map/tiles';
 import { useServerStatus } from '../server/context';
 
-const DEFAULTS: MapSettings = { bounds: null, newHours: 10, veteranHours: 100, everySeconds: 2 };
+/** Until the settings are read: the grid, so that nothing is asked of Rockstar's servers unasked. */
+const DEFAULTS: MapSettings = {
+    imagery: 'grid',
+    bounds: null,
+    newHours: 10,
+    veteranHours: 100,
+    everySeconds: 2,
+};
 const TIERS: Tier[] = ['new', 'regular', 'veteran', 'unconfirmed'];
 
 export function MapPage() {
@@ -50,6 +66,8 @@ export function MapPage() {
     const [missed, setMissed] = useState(false);
     const [focus, setFocus] = useState<{ id: number; at: number } | null>(null);
     const [banning, setBanning] = useState<MapPlayer | null>(null);
+    // The style Rockstar's servers did not send, until another is chosen or the page asks again.
+    const [unsent, setUnsent] = useState<string | null>(null);
     const now = useNow(1_000);
 
     const players = useMemo(() => live?.players ?? [], [live]);
@@ -71,8 +89,10 @@ export function MapPage() {
     });
     const chosen = players.find((player) => player.netId === selected) ?? null;
     const session = online.data?.players.find((player) => player.netId === selected) ?? null;
+    const { imagery } = settings;
+    const tiles = isTileStyle(imagery) && unsent !== imagery ? imagery : null;
     const placedImage =
-        image !== null && imageUrl !== null && settings.bounds !== null
+        imagery === 'image' && image !== null && imageUrl !== null && settings.bounds !== null
             ? { url: imageUrl, width: image.width, height: image.height }
             : null;
     const running = status !== null && ['starting', 'online', 'degraded', 'hung'].includes(status.state);
@@ -176,6 +196,8 @@ export function MapPage() {
                     </ul>
                 </div>
                 <MapCanvas
+                    tiles={tiles}
+                    onTilesFailed={() => setUnsent(imagery)}
                     image={placedImage}
                     bounds={placedImage === null ? null : settings.bounds}
                     dots={dots}
@@ -185,7 +207,19 @@ export function MapPage() {
                     onSelect={setSelected}
                     className="h-[calc(100dvh-17rem)] min-h-96 max-md:h-[62dvh] max-md:min-h-80"
                 >
-                    {placedImage === null && view.isSuccess && (
+                    {isTileStyle(imagery) && tiles === null && (
+                        <output
+                            data-overlay
+                            className="absolute top-3 left-1/2 flex max-w-[calc(100%-1.5rem)] -translate-x-1/2 flex-wrap items-center justify-center gap-x-2 gap-y-1 rounded-box border border-line bg-surface py-1 pr-1 pl-3 text-meta text-ink-2 shadow-pop"
+                        >
+                            <ImageIcon size={14} strokeWidth={1.5} className="flex-none" aria-hidden="true" />
+                            {words.tilesUnsent}
+                            <Button tone="ghost" size="sm" icon={RotateCw} onClick={() => setUnsent(null)}>
+                                {words.retry}
+                            </Button>
+                        </output>
+                    )}
+                    {imagery === 'image' && placedImage === null && view.isSuccess && (
                         <div
                             data-overlay
                             className="absolute top-3 left-1/2 flex max-w-[calc(100%-1.5rem)] -translate-x-1/2 flex-wrap items-center justify-center gap-x-2 gap-y-1 rounded-box border border-line bg-surface px-3 py-1.5 text-meta text-ink-2 shadow-pop"
@@ -204,7 +238,7 @@ export function MapPage() {
                         </div>
                     )}
                     {players.length === 0 && live !== null && (
-                        <p className="pointer-events-none absolute inset-x-0 top-1/2 text-center text-ui text-ink-3">
+                        <p className="pointer-events-none absolute top-1/2 left-1/2 max-w-[calc(100%-1.5rem)] -translate-1/2 rounded-box border border-line bg-surface px-3 py-1.5 text-center text-ui text-ink-2 shadow-pop">
                             {running ? words.waitingFirst : words.stopped}
                         </p>
                     )}
@@ -293,6 +327,7 @@ export function MapPage() {
                 </MapCanvas>
                 <div className="flex flex-wrap items-center gap-x-4 gap-y-1 rounded-b-card border-t border-line bg-bg-subtle py-2 pr-3 pl-5 text-meta text-ink-3 max-md:pl-4">
                     <span className="mr-auto">{words.every(settings.everySeconds)}</span>
+                    {tiles !== null && <span>{words.credit}</span>}
                     {live?.at != null && (
                         <span>
                             {words.updated(format.duration(Math.max(0, now - Date.parse(live.at)) / 1000))}

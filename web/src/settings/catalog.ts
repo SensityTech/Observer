@@ -34,6 +34,7 @@ export type SettingId =
     | 'backupsLast'
     | 'refusalMessage'
     | 'tokenMatches'
+    | 'mapImagery'
     | 'mapImage'
     | 'mapBounds'
     | 'mapTiers'
@@ -172,6 +173,7 @@ export const CATEGORIES: readonly Category[] = [
         group: 'server',
         access: ['SettingsView', 'PlayersMap'],
         settings: [
+            { id: 'mapImagery', applies: 'now' },
             { id: 'mapImage' },
             { id: 'mapBounds', applies: 'now' },
             { id: 'mapTiers', applies: 'now' },
