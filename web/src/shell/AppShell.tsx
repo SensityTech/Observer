@@ -1,28 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { Link, Outlet } from '@tanstack/react-router';
-import {
-    Ban,
-    CalendarClock,
-    ChartLine,
-    Contact,
-    DatabaseBackup,
-    FileCog,
-    GitCompare,
-    LayoutDashboard,
-    Map as MapIcon,
-    Menu as MenuIcon,
-    Package,
-    ScrollText,
-    Server,
-    Settings,
-    SquareTerminal,
-    Stethoscope,
-    TriangleAlert,
-    Unplug,
-    Wrench,
-    X,
-    type LucideIcon,
-} from 'lucide-react';
+import { Menu as MenuIcon, Search, Server, TriangleAlert, X } from 'lucide-react';
 import { Suspense, useCallback, useEffect, useState } from 'react';
 
 import { meQuery } from '../api/auth';
@@ -43,47 +21,18 @@ import { ServerControls } from './ServerControls';
 import { SignedIn } from './SignedIn';
 import { StatusBar } from './StatusBar';
 import { UpdateSignal } from '../updates/UpdateSignal';
+import { CommandPalette } from './CommandPalette';
+import { navSections, opensEntry, type NavEntry } from './nav';
 import { UserMenu } from './UserMenu';
-
-type NavEntry = {
-    to:
-        | '/'
-        | '/statistics'
-        | '/console'
-        | '/schedule'
-        | '/artifacts'
-        | '/diagnostics'
-        | '/players'
-        | '/map'
-        | '/bans'
-        | '/changes'
-        | '/drops'
-        | '/settings'
-        | '/tools'
-        | '/cfg'
-        | '/backups'
-        | '/audit';
-    label: string;
-    icon: LucideIcon;
-    /**
-     * A permission, any one of a list, the owner alone for what no permission grants, or every
-     * account.
-     */
-    access: bigint | bigint[] | 'owner' | 'everyone';
-    /** Shows how many alerts are live. */
-    alerts?: boolean;
-    /**
-     * Stays current on the pages under it, as a player's profile is under the players and a resource
-     * under the changes, and whatever its address holds, as the drops' filters.
-     */
-    nested?: boolean;
-};
 
 export function AppShell() {
     const { t } = useI18n();
     const { data: me } = useQuery(meQuery);
     const [menuOpen, setMenuOpen] = useState(false);
     const [playersOpen, setPlayersOpen] = useState(false);
+    const [paletteOpen, setPaletteOpen] = useState(false);
+    const openPalette = useCallback(() => setPaletteOpen(true), []);
+    const closePalette = useCallback(() => setPaletteOpen(false), []);
     const closeMenu = () => setMenuOpen(false);
     const openPlayers = useCallback(() => setPlayersOpen(true), []);
     const closePlayers = useCallback(() => setPlayersOpen(false), []);
@@ -118,54 +67,7 @@ export function AppShell() {
     }
     const players = allows(me, Permission.PlayersView);
 
-    const main: NavEntry[] = [
-        { to: '/', label: t.nav.overview, icon: LayoutDashboard, access: Permission.DashboardView },
-        { to: '/console', label: t.nav.console, icon: SquareTerminal, access: Permission.ConsoleView },
-    ];
-    // By what one comes for: a person, the server's setup, what the server did, the upkeep.
-    const people: NavEntry[] = [
-        { to: '/players', label: t.nav.players, icon: Contact, access: Permission.PlayersView, nested: true },
-        { to: '/map', label: t.nav.map, icon: MapIcon, access: Permission.PlayersMap },
-        { to: '/bans', label: t.nav.bans, icon: Ban, access: Permission.BansView },
-    ];
-    const server: NavEntry[] = [
-        {
-            to: '/schedule',
-            label: t.nav.schedule,
-            icon: CalendarClock,
-            access: [Permission.DashboardView, Permission.ScheduleManage, Permission.ServerControl],
-        },
-        { to: '/cfg', label: t.nav.cfg, icon: FileCog, access: 'owner' },
-        { to: '/artifacts', label: t.nav.artifacts, icon: Package, access: Permission.ArtifactsView },
-        { to: '/backups', label: t.nav.backups, icon: DatabaseBackup, access: Permission.BackupsView },
-        {
-            to: '/changes',
-            label: t.nav.changes,
-            icon: GitCompare,
-            access: Permission.ChangesView,
-            nested: true,
-        },
-    ];
-    const insights: NavEntry[] = [
-        { to: '/statistics', label: t.nav.statistics, icon: ChartLine, access: Permission.DashboardView },
-        { to: '/drops', label: t.nav.drops, icon: Unplug, access: Permission.DropsView, nested: true },
-        {
-            to: '/diagnostics',
-            label: t.nav.diagnostics,
-            icon: Stethoscope,
-            access: Permission.DiagnosticsView,
-            alerts: true,
-        },
-    ];
-    const maintenance: NavEntry[] = [
-        { to: '/tools', label: t.nav.tools, icon: Wrench, access: 'owner', nested: true },
-        { to: '/audit', label: t.nav.audit, icon: ScrollText, access: Permission.AuditView },
-    ];
-    // At the foot, beside the account: every account opens its own settings, and the categories
-    // its permissions open, the users and the file access among them.
-    const settings: NavEntry[] = [
-        { to: '/settings', label: t.nav.settings, icon: Settings, access: 'everyone', nested: true },
-    ];
+    const sections = navSections(t);
 
     return (
         <SignedIn>
@@ -184,10 +86,21 @@ export function AppShell() {
                             <Logo />
                             <button
                                 type="button"
-                                className={cn(
-                                    buttonVariants({ tone: 'ghost', size: 'icon' }),
-                                    'ml-auto xl:hidden',
-                                )}
+                                className="ml-auto inline-flex h-8 items-center gap-2 rounded-control border border-line bg-surface-2 px-2 text-ink-3 hover:text-ink max-md:h-11"
+                                aria-label={t.palette.label}
+                                aria-keyshortcuts="Control+K"
+                                title={t.palette.label}
+                                onClick={() => {
+                                    closeMenu();
+                                    openPalette();
+                                }}
+                            >
+                                <Search size={14} strokeWidth={1.5} aria-hidden="true" />
+                                <kbd className="font-mono text-micro">Ctrl K</kbd>
+                            </button>
+                            <button
+                                type="button"
+                                className={cn(buttonVariants({ tone: 'ghost', size: 'icon' }), 'xl:hidden')}
                                 aria-label={t.nav.close}
                                 onClick={closeMenu}
                             >
@@ -196,35 +109,35 @@ export function AppShell() {
                         </div>
                         <ServerTile />
                         <nav className="nav" aria-label={t.nav.sections}>
-                            <NavEntries me={me} entries={main} onNavigate={closeMenu} />
+                            <NavEntries me={me} entries={sections.main} onNavigate={closeMenu} />
                             <NavEntries
                                 me={me}
-                                entries={people}
+                                entries={sections.people}
                                 group={t.nav.groupPlayers}
                                 onNavigate={closeMenu}
                             />
                             <NavEntries
                                 me={me}
-                                entries={server}
+                                entries={sections.server}
                                 group={t.nav.groupServer}
                                 onNavigate={closeMenu}
                             />
                             <NavEntries
                                 me={me}
-                                entries={insights}
+                                entries={sections.insights}
                                 group={t.nav.groupInsights}
                                 onNavigate={closeMenu}
                             />
                             <NavEntries
                                 me={me}
-                                entries={maintenance}
+                                entries={sections.maintenance}
                                 group={t.nav.maintenance}
                                 onNavigate={closeMenu}
                             />
                         </nav>
                         <div className="rail-foot">
                             {me.isOwner && <UpdateSignal onNavigate={closeMenu} />}
-                            <NavEntries me={me} entries={settings} onNavigate={closeMenu} />
+                            <NavEntries me={me} entries={sections.settings} onNavigate={closeMenu} />
                             <UserMenu me={me} onNavigate={closeMenu} />
                         </div>
                     </div>
@@ -261,6 +174,7 @@ export function AppShell() {
                 </div>
 
                 {players && <OnlineColumn open={playersOpen} onOpen={openPlayers} onClose={closePlayers} />}
+                <CommandPalette me={me} open={paletteOpen} onOpen={openPalette} onClose={closePalette} />
             </div>
         </SignedIn>
     );
@@ -317,13 +231,7 @@ function NavEntries({
     group?: string;
     onNavigate: () => void;
 }) {
-    const allowed = entries.filter(({ access }) =>
-        access === 'everyone'
-            ? true
-            : access === 'owner'
-              ? me.isOwner
-              : (Array.isArray(access) ? access : [access]).some((permission) => allows(me, permission)),
-    );
+    const allowed = entries.filter((entry) => opensEntry(me, entry));
     if (allowed.length === 0) {
         return null;
     }

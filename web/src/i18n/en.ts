@@ -555,6 +555,16 @@ export const en = {
         signOut: 'Sign out',
         about: 'About Observer',
     },
+    palette: {
+        label: 'Go to a page, a setting or a player',
+        placeholder: 'A page, a setting, a player online',
+        results: 'Results',
+        page: 'Page',
+        tool: 'Tool',
+        setting: (category: string) => `Setting · ${category}`,
+        player: (netId: number) => `Player online · #${netId}`,
+        none: 'Nothing matches.',
+    },
     cfg: {
         title: 'server.cfg',
         meta: (lines: number, started: number) =>
@@ -4734,7 +4744,7 @@ export const en = {
             },
             hangDetection: {
                 label: 'Restart a server that stops responding',
-                about: 'Observer restarts FXServer once its main loop or its HTTP endpoints stay silent for the delay below. Off, a stuck server stays stuck until someone restarts it. A crash restarts FXServer either way.',
+                about: 'Hang detection: Observer restarts FXServer once its main loop or its HTTP endpoints stay silent for the delay below. Off, a stuck server stays stuck until someone restarts it. A crash restarts FXServer either way.',
             },
             hangTimeout: {
                 label: 'Wait before restarting',

@@ -110,6 +110,12 @@ http://localhost:40125/setup#<token>
 Once the owner exists, the panel opens the server setup. Other accounts are added on the **Users**
 page, each with a temporary password that works for 72 hours and is changed at the first sign-in.
 
+The panel's pages are grouped by what one comes for: **Players** (the players, the live map, the
+bans), **Server** (restarts, the cfg, builds, backups, file changes), **Insights** (statistics, drops,
+diagnostics) and **Maintenance** (tools, the audit log). The search button beside the logo, or Ctrl K
+(⌘ K on a Mac) from any page, opens a search of the pages, of the settings by their name, and of the
+connected players by name or ID. Each account finds only what it may open.
+
 From the host, even while Observer runs:
 
 ```sh
