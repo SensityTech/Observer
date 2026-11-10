@@ -90,27 +90,37 @@ describe('AppShell', () => {
         expect(moderator.getByRole('button', { name: en.online.show('0') })).not.toBeNull();
     });
 
-    it('should list the sections in their groups, the map, the bans and the statistics after the players', async () => {
+    it('should list the sections by what one comes for: a player, the server, what it did, its upkeep', async () => {
         const every = Object.values(Permission).reduce((mask, permission) => mask | permission, 0n);
         const { findByRole, getByRole } = shell({ ...OWNER, permissions: formatPermissions(every) });
         await findByRole('heading', { name: 'Overview' });
 
-        const sections = within(getByRole('navigation', { name: en.nav.sections }));
-        expect(sections.getAllByRole('link').map((link) => link.textContent)).toEqual([
+        const nav = getByRole('navigation', { name: en.nav.sections });
+        expect(
+            within(nav)
+                .getAllByRole('link')
+                .map((link) => link.textContent),
+        ).toEqual([
             en.nav.overview,
             en.nav.console,
-            en.nav.schedule,
             en.nav.players,
             en.nav.map,
             en.nav.bans,
-            en.nav.statistics,
-            en.nav.diagnostics,
-            en.nav.changes,
-            en.nav.drops,
+            en.nav.schedule,
             en.nav.artifacts,
             en.nav.backups,
+            en.nav.changes,
+            en.nav.statistics,
+            en.nav.drops,
+            en.nav.diagnostics,
             en.nav.tools,
             en.nav.audit,
+        ]);
+        expect([...nav.querySelectorAll('.nav-group')].map((group) => group.textContent)).toEqual([
+            en.nav.groupPlayers,
+            en.nav.groupServer,
+            en.nav.groupInsights,
+            en.nav.maintenance,
         ]);
     });
 

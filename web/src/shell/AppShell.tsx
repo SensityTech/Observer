@@ -120,24 +120,21 @@ export function AppShell() {
         { to: '/', label: t.nav.overview, icon: LayoutDashboard, access: Permission.DashboardView },
         { to: '/console', label: t.nav.console, icon: SquareTerminal, access: Permission.ConsoleView },
     ];
-    const operations: NavEntry[] = [
+    // By what one comes for: a person, the server's setup, what the server did, the upkeep.
+    const people: NavEntry[] = [
+        { to: '/players', label: t.nav.players, icon: Contact, access: Permission.PlayersView, nested: true },
+        { to: '/map', label: t.nav.map, icon: MapIcon, access: Permission.PlayersMap },
+        { to: '/bans', label: t.nav.bans, icon: Ban, access: Permission.BansView },
+    ];
+    const server: NavEntry[] = [
         {
             to: '/schedule',
             label: t.nav.schedule,
             icon: CalendarClock,
             access: [Permission.DashboardView, Permission.ScheduleManage, Permission.ServerControl],
         },
-        { to: '/players', label: t.nav.players, icon: Contact, access: Permission.PlayersView, nested: true },
-        { to: '/map', label: t.nav.map, icon: MapIcon, access: Permission.PlayersMap },
-        { to: '/bans', label: t.nav.bans, icon: Ban, access: Permission.BansView },
-        { to: '/statistics', label: t.nav.statistics, icon: ChartLine, access: Permission.DashboardView },
-        {
-            to: '/diagnostics',
-            label: t.nav.diagnostics,
-            icon: Stethoscope,
-            access: Permission.DiagnosticsView,
-            alerts: true,
-        },
+        { to: '/artifacts', label: t.nav.artifacts, icon: Package, access: Permission.ArtifactsView },
+        { to: '/backups', label: t.nav.backups, icon: DatabaseBackup, access: Permission.BackupsView },
         {
             to: '/changes',
             label: t.nav.changes,
@@ -145,12 +142,20 @@ export function AppShell() {
             access: Permission.ChangesView,
             nested: true,
         },
+    ];
+    const insights: NavEntry[] = [
+        { to: '/statistics', label: t.nav.statistics, icon: ChartLine, access: Permission.DashboardView },
         { to: '/drops', label: t.nav.drops, icon: Unplug, access: Permission.DropsView, nested: true },
+        {
+            to: '/diagnostics',
+            label: t.nav.diagnostics,
+            icon: Stethoscope,
+            access: Permission.DiagnosticsView,
+            alerts: true,
+        },
     ];
     const maintenance: NavEntry[] = [
-        { to: '/artifacts', label: t.nav.artifacts, icon: Package, access: Permission.ArtifactsView },
-        { to: '/backups', label: t.nav.backups, icon: DatabaseBackup, access: Permission.BackupsView },
-        { to: '/tools', label: t.nav.tools, icon: Wrench, access: 'owner' },
+        { to: '/tools', label: t.nav.tools, icon: Wrench, access: 'owner', nested: true },
         { to: '/audit', label: t.nav.audit, icon: ScrollText, access: Permission.AuditView },
     ];
     // At the foot, beside the account: every account opens its own settings, and the categories
@@ -191,8 +196,20 @@ export function AppShell() {
                             <NavEntries me={me} entries={main} onNavigate={closeMenu} />
                             <NavEntries
                                 me={me}
-                                entries={operations}
-                                group={t.nav.operations}
+                                entries={people}
+                                group={t.nav.groupPlayers}
+                                onNavigate={closeMenu}
+                            />
+                            <NavEntries
+                                me={me}
+                                entries={server}
+                                group={t.nav.groupServer}
+                                onNavigate={closeMenu}
+                            />
+                            <NavEntries
+                                me={me}
+                                entries={insights}
+                                group={t.nav.groupInsights}
                                 onNavigate={closeMenu}
                             />
                             <NavEntries
