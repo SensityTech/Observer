@@ -981,7 +981,8 @@ player; the settings can ask for more, or for none. Addresses are never matched:
 address would be refused together.
 
 Your resources hear of both through `observer:playerRefused` and `observer:playerBanned`, in the
-contract.
+contract. With **Send txAdmin's events too**, each ban made while the server runs also raises
+`txAdmin:events:playerBanned`, whether or not the player is connected.
 
 ## Kicks, announcements and messages
 

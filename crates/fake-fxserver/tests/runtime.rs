@@ -1549,24 +1549,33 @@ async fn players_are_confirmed_followed_and_credited_and_their_address_is_kept_n
     );
 }
 
-#[tokio::test]
-async fn a_banned_player_is_refused_at_connection_and_dropped_when_banned_while_playing() {
-    let mut observer = Observer::new(false).await;
-    let (bans, banning) = Bans::start(BansSetup {
+/// The bans over `observer`'s data.
+fn bans_over(observer: &Observer) -> (Bans, BansTask) {
+    Bans::start(BansSetup {
         db: observer.db.clone(),
         clock: Clock::system(),
         supervision: observer.supervision.clone(),
         schedule: observer.schedule.status(),
-    });
-    let cheater = format!("license:{}", "a".repeat(40));
-    let ada = format!("license:{}", "b".repeat(40));
-    let ban = |license: &str| BanRequest {
+    })
+}
+
+/// A ban of one licence typed by hand, for `minutes` or for good.
+fn ban_of(license: &str, minutes: Option<u32>) -> BanRequest {
+    BanRequest {
         player: None,
         identifiers: vec![license.to_owned()],
         reason: "Aimbot".to_owned(),
-        minutes: None,
-    };
-    let first = bans.ban(&observer.owner, ban(&cheater)).await.unwrap();
+        minutes,
+    }
+}
+
+#[tokio::test]
+async fn a_banned_player_is_refused_at_connection_and_dropped_when_banned_while_playing() {
+    let mut observer = Observer::new(false).await;
+    let (bans, banning) = bans_over(&observer);
+    let cheater = format!("license:{}", "a".repeat(40));
+    let ada = format!("license:{}", "b".repeat(40));
+    let first = bans.ban(&observer.owner, ban_of(&cheater, None)).await.unwrap();
     let send = |line: String| {
         let observer = &observer;
         async move {
@@ -1585,7 +1594,7 @@ async fn a_banned_player_is_refused_at_connection_and_dropped_when_banned_while_
     let refused_event = observer.console_until("observer:playerRefused").await;
     send(format!("fake_connecting Ada {ada}")).await;
     observer.console_until("Player Ada connected").await;
-    let second = bans.ban(&observer.owner, ban(&ada)).await.unwrap();
+    let second = bans.ban(&observer.owner, ban_of(&ada, None)).await.unwrap();
     let banned_event = observer.console_until("observer:playerBanned").await;
     let listed = bans
         .page(BanFilter::Active, None, None, Permissions::all())
@@ -1636,6 +1645,116 @@ Ban ID: {}",
         .map(|ban| (ban.code.clone(), ban.refused))
         .collect();
     assert_eq!(refusals, [(second.code.clone(), 1), (first.code.clone(), 1)]);
+}
+
+#[tokio::test]
+async fn a_ban_is_told_to_txadmin_s_listeners_once_before_it_drops_anyone() {
+    let mut observer = Observer::new(false).await;
+    let stored = observer
+        .servers
+        .launch_settings(Servers::DEFAULT)
+        .await
+        .unwrap()
+        .unwrap();
+    let with_txadmin = LaunchSettings {
+        txadmin_events: true,
+        ..stored.settings
+    };
+    observer
+        .servers
+        .change_launch_settings(
+            &observer.owner,
+            Servers::DEFAULT,
+            with_txadmin,
+            Some(stored.version),
+        )
+        .await
+        .unwrap();
+    let (bans, banning) = bans_over(&observer);
+    let owner = observer.owner.clone();
+    let absent = format!("license:{}", "a".repeat(40));
+    let ada = format!("license:{}", "b".repeat(40));
+
+    observer.supervision.start_server(&owner).await.unwrap();
+    observer.state(ServerState::Online).await;
+    let offline = bans.ban(&owner, ban_of(&absent, None)).await.unwrap();
+    let told_offline = plain(&observer.console_until("txAdmin:events:playerBanned").await.5);
+    observer.type_line(&format!("fake_connecting Ada {ada}")).await;
+    observer.console_until("Player Ada connected").await;
+    let online = bans.ban(&owner, ban_of(&ada, Some(2 * 24 * 60))).await.unwrap();
+    observer.console_until("observer:playerBanned").await;
+    let lines: Vec<String> = observer.console().iter().map(|line| plain(&line.5)).collect();
+    observer.supervision.stop_server(&owner).await.unwrap();
+    observer.state(ServerState::Stopped).await;
+    banning.close().await;
+    observer.stop_observer().await;
+
+    for field in [
+        format!(r#""actionId":"{}""#, offline.code),
+        r#""author":"ada""#.to_owned(),
+        r#""reason":"Aimbot""#.to_owned(),
+        r#""expiration":false"#.to_owned(),
+        r#""durationInput":"permanent""#.to_owned(),
+        format!(r#""targetIds":["{absent}"]"#),
+        r#""targetHwids":[]"#.to_owned(),
+        r#""targetName":"identifiers""#.to_owned(),
+    ] {
+        assert!(told_offline.contains(&field), "{field} in {told_offline}");
+    }
+    assert!(
+        !told_offline.contains("targetNetId") && !told_offline.contains("durationTranslated"),
+        "{told_offline}"
+    );
+    let told: Vec<usize> = (0..lines.len())
+        .filter(|&index| lines[index].contains("txAdmin:events:playerBanned"))
+        .collect();
+    assert_eq!(told.len(), 2, "{lines:#?}");
+    let told_online = &lines[told[1]];
+    for field in [
+        format!(r#""actionId":"{}""#, online.code),
+        format!(r#""expiration":{}"#, online.ends_at.unwrap().as_second()),
+        r#""durationInput":"2 days""#.to_owned(),
+        r#""durationTranslated":"2 days""#.to_owned(),
+        r#""targetNetId":1"#.to_owned(),
+        r#""kickMessage":"You are banned from this server.\nReason: Aimbot\nEnds: 2"#.to_owned(),
+        format!(r#"\nBan ID: {}""#, online.code),
+    ] {
+        assert!(told_online.contains(&field), "{field} in {told_online}");
+    }
+    let dropped = lines
+        .iter()
+        .position(|line| line.contains("observer:playerBanned"));
+    assert!(
+        Some(told[1]) < dropped,
+        "the player was dropped before txAdmin's event"
+    );
+}
+
+#[tokio::test]
+async fn a_ban_writes_nothing_for_txadmin_s_listeners_unless_the_owner_asked() {
+    let mut observer = Observer::new(false).await;
+    let (bans, banning) = bans_over(&observer);
+    let owner = observer.owner.clone();
+
+    observer.supervision.start_server(&owner).await.unwrap();
+    observer.state(ServerState::Online).await;
+    bans.ban(&owner, ban_of(&format!("license:{}", "a".repeat(40)), None))
+        .await
+        .unwrap();
+    observer.type_line("fake_print after the ban").await;
+    observer.console_until("] after the ban").await;
+    let lines: Vec<String> = observer.console().iter().map(|line| plain(&line.5)).collect();
+    observer.supervision.stop_server(&owner).await.unwrap();
+    observer.state(ServerState::Stopped).await;
+    banning.close().await;
+    observer.stop_observer().await;
+
+    assert!(
+        !lines
+            .iter()
+            .any(|line| line.contains("observer_cmd banned") || line.contains("txAdmin:events:playerBanned")),
+        "{lines:#?}"
+    );
 }
 
 #[tokio::test]
@@ -1908,12 +2027,7 @@ async fn a_crash_and_a_kick_reach_the_drops_with_their_signature_and_reason_grou
 
 /// The moderation over `observer`'s data, with the bans whose list of connected players it reads.
 fn moderate(observer: &Observer) -> (Moderation, BansTask) {
-    let (bans, banning) = Bans::start(BansSetup {
-        db: observer.db.clone(),
-        clock: Clock::system(),
-        supervision: observer.supervision.clone(),
-        schedule: observer.schedule.status(),
-    });
+    let (bans, banning) = bans_over(observer);
     let moderation = Moderation::new(ModerationSetup {
         db: observer.db.clone(),
         clock: Clock::system(),

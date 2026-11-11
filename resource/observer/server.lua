@@ -349,6 +349,13 @@ local ACTIONS = {
             DropPlayer(tostring(id), payload.message)
         end
     end,
+    -- A ban just made, for resources written against txAdmin: Observer raises nothing of its own
+    -- for a ban that drops nobody.
+    banned = function(payload)
+        if type(payload.event) == 'table' and txadminEvents() then
+            TriggerEvent('txAdmin:events:playerBanned', payload.event)
+        end
+    end,
     positions = function(payload)
         if type(payload.everyMs) ~= 'number' or type(payload.forMs) ~= 'number' then
             return

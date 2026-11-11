@@ -57,7 +57,8 @@
 //!   `playerConnecting`: it reports them and waits for Observer's verdict, `fake_verdict_ms`
 //!   (5000) at most, then lets them in as `fake_join` does, or refuses them; a verdict to drop a
 //!   connected player drops them with category 1, the bridge as the resource, and so does a kick,
-//!   of the players it lists or of everyone;
+//!   of the players it lists or of everyone; a ban told to txAdmin's listeners is printed as
+//!   `txAdmin:events:playerBanned` when `observer_txadmin_events` is 1, which the launch sets;
 //! - on stdin: `fake_move <id> <x> <y> <z>`, which puts a player at a position the bridge reports
 //!   while Observer asks for positions; the others go round a circle. With `onesync off` the bridge
 //!   reports no position, as it reads them from OneSync;
@@ -1023,6 +1024,12 @@ impl Fake {
                 self.drop_player(id, 1, &bridge, message);
             }
             Some("kick") => self.kick(&bridge, payload),
+            Some("banned") if self.server.convar("observer_txadmin_events").as_deref() == Some("1") => {
+                console::script(
+                    &bridge,
+                    &format!("txAdmin:events:playerBanned {}", payload["event"]),
+                );
+            }
             Some(_) => {}
             None => console::script(
                 &bridge,
