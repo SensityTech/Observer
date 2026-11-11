@@ -1,5 +1,6 @@
 import {
     Ban,
+    BookOpen,
     CalendarClock,
     ChartLine,
     Contact,
@@ -42,6 +43,7 @@ export type NavEntry = {
         | '/bans'
         | '/changes'
         | '/drops'
+        | '/docs'
         | '/settings'
         | '/tools'
         | '/cfg'
@@ -73,7 +75,7 @@ export const opensEntry = (me: Me, { access }: Pick<NavEntry, 'access'>) =>
 
 /**
  * The panel's pages as the rail lists them, by what one comes for: a person, the server's setup,
- * what the server did, the upkeep. The settings sit at the rail's foot.
+ * what the server did, the upkeep. The documentation and the settings sit at the rail's foot.
  */
 export const navSections = (t: Messages) => ({
     main: [
@@ -129,8 +131,10 @@ export const navSections = (t: Messages) => ({
         { to: '/tools', label: t.nav.tools, icon: Wrench, access: 'owner', nested: true },
         { to: '/audit', label: t.nav.audit, icon: ScrollText, access: Permission.AuditView },
     ] satisfies NavEntry[],
-    // Every account opens its own settings, and the categories its permissions open.
+    // Every account reads the documentation, which holds no secret, and opens its own settings and
+    // the categories its permissions open.
     settings: [
+        { to: '/docs', label: t.nav.docs, icon: BookOpen, access: 'everyone' },
         { to: '/settings', label: t.nav.settings, icon: Settings, access: 'everyone', nested: true },
     ] satisfies NavEntry[],
 });

@@ -1,13 +1,16 @@
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
-import { Contact, Search, SlidersHorizontal, Wrench, type LucideIcon } from 'lucide-react';
-import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
+import { BookOpen, Contact, Search, SlidersHorizontal, Wrench, type LucideIcon } from 'lucide-react';
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
+import { integrationDocsQuery } from '../api/docs';
 import type { Me } from '../api/generated/Me';
 import { Permission } from '../api/generated/Permission';
 import { onlineQuery } from '../api/players';
 import { allows } from '../auth/me';
+import { buildDocs, docIndex } from '../docs/model';
 import { useI18n } from '../i18n/I18nProvider';
+import { cn } from '../lib/cn';
 import { anchorOf, search as searchSettings } from '../settings/catalog';
 import { navSections, opensEntry } from './nav';
 
@@ -20,6 +23,8 @@ type Result = {
     label: string;
     /** What kind of place it is, or where it lies. */
     hint: string;
+    /** A name of the code, an event's or an export's, shown as code is. */
+    code?: boolean;
     go: () => void;
 };
 
@@ -34,8 +39,9 @@ const asksForPalette = (event: KeyboardEvent) =>
     (event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey && event.key.toLowerCase() === 'k';
 
 /**
- * Goes anywhere in the panel from the keyboard: a page, a setting by its name, a player who is
- * connected. Ctrl K opens it from any page; it lists only what the account may open.
+ * Goes anywhere in the panel from the keyboard: a page, a setting by its name, a section, an event
+ * or an export of the documentation, a player who is connected. Ctrl K opens it from any page; it
+ * lists only what the account may open.
  */
 export function CommandPalette({
     me,
@@ -76,6 +82,12 @@ function Palette({ me, onClose }: { me: Me; onClose: () => void }) {
     const [active, setActive] = useState(0);
     const seesPlayers = allows(me, Permission.PlayersView);
     const online = useQuery({ ...onlineQuery, enabled: seesPlayers, refetchInterval: false });
+    // The contract only changes with the build: its sections are read once.
+    const contract = useQuery({ ...integrationDocsQuery, staleTime: Infinity }).data;
+    const documented = useMemo(
+        () => (contract === undefined ? [] : docIndex(buildDocs(contract))),
+        [contract],
+    );
 
     useLayoutEffect(() => {
         const element = dialog.current;
@@ -149,6 +161,18 @@ function Palette({ me, onClose }: { me: Me; onClose: () => void }) {
             ? pages
             : [
                   ...pages.filter((page) => matches(page.label)),
+                  // `restartScheduled` is also found by `scheduled`: a name of the code is read word by word.
+                  ...documented
+                      .filter(({ label }) => matches(`${label} ${label.replace(/([a-z])([A-Z])/g, '$1 $2')}`))
+                      .slice(0, MAX_OF_KIND)
+                      .map((match) => ({
+                          key: `doc ${match.kind} ${match.label}`,
+                          icon: BookOpen,
+                          label: match.label,
+                          hint: words.doc(words.docKinds[match.kind]),
+                          code: match.kind !== 'section',
+                          go: leave(() => void navigate({ to: '/docs', hash: match.id })),
+                      })),
                   // Those named by what was asked first, then those whose explanation says it.
                   ...searchSettings(t, me, query)
                       .map((match) => {
@@ -263,7 +287,13 @@ function Palette({ me, onClose }: { me: Me; onClose: () => void }) {
                                     className="flex-none text-ink-3"
                                     aria-hidden="true"
                                 />
-                                <span className="min-w-0 flex-1 truncate text-ui text-ink">
+                                <span
+                                    className={cn(
+                                        'min-w-0 flex-1 truncate text-ui text-ink',
+                                        result.code === true &&
+                                            'font-mono text-small [font-variant-ligatures:none]',
+                                    )}
+                                >
                                     {result.label}
                                 </span>
                                 <span className="flex-none text-meta text-ink-3">{result.hint}</span>

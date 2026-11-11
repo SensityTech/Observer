@@ -3,9 +3,11 @@ import { cleanup, fireEvent, render } from '@testing-library/react';
 import { useState } from 'react';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
+import { integrationDocsQuery } from '../api/docs';
 import type { Me } from '../api/generated/Me';
 import type { OnlinePlayers } from '../api/generated/OnlinePlayers';
 import { onlineQuery } from '../api/players';
+import { integrationDocs } from '../docs/fixtures';
 import { en } from '../i18n/en';
 import { I18nProvider } from '../i18n/I18nProvider';
 import { CommandPalette } from './CommandPalette';
@@ -38,6 +40,7 @@ const listed = () =>
 const palette = (me: Me = OWNER) => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
     client.setQueryData(onlineQuery.queryKey, ONLINE);
+    client.setQueryData(integrationDocsQuery.queryKey, integrationDocs());
     const view = render(
         <QueryClientProvider client={client}>
             <I18nProvider>
@@ -75,7 +78,13 @@ describe('CommandPalette', () => {
         cleanup();
 
         palette(VIEWER);
-        expect(listed()).toEqual([en.nav.overview, en.nav.schedule, en.nav.statistics, en.nav.settings]);
+        expect(listed()).toEqual([
+            en.nav.overview,
+            en.nav.schedule,
+            en.nav.statistics,
+            en.nav.docs,
+            en.nav.settings,
+        ]);
     });
 
     it('should go to the page the arrows are on when Enter is pressed', () => {
@@ -103,6 +112,34 @@ describe('CommandPalette', () => {
             params: { category: 'launch' },
             hash: 'setting-hangDetection',
         });
+    });
+
+    it('should find an event of the documentation by any word of its name, and open the page on it', () => {
+        const { field, getByText } = palette(VIEWER);
+
+        fireEvent.change(field(), { target: { value: 'rescheduled' } });
+
+        expect(listed()).toEqual(['observer:restartRescheduled']);
+        expect(getByText(en.palette.doc(en.palette.docKinds.event))).not.toBeNull();
+        fireEvent.keyDown(field(), { key: 'Enter' });
+        expect(navigate).toHaveBeenCalledWith({ to: '/docs', hash: 'observerrestartrescheduled' });
+    });
+
+    it('should find a section, an export and an event txAdmin names, each where the page documents it', () => {
+        const { field, getByText } = palette(VIEWER);
+
+        fireEvent.change(field(), { target: { value: 'label' } });
+        expect(listed()).toEqual(['Player labels', 'setPlayerLabel', 'clearPlayerLabel']);
+        fireEvent.click(getByText('clearPlayerLabel'));
+        expect(navigate).toHaveBeenLastCalledWith({ to: '/docs', hash: 'player-labels' });
+        cleanup();
+
+        const again = palette(VIEWER);
+        fireEvent.change(again.field(), { target: { value: 'serverShuttingDown' } });
+        expect(listed()).toEqual(['txAdmin:events:serverShuttingDown']);
+        expect(again.getByText(en.palette.doc(en.palette.docKinds.txadmin))).not.toBeNull();
+        fireEvent.keyDown(again.field(), { key: 'Enter' });
+        expect(navigate).toHaveBeenLastCalledWith({ to: '/docs', hash: 'txadmins-events' });
     });
 
     it('should find a connected player whose profile is known, by name or by ID', () => {

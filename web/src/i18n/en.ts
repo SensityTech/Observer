@@ -101,6 +101,7 @@ import type { UpdateWhen } from '../api/generated/UpdateWhen';
 import type { DestinationKind } from '../api/backups';
 import { parsePermissions, permissionKeys, type PermissionKey } from '../auth/permissions';
 import type { InvisibleKind } from '../changes/invisible';
+import type { DocMatch } from '../docs/model';
 import type { LinkState } from '../live/realtime';
 import type { Applies as SettingApplies, CategoryGroup, CategoryId, SettingId } from '../settings/catalog';
 import type { LaunchStep, SetupStep } from '../setup/state';
@@ -471,6 +472,7 @@ export const en = {
         debugBags: 'State bags',
         debugHttp: 'HTTP requests',
         maintenance: 'Maintenance',
+        docs: 'Documentation',
         settings: 'Settings',
         schedule: 'Restarts',
         artifacts: 'FXServer builds',
@@ -565,10 +567,17 @@ export const en = {
     },
     palette: {
         label: 'Go to a page, a setting or a player',
-        placeholder: 'A page, a setting, a player online',
+        placeholder: 'A page, a setting, an event, a player online',
         results: 'Results',
         page: 'Page',
         tool: 'Tool',
+        doc: (kind: string) => `Documentation · ${kind}`,
+        docKinds: {
+            section: 'Section',
+            event: 'Event',
+            export: 'Export',
+            txadmin: "txAdmin's event",
+        } satisfies Record<DocMatch['kind'], string>,
         setting: (category: string) => `Setting · ${category}`,
         player: (netId: number) => `Player online · #${netId}`,
         none: 'Nothing matches.',
@@ -6081,6 +6090,83 @@ export const en = {
         noMatch: 'No package matches the search.',
         missing: 'This build carries no licence list. cargo xtask web and cargo xtask dist write it.',
         loadFailed: 'The licence list could not be loaded.',
+    },
+    // The contract itself is not here: the page draws the text this build of Observer ships, as it
+    // draws a licence or a release's notes. These are the panel's own words around it.
+    docs: {
+        title: 'Documentation',
+        gloss: "for your server's resources",
+        find: 'Find an event or an export',
+        toc: 'On this page',
+        contract: 'The contract',
+        copyLink: (section: string) => `Copy the link to ${section}`,
+        linkCopied: 'Link copied',
+        event: 'Event',
+        exports: 'Exports',
+        lua: 'Lua',
+        copyNamed: (what: string) => `Copy ${what}`,
+        handlerOf: (event: string) => `the handler for ${event}`,
+        codeOf: (section: string) => `the code of ${section}`,
+        lines: (value: number) => count(value, { one: 'line', other: 'lines' }),
+        loading: 'Reading the documentation',
+        failed: 'The documentation could not be read.',
+        server: {
+            title: 'This server',
+            startedAt: (when: string) => `FXServer started ${when}`,
+            running: 'FXServer is running',
+            stopped: 'FXServer is stopped',
+            contract: 'Contract',
+            version: (version: number) => `Version ${formatNumber('en', version)}`,
+            versionAbout: "What this Observer's bridge speaks.",
+            bridge: 'Bridge',
+            bridgeRunning: 'Running',
+            bridgeStarting: 'Starting',
+            bridgeName: (name: ReactNode): ReactNode => [
+                'As ',
+                name,
+                ', the name drawn for this start. The next start draws another.',
+            ],
+            bridgeStopped: 'Not running',
+            bridgeStoppedAbout: 'It starts with FXServer, under a name drawn for that start.',
+            txadmin: "txAdmin's events",
+            on: 'On',
+            off: 'Off',
+            txadminOn: "Raised right after Observer's own events.",
+            txadminOff: "Only Observer's own events are raised.",
+            txadminNext: (on: boolean) =>
+                on ? 'On from the next start of FXServer.' : 'Off from the next start of FXServer.',
+            txadminFromNext: 'From the next start of FXServer.',
+            notSet: 'Not set',
+            notSetAbout: 'The launch settings are not saved yet.',
+            launchSettings: 'Launch settings',
+        },
+        notes: {
+            panel: 'In the panel.',
+            server: 'This server.',
+            labels: (players: ReactNode): ReactNode => [
+                'Online now shows a label in place of the FiveM name, with a tag. The ',
+                players,
+                ' page finds players by it, and each profile keeps it with the resource that gave it.',
+            ],
+            startChanges: (changes: ReactNode): ReactNode => [
+                changes,
+                ' lists every resource this event names, and those it left out.',
+            ],
+            bans: (bans: ReactNode, message: ReactNode): ReactNode => [
+                'The staff bans from a profile or the ',
+                bans,
+                ' page. The ',
+                message,
+                ' banned players read is in the settings.',
+            ],
+            txadminOn: "txAdmin's events are on: the bridge raises them right after Observer's own.",
+            txadminOff: "txAdmin's events are off: the bridge raises Observer's events only.",
+            txadminStopped: (on: boolean) =>
+                on
+                    ? "txAdmin's events are on in the launch settings: the bridge raises them from the next start."
+                    : "txAdmin's events are off in the launch settings: the next start raises Observer's events only.",
+            refusalMessage: 'refusal message',
+        },
     },
     permissions,
     permissionAreas: {
