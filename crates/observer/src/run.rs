@@ -10,9 +10,9 @@ use observer_app::{
     Accounts, Artifacts, ArtifactsSetup, ArtifactsTask, AuditLog, Backups, BackupsHook, BackupsSetup, Bans,
     BansSetup, BeforeSpawn, Changes, ChangesSetup, Clock, DatabaseFiles, DebugCounts, DebugSetup,
     Diagnostics, DiagnosticsSetup, Drops, DropsSetup, Features, FeaturesSetup, LiveMap, MapSetup, Metrics,
-    MetricsSetup, OwnPaths, PRE_LAUNCH_LIMIT, PasswordCost, Players, PlayersSetup, Running, Schedule,
-    ScheduleSetup, ScheduleTask, Servers, Setup, Sources, Statistics, Supervision, Switched, Takeover, Tools,
-    ToolsHook, ToolsSetup, Updates, UpdatesSetup,
+    MetricsSetup, Moderation, ModerationSetup, OwnPaths, PRE_LAUNCH_LIMIT, PasswordCost, Players,
+    PlayersSetup, Running, Schedule, ScheduleSetup, ScheduleTask, Servers, Setup, Sources, Statistics,
+    Supervision, Switched, Takeover, Tools, ToolsHook, ToolsSetup, Updates, UpdatesSetup,
 };
 use observer_artifacts::Http;
 use observer_artifacts::catalog::Catalog;
@@ -328,6 +328,12 @@ async fn run_until_stopped(
         supervision: supervision.clone(),
         schedule: schedule.status(),
     });
+    let moderation = Moderation::new(ModerationSetup {
+        db: db.clone(),
+        clock: clock.clone(),
+        supervision: supervision.clone(),
+        bans: bans.clone(),
+    });
 
     let listener = TcpListener::bind(config.http.listen)
         .await
@@ -404,6 +410,7 @@ async fn run_until_stopped(
         updates: updates.clone(),
         backups,
         bans,
+        moderation,
         statistics,
     };
     let state = observer_web::AppState::new(

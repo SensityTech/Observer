@@ -21,7 +21,7 @@ use axum::extract::Request;
 use axum::{Router, middleware};
 use observer_app::{
     Accounts, Artifacts, AuditLog, Backups, Bans, Changes, DebugCounts, Diagnostics, Drops, Error, Features,
-    Files, LiveMap, Metrics, Players, Schedule, Servers, Statistics, Supervision, Tools, Updates,
+    Files, LiveMap, Metrics, Moderation, Players, Schedule, Servers, Statistics, Supervision, Tools, Updates,
 };
 use observer_domain::about::Build;
 use observer_domain::features::Feature;
@@ -63,6 +63,7 @@ pub struct AppState {
     updates: Option<Updates>,
     pub backups: Backups,
     pub bans: Bans,
+    pub moderation: Moderation,
     pub live: Live,
     /// Cookies ignore ports, so the name carries the instance id: two Observers on one host never
     /// read each other's sessions.
@@ -103,6 +104,7 @@ pub struct Services {
     pub updates: Option<Updates>,
     pub backups: Backups,
     pub bans: Bans,
+    pub moderation: Moderation,
 }
 
 impl AppState {
@@ -134,6 +136,7 @@ impl AppState {
             updates,
             backups,
             bans,
+            moderation,
             statistics,
         } = services;
         Self {
@@ -157,6 +160,7 @@ impl AppState {
             updates,
             backups,
             bans,
+            moderation,
             statistics,
             live: Live::new(),
             cookie: format!("observer_session_{instance_id}"),

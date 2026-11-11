@@ -238,10 +238,25 @@ pub enum AuditAction {
     /// `to`); a failure when the release could not be downloaded or verified (`reason`), or when
     /// the new version did not finish starting and the previous one came back (`rolledBack`).
     ObserverUpdateFinished,
+    /// A connected player was kicked. The target is their name, when the server gave one;
+    /// `details` hold their `serverId`, their `license` and the `reason`.
+    PlayerKicked,
+    /// Everyone connected was kicked. `details` hold the `reason` and the `players` Observer
+    /// counted as connected.
+    EveryoneKicked,
+    /// `details` hold each changed setting with its value before and after.
+    KickSettingsChanged,
+    /// An announcement was raised for the server's resources to show. `details` hold its
+    /// `message`.
+    AnnouncementSent,
+    /// A message to one connected player was raised for the server's resources to show. The
+    /// target is the player's name, when the server gave one; `details` hold their `serverId`,
+    /// their `license` and the `message`.
+    DirectMessageSent,
 }
 
 impl AuditAction {
-    pub const ALL: [Self; 111] = [
+    pub const ALL: [Self; 116] = [
         Self::SetupCompleted,
         Self::SetupLinkCreated,
         Self::LoginSucceeded,
@@ -353,6 +368,11 @@ impl AuditAction {
         Self::ObserverUpdateStarted,
         Self::ObserverUpdateCancelled,
         Self::ObserverUpdateFinished,
+        Self::PlayerKicked,
+        Self::EveryoneKicked,
+        Self::KickSettingsChanged,
+        Self::AnnouncementSent,
+        Self::DirectMessageSent,
     ];
 
     #[expect(clippy::too_many_lines, reason = "one arm per action, read best as one list")]
@@ -469,6 +489,11 @@ impl AuditAction {
             Self::ObserverUpdateStarted => "observer_update_started",
             Self::ObserverUpdateCancelled => "observer_update_cancelled",
             Self::ObserverUpdateFinished => "observer_update_finished",
+            Self::PlayerKicked => "player_kicked",
+            Self::EveryoneKicked => "everyone_kicked",
+            Self::KickSettingsChanged => "kick_settings_changed",
+            Self::AnnouncementSent => "announcement_sent",
+            Self::DirectMessageSent => "direct_message_sent",
         }
     }
 

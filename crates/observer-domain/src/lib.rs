@@ -25,6 +25,7 @@ pub mod launch;
 pub mod live;
 pub mod map;
 pub mod metrics;
+pub mod moderation;
 pub mod permissions;
 pub mod players;
 pub mod schedule;

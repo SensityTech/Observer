@@ -268,6 +268,11 @@ const AUDIT_ACTIONS = {
     observer_update_started: true,
     observer_update_cancelled: true,
     observer_update_finished: true,
+    player_kicked: true,
+    everyone_kicked: true,
+    kick_settings_changed: true,
+    announcement_sent: true,
+    direct_message_sent: true,
 } satisfies Record<AuditAction, true>;
 
 const OUTCOMES = { success: true, failure: true, denied: true } satisfies Record<Outcome, true>;

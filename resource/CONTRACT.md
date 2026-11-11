@@ -1,17 +1,18 @@
 # Integration contract
 
-Observer never shows anything to players, but for one text: the refusal message the owner writes
-for bans. It tells your resources what is about to happen to the server, with data and no text, and
-your resources decide what players see, what gets saved and when. This page is that contract: the
-server events Observer raises, what they carry, what your resources can tell Observer about players,
-how bans keep players out, and what you can rely on.
+Observer never shows anything to players, but for two texts the owner writes: the refusal message
+for bans and the kick message. It tells your resources what is about to happen to the server, with
+data and no text of its own, and your resources decide what players see, what gets saved and when.
+This page is that contract: the server events Observer raises, what they carry, what your resources
+can tell Observer about players, how bans keep players out, how the staff's kicks, announcements and
+messages reach your resources, and what you can rely on.
 
 ## The bridge
 
 The bridge is a server-side resource that Observer writes into the build's `system_resources` folder
 before every start of FXServer, and ensures before your cfg runs. Observer overwrites any change made
-to it. It reports the server's health to Observer, turns Observer's commands into server events, and refuses
-banned players. While someone has the panel's live map open, it also reads where each player stands,
+to it. It reports the server's health to Observer, turns Observer's commands into server events, refuses
+banned players and drops the players the staff kicks. While someone has the panel's live map open, it also reads where each player stands,
 from OneSync, every 1 to 5 seconds, and reports it to Observer; it raises no event for it and stops
 within 30 seconds after the last one closes the map. It has no client script and no UI.
 
@@ -27,10 +28,10 @@ local bridge = GetConvar('observer_bridge', '') -- empty when Observer did not s
 
 ## Version
 
-This is contract version **4**.
+This is contract version **5**.
 
 ```lua
-local version = exports[GetConvar('observer_bridge', '')]:getContractVersion() -- 4
+local version = exports[GetConvar('observer_bridge', '')]:getContractVersion() -- 5
 ```
 
 Within a version, fields and `reason` values are only ever added. Ignore fields you do not know, and
@@ -38,6 +39,9 @@ treat a `reason` you do not know as the closest one you do (`stop` for `observer
 field renamed or removed, or a change of meaning, is a new version. So is a new export of the
 bridge, so that a resource can check for it before calling it.
 
+Version 5 added what the staff does to connected players: the bridge drops the players the staff
+kicks, with the kick message the owner wrote, and raises `observer:playerKicked`,
+`observer:announcement` and `observer:directMessage`.
 Version 4 added bans: the bridge holds every connecting player until Observer checks them, refuses a
 banned one, drops a connected player when they are banned, and raises `observer:playerRefused` and
 `observer:playerBanned`. Version 3 added the player labels: `setPlayerLabel` and `clearPlayerLabel`. Version 2 changed how a
@@ -60,6 +64,9 @@ who signs in to nothing. No account can take either name.
 | `observer:startChanges` | Once per start of FXServer, when its files are hashed: what changed since the start before. |
 | `observer:playerRefused` | A ban refused a connecting player. See [Bans](#bans). |
 | `observer:playerBanned` | A ban is about to drop a connected player. See [Bans](#bans). |
+| `observer:playerKicked` | The staff kicked a connected player, who is dropped next. See [Kicks](#kicks). |
+| `observer:announcement` | The staff wrote an announcement for the whole server. See [Announcements and messages](#announcements-and-messages). |
+| `observer:directMessage` | The staff wrote a message for one connected player. See [Announcements and messages](#announcements-and-messages). |
 
 ### `observer:restartScheduled`
 
@@ -191,7 +198,8 @@ identifiers and their hardware tokens, for a time or for good. The bridge enforc
   milliseconds. Your own `playerConnecting` handlers run as they do without Observer: the player
   gets in once every handler is done.
 - A banned player is refused with the refusal message the owner wrote in the panel, which can name
-  the reason, when the ban ends and its code. It is the only text Observer shows players.
+  the reason, when the ban ends and its code. With the kick message, it is all the text Observer
+  shows players.
 - Without an answer within 5 seconds, the player gets in. Observer checks every player again once
   they joined, and drops a banned one with the same message.
 - When the staff bans a connected player, the bridge drops them at once with that message.
@@ -222,11 +230,58 @@ been refused, or are about to be dropped: nothing a resource does changes it.
 | `name` | string, or nil | The player's name. |
 | `license` | string, or nil | The player's licence. |
 
+## Kicks
+
+The staff kicks a connected player in Observer's panel, with a reason, or everyone at once. The
+bridge drops them with the kick message the owner wrote in the panel, which can name the reason and
+who kicked. A kick keeps no one out: the player can connect again at once. A kick of everyone drops
+the players `GetPlayers()` lists: one who is still connecting is not among them.
+
+The bridge raises `observer:playerKicked` once for each player of a kick, then drops them. Every
+player of the kick is still connected while the handlers run: read what you need of a player, their
+name, their identifiers, your own data, before your handler returns. Nothing a resource does stops
+the kick.
+
+### `observer:playerKicked`
+
+| Field | Type | Meaning |
+|---|---|---|
+| `player` | integer | The player's server id, dropped once the events of the kick are raised. |
+| `reason` | string | The reason the staff gave. |
+| `by` | string | Who kicked the player. |
+| `cause` | string | `kick` when the staff kicked this player, `kickAll` when they kicked everyone. Treat a cause you do not know as `kick`. |
+
+## Announcements and messages
+
+The staff writes an announcement for the whole server, or a message for one connected player, in
+Observer's panel. Observer shows players nothing of either: the bridge raises an event with the
+text, and your resources show it, in the chat, as a notification, or the way your server speaks to
+its players. Without a resource that handles the event, nobody reads the text.
+
+### `observer:announcement`
+
+| Field | Type | Meaning |
+|---|---|---|
+| `message` | string | The text, up to 400 characters, on one line or several. |
+| `by` | string | Who wrote it. |
+
+### `observer:directMessage`
+
+| Field | Type | Meaning |
+|---|---|---|
+| `player` | integer | The server id of the player the message is for. They were connected when the staff sent it and may have left since. |
+| `message` | string | The text, up to 400 characters, on one line or several. |
+| `by` | string | Who wrote it. |
+
 ## Security
 
 The bridge raises these events, refuses players and drops them only for commands typed on the server
 console, where only Observer writes, and never for a call from another resource. Listen with `AddEventHandler` only. Never
 `RegisterNetEvent` these names: clients could then raise them.
+
+The text of an announcement or a message is what a member of the staff typed, without control or
+invisible characters and nothing more: escape it for whatever shows it, as you would a player's
+chat line.
 
 Any server resource can give a label: the exports are for your resources, which can already do
 anything on the server. Never call them with text a client sent you without checking it first.
@@ -239,8 +294,8 @@ resources, read `observer_bridge` and the bridge's files. Run only server resour
 
 Resources written for txAdmin can keep working: with **Send txAdmin's events too** checked in the
 launch settings, the bridge also raises txAdmin's events, from the next start of FXServer. Each comes
-right after Observer's own event. `translatedMessage` and `message` are always empty: Observer writes
-no text.
+right after Observer's own event. The `translatedMessage` of a restart warning and the `message` of
+a shutdown are always empty: Observer writes no text.
 
 | Observer's event | txAdmin's events, in order | Their payload |
 |---|---|---|
@@ -248,8 +303,15 @@ no text.
 | `observer:restartSkipped` | `txAdmin:events:scheduledRestartSkipped`, then the deprecated `txAdmin:events:skippedNextScheduledRestart` | `secondsRemaining` (until `at`), `temporary` (true for `oneOff`), `author` (`by`); the deprecated one without `author` |
 | `observer:restartRescheduled` | none | |
 | `observer:shuttingDown` | `txAdmin:events:serverShuttingDown` | `delay` (`delayMs`), `author` (`by`), `message = ''` |
+| `observer:playerKicked` | `txAdmin:events:playerKicked` | `target` (`player`), `author` (`by`), `reason`, `dropMessage` (what the player reads). For a kick of everyone, once, after the last player's event and with nobody connected too, with `target = -1`, as txAdmin does |
+| `observer:announcement` | `txAdmin:events:announcement` | `message`, `author` (`by`) |
+| `observer:directMessage` | `txAdmin:events:playerDirectMessage` | `target` (`player`), `author` (`by`), `message` |
+| `observer:playerRefused`, `observer:playerBanned` | none | |
 
-## Not in version 4
+txAdmin showed announcements and direct messages to players itself. Observer does not: a resource
+written for txAdmin's events shows them, the events alone show nothing.
+
+## Not in version 5
 
 Exports to read the next restart or the server's state come later.
 
@@ -257,6 +319,7 @@ Exports to read the next restart or the server's state come later.
 
 [`observer_example`](observer_example) finds the bridge and checks the contract version when it
 starts, prints each event to the server console with its fields, and marks with short comments where
-a team plugs in its notifications, its cancellation notice and its saves. Its console command
+a team plugs in its notifications, its cancellation notice, its saves and what shows the staff's
+announcements and messages. Its console command
 `observer_example_label` gives a player a label, or clears it, to try the panel's side. It shows
 nothing to players. Copy what fits into your own resources rather than running it as is.

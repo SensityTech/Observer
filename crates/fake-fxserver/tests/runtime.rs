@@ -11,10 +11,10 @@ use std::time::{Duration, Instant};
 
 use jiff::{SignedDuration, Timestamp, Unit};
 use observer_app::{
-    Accounts, AuditLog, Bans, BansSetup, Caller, Client, Clock, DatabaseFiles, Diagnostics, DiagnosticsSetup,
-    DiagnosticsTask, Drops, DropsSetup, Error, LiveMap, LogQuery, MapSetup, Metrics, MetricsSetup,
-    PasswordCost, Players, PlayersSetup, PlayersTask, Running, Sampling, Schedule, ScheduleSetup,
-    ScheduleTask, Servers, Setup, Sources, Supervision,
+    Accounts, AuditLog, Bans, BansSetup, BansTask, Caller, Client, Clock, DatabaseFiles, Diagnostics,
+    DiagnosticsSetup, DiagnosticsTask, Drops, DropsSetup, Error, LiveMap, LogQuery, MapSetup, Metrics,
+    MetricsSetup, Moderation, ModerationSetup, PasswordCost, Players, PlayersSetup, PlayersTask, Running,
+    Sampling, Schedule, ScheduleSetup, ScheduleTask, Servers, Setup, Sources, Supervision,
 };
 use observer_domain::audit::{ActorKind, AuditAction, AuditEntry, AuditFilter, Outcome};
 use observer_domain::bans::{BanFilter, BanRequest};
@@ -26,6 +26,9 @@ use observer_domain::drops::{DropCategory, DropsRange, TileKind};
 use observer_domain::error::ErrorCode;
 use observer_domain::launch::{ExtraArgument, LaunchSettings, OneSync};
 use observer_domain::metrics::{LiveSample, MarkerKind, Range, Series, ThreadGroup, ThreadShares};
+use observer_domain::moderation::{
+    AnnouncementRequest, DirectMessageRequest, KickAllRequest, KickRequest, KickSettings,
+};
 use observer_domain::permissions::Permissions;
 use observer_domain::players::{Confirmation, IdentifierKind, PlayerLabel, PlayerProfile, PlayerSort};
 use observer_domain::schedule::{
@@ -1901,4 +1904,213 @@ async fn a_crash_and_a_kick_reach_the_drops_with_their_signature_and_reason_grou
         .find(|tile| tile.kind == TileKind::Crashes)
         .unwrap();
     assert_eq!(crashes.drops, 1);
+}
+
+/// The moderation over `observer`'s data, with the bans whose list of connected players it reads.
+fn moderate(observer: &Observer) -> (Moderation, BansTask) {
+    let (bans, banning) = Bans::start(BansSetup {
+        db: observer.db.clone(),
+        clock: Clock::system(),
+        supervision: observer.supervision.clone(),
+        schedule: observer.schedule.status(),
+    });
+    let moderation = Moderation::new(ModerationSetup {
+        db: observer.db.clone(),
+        clock: Clock::system(),
+        supervision: observer.supervision.clone(),
+        bans,
+    });
+    (moderation, banning)
+}
+
+/// Starts the server and has Ada, Grace and Linus join it, with ids 1, 2 and 3.
+async fn three_join(observer: &Observer, ada: &str, grace: &str) {
+    observer.supervision.start_server(&observer.owner).await.unwrap();
+    observer.state(ServerState::Online).await;
+    for line in [
+        format!("fake_join Ada {ada}"),
+        format!("fake_join Grace {grace}"),
+        "fake_join Linus".to_owned(),
+    ] {
+        observer
+            .supervision
+            .command(&observer.owner, &line, CONSOLE_ROUTE.0, CONSOLE_ROUTE.1)
+            .await
+            .unwrap();
+    }
+}
+
+/// Asks until the player it names is connected for the moderation, or no longer is when `gone`:
+/// the bridge's reports reach it a moment after a join or a drop.
+async fn once_reported<T, F>(gone: bool, mut ask: impl FnMut() -> F) -> Result<T, Error>
+where
+    F: Future<Output = Result<T, Error>>,
+{
+    let deadline = Instant::now() + WAIT;
+    loop {
+        let answer = ask().await;
+        let missing = matches!(&answer, Err(error) if error.code() == Some(ErrorCode::PlayerNotConnected));
+        if missing == gone {
+            return answer;
+        }
+        assert!(Instant::now() < deadline, "the bridge's report never came");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+#[tokio::test]
+async fn the_staff_kicks_a_player_then_everyone_with_the_owners_message() {
+    let mut observer = Observer::new(false).await;
+    let (moderation, banning) = moderate(&observer);
+    let owner = observer.owner.clone();
+    let grace = format!("license:{}", "b".repeat(40));
+    let kick = |player: u32, license: Option<&str>| KickRequest {
+        player,
+        license: license.map(str::to_owned),
+        reason: " RDM ".to_owned(),
+    };
+    three_join(&observer, &format!("license:{}", "a".repeat(40)), &grace).await;
+    let message = KickSettings {
+        message: "Kicked by {by}: {reason}".to_owned(),
+    };
+    moderation.change_settings(&owner, message).await.unwrap();
+
+    once_reported(false, || moderation.kick(&owner, kick(2, Some(&grace))))
+        .await
+        .unwrap();
+    let kicked_event = observer.console_until("observer:playerKicked").await;
+    let kicked = observer.console_until("kicked 2 ").await;
+    let another_player = moderation.kick(&owner, kick(1, Some(&grace))).await;
+    let left = once_reported(true, || moderation.kick(&owner, kick(2, None))).await;
+    let reason = "Maintenance".to_owned();
+    let everyone = moderation
+        .kick_all(&owner, KickAllRequest { reason })
+        .await
+        .unwrap();
+    let last = observer.console_until("kicked 3 ").await;
+    let lines: Vec<String> = observer.console().iter().map(|line| plain(&line.5)).collect();
+    let kicks = observer.audited(AuditAction::PlayerKicked).await;
+    let kick_alls = observer.audited(AuditAction::EveryoneKicked).await;
+    observer.supervision.stop_server(&owner).await.unwrap();
+    observer.state(ServerState::Stopped).await;
+    banning.close().await;
+    observer.stop_observer().await;
+
+    assert_eq!(
+        another_player.unwrap_err().code(),
+        Some(ErrorCode::PlayerNotConnected)
+    );
+    let kicked_event = plain(&kicked_event.5);
+    for field in [
+        r#""player":2"#,
+        r#""reason":"RDM""#,
+        r#""by":"ada""#,
+        r#""cause":"kick""#,
+    ] {
+        assert!(kicked_event.contains(field), "{field} in {kicked_event}");
+    }
+    assert!(
+        plain(&kicked.5).contains(r#"kicked 2 "Kicked by ada: RDM""#),
+        "{}",
+        kicked.5
+    );
+    assert_eq!(left.unwrap_err().code(), Some(ErrorCode::PlayerNotConnected));
+    assert_eq!(everyone.players, 2);
+    assert!(
+        plain(&last.5).contains(r#"kicked 3 "Kicked by ada: Maintenance""#),
+        "{}",
+        last.5
+    );
+    let of_everyone: Vec<&String> = lines
+        .iter()
+        .filter(|line| line.contains("observer:playerKicked") && line.contains(r#""cause":"kickAll""#))
+        .collect();
+    assert_eq!(of_everyone.len(), 2, "{of_everyone:?}");
+    assert!(of_everyone[0].contains(r#""player":1"#) && of_everyone[1].contains(r#""player":3"#));
+    let last_event = lines
+        .iter()
+        .rposition(|line| line.contains("observer:playerKicked"));
+    let first_drop = lines.iter().position(|line| line.contains("kicked 1 "));
+    assert!(
+        last_event < first_drop,
+        "a player was dropped before the last event"
+    );
+    assert!(lines.iter().any(|line| line.contains("observer_cmd kick")));
+    assert_eq!(kicks.len(), 1);
+    assert_eq!(
+        (kicks[0].target.as_deref(), kicks[0].actor_name.as_deref()),
+        (Some("Grace"), Some("ada"))
+    );
+    assert_eq!(
+        kicks[0].details,
+        json!({ "serverId": 2, "license": grace, "reason": "RDM" })
+    );
+    assert_eq!(
+        kick_alls[0].details,
+        json!({ "reason": "Maintenance", "players": 2 })
+    );
+}
+
+#[tokio::test]
+async fn an_announcement_and_a_message_are_raised_for_the_servers_resources() {
+    let mut observer = Observer::new(false).await;
+    let (moderation, banning) = moderate(&observer);
+    let owner = observer.owner.clone();
+    let grace = format!("license:{}", "b".repeat(40));
+    let direct = |player: u32, license: Option<&str>| DirectMessageRequest {
+        player,
+        license: license.map(str::to_owned),
+        message: "  Come to the staff room\u{202E} ".to_owned(),
+    };
+    let announcement = || AnnouncementRequest {
+        message: "Restart in five minutes\nPark your cars".to_owned(),
+    };
+
+    let stopped = moderation.announce(&owner, announcement()).await;
+    three_join(&observer, &format!("license:{}", "a".repeat(40)), &grace).await;
+    once_reported(false, || moderation.message(&owner, direct(3, None)))
+        .await
+        .unwrap();
+    let to_linus = observer.console_until("observer:directMessage").await;
+    moderation.announce(&owner, announcement()).await.unwrap();
+    let announced = observer.console_until("observer:announcement").await;
+    let another_player = moderation.message(&owner, direct(1, Some(&grace))).await;
+    let nobody = moderation.message(&owner, direct(9, None)).await;
+    let announcements = observer.audited(AuditAction::AnnouncementSent).await;
+    let messages = observer.audited(AuditAction::DirectMessageSent).await;
+    observer.supervision.stop_server(&owner).await.unwrap();
+    observer.state(ServerState::Stopped).await;
+    banning.close().await;
+    observer.stop_observer().await;
+
+    assert_eq!(stopped.unwrap_err().code(), Some(ErrorCode::ServerNotRunning));
+    let to_linus = plain(&to_linus.5);
+    assert!(
+        to_linus.contains(r#""player":3"#) && to_linus.contains(r#""message":"Come to the staff room""#),
+        "{to_linus}"
+    );
+    let announced = plain(&announced.5);
+    assert!(
+        announced.contains(r#""message":"Restart in five minutes\nPark your cars""#)
+            && announced.contains(r#""by":"ada""#),
+        "{announced}"
+    );
+    for refused in [another_player, nobody] {
+        assert_eq!(refused.unwrap_err().code(), Some(ErrorCode::PlayerNotConnected));
+    }
+    assert_eq!(announcements.len(), 1);
+    assert_eq!(
+        announcements[0].details,
+        json!({ "message": "Restart in five minutes\nPark your cars" })
+    );
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0].target.as_deref(), Some("Linus"));
+    assert_eq!(
+        messages[0].details,
+        json!({
+            "serverId": 3,
+            "license": format!("license:{:040}", 3),
+            "message": "Come to the staff room"
+        })
+    );
 }

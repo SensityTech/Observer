@@ -31,7 +31,7 @@ pub(crate) const REPORT_TYPE: &str = "observer";
 
 /// The version of the server events the bridge raises; it must match `CONTRACT_VERSION` in
 /// `server.lua`.
-pub const CONTRACT_VERSION: u32 = 4;
+pub const CONTRACT_VERSION: u32 = 5;
 
 const FILES: [(&str, &str); 3] = [
     (
@@ -167,6 +167,14 @@ pub enum BridgeEvent {
         skipped: u32,
         /// Resources left out to keep the event within what the console takes.
         truncated: bool,
+    },
+    /// The staff's announcement to the whole server, which the server's resources show.
+    Announcement { message: String, by: String },
+    /// The staff's message to one connected player, which the server's resources show.
+    DirectMessage {
+        player: u32,
+        message: String,
+        by: String,
     },
 }
 
@@ -306,6 +314,8 @@ impl BridgeEvent {
             Self::RestartRescheduled { .. } => "restartRescheduled",
             Self::ShuttingDown { .. } => "shuttingDown",
             Self::StartChanges { .. } => "startChanges",
+            Self::Announcement { .. } => "announcement",
+            Self::DirectMessage { .. } => "directMessage",
         }
     }
 
@@ -352,6 +362,16 @@ pub enum BridgeAction {
     },
     /// Has the bridge report where the players stand every `every_ms` for `for_ms`, or stop with 0.
     Positions { every_ms: u32, for_ms: u32 },
+    /// Drops `players`, or everyone connected with `all`, with the message they read, after
+    /// `observer:playerKicked` for each.
+    Kick {
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        players: Vec<u32>,
+        #[serde(skip_serializing_if = "std::ops::Not::not")]
+        all: bool,
+        message: String,
+        event: KickEvent,
+    },
 }
 
 /// What a banned player reads, and the `observer:playerRefused` the bridge raises for it.
@@ -381,35 +401,111 @@ pub struct BanEvent {
     pub player: Option<u32>,
 }
 
+/// Why players are kicked, from a closed list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum KickCause {
+    /// The staff kicked this player.
+    Kick,
+    /// The staff kicked everyone.
+    KickAll,
+}
+
+/// The payload of `observer:playerKicked`, to which the bridge adds the `player` it drops.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct KickEvent {
+    pub reason: String,
+    pub by: String,
+    pub cause: KickCause,
+}
+
 impl BridgeAction {
     pub fn name(&self) -> &'static str {
         match self {
             Self::Verdict { .. } => "verdict",
             Self::Drop { .. } => "drop",
             Self::Positions { .. } => "positions",
+            Self::Kick { .. } => "kick",
         }
+    }
+
+    /// The kick of everyone connected, as the server counts them when it runs the action.
+    pub fn kick_all(message: String, event: KickEvent) -> Self {
+        Self::Kick {
+            players: Vec::new(),
+            all: true,
+            message,
+            event,
+        }
+        .fitted()
+    }
+
+    /// The kicks that drop `players`, each within the console's line: one action while the list
+    /// fits beside the message, several past that. None for an empty list.
+    pub fn kicks(players: &[u32], message: String, event: KickEvent) -> Vec<Self> {
+        // Fitted around the longest id, so that every list of one fits.
+        let fitted = Self::Kick {
+            players: vec![u32::MAX],
+            all: false,
+            message,
+            event,
+        }
+        .fitted();
+        let Self::Kick { message, event, .. } = &fitted else {
+            return Vec::new();
+        };
+        // What the ids and the commas between them may take of the line.
+        let room = (MAX_BRIDGE_JSON + u32::MAX.to_string().len()).saturating_sub(fitted.encode().len() / 2);
+        let mut lists = Vec::new();
+        let mut listed = Vec::new();
+        let mut used = 0;
+        for &player in players {
+            let digits = player.to_string().len();
+            if !listed.is_empty() && used + 1 + digits > room {
+                lists.push(std::mem::take(&mut listed));
+                used = 0;
+            }
+            used += digits + usize::from(!listed.is_empty());
+            listed.push(player);
+        }
+        if !listed.is_empty() {
+            lists.push(listed);
+        }
+        lists
+            .into_iter()
+            .map(|players| Self::Kick {
+                players,
+                all: false,
+                message: message.clone(),
+                event: event.clone(),
+            })
+            .collect()
     }
 
     pub fn encode(&self) -> String {
         hex_json(self)
     }
 
-    /// The action shortened until it fits the console's line: the message first, then the
-    /// event's name and reason, each cut on a character boundary.
+    /// The action shortened until it fits the console's line: the longest of its message and its
+    /// event's name and reason first, each cut on a character boundary. A list of players is
+    /// never cut: [`BridgeAction::kicks`] splits it.
     #[must_use]
     pub fn fitted(mut self) -> Self {
         while self.encode().len() > 2 * MAX_BRIDGE_JSON {
-            let (message, event) = match &mut self {
+            let texts: Vec<&mut String> = match &mut self {
                 Self::Verdict { refusal: None, .. } | Self::Positions { .. } => return self,
                 Self::Verdict {
                     refusal: Some(Refusal { message, event }),
                     ..
                 }
-                | Self::Drop { message, event, .. } => (message, event),
+                | Self::Drop { message, event, .. } => [message, &mut event.reason]
+                    .into_iter()
+                    .chain(event.name.as_mut())
+                    .collect(),
+                Self::Kick { message, event, .. } => vec![message, &mut event.reason],
             };
-            let longest = [message, &mut event.reason]
+            let longest = texts
                 .into_iter()
-                .chain(event.name.as_mut())
                 .max_by_key(|text| text.len())
                 .expect("a message is always there");
             if longest.is_empty() {
@@ -474,6 +570,7 @@ impl Report {
 
 #[cfg(test)]
 mod tests {
+    use observer_domain::moderation::MAX_TEXT_CHARS;
     use observer_domain::players::{MAX_LABEL_ID_CHARS, MAX_LABEL_NAME_CHARS};
     use serde_json::json;
 
@@ -484,7 +581,7 @@ mod tests {
     const CONTRACT: &str = include_str!("../../../resource/CONTRACT.md");
     const EXAMPLE: &str = include_str!("../../../resource/observer_example/server.lua");
 
-    fn every_event() -> [BridgeEvent; 5] {
+    fn every_event() -> [BridgeEvent; 7] {
         [
             BridgeEvent::RestartScheduled {
                 at: 0,
@@ -523,6 +620,15 @@ mod tests {
                 resources: Vec::new(),
                 skipped: 0,
                 truncated: false,
+            },
+            BridgeEvent::Announcement {
+                message: String::new(),
+                by: String::new(),
+            },
+            BridgeEvent::DirectMessage {
+                player: 0,
+                message: String::new(),
+                by: String::new(),
             },
         ]
     }
@@ -842,7 +948,15 @@ mod tests {
         }
     }
 
-    fn every_action() -> [BridgeAction; 3] {
+    fn kick_event() -> KickEvent {
+        KickEvent {
+            reason: "RDM".to_owned(),
+            by: "maxime".to_owned(),
+            cause: KickCause::Kick,
+        }
+    }
+
+    fn every_action() -> [BridgeAction; 4] {
         [
             BridgeAction::Verdict {
                 request: 7,
@@ -859,6 +973,12 @@ mod tests {
             BridgeAction::Positions {
                 every_ms: 2000,
                 for_ms: 30_000,
+            },
+            BridgeAction::Kick {
+                players: vec![3],
+                all: false,
+                message: "Kicked".to_owned(),
+                event: kick_event(),
             },
         ]
     }
@@ -936,6 +1056,134 @@ mod tests {
                     "{heading} does not document `{field}`"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn the_contract_and_the_example_cover_the_kick_event_with_every_field() {
+        let mut wire = serde_json::to_value(kick_event()).unwrap();
+        wire["player"] = json!(3);
+        let heading = "### `observer:playerKicked`";
+        let start = CONTRACT
+            .find(heading)
+            .unwrap_or_else(|| panic!("CONTRACT.md has no section {heading}"));
+        let section = &CONTRACT[start + heading.len()..];
+        let section = &section[..section.find("\n#").unwrap_or(section.len())];
+
+        assert!(CONTRACT.contains("| `observer:playerKicked` |"));
+        assert!(FILES[1].1.contains("TriggerEvent('observer:playerKicked'"));
+        assert!(FILES[1].1.contains("copy.player = id"));
+        assert!(EXAMPLE.contains("AddEventHandler('observer:playerKicked'"));
+        for field in wire.as_object().unwrap().keys() {
+            assert!(
+                section.contains(&format!("| `{field}` |")),
+                "{heading} does not document `{field}`"
+            );
+        }
+        for cause in [KickCause::Kick, KickCause::KickAll] {
+            let wire = serde_json::to_value(cause).unwrap();
+            assert!(
+                section.contains(&format!("`{}`", wire.as_str().unwrap())),
+                "{cause:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_kick_names_its_players_or_everyone_and_never_both() {
+        let kicks = BridgeAction::kicks(&[3, 12], "Kicked".to_owned(), kick_event());
+        let everyone = BridgeAction::kick_all(
+            "Kicked".to_owned(),
+            KickEvent {
+                cause: KickCause::KickAll,
+                ..kick_event()
+            },
+        );
+
+        assert_eq!(kicks.len(), 1);
+        assert_eq!(
+            decode(&kicks[0].encode()),
+            json!({
+                "action": "kick",
+                "payload": {
+                    "players": [3, 12],
+                    "message": "Kicked",
+                    "event": { "reason": "RDM", "by": "maxime", "cause": "kick" }
+                }
+            })
+        );
+        assert_eq!(
+            decode(&everyone.encode()),
+            json!({
+                "action": "kick",
+                "payload": {
+                    "all": true,
+                    "message": "Kicked",
+                    "event": { "reason": "RDM", "by": "maxime", "cause": "kickAll" }
+                }
+            })
+        );
+        assert_eq!(BridgeAction::kicks(&[], "Kicked".to_owned(), kick_event()), []);
+    }
+
+    #[test]
+    fn a_long_list_of_players_is_kicked_in_as_many_actions_as_the_console_line_asks() {
+        let players: Vec<u32> = (1..=2048).map(|id| id * 2_000_000).collect();
+        let event = KickEvent {
+            reason: "é".repeat(1500),
+            ..kick_event()
+        };
+
+        let kicks = BridgeAction::kicks(&players, "\"".repeat(900), event);
+
+        assert!(kicks.len() > 1);
+        let mut listed: Vec<u32> = Vec::new();
+        for kick in &kicks {
+            assert!(crate::stdin::allowed(&format!("observer_cmd {}", kick.encode())));
+            let BridgeAction::Kick {
+                players,
+                all,
+                message,
+                event,
+            } = kick
+            else {
+                panic!("not a kick");
+            };
+            assert!(!all && !players.is_empty());
+            assert_ne!(message, "");
+            assert_ne!(event.reason, "");
+            listed.extend(players.iter().copied());
+        }
+        assert_eq!(listed, players);
+        let one_line = BridgeAction::kicks(&players[..40], "Kicked".to_owned(), kick_event());
+        assert_eq!(one_line.len(), 1);
+    }
+
+    #[test]
+    fn an_announcement_or_a_message_at_its_longest_fits_the_console_line() {
+        let longest = "\u{1F697}".repeat(MAX_TEXT_CHARS);
+        let by = "m".repeat(32);
+
+        for event in [
+            BridgeEvent::Announcement {
+                message: longest.clone(),
+                by: by.clone(),
+            },
+            BridgeEvent::DirectMessage {
+                player: u32::MAX,
+                message: longest.clone(),
+                by: by.clone(),
+            },
+            BridgeEvent::Announcement {
+                message: "\n".repeat(MAX_TEXT_CHARS),
+                by,
+            },
+        ] {
+            assert!(
+                crate::stdin::allowed(&format!("observer_cmd {}", event.encode())),
+                "{} bytes",
+                event.encode().len() / 2
+            );
         }
     }
 

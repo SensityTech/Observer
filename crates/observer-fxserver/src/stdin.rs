@@ -348,6 +348,7 @@ mod tests {
     use observer_domain::schedule::RestartSource;
 
     use super::*;
+    use crate::bridge::{KickCause, KickEvent};
 
     const HOSTILE: &str = "\";\r\n\\";
 
@@ -374,7 +375,29 @@ mod tests {
                 reason: StopReason::Stop,
                 by: text.to_owned(),
             },
+            BridgeEvent::Announcement {
+                message: text.to_owned(),
+                by: text.to_owned(),
+            },
+            BridgeEvent::DirectMessage {
+                player: 7,
+                message: text.to_owned(),
+                by: text.to_owned(),
+            },
         ]
+    }
+
+    fn kick_carrying(text: &str) -> BridgeAction {
+        BridgeAction::Kick {
+            players: vec![7],
+            all: false,
+            message: text.to_owned(),
+            event: KickEvent {
+                reason: text.to_owned(),
+                by: text.to_owned(),
+                cause: KickCause::Kick,
+            },
+        }
     }
 
     fn refusal(line: &str) -> Option<CommandRefusal> {
@@ -395,6 +418,7 @@ mod tests {
         let mut lines: Vec<SystemLine> = QUIT_REASONS.into_iter().map(SystemLine::Quit).collect();
         lines.extend(credentials.lines());
         lines.extend(events_carrying("alice").into_iter().map(SystemLine::Bridge));
+        lines.push(SystemLine::Action(kick_carrying("alice")));
 
         for line in lines {
             assert!(allowed(&line.render()), "{:?} was refused", line.render());
@@ -403,8 +427,12 @@ mod tests {
 
     #[test]
     fn hostile_text_in_any_field_never_reaches_stdin_as_such() {
-        for event in events_carrying(HOSTILE) {
-            let line = SystemLine::Bridge(event).render();
+        let lines = events_carrying(HOSTILE)
+            .into_iter()
+            .map(SystemLine::Bridge)
+            .chain([SystemLine::Action(kick_carrying(HOSTILE))]);
+        for line in lines {
+            let line = line.render();
 
             assert!(allowed(&line));
             assert!(!line.contains(['"', ';', '\r', '\n', '\\']), "{line:?}");

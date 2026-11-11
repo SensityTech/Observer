@@ -14,6 +14,7 @@ mod files;
 mod live;
 mod map;
 mod metrics;
+mod moderation;
 mod players;
 mod proxy;
 mod schedule;
@@ -36,9 +37,9 @@ use observer_app::{
     Accounts, Artifacts, ArtifactsSetup, ArtifactsTask, AuditLog, Backups, BackupsSetup, BackupsTask, Bans,
     BansSetup, BansTask, Changes, ChangesSetup, ChangesTask, Clock, Diagnostics, DiagnosticsSetup,
     DiagnosticsTask, Drops, DropsSetup, DropsTask, Features, FeaturesSetup, LiveMap, MapSetup, MapTask,
-    Metrics, MetricsSetup, OwnPaths, PasswordCost, Players, PlayersSetup, PlayersTask, Running, Schedule,
-    ScheduleSetup, ScheduleTask, Servers, Setup, Statistics, Supervision, Tools, ToolsSetup, Updates,
-    UpdatesSetup, UpdatesTask,
+    Metrics, MetricsSetup, Moderation, ModerationSetup, OwnPaths, PasswordCost, Players, PlayersSetup,
+    PlayersTask, Running, Schedule, ScheduleSetup, ScheduleTask, Servers, Setup, Statistics, Supervision,
+    Tools, ToolsSetup, Updates, UpdatesSetup, UpdatesTask,
 };
 use observer_artifacts::Http;
 use observer_artifacts::catalog::{Catalog, Listing};
@@ -268,6 +269,12 @@ impl Server {
             supervision: supervision.clone(),
             schedule: schedule.status(),
         });
+        let moderation = Moderation::new(ModerationSetup {
+            db: db.clone(),
+            clock: clock.clone(),
+            supervision: supervision.clone(),
+            bans: bans.clone(),
+        });
         let instance_id = db.instance_id().await.unwrap();
         let features = Features::load(FeaturesSetup {
             db: db.clone(),
@@ -346,6 +353,7 @@ impl Server {
             updates: Some(updates),
             backups,
             bans,
+            moderation,
             statistics,
         };
         let state = AppState::new(
@@ -708,7 +716,7 @@ async fn setup_signs_the_owner_in_with_a_strict_http_only_cookie() {
     assert_eq!(session["sessionKey"].as_str().unwrap().len(), 64);
     assert_eq!(session["me"]["username"], "ada");
     assert_eq!(session["me"]["isOwner"], true);
-    assert_eq!(session["me"]["permissions"], "3ffffff");
+    assert_eq!(session["me"]["permissions"], "1fffffff");
 
     let again = server.call(Method::POST, "/api/setup", None, Some(body)).await;
     assert_eq!(again.status, StatusCode::CONFLICT);

@@ -86,6 +86,14 @@ impl Seen {
     }
 }
 
+/// A player of the run under way, as the bridge reported them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ConnectedPlayer {
+    pub net_id: u32,
+    pub name: Option<String>,
+    pub license: Option<String>,
+}
+
 /// The identifiers as a ban stores them: the licence without its prefix, the others as the
 /// players keep them.
 fn held(identifiers: &Identifiers) -> Vec<(String, String)> {
@@ -282,6 +290,28 @@ impl Bans {
             .connected
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// The players of the run under way, by server id, once its bridge has listed them: `None`
+    /// for a server that is stopped or whose bridge has not started yet.
+    pub(crate) fn connected_players(&self) -> Option<Vec<ConnectedPlayer>> {
+        let status = self.inner.supervisor.status();
+        let status = status.borrow();
+        let connected = self.connected();
+        if status.pid.is_none() || connected.generation != status.generation {
+            return None;
+        }
+        let mut players: Vec<ConnectedPlayer> = connected
+            .players
+            .iter()
+            .map(|(net_id, seen)| ConnectedPlayer {
+                net_id: *net_id,
+                name: seen.name.clone(),
+                license: seen.license.clone(),
+            })
+            .collect();
+        players.sort_by_key(|player| player.net_id);
+        Some(players)
     }
 
     /// Bans a player Observer knows, with every identifier and token their profile links to, or

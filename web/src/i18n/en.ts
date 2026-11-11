@@ -133,7 +133,8 @@ const permissions = {
     },
     serverControl: {
         name: 'Start and stop the server',
-        description: 'Start, stop and restart FXServer, now or once at a set time.',
+        description:
+            'Start, stop and restart FXServer, now or once at a set time, and kick everyone connected at once.',
     },
     scheduleManage: {
         name: 'Manage the schedule',
@@ -217,6 +218,18 @@ const permissions = {
     playersMap: {
         name: 'See the live map',
         description: 'Where every connected player stands, as the server sees it, a few times a minute.',
+    },
+    playersKick: {
+        name: 'Kick players',
+        description: 'Drop a connected player, who reads the kick message and can connect again.',
+    },
+    playersAnnounce: {
+        name: 'Send announcements',
+        description: "Write to every connected player, through whatever the server's resources show.",
+    },
+    playersMessage: {
+        name: 'Message players',
+        description: "Write to one connected player, through whatever the server's resources show.",
     },
 } satisfies Record<PermissionKey, { name: string; description: string }>;
 
@@ -5705,6 +5718,11 @@ export const en = {
             observer_update_started: 'Observer update started',
             observer_update_cancelled: 'Observer update cancelled',
             observer_update_finished: 'Observer update finished',
+            player_kicked: 'Player kicked',
+            everyone_kicked: 'Everyone kicked',
+            kick_settings_changed: 'Kick message changed',
+            announcement_sent: 'Announcement sent',
+            direct_message_sent: 'Message sent to a player',
         } satisfies Record<AuditAction, string>,
         outcomes: {
             success: 'Success',
@@ -5895,6 +5913,10 @@ export const en = {
             updated: 'Updated',
             forgotten: 'Skipped as forgotten',
             invalid: 'Invalid',
+            serverId: 'Server ID',
+            license: 'Licence',
+            message: 'Message',
+            players: 'Players connected',
         },
         days: (value: number) => count(value, { one: 'day', other: 'days' }),
         // A profile whose retention is unset is never deleted.
@@ -6297,6 +6319,19 @@ export const en = {
             typeof params.maxMessage === 'number' && typeof params.maxTokens === 'number'
                 ? `Write a refusal message of ${formatNumber('en', params.maxMessage)} characters at most, and ask for 0 to ${formatNumber('en', params.maxTokens)} tokens.`
                 : 'These settings are out of range.',
+        player_not_connected: 'This player is no longer connected.',
+        invalid_kick: (params) =>
+            typeof params.max === 'number'
+                ? `Give a reason of ${formatNumber('en', params.max)} characters at most: the player reads it.`
+                : 'Give a reason: the player reads it.',
+        invalid_kick_settings: (params) =>
+            typeof params.maxMessage === 'number'
+                ? `Write a kick message of ${formatNumber('en', params.maxMessage)} characters at most.`
+                : 'Write a kick message.',
+        invalid_message: (params) =>
+            typeof params.max === 'number'
+                ? `Write a text of ${formatNumber('en', params.max)} characters at most.`
+                : 'Write a text.',
         invalid_players_settings:
             'Some retentions are out of range. Each one says its range below its field.',
         invalid_players_file: (params) => {

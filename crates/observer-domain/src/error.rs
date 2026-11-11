@@ -176,6 +176,14 @@ pub enum ErrorCode {
     /// The refusal message is empty or too long, or the tokens needed are out of range. Params:
     /// `maxMessage`, `maxTokens`.
     InvalidBansSettings,
+    /// No player holds this server id now, or another player than the one named does.
+    PlayerNotConnected,
+    /// A kick needs a reason of 1 to `max` characters. Params: `max`.
+    InvalidKick,
+    /// The kick message is empty or too long. Params: `maxMessage`.
+    InvalidKickSettings,
+    /// An announcement or a direct message needs a text of 1 to `max` characters. Params: `max`.
+    InvalidMessage,
     /// The live map's image was refused. Params: `problem`, `notLocal`, `missing`, `unreadable`,
     /// `tooLarge` or `notAnImage`.
     InvalidMapImage,

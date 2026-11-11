@@ -41,6 +41,9 @@ impl Permissions {
     pub const PLAYERS_BAN: Self = Self(1 << 23);
     pub const BANS_LIFT: Self = Self(1 << 24);
     pub const PLAYERS_MAP: Self = Self(1 << 25);
+    pub const PLAYERS_KICK: Self = Self(1 << 26);
+    pub const PLAYERS_ANNOUNCE: Self = Self(1 << 27);
+    pub const PLAYERS_MESSAGE: Self = Self(1 << 28);
 
     /// Every permission in the catalog, which is what the owner holds.
     pub fn all() -> Self {
@@ -462,6 +465,33 @@ pub const CATALOG: &[PermissionInfo] = &[
         danger: Danger::Sensitive,
         implies: Permissions::PLAYERS_VIEW,
     },
+    PermissionInfo {
+        bit: 26,
+        constant: "PLAYERS_KICK",
+        key: "playersKick",
+        area: PermissionArea::Players,
+        // A kick drops a connected player, who reads the owner's message and may come back.
+        danger: Danger::Sensitive,
+        implies: Permissions::PLAYERS_VIEW,
+    },
+    PermissionInfo {
+        bit: 27,
+        constant: "PLAYERS_ANNOUNCE",
+        key: "playersAnnounce",
+        area: PermissionArea::Players,
+        // An announcement goes to every connected player, in whatever the server's resources show.
+        danger: Danger::Sensitive,
+        implies: Permissions::NONE,
+    },
+    PermissionInfo {
+        bit: 28,
+        constant: "PLAYERS_MESSAGE",
+        key: "playersMessage",
+        area: PermissionArea::Players,
+        // A message reaches one connected player, in the staff's name.
+        danger: Danger::Sensitive,
+        implies: Permissions::PLAYERS_VIEW,
+    },
 ];
 
 #[cfg(test)]
@@ -502,6 +532,9 @@ mod tests {
             (23, "PLAYERS_BAN", Permissions::PLAYERS_BAN),
             (24, "BANS_LIFT", Permissions::BANS_LIFT),
             (25, "PLAYERS_MAP", Permissions::PLAYERS_MAP),
+            (26, "PLAYERS_KICK", Permissions::PLAYERS_KICK),
+            (27, "PLAYERS_ANNOUNCE", Permissions::PLAYERS_ANNOUNCE),
+            (28, "PLAYERS_MESSAGE", Permissions::PLAYERS_MESSAGE),
         ];
 
         assert_eq!(CATALOG.len(), frozen.len());

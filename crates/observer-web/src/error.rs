@@ -109,6 +109,7 @@ fn status(code: ErrorCode) -> StatusCode {
         | ErrorCode::BackupNotConfigured
         | ErrorCode::BackupCopyUnavailable
         | ErrorCode::BanNotActive
+        | ErrorCode::PlayerNotConnected
         | ErrorCode::UpdateNotAvailable
         | ErrorCode::UpdateRunning
         | ErrorCode::NoUpdate
@@ -151,6 +152,9 @@ fn status(code: ErrorCode) -> StatusCode {
         | ErrorCode::InvalidPlayersSettings
         | ErrorCode::InvalidBan
         | ErrorCode::InvalidBansSettings
+        | ErrorCode::InvalidKick
+        | ErrorCode::InvalidKickSettings
+        | ErrorCode::InvalidMessage
         | ErrorCode::InvalidMapSettings
         | ErrorCode::InvalidBackupSettings
         | ErrorCode::InvalidBackupDestination => StatusCode::BAD_REQUEST,
