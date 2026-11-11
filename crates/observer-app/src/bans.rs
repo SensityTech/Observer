@@ -17,11 +17,13 @@ use observer_domain::error::{ApiError, ErrorCode};
 use observer_domain::permissions::Permissions;
 use observer_domain::players::{Identifiers, Search, SearchRefusal, clean_name};
 use observer_domain::schedule::ScheduleStatus;
-use observer_fxserver::bridge::{BanEvent, BridgeAction, Refusal};
+use observer_fxserver::bridge::{
+    BanEvent, BridgeAction, Refusal, TxAdminAction, TxAdminBan, TxAdminRevocation,
+};
 use observer_fxserver::players::{PlayerReport, PlayerReportKind, Shown};
 use observer_fxserver::supervisor::Supervisor;
-use observer_store::Database;
 use observer_store::bans::{self as stored, BanMatch, BanQuery, Candidate, Lifted, NewBan};
+use observer_store::{Connection, Database, StoreError, launch};
 use serde_json::json;
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::{broadcast, watch};
@@ -31,7 +33,7 @@ use tracing::warn;
 
 use crate::audit::Record;
 use crate::secrets::random;
-use crate::{Caller, Clock, Error, Supervision};
+use crate::{Caller, Clock, Error, Servers, Supervision};
 
 const PAGE: u32 = 50;
 
@@ -84,6 +86,14 @@ impl Seen {
             license: identifiers.license,
         }
     }
+}
+
+/// A player of the run under way, as the bridge reported them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ConnectedPlayer {
+    pub net_id: u32,
+    pub name: Option<String>,
+    pub license: Option<String>,
 }
 
 /// The identifiers as a ban stores them: the licence without its prefix, the others as the
@@ -284,6 +294,28 @@ impl Bans {
             .unwrap_or_else(PoisonError::into_inner)
     }
 
+    /// The players of the run under way, by server id, once its bridge has listed them: `None`
+    /// for a server that is stopped or whose bridge has not started yet.
+    pub(crate) fn connected_players(&self) -> Option<Vec<ConnectedPlayer>> {
+        let status = self.inner.supervisor.status();
+        let status = status.borrow();
+        let connected = self.connected();
+        if status.pid.is_none() || connected.generation != status.generation {
+            return None;
+        }
+        let mut players: Vec<ConnectedPlayer> = connected
+            .players
+            .iter()
+            .map(|(net_id, seen)| ConnectedPlayer {
+                net_id: *net_id,
+                name: seen.name.clone(),
+                license: seen.license.clone(),
+            })
+            .collect();
+        players.sort_by_key(|player| player.net_id);
+        Some(players)
+    }
+
     /// Bans a player Observer knows, with every identifier and token their profile links to, or
     /// identifiers typed by hand, or both; drops the connected players it refuses.
     pub async fn ban(&self, caller: &Caller, request: BanRequest) -> Result<Ban, Error> {
@@ -303,7 +335,7 @@ impl Bans {
         let ends_at = request
             .minutes
             .map(|minutes| now + SignedDuration::from_mins(i64::from(minutes)));
-        let player = request.player;
+        let (player, minutes) = (request.player, request.minutes);
         let caller_record = Record::by(caller, AuditAction::PlayerBanned);
         let (by_user, by_name) = (caller.user_id, caller.username.clone());
         let connected: Vec<(u32, Seen)> = self
@@ -312,7 +344,7 @@ impl Bans {
             .iter()
             .map(|(id, seen)| (*id, seen.clone()))
             .collect();
-        let (id, code, dropped) = self
+        let (id, code, held, dropped) = self
             .inner
             .db
             .write(move |tx| -> Result<_, Error> {
@@ -358,21 +390,120 @@ impl Bans {
                         "player": player,
                         "license": license,
                         "reason": reason,
-                        "minutes": request.minutes,
+                        "minutes": minutes,
                         "identifiers": held.len() - tokens,
                         "tokens": tokens,
                         "dropped": dropped.len(),
                     }))
                     .write(tx, now)?;
-                Ok((id, code, dropped))
+                Ok((id, code, held, dropped))
             })
             .await?;
         let ban = self.by_code(&code).await?;
+        self.tell_txadmin(&ban, minutes, &held, &dropped).await;
         if dropped.is_empty() {
             return Ok(ban);
         }
         self.drop_banned(&ban, id, &dropped).await?;
         self.by_code(&code).await
+    }
+
+    /// Has the bridge raise txAdmin's `playerBanned` for a ban just made, once, before the players
+    /// it drops hear of it, as txAdmin does. Nothing is written unless the launch settings ask for
+    /// txAdmin's events; the bridge still goes by the launch it runs under.
+    async fn tell_txadmin(
+        &self,
+        ban: &Ban,
+        minutes: Option<u32>,
+        held: &[(String, String)],
+        dropped: &[(u32, Seen)],
+    ) {
+        let asked = self
+            .inner
+            .db
+            .read(|conn| txadmin_asked(conn)?.then(|| stored::settings(conn)).transpose())
+            .await;
+        match asked {
+            Ok(Some(settings)) => {
+                let event = self.txadmin_ban(ban, minutes, held, dropped, &settings);
+                self.act(BridgeAction::Banned { event }).await;
+            }
+            Ok(None) => {}
+            Err(error) => warn!(%error, "txAdmin's listeners could not be told of a ban"),
+        }
+    }
+
+    /// Has the bridge raise txAdmin's `actionRevoked` for a ban just lifted, under the same
+    /// condition as [`Bans::tell_txadmin`].
+    async fn tell_txadmin_lifted(&self, code: &str, by: &str) {
+        let code = code.to_owned();
+        let now = self.inner.clock.now();
+        let asked = self
+            .inner
+            .db
+            .read(move |conn| -> Result<_, StoreError> {
+                if !txadmin_asked(conn)? {
+                    return Ok(None);
+                }
+                let Some(ban) = stored::by_code(conn, &code, now)? else {
+                    return Ok(None);
+                };
+                Ok(Some((ban, stored::held(conn, &code)?)))
+            })
+            .await;
+        match asked {
+            Ok(Some((ban, held))) => {
+                let event = txadmin_revocation(&ban, &held, by);
+                self.act(BridgeAction::Lifted { event }).await;
+            }
+            Ok(None) => {}
+            Err(error) => warn!(%error, "txAdmin's listeners could not be told of a lifted ban"),
+        }
+    }
+
+    /// A ban as txAdmin tells it: its code for the action's id, its length in txAdmin's words,
+    /// what it holds, and what a player it drops reads.
+    fn txadmin_ban(
+        &self,
+        ban: &Ban,
+        minutes: Option<u32>,
+        held: &[(String, String)],
+        dropped: &[(u32, Seen)],
+        settings: &BansSettings,
+    ) -> TxAdminBan {
+        // The player the ban was made for, when they are among those it drops; else the lowest id.
+        let target = dropped
+            .iter()
+            .find(|(_, seen)| ban.license.is_some() && seen.license == ban.license)
+            .or_else(|| dropped.iter().min_by_key(|(net_id, _)| *net_id));
+        let name = target
+            .and_then(|(_, seen)| seen.name.as_deref())
+            .or(ban.name.as_deref());
+        let kick_message = rules::refusal(
+            &settings.message,
+            &RefusalValues {
+                reason: &ban.reason,
+                ends: &self.ends_text(ban.ends_at),
+                code: &ban.code,
+                name: name.unwrap_or_default(),
+                by: &ban.by,
+            },
+        );
+        let (target_ids, target_hwids) = txadmin_ids(held);
+        let duration = TxAdminBan::duration(minutes);
+        TxAdminBan {
+            author: ban.by.clone(),
+            reason: ban.reason.clone(),
+            action_id: ban.code.clone(),
+            expiration: ban.ends_at.map(Timestamp::as_second),
+            duration_translated: minutes.map(|_| duration.clone()),
+            duration_input: duration,
+            target_net_id: target.map(|(net_id, _)| *net_id),
+            target_ids,
+            target_hwids,
+            target_name: ban.name.clone().unwrap_or_else(|| "identifiers".to_owned()),
+            kick_message,
+        }
     }
 
     /// Drops the connected players a new ban refuses, each counted on it.
@@ -431,18 +562,20 @@ impl Bans {
         let record = Record::by(caller, AuditAction::BanLifted)
             .target(code.clone())
             .details(json!({ "reason": reason }));
-        let by = caller.username.clone();
+        let (lifted, by) = (code.clone(), caller.username.clone());
         let now = self.inner.clock.now();
         self.inner
             .db
             .write(move |tx| -> Result<(), Error> {
-                match stored::lift(tx, &code, &by, reason.as_deref(), now)? {
+                match stored::lift(tx, &lifted, &by, reason.as_deref(), now)? {
                     Lifted::Done => Ok(record.write(tx, now)?),
                     Lifted::NotFound => Err(ErrorCode::BanNotFound.into()),
                     Lifted::NotActive => Err(ErrorCode::BanNotActive.into()),
                 }
             })
-            .await
+            .await?;
+        self.tell_txadmin_lifted(&code, &caller.username).await;
+        Ok(())
     }
 
     /// A page of the list, latest first. A search by an identifier other than the licence needs
@@ -565,6 +698,40 @@ fn holding(
     held.sort();
     held.dedup();
     (held, license, name)
+}
+
+/// Whether the owner asked for txAdmin's events. The bridge goes by the launch it runs under; this
+/// keeps Observer from writing lines for txAdmin's events nobody asked for.
+fn txadmin_asked(conn: &Connection) -> Result<bool, StoreError> {
+    Ok(launch::get(conn, Servers::DEFAULT)?.is_some_and(|stored| stored.settings.txadmin_events))
+}
+
+/// What a ban holds, as txAdmin lists it: the identifiers as `kind:value`, the licence first, as
+/// a line too long loses it last, then the hardware tokens apart.
+fn txadmin_ids(held: &[(String, String)]) -> (Vec<String>, Vec<String>) {
+    let (hwids, mut ids): (Vec<_>, Vec<_>) = held.iter().partition(|(kind, _)| kind == stored::TOKEN);
+    ids.sort_by_key(|(kind, _)| kind != stored::LICENSE);
+    (
+        ids.into_iter()
+            .map(|(kind, value)| format!("{kind}:{value}"))
+            .collect(),
+        hwids.into_iter().map(|(_, value)| value.clone()).collect(),
+    )
+}
+
+/// A lifted ban, as txAdmin tells of an action revoked.
+fn txadmin_revocation(ban: &Ban, held: &[(String, String)], by: &str) -> TxAdminRevocation {
+    let (player_ids, player_hwids) = txadmin_ids(held);
+    TxAdminRevocation {
+        action_id: ban.code.clone(),
+        action_type: TxAdminAction::Ban,
+        action_reason: ban.reason.clone(),
+        action_author: ban.by.clone(),
+        player_name: ban.name.clone(),
+        player_ids,
+        player_hwids,
+        revoked_by: by.to_owned(),
+    }
 }
 
 /// How many of a ban's identifiers, tokens apart, a player shows.

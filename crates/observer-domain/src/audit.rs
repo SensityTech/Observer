@@ -255,10 +255,25 @@ pub enum AuditAction {
     ResourceRestarted,
     /// Someone had FXServer read its resource folders again.
     ResourcesRescanned,
+    /// A connected player was kicked. The target is their name, when the server gave one;
+    /// `details` hold their `serverId`, their `license` and the `reason`.
+    PlayerKicked,
+    /// Everyone connected was kicked. `details` hold the `reason` and the `players` Observer
+    /// counted as connected.
+    EveryoneKicked,
+    /// `details` hold each changed setting with its value before and after.
+    KickSettingsChanged,
+    /// An announcement was raised for the server's resources to show. `details` hold its
+    /// `message`.
+    AnnouncementSent,
+    /// A message to one connected player was raised for the server's resources to show. The
+    /// target is the player's name, when the server gave one; `details` hold their `serverId`,
+    /// their `license` and the `message`.
+    DirectMessageSent,
 }
 
 impl AuditAction {
-    pub const ALL: [Self; 117] = [
+    pub const ALL: [Self; 122] = [
         Self::SetupCompleted,
         Self::SetupLinkCreated,
         Self::LoginSucceeded,
@@ -376,6 +391,11 @@ impl AuditAction {
         Self::ResourceStopped,
         Self::ResourceRestarted,
         Self::ResourcesRescanned,
+        Self::PlayerKicked,
+        Self::EveryoneKicked,
+        Self::KickSettingsChanged,
+        Self::AnnouncementSent,
+        Self::DirectMessageSent,
     ];
 
     #[expect(clippy::too_many_lines, reason = "one arm per action, read best as one list")]
@@ -498,6 +518,11 @@ impl AuditAction {
             Self::ResourceStopped => "resource_stopped",
             Self::ResourceRestarted => "resource_restarted",
             Self::ResourcesRescanned => "resources_rescanned",
+            Self::PlayerKicked => "player_kicked",
+            Self::EveryoneKicked => "everyone_kicked",
+            Self::KickSettingsChanged => "kick_settings_changed",
+            Self::AnnouncementSent => "announcement_sent",
+            Self::DirectMessageSent => "direct_message_sent",
         }
     }
 

@@ -65,7 +65,10 @@
 //! - on stdin: `fake_connecting [name] [identifier,...] [token,...]`, a player the bridge holds at
 //!   `playerConnecting`: it reports them and waits for Observer's verdict, `fake_verdict_ms`
 //!   (5000) at most, then lets them in as `fake_join` does, or refuses them; a verdict to drop a
-//!   connected player drops them with category 1, the bridge as the resource;
+//!   connected player drops them with category 1, the bridge as the resource, and so does a kick,
+//!   of the players it lists or of everyone; a ban made or lifted, told to txAdmin's listeners, is
+//!   printed as `txAdmin:events:playerBanned` or `txAdmin:events:actionRevoked` when
+//!   `observer_txadmin_events` is 1, which the launch sets;
 //! - on stdin: `fake_move <id> <x> <y> <z>`, which puts a player at a position the bridge reports
 //!   while Observer asks for positions; the others go round a circle. With `onesync off` the bridge
 //!   reports no position, as it reads them from OneSync;
@@ -97,9 +100,10 @@
 //! The main loop runs in a thread named `UV loop: svMain`, as FXServer's does.
 //!
 //! The bridge's `observer_cmd <hex>` prints the event it decodes, which the real bridge does not, so
-//! that tests can see it arrive; a refusal prints the message as JSON after `refused`, which the
-//! real bridge shows the player instead. A convar typed alone gets the first line FXServer prints
-//! for it, ` "name" is "value"`; unknown commands get FXServer's `No such command <name>.`
+//! that tests can see it arrive; a refusal prints the message as JSON after `refused`, and a kick
+//! after `kicked` and the player's id, which the real bridge shows the player instead. A convar
+//! typed alone gets the first line FXServer prints for it, ` "name" is "value"`; unknown commands
+//! get FXServer's `No such command <name>.`
 
 mod console;
 mod dump;
@@ -1273,6 +1277,17 @@ impl Fake {
                 console::script(&bridge, &format!("observer:playerBanned {}", payload["event"]));
                 self.drop_player(id, 1, &bridge, message);
             }
+            Some("kick") => self.kick(&bridge, payload),
+            Some(action @ ("banned" | "lifted"))
+                if self.server.convar("observer_txadmin_events").as_deref() == Some("1") =>
+            {
+                let event = if action == "banned" {
+                    "playerBanned"
+                } else {
+                    "actionRevoked"
+                };
+                console::script(&bridge, &format!("txAdmin:events:{event} {}", payload["event"]));
+            }
             Some(_) => {}
             None => console::script(
                 &bridge,
@@ -1282,6 +1297,42 @@ impl Fake {
                     payload
                 ),
             ),
+        }
+    }
+
+    /// A kick of the players listed, or of everyone with `all`: `observer:playerKicked` for each
+    /// one connected, then their drops, with category 1 and the bridge as the resource.
+    fn kick(&self, bridge: &str, payload: &serde_json::Value) {
+        let (Some(message), Some(event)) = (
+            payload["message"].as_str().filter(|message| !message.is_empty()),
+            payload["event"].as_object(),
+        ) else {
+            return;
+        };
+        let mut connected = self.server.players().ids();
+        connected.sort_unstable();
+        let kicked: Vec<u32> = if payload["all"] == json!(true) {
+            connected
+        } else {
+            payload["players"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|id| id.as_u64().and_then(|id| u32::try_from(id).ok()))
+                .filter(|id| connected.contains(id))
+                .collect()
+        };
+        for &id in &kicked {
+            let mut event = event.clone();
+            event.insert("player".to_owned(), json!(id));
+            console::script(
+                bridge,
+                &format!("observer:playerKicked {}", serde_json::Value::Object(event)),
+            );
+        }
+        for id in kicked {
+            console::script(bridge, &format!("kicked {id} {}", json!(message)));
+            self.drop_player(id, 1, bridge, message);
         }
     }
 

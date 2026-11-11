@@ -1,16 +1,18 @@
 import { useMutation } from '@tanstack/react-query';
-import { Play, RotateCw, Square, X } from 'lucide-react';
+import { Ellipsis, LogOut, Megaphone, Play, RotateCw, Square, X } from 'lucide-react';
 import { useState } from 'react';
 
 import { restartServer, startServer, stopServer } from '../api/server';
 import { Permission } from '../api/generated/Permission';
 import { allows, useMe } from '../auth/me';
-import { Button } from '../components/Button';
+import { Button, buttonVariants } from '../components/Button';
 import { Dialog } from '../components/Dialog';
+import { Menu, type MenuItem } from '../components/Menu';
 import { Notice } from '../components/Notice';
 import { errorMessage } from '../i18n/errors';
 import { useI18n } from '../i18n/I18nProvider';
 import { cn } from '../lib/cn';
+import { AnnounceDialog, KickAllDialog } from '../moderation/dialogs';
 import { useServerStatus } from '../server/context';
 import { blocked, isRunning, type Action } from '../server/state';
 
@@ -23,7 +25,8 @@ const SEND = { start: startServer, stop: stopServer, restart: restartServer } sa
  * Restart and Stop at the end of the status card, Start in Restart's place while no process runs.
  * A button that cannot act now stays in the tab order, marked disabled; pressed, it says why below,
  * since a touch screen or the keyboard never shows its title. Stop and Restart ask first, since
- * players are disconnected.
+ * players are disconnected. While the server runs, a menu holds what reaches every player at once:
+ * an announcement, and a kick of everyone, for the accounts that may send them.
  */
 export function ServerControls() {
     const { t } = useI18n();
@@ -31,6 +34,7 @@ export function ServerControls() {
     const { status } = useServerStatus();
     const [confirming, setConfirming] = useState<Action | null>(null);
     const [failure, setFailure] = useState<{ tone: 'warning' | 'danger'; text: string } | null>(null);
+    const [reaching, setReaching] = useState<'announce' | 'kickAll' | null>(null);
     const permitted = allows(me, Permission.ServerControl);
 
     // Why a blocked control did nothing holds for the state it was pressed in only: it goes with
@@ -87,6 +91,29 @@ export function ServerControls() {
         );
     };
     const players = status?.players?.online ?? 0;
+    const more: MenuItem[] = running
+        ? [
+              ...(allows(me, Permission.PlayersAnnounce)
+                  ? [
+                        {
+                            label: t.moderation.announce.menu,
+                            icon: Megaphone,
+                            onSelect: () => setReaching('announce'),
+                        },
+                    ]
+                  : []),
+              ...(permitted
+                  ? [
+                        {
+                            label: t.moderation.kickAll.menu,
+                            icon: LogOut,
+                            danger: true,
+                            onSelect: () => setReaching('kickAll'),
+                        },
+                    ]
+                  : []),
+          ]
+        : [];
     // No process runs while FXServer waits to restart or sits in a crash loop: a stop only keeps it down.
     const keepsDown = status?.state === 'crashed' || status?.state === 'crashLoop';
 
@@ -96,6 +123,19 @@ export function ServerControls() {
                 <legend className="sr-only">{t.controls.label}</legend>
                 {running ? button('restart', RotateCw, 'secondary') : button('start', Play, 'ink')}
                 {button('stop', Square, 'secondary')}
+                {more.length > 0 && (
+                    <Menu
+                        label={t.moderation.more}
+                        buttonClassName={cn(
+                            buttonVariants({ tone: 'secondary', size: 'icon-sm' }),
+                            'controls-more',
+                        )}
+                        items={more}
+                        placement="below-end"
+                    >
+                        <Ellipsis size={16} strokeWidth={1.5} aria-hidden="true" />
+                    </Menu>
+                )}
             </fieldset>
             {failure && (
                 <Notice tone={failure.tone} className="controls-failure">
@@ -153,6 +193,8 @@ export function ServerControls() {
                     )}
                 </Dialog>
             )}
+            {reaching === 'announce' && <AnnounceDialog onClose={() => setReaching(null)} />}
+            {reaching === 'kickAll' && <KickAllDialog onClose={() => setReaching(null)} />}
         </>
     );
 }
