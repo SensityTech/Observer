@@ -60,6 +60,7 @@ pub(super) fn allows(topic: Topic, held: Permissions) -> bool {
         Topic::ServerMap => any(&[Permissions::PLAYERS_MAP]),
         // Names, versions and states: what the dashboard's start already shows one by one.
         Topic::ServerResources => any(&[Permissions::DASHBOARD_VIEW, Permissions::RESOURCES_CONTROL]),
+        Topic::ServerEntities => any(&[Permissions::ENTITIES_VIEW]),
         // Counts and a switch, no player: the rail and the status card show them everywhere.
         Topic::ServerAdmission => any(&[
             Permissions::DASHBOARD_VIEW,
@@ -93,17 +94,17 @@ pub(super) async fn open(topic: Topic, since: Option<u64>, state: &AppState) -> 
                 events: Some(audit_events(entries, latest_id)),
             })
         }
-        Topic::ServerStatus => Ok(watched(
+        Topic::ServerStatus => Ok(followed(
             state.supervision.status(),
             TopicSnapshot::ServerStatus,
             TopicEvent::ServerStatus,
         )),
-        Topic::ServerSchedule => Ok(watched(
+        Topic::ServerSchedule => Ok(followed(
             state.schedule.status(),
             TopicSnapshot::ServerSchedule,
             TopicEvent::ServerSchedule,
         )),
-        Topic::ServerArtifacts => Ok(watched(
+        Topic::ServerArtifacts => Ok(followed(
             state.artifacts.status(),
             |status| TopicSnapshot::ServerArtifacts(Box::new(status)),
             |status| TopicEvent::ServerArtifacts(Box::new(status)),
@@ -122,7 +123,7 @@ pub(super) async fn open(topic: Topic, since: Option<u64>, state: &AppState) -> 
                 events: Some(metrics_events(samples)),
             })
         }
-        Topic::ServerAlerts => Ok(watched(
+        Topic::ServerAlerts => Ok(followed(
             state.diagnostics()?.alerts(),
             TopicSnapshot::ServerAlerts,
             TopicEvent::ServerAlerts,
@@ -138,20 +139,27 @@ pub(super) async fn open(topic: Topic, since: Option<u64>, state: &AppState) -> 
             let (snapshot, live, watching) = state.map()?.watch();
             Ok(Feed {
                 snapshot: TopicSnapshot::ServerMap(snapshot),
-                events: Some(map_events(live, watching)),
+                events: Some(watched_events(live, watching, TopicEvent::ServerMap)),
             })
         }
-        Topic::ServerAdmission => Ok(watched(
+        Topic::ServerAdmission => Ok(followed(
             state.admission.status(),
             TopicSnapshot::ServerAdmission,
             TopicEvent::ServerAdmission,
         )),
-        Topic::ServerChanges => Ok(watched(
+        Topic::ServerEntities => {
+            let (snapshot, live, watching) = state.entities()?.watch();
+            Ok(Feed {
+                snapshot: TopicSnapshot::ServerEntities(snapshot),
+                events: Some(watched_events(live, watching, TopicEvent::ServerEntities)),
+            })
+        }
+        Topic::ServerChanges => Ok(followed(
             state.changes()?.live(),
             TopicSnapshot::ServerChanges,
             TopicEvent::ServerChanges,
         )),
-        Topic::ServerResources => Ok(watched(
+        Topic::ServerResources => Ok(followed(
             state.supervision.resources(),
             TopicSnapshot::ServerResources,
             TopicEvent::ServerResources,
@@ -185,8 +193,8 @@ fn metrics_events(samples: broadcast::Receiver<LiveSample>) -> Events {
     }))
 }
 
-/// A topic whose state is a watch: the state as it is now, then the whole of it at each change.
-fn watched<T>(
+/// A status as it stands, then the whole of it each time it changes.
+fn followed<T>(
     mut status: watch::Receiver<T>,
     snapshot: fn(T) -> TopicSnapshot,
     event: fn(T) -> TopicEvent,
@@ -214,18 +222,18 @@ where
     }))
 }
 
-/// The map's changes, holding the guard that keeps the server sending positions: it goes with the
-/// subscription.
-fn map_events(live: watch::Receiver<observer_domain::map::MapLive>, watching: Watching) -> Events {
+/// The changes of a view the server reads for only while someone looks, holding the guard that
+/// keeps it reading: it goes with the subscription.
+fn watched_events<T>(live: watch::Receiver<T>, watching: Watching, event: fn(T) -> TopicEvent) -> Events
+where
+    T: Clone + Send + Sync + 'static,
+{
     Box::pin(stream::unfold(
         (live, watching),
-        |(mut live, watching)| async move {
+        move |(mut live, watching)| async move {
             live.changed().await.ok()?;
             let current = live.borrow_and_update().clone();
-            Some((
-                Delivery::Event(Box::new(TopicEvent::ServerMap(current))),
-                (live, watching),
-            ))
+            Some((Delivery::Event(Box::new(event(current))), (live, watching)))
         },
     ))
 }

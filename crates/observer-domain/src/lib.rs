@@ -21,6 +21,7 @@ pub mod delegation;
 pub mod diagnostics;
 pub mod docs;
 pub mod drops;
+pub mod entities;
 pub mod error;
 pub mod features;
 pub mod files;

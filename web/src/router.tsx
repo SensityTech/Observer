@@ -15,6 +15,8 @@ import { ReauthDialog } from './auth/ReauthDialog';
 import { RequireOwner, RequirePermission } from './auth/RequirePermission';
 import { changesSearch, resourceSearch } from './changes/search';
 import { parseDropsSearch, type DropsSearch } from './drops/search';
+import { parseEntitiesSearch, type EntitiesSearch } from './entities/search';
+import { parseMapSearch, type MapSearch } from './map/search';
 import { parseStatisticsSearch, type StatisticsSearch } from './statistics/search';
 import { lazyCode } from './lib/lazyCode';
 import { LoginPage } from './pages/LoginPage';
@@ -97,6 +99,9 @@ const ChangesResourcePage = lazyCode(() =>
     import('./pages/ChangesResourcePage').then((page) => ({ default: page.ChangesResourcePage })),
 );
 const DropsPage = lazyCode(() => import('./pages/DropsPage').then((page) => ({ default: page.DropsPage })));
+const EntitiesPage = lazyCode(() =>
+    import('./pages/EntitiesPage').then((page) => ({ default: page.EntitiesPage })),
+);
 const StatisticsPage = lazyCode(() =>
     import('./pages/StatisticsPage').then((page) => ({ default: page.StatisticsPage })),
 );
@@ -312,9 +317,11 @@ const playersRoute = createRoute({
     ),
 });
 
+// An entity the list sends here is in the address: the map opens on it, its layer on.
 const mapRoute = createRoute({
     getParentRoute: () => panelRoute,
     path: '/map',
+    validateSearch: (search: Record<string, unknown>): MapSearch => parseMapSearch(search),
     component: () => (
         <RequirePermission name="PlayersMap">
             <MapPage />
@@ -358,6 +365,18 @@ const dropsRoute = createRoute({
     component: () => (
         <RequirePermission name="DropsView">
             <DropsPage />
+        </RequirePermission>
+    ),
+});
+
+// The filters, the sort and the page are in the address, so that a link opens the list as it was.
+const entitiesRoute = createRoute({
+    getParentRoute: () => panelRoute,
+    path: '/entities',
+    validateSearch: (search: Record<string, unknown>): EntitiesSearch => parseEntitiesSearch(search),
+    component: () => (
+        <RequirePermission name="EntitiesView">
+            <EntitiesPage />
         </RequirePermission>
     ),
 });
@@ -553,6 +572,7 @@ const routeTree = rootRoute.addChildren([
         changesRoute,
         changesResourceRoute,
         dropsRoute,
+        entitiesRoute,
         serverRoute,
         toolsRoute,
         archetypesRoute,

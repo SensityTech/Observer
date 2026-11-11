@@ -1,6 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Link } from '@tanstack/react-router';
-import { ArrowRight, Check, ChevronDown, Image as ImageIcon, Trash2 } from 'lucide-react';
+import { Check, ChevronDown, Image as ImageIcon, Trash2 } from 'lucide-react';
 import { useState, type MouseEvent } from 'react';
 
 import type { MapBounds } from '../api/generated/MapBounds';
@@ -25,7 +24,7 @@ import { boundsFrom, type Spot } from '../map/geometry';
 import { useVisit } from '../players/words';
 import { useSchedule } from '../schedule/context';
 import { SettingsForm, useSection } from './Form';
-import { CategoryHead, SettingRow, SettingsGroup } from './Row';
+import { CategoryHead, CategoryLink, CategoryLoading, SettingRow, SettingsGroup } from './Row';
 
 type Outcome = { tone: 'success' | 'danger'; message: string };
 type Way = 'players' | 'edges';
@@ -45,25 +44,11 @@ export function LiveMapSettings() {
                 category="map"
                 aside={
                     allows(me, Permission.PlayersMap) ? (
-                        <Link
-                            to="/map"
-                            className="inline-flex items-center gap-1.5 text-ui font-medium text-ink underline-offset-2 hover:underline max-md:min-h-11"
-                        >
-                            {t.settings.map.openMap}
-                            <ArrowRight size={14} strokeWidth={1.5} aria-hidden="true" />
-                        </Link>
+                        <CategoryLink to="/map">{t.settings.map.openMap}</CategoryLink>
                     ) : undefined
                 }
             />
-            {view.isPending && (
-                <section className="card">
-                    <div className="card-body flex flex-col gap-3" aria-busy="true">
-                        <span className="sr-only">{t.common.loading}</span>
-                        <span className="skeleton w-1/3" />
-                        <span className="skeleton w-1/2" />
-                    </div>
-                </section>
-            )}
+            {view.isPending && <CategoryLoading />}
             {view.isError && (
                 <Notice tone="danger">
                     {t.settings.map.loadFailed} {errorMessage(t, view.error)}

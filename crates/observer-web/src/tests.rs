@@ -11,6 +11,7 @@ mod debug;
 mod diagnostics;
 mod docs;
 mod drops;
+mod entities;
 mod features;
 mod files;
 mod live;
@@ -39,10 +40,10 @@ use jiff::SignedDuration;
 use observer_app::{
     Accounts, Artifacts, ArtifactsSetup, ArtifactsTask, AuditLog, Backups, BackupsSetup, BackupsTask, Bans,
     BansSetup, BansTask, Changes, ChangesSetup, ChangesTask, Clock, Diagnostics, DiagnosticsSetup,
-    DiagnosticsTask, Drops, DropsSetup, DropsTask, Features, FeaturesSetup, LiveMap, MapSetup, MapTask,
-    Metrics, MetricsSetup, OwnPaths, PasswordCost, Players, PlayersSetup, PlayersTask, Running, Schedule,
-    ScheduleSetup, ScheduleTask, Servers, Setup, Statistics, Supervision, Tools, ToolsSetup, Updates,
-    UpdatesSetup, UpdatesTask,
+    DiagnosticsTask, Drops, DropsSetup, DropsTask, Entities, EntitiesSetup, EntitiesTask, Features,
+    FeaturesSetup, LiveMap, MapSetup, MapTask, Metrics, MetricsSetup, OwnPaths, PasswordCost, Players,
+    PlayersSetup, PlayersTask, Running, Schedule, ScheduleSetup, ScheduleTask, Servers, Setup, Statistics,
+    Supervision, Tools, ToolsSetup, Updates, UpdatesSetup, UpdatesTask,
 };
 use observer_artifacts::Http;
 use observer_artifacts::catalog::{Catalog, Listing};
@@ -88,6 +89,7 @@ struct Server {
     _admitting: observer_app::AdmissionTask,
     _debugging: observer_app::DebugTask,
     _mapping: MapTask,
+    _listing: EntitiesTask,
     _following: ChangesTask,
     _backing_up: BackupsTask,
     _updating: UpdatesTask,
@@ -267,6 +269,12 @@ impl Server {
             players: players.clone(),
             data_dir: dir.path().join("data"),
         });
+        let (entities, listing) = Entities::start(EntitiesSetup {
+            db: db.clone(),
+            clock: clock.clone(),
+            supervision: supervision.clone(),
+            players: Some(players.clone()),
+        });
         let (bans, banning) = Bans::start(BansSetup {
             db: db.clone(),
             clock: clock.clone(),
@@ -353,8 +361,9 @@ impl Server {
             debug,
             diagnostics: Some(diagnostics),
             metrics: Some(metrics.clone()),
-            players: Some(players),
+            players: Some(players.clone()),
             map: Some(map),
+            entities: Some(entities),
             drops: Some(drops),
             changes: Some(changes),
             updates: Some(updates),
@@ -397,6 +406,7 @@ impl Server {
             _admitting: admitting,
             _debugging: debugging,
             _mapping: mapping,
+            _listing: listing,
             _following: following,
             _backing_up: backing_up,
             _updating: updating,
@@ -724,7 +734,7 @@ async fn setup_signs_the_owner_in_with_a_strict_http_only_cookie() {
     assert_eq!(session["sessionKey"].as_str().unwrap().len(), 64);
     assert_eq!(session["me"]["username"], "ada");
     assert_eq!(session["me"]["isOwner"], true);
-    assert_eq!(session["me"]["permissions"], "fffffff");
+    assert_eq!(session["me"]["permissions"], "3fffffff");
 
     let again = server.call(Method::POST, "/api/setup", None, Some(body)).await;
     assert_eq!(again.status, StatusCode::CONFLICT);

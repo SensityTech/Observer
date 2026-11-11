@@ -26,6 +26,8 @@ own resources decide what to do with them.
   FXServer's threads and connections, crash dumps and hangs.
 - **Live map.** Where the connected players stand, over Rockstar's map of GTA V or an image you add,
   coloured by play time, a click away from their profile and a ban.
+- **Entities.** The server's vehicles, peds and objects, each with the resource that created it and
+  the player whose game simulates it, found on the live map and deleted one at a time or a hundred.
 - **Debug.** What each resource sends and receives, writes into state bags and calls over HTTP,
   counted inside the resources: the event that floods the clients, the client that sends far more
   than the others, the resource that calls a host it never called. Off until the owner turns it on.
@@ -122,10 +124,10 @@ page, each with a temporary password that works for 72 hours and is changed at t
 
 The panel's pages are grouped by what one comes for: **Players** (the players, the live map, the
 bans), **Server** (restarts, the cfg, builds, backups, file changes), **Insights** (statistics, drops,
-diagnostics) and **Maintenance** (tools, the audit log). The search button beside the logo, or Ctrl K
-(⌘ K on a Mac) from any page, opens a search of the pages, of the settings by their name, of the
-events and exports the **Documentation** page describes (see [Integrations](#integrations)), and of
-the connected players by name or ID. Each account finds only what it may open.
+entities, diagnostics) and **Maintenance** (tools, the audit log). The search button beside the logo,
+or Ctrl K (⌘ K on a Mac) from any page, opens a search of the pages, of the settings by their name, of
+the events and exports the **Documentation** page describes (see [Integrations](#integrations)), and
+of the connected players by name or ID. Each account finds only what it may open.
 
 From the host, even while Observer runs:
 
@@ -924,11 +926,11 @@ are the owner's.
 
 File access over SFTP (`sftp`), file changes (`changes`), the server tools (`tools`), the diagnostics
 (`diagnostics`), the statistics (`metrics`), the players (`players`), the player drops (`drops`), the
-update checks (`updates`) and Debug (`debug`) can each be turned off; Debug alone starts off. A
-feature that is off runs none of its code: Observer does not open its port, start its tasks or open
-its database, and its API routes answer `feature_disabled`. What it recorded stays on disk, and its
-retention waits until it runs again. Supervision, the console, accounts, the audit log, the restart
-schedule and FXServer's builds are always on.
+update checks (`updates`), Debug (`debug`) and the entities (`entities`) can each be turned off; Debug
+alone starts off. A feature that is off runs none of its code: Observer does not open its port, start
+its tasks or open its database, and its API routes answer `feature_disabled`. What it recorded stays
+on disk, and its retention waits until it runs again. Supervision, the console, accounts, the audit
+log, the restart schedule and FXServer's builds are always on.
 
 `GET /api/features` (**View settings**) says for each feature whether it runs, what holds it off, and
 what it opens: its port, its tasks, its files, its routes. Only the owner turns one on or off, with
@@ -1132,6 +1134,40 @@ not send.
 Positions come from the bridge, which reads them from OneSync: without OneSync there are none. The
 server sends them every 1, 2 or 5 seconds, only while someone has the page open, and stops within 30
 seconds after the last one leaves. Observer keeps them in memory only: nothing of them is written.
+
+## Entities
+
+The Entities page lists what the game holds on the server: its vehicles, its peds and its objects, as
+OneSync knows them. Each has its type, its model, the resource that created it, the player whose game
+simulates it, its routing bucket and its position. The players' own peds are counted and never listed.
+The list is filtered by type, vehicle class, creating resource, owner and bucket, searched by net ID,
+model, resource or owner's name, sorted by any column, and read a hundred at a time. Seeing it takes
+**See the entities**.
+
+A model shows as its hash, which is all the server knows of it: Observer ships no table of GTA V's
+names. The creating resource is the one the server knew when the entity was first seen: none for the
+game's own traffic, and for what a client's script created. Who owns an entity, and whether a player
+sits in a vehicle, is told only to accounts that also hold **See the live map**: both say where a
+player is.
+
+On the [live map](#live-map), **Entities** draws them under the players, a shape for each type. Past
+5,000 in the part of the map in view, the map counts them by square instead, and zooming in shows each
+one again. A click on an entity gives what the list says of it.
+
+**Delete entities** is a permission of its own. A deletion takes up to 100 entities, asks for a word
+typed from 20, and never takes a player's own ped, a vehicle a player sits in or a train. The server
+checks each entity again before it deletes it, so one that changed since the list was read stays, and
+the panel says what became of each. Nothing is deleted from a list more than three sweeps old, nor from
+one read before the server or its bridge restarted. Every deletion is in the audit log, with what was
+deleted and by whom.
+
+The entities come from the bridge, which reads them from OneSync: without OneSync there are none, and
+only GTA V servers are read. The server lists them every 15 seconds, or as often as the settings'
+Entities category says, only while someone has the page or the map's layer open, and stops within 30
+seconds after the last one leaves. A sweep works a millisecond at a time and gives the server its frame
+back in between, and stops at 50 ms of work, its list then partial. When a sweep costs more than half
+of that, the server spaces the next ones out by itself, up to once a minute, and comes back to its
+cadence once they are cheap again. Observer keeps the list in memory only: nothing of it is written.
 
 ## Updates
 

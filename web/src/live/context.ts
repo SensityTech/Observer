@@ -18,24 +18,28 @@ export const useLinkState = () => {
     return useSyncExternalStore(live.subscribe, live.getState);
 };
 
-/** Follows a topic while the component is mounted. The handlers may change on every render. */
-export const useTopic = <T extends Topic>(topic: T, handlers: TopicHandlers<T>) => {
+/**
+ * Follows a topic while the component is mounted, and while `enabled`: a topic that costs the server
+ * to feed is followed only while what shows it is on. The handlers may change on every render.
+ */
+export const useTopic = <T extends Topic>(topic: T, handlers: TopicHandlers<T>, enabled = true) => {
     const live = useRealtime();
     const latest = useRef(handlers);
     useEffect(() => {
         latest.current = handlers;
     });
-    useEffect(
-        () =>
-            live.watch<T>(topic, {
-                snapshot: (data) => latest.current.snapshot?.(data),
-                event: (data) => latest.current.event?.(data),
-                refused: () => latest.current.refused?.(),
-                cleared: () => latest.current.cleared?.(),
-                since: () => latest.current.since?.() ?? null,
-            }),
-        [live, topic],
-    );
+    useEffect(() => {
+        if (!enabled) {
+            return;
+        }
+        return live.watch<T>(topic, {
+            snapshot: (data) => latest.current.snapshot?.(data),
+            event: (data) => latest.current.event?.(data),
+            refused: () => latest.current.refused?.(),
+            cleared: () => latest.current.cleared?.(),
+            since: () => latest.current.since?.() ?? null,
+        });
+    }, [live, topic, enabled]);
 };
 
 /** A topic's latest snapshot, or null while none holds: until one arrives, and while the link is down. */

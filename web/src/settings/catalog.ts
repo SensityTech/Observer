@@ -44,6 +44,7 @@ export type SettingId =
     | 'mapBounds'
     | 'mapTiers'
     | 'mapCadence'
+    | 'entitiesCadence'
     | 'switchSftp'
     | 'switchChanges'
     | 'switchTools'
@@ -53,6 +54,7 @@ export type SettingId =
     | 'switchDrops'
     | 'switchUpdates'
     | 'switchDebug'
+    | 'switchEntities'
     | 'changesEnabled'
     | 'startEvent'
     | 'extensions'
@@ -95,6 +97,7 @@ export type CategoryId =
     | 'allowlist'
     | 'maintenance'
     | 'map'
+    | 'entities'
     | 'features'
     | 'data'
     | 'tools'
@@ -209,6 +212,12 @@ export const CATEGORIES: readonly Category[] = [
         ],
     },
     {
+        id: 'entities',
+        group: 'server',
+        access: ['SettingsView'],
+        settings: [{ id: 'entitiesCadence', applies: 'now' }],
+    },
+    {
         id: 'features',
         group: 'observer',
         access: ['SettingsView'],
@@ -222,6 +231,7 @@ export const CATEGORIES: readonly Category[] = [
             { id: 'switchDrops' },
             { id: 'switchUpdates' },
             { id: 'switchDebug' },
+            { id: 'switchEntities' },
         ],
     },
     {
@@ -307,6 +317,7 @@ export const SWITCH_OF = {
     drops: 'switchDrops',
     updates: 'switchUpdates',
     debug: 'switchDebug',
+    entities: 'switchEntities',
 } satisfies Record<Feature, SettingId>;
 
 /** When each setting applies, found by its id. */

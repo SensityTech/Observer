@@ -11,6 +11,7 @@ use crate::artifacts::ArtifactsStatus;
 use crate::audit::AuditEntry;
 use crate::changes::ChangesLive;
 use crate::diagnostics::{AlertList, DiagnosticsEvent, DiagnosticsSnapshot};
+use crate::entities::EntitiesLive;
 use crate::error::ErrorCode;
 use crate::map::MapLive;
 use crate::metrics::{LiveSample, MetricsSnapshot};
@@ -79,6 +80,10 @@ pub enum Topic {
     /// permission, or the one that starts and stops resources.
     #[serde(rename = "server.resources")]
     ServerResources,
+    /// The state of the list of the server's entities, while the topic is followed: the server
+    /// lists them only then. Needs the entities permission.
+    #[serde(rename = "server.entities")]
+    ServerEntities,
     /// Who the server lets in: whether the allowlist is on, how many requests wait and how many
     /// licences are approved. Needs the dashboard, players or server control permission.
     #[serde(rename = "server.admission")]
@@ -86,7 +91,7 @@ pub enum Topic {
 }
 
 impl Topic {
-    pub const ALL: [Self; 13] = [
+    pub const ALL: [Self; 14] = [
         Self::Status,
         Self::Audit,
         Self::ServerStatus,
@@ -99,6 +104,7 @@ impl Topic {
         Self::ServerChanges,
         Self::ServerMap,
         Self::ServerResources,
+        Self::ServerEntities,
         Self::ServerAdmission,
     ];
 }
@@ -179,6 +185,8 @@ pub enum TopicSnapshot {
     ServerMap(MapLive),
     #[serde(rename = "server.resources")]
     ServerResources(ResourcesView),
+    #[serde(rename = "server.entities")]
+    ServerEntities(EntitiesLive),
     #[serde(rename = "server.admission")]
     ServerAdmission(AdmissionStatus),
 }
@@ -215,6 +223,9 @@ pub enum TopicEvent {
     /// Every resource again, whenever one changes: a few times a second at most.
     #[serde(rename = "server.resources")]
     ServerResources(ResourcesView),
+    /// The state of the list again, at each sweep of the bridge and after each deletion.
+    #[serde(rename = "server.entities")]
+    ServerEntities(EntitiesLive),
     /// The whole status again, whenever any of it changes.
     #[serde(rename = "server.admission")]
     ServerAdmission(AdmissionStatus),

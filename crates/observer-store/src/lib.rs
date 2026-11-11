@@ -13,6 +13,7 @@ pub mod changes;
 mod database;
 pub mod debug;
 pub mod diagnostics;
+pub mod entities;
 pub mod features;
 pub mod files;
 pub mod launch;

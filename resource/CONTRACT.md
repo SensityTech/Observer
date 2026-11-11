@@ -16,7 +16,11 @@ the players Observer keeps out: banned ones, everyone but a short list during ma
 those the staff has not approved while the allowlist is on. While someone has the panel's live map
 open, it also reads where each player stands,
 from OneSync, every 1 to 5 seconds, and reports it to Observer; it raises no event for it and stops
-within 30 seconds after the last one closes the map. It has no client script and no UI.
+within 30 seconds after the last one closes the map. In the same way, while someone looks at the
+server's entities in the panel, it lists the vehicles, peds and objects OneSync knows, every 5 to 60
+seconds, a millisecond of the main thread at a time, and deletes the ones the staff picks there: never
+a player's own ped, a vehicle a player sits in or a train. It raises no event for either. It has no
+client script and no UI.
 
 Its name changes with every start of FXServer: Observer draws it at random, so that no script can
 target the bridge by a name known in advance. Read it from the `observer_bridge` convar, which

@@ -13,6 +13,7 @@ import { BansSettings } from './Bans';
 import { BuildSettings } from './Builds';
 import { CATEGORIES, opens, type Category, type CategoryId } from './catalog';
 import { DataSettings } from './Data';
+import { EntitiesSettings } from './Entities';
 import { LiveMapSettings } from './LiveMap';
 import { MaintenanceSettings } from './Maintenance';
 import { FeatureSettings } from './Features';
@@ -33,6 +34,7 @@ const CONTENT = {
     allowlist: AllowlistSettings,
     maintenance: MaintenanceSettings,
     map: LiveMapSettings,
+    entities: EntitiesSettings,
     features: FeatureSettings,
     data: DataSettings,
     tools: ToolSettings,

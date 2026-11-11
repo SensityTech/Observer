@@ -32,6 +32,7 @@ use self::image::image_size;
 use crate::audit::Record;
 use crate::host_file::{HostFileProblem, open_local};
 use crate::secrets::{hex, random};
+use crate::watching::{Watchers, Watching};
 use crate::{Caller, Clock, Error, Players, Supervision};
 
 /// How long one ask for positions lasts, and how often it is renewed while a panel watches.
@@ -61,19 +62,7 @@ struct Inner {
     players: Players,
     folder: PathBuf,
     live: watch::Sender<MapLive>,
-    watchers: watch::Sender<usize>,
-}
-
-/// Held while a panel follows the map: the server stops sending positions once none does.
-pub struct Watching {
-    watchers: watch::Sender<usize>,
-}
-
-impl Drop for Watching {
-    fn drop(&mut self) {
-        self.watchers
-            .send_modify(|watchers| *watchers = watchers.saturating_sub(1));
-    }
+    watchers: Watchers,
 }
 
 pub struct MapTask {
@@ -115,7 +104,7 @@ impl LiveMap {
                     waiting: 0,
                     onesync: true,
                 }),
-                watchers: watch::Sender::new(0),
+                watchers: Watchers::new(),
             }),
         };
         let stop = CancellationToken::new();
@@ -123,14 +112,12 @@ impl LiveMap {
         (map, MapTask { stop, task })
     }
 
-    /// The map as it stands and its changes, for as long as the guard is held.
+    /// The map as it stands and its changes, for as long as the guard is held: the server sends
+    /// positions only while someone holds one.
     pub fn watch(&self) -> (MapLive, watch::Receiver<MapLive>, Watching) {
-        self.inner.watchers.send_modify(|watchers| *watchers += 1);
+        let guard = self.inner.watchers.join();
         let mut live = self.inner.live.subscribe();
         let snapshot = live.borrow_and_update().clone();
-        let guard = Watching {
-            watchers: self.inner.watchers.clone(),
-        };
         (snapshot, live, guard)
     }
 
@@ -298,7 +285,7 @@ impl LiveMap {
                 Ok(record.write(tx, now)?)
             })
             .await?;
-        if *self.inner.watchers.borrow() > 0 {
+        if self.inner.watchers.any() {
             self.ask(true).await;
         }
         Ok(())
