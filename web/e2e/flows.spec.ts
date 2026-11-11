@@ -231,6 +231,43 @@ test.describe.serial('Observer in a browser', () => {
         await expect(labels.getByRole('cell', { name: /CHAR-1234/ })).toBeVisible();
     });
 
+    test('the staff writes to a player from the players column, then kicks them with the kick message', async () => {
+        await page.getByRole('link', { name: en.nav.console, exact: true }).click();
+        const command = page.getByRole('textbox', { name: en.console.commandLabel });
+        await command.fill('fake_join Bo');
+        await command.press('Enter');
+        await expect(page.getByText(en.console.sent('fake_join Bo'))).toBeVisible();
+        // The column reads who is connected every 10 s, and names a player once they are confirmed.
+        const column = page.getByRole('complementary', { name: en.online.label });
+        const actions = column.getByRole('button', { name: en.moderation.actions('Bo') });
+        await expect(actions).toBeVisible({ timeout: 30_000 });
+
+        await actions.click();
+        await page.getByRole('menuitem', { name: en.moderation.message }).click();
+        const message = page.getByRole('dialog', { name: en.moderation.messageDialog.title('Bo') });
+        await message.getByLabel(en.moderation.messageDialog.text).fill('Come to the staff room');
+        await message.getByRole('button', { name: en.moderation.messageDialog.submit, exact: true }).click();
+        await expect(page.getByText(en.moderation.messageDialog.done('Bo'))).toBeVisible();
+        await page.getByRole('button', { name: en.common.close, exact: true }).click();
+        // The fake's bridge prints the event the real one raises for the server's resources.
+        await expect(
+            page.getByText(/observer:directMessage .*"message":"Come to the staff room"/),
+        ).toBeVisible();
+
+        await actions.click();
+        await page.getByRole('menuitem', { name: en.moderation.kick }).click();
+        const kick = page.getByRole('dialog', { name: en.moderation.kickDialog.title('Bo') });
+        await kick.getByLabel(en.moderation.kickDialog.reason).fill('AFK on the runway');
+        await kick.getByRole('button', { name: en.moderation.kickDialog.submit, exact: true }).click();
+        await expect(page.getByText(en.moderation.kickDialog.done('Bo'))).toBeVisible();
+        await page.getByRole('button', { name: en.common.close, exact: true }).click();
+        // And what the player read, in place of showing it.
+        await expect(
+            page.getByText(/kicked 2 "You were kicked from this server\.\\nReason: AFK on the runway"/),
+        ).toBeVisible();
+        await expect(actions).toBeHidden({ timeout: 30_000 });
+    });
+
     test('a player who crashes shows in the drop log, then with their crash signature', async () => {
         // The page reads the log every 30 s, and the drops service classifies a crash at its next
         // round, every minute.

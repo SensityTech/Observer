@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { cleanup, fireEvent, render, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { Me } from '../api/generated/Me';
 import type { OnlinePlayer } from '../api/generated/OnlinePlayer';
@@ -42,6 +42,8 @@ const MODERATOR: Me = {
     permissions: '4000',
     mustChangePassword: false,
 };
+/** A moderator who also kicks and messages players, with what those permissions imply. */
+const KICKER: Me = { ...MODERATOR, permissions: '14014000' };
 const ago = (ms: number) => new Date(NOW - ms).toISOString();
 
 const player = (fields: Partial<OnlinePlayer> & Pick<OnlinePlayer, 'netId'>): OnlinePlayer => ({
@@ -84,11 +86,13 @@ const column = ({
     wide = true,
     onOpen = () => {},
     listed = true,
+    me = MODERATOR,
 }: {
     wide?: boolean;
     onOpen?: () => void;
     /** Whether the list is already read; otherwise it is asked of the API. */
     listed?: boolean;
+    me?: Me;
 } = {}) => {
     vi.stubGlobal('matchMedia', (query: string) => ({
         matches: wide && query === COLUMN_WIDE,
@@ -102,7 +106,7 @@ const column = ({
     return render(
         <I18nProvider>
             <QueryClientProvider client={client}>
-                <MeContext value={MODERATOR}>
+                <MeContext value={me}>
                     <OnlineColumn open={false} onOpen={onOpen} onClose={() => {}} />
                 </MeContext>
             </QueryClientProvider>
@@ -115,6 +119,17 @@ const names = (list: HTMLElement) =>
     [...list.querySelectorAll('li')].map((row) => row.querySelector('span:nth-child(2)')?.textContent);
 
 describe('the players column', () => {
+    beforeAll(() => {
+        // jsdom has the elements but neither the dialog's modal methods nor the popover's.
+        HTMLDialogElement.prototype.showModal ??= function (this: HTMLDialogElement) {
+            this.open = true;
+        };
+        HTMLDialogElement.prototype.close ??= function (this: HTMLDialogElement) {
+            this.open = false;
+        };
+        HTMLElement.prototype.hidePopover ??= () => {};
+    });
+
     beforeEach(() => {
         vi.useFakeTimers({ toFake: ['Date'] });
         vi.setSystemTime(NOW);
@@ -254,6 +269,24 @@ describe('the players column', () => {
         expect(strip.getAttribute('aria-expanded')).toBe('false');
         expect(queryByRole('searchbox')).toBeNull();
         expect(onOpen).toHaveBeenCalledOnce();
+    });
+
+    it('should offer a message and a kick from a row only to an account that may send them', () => {
+        const viewer = column();
+        const unseen = viewer.queryByRole('button', { name: en.moderation.actions('Ruby Vex') });
+        cleanup();
+
+        const { getByRole } = column({ me: KICKER });
+        const opener = getByRole('button', { name: en.moderation.actions('Ruby Vex') });
+        const menu = within(document.getElementById(opener.getAttribute('aria-controls') ?? '')!);
+        const offered = menu.getAllByRole('menuitem', { hidden: true }).map((item) => item.textContent);
+        fireEvent.click(menu.getByRole('menuitem', { name: en.moderation.kick, hidden: true }));
+        const dialog = within(getByRole('dialog', { name: en.moderation.kickDialog.title('Ruby Vex') }));
+
+        expect(unseen).toBeNull();
+        expect(offered).toEqual([en.moderation.message, en.moderation.kick]);
+        expect(dialog.getByText(en.moderation.player(3, PLAYERS[0]?.license ?? null))).not.toBeNull();
+        expect(getByRole('button', { name: en.moderation.actions(en.online.someone(5)) })).not.toBeNull();
     });
 
     it('should leave the page alone while the players feature is turned off', async () => {

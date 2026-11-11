@@ -9,6 +9,8 @@ import {
     Fingerprint,
     History,
     Link2,
+    LogOut,
+    MessageSquare,
     OctagonX,
     Signature,
     Tag,
@@ -19,6 +21,7 @@ import { useState, type ReactNode } from 'react';
 import { ApiError } from '../api/client';
 import type { LinkedLicence } from '../api/generated/LinkedLicence';
 import { Permission } from '../api/generated/Permission';
+import type { Target } from '../api/moderation';
 import type { PlayerDrop } from '../api/generated/PlayerDrop';
 import type { PlayerProfile } from '../api/generated/PlayerProfile';
 import type { SeenLabel } from '../api/generated/SeenLabel';
@@ -27,6 +30,7 @@ import {
     allPlayers,
     fillDays,
     forgetPlayer,
+    onlineQuery,
     profileQuery,
     shortLicence,
     shortToken,
@@ -49,6 +53,7 @@ import { errorMessage } from '../i18n/errors';
 import { FIGURE, zoneDate } from '../i18n/format';
 import { useI18n } from '../i18n/I18nProvider';
 import { cn } from '../lib/cn';
+import { KickDialog, MessageDialog } from '../moderation/dialogs';
 import { Tile, type Fact } from '../overview/Tiles';
 import { DROP_ICONS, LabelChip, OnlineState, PlayerName, useVisit, ZoneNote } from '../players/words';
 
@@ -106,7 +111,13 @@ function Profile({ profile }: { profile: PlayerProfile }) {
     const [forgetting, setForgetting] = useState(false);
     const [banning, setBanning] = useState(false);
     const [banned, setBanned] = useState<string | null>(null);
+    const [acting, setActing] = useState<{ action: 'kick' | 'message'; target: Target } | null>(null);
     const label = profile.labels[0];
+    // The session under way gives the server ID a kick or a message is sent to.
+    const online = useQuery({ ...onlineQuery, enabled: profile.online });
+    const session = online.data?.players.find((player) => player.player === profile.id);
+    const target: Target | null =
+        session === undefined ? null : { netId: session.netId, name: profile.name, license: profile.license };
     return (
         <>
             <div className="page-head">
@@ -115,6 +126,24 @@ function Profile({ profile }: { profile: PlayerProfile }) {
                 </h1>
                 <div className="flex flex-wrap items-center gap-3 max-md:w-full">
                     <ZoneNote zone={profile.zone} />
+                    {target !== null && allows(me, Permission.PlayersMessage) && (
+                        <Button
+                            icon={MessageSquare}
+                            className="max-md:flex-1"
+                            onClick={() => setActing({ action: 'message', target })}
+                        >
+                            {t.moderation.message}
+                        </Button>
+                    )}
+                    {target !== null && allows(me, Permission.PlayersKick) && (
+                        <Button
+                            icon={LogOut}
+                            className="max-md:flex-1"
+                            onClick={() => setActing({ action: 'kick', target })}
+                        >
+                            {t.moderation.kick}
+                        </Button>
+                    )}
                     {allows(me, Permission.PlayersBan) && (
                         <Button icon={BanIcon} className="max-md:flex-1" onClick={() => setBanning(true)}>
                             {t.bans.profile.ban}
@@ -176,6 +205,12 @@ function Profile({ profile }: { profile: PlayerProfile }) {
             )}
             {profile.linked !== null && <LinkedCard linked={profile.linked} />}
             {forgetting && <ForgetDialog profile={profile} onClose={() => setForgetting(false)} />}
+            {acting?.action === 'kick' && (
+                <KickDialog target={acting.target} onClose={() => setActing(null)} />
+            )}
+            {acting?.action === 'message' && (
+                <MessageDialog target={acting.target} onClose={() => setActing(null)} />
+            )}
             {banning && (
                 <BanDialog
                     target={{

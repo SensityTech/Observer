@@ -5,7 +5,9 @@ import {
     ExternalLink,
     Image as ImageIcon,
     LocateFixed,
+    LogOut,
     Map as MapIcon,
+    MessageSquare,
     RotateCw,
     Search,
     X,
@@ -17,6 +19,7 @@ import type { MapPlayer } from '../api/generated/MapPlayer';
 import type { MapSettings } from '../api/generated/MapSettings';
 import { Permission } from '../api/generated/Permission';
 import { mapQuery, useMapImage } from '../api/map';
+import type { Target } from '../api/moderation';
 import { onlineQuery } from '../api/players';
 import { allows, useMe } from '../auth/me';
 import { BanDialog } from '../bans/dialogs';
@@ -33,6 +36,7 @@ import { useNow } from '../lib/useNow';
 import { useTopic } from '../live/context';
 import { tierOf, type Tier } from '../map/geometry';
 import { MapCanvas, TIER_MARK, type Dot } from '../map/MapCanvas';
+import { KickDialog, MessageDialog } from '../moderation/dialogs';
 import { TILE_STYLES, isTileStyle, type TileStyle } from '../map/tiles';
 import { extend, type Trails } from '../map/trails';
 import { useServerStatus } from '../server/context';
@@ -90,6 +94,7 @@ export function MapPage() {
     const [missed, setMissed] = useState(false);
     const [focus, setFocus] = useState<{ id: number; at: number } | null>(null);
     const [banning, setBanning] = useState<MapPlayer | null>(null);
+    const [acting, setActing] = useState<{ action: 'kick' | 'message'; target: Target } | null>(null);
     // The style Rockstar's servers did not send, until another is chosen or the page asks again.
     const [unsent, setUnsent] = useState<string | null>(null);
     const now = useNow(1_000);
@@ -137,6 +142,17 @@ export function MapPage() {
             : null;
     const running = status !== null && ['starting', 'online', 'degraded', 'hung'].includes(status.state);
     const canBan = allows(me, Permission.PlayersBan);
+    const canKick = allows(me, Permission.PlayersKick);
+    const canMessage = allows(me, Permission.PlayersMessage);
+    const act = (action: 'kick' | 'message', player: MapPlayer) =>
+        setActing({
+            action,
+            target: {
+                netId: player.netId,
+                name: player.name ?? words.unnamed(player.netId),
+                license: session?.license ?? null,
+            },
+        });
 
     const show = (netId: number) => {
         setSelected(netId);
@@ -224,8 +240,8 @@ export function MapPage() {
                         {following ? words.following : words.follow}
                     </Button>
                 </div>
-                {(chosen.player !== null || canBan) && (
-                    <div className="flex gap-2 [&>*]:flex-1">
+                {(chosen.player !== null || canMessage || canKick) && (
+                    <div className="flex flex-wrap gap-2 [&>*]:flex-[1_1_40%]">
                         {chosen.player !== null && (
                             <Link
                                 to="/players/$id"
@@ -235,6 +251,16 @@ export function MapPage() {
                                 <ExternalLink size={14} strokeWidth={1.5} aria-hidden="true" />
                                 {words.profile}
                             </Link>
+                        )}
+                        {canMessage && (
+                            <Button size="sm" icon={MessageSquare} onClick={() => act('message', chosen)}>
+                                {t.moderation.message}
+                            </Button>
+                        )}
+                        {canKick && (
+                            <Button size="sm" icon={LogOut} onClick={() => act('kick', chosen)}>
+                                {t.moderation.kick}
+                            </Button>
                         )}
                         {canBan && chosen.player !== null && (
                             <Button size="sm" icon={BanIcon} onClick={() => setBanning(chosen)}>
@@ -493,6 +519,12 @@ export function MapPage() {
                     onClose={() => setBanning(null)}
                     onBanned={() => setBanning(null)}
                 />
+            )}
+            {acting?.action === 'kick' && (
+                <KickDialog target={acting.target} onClose={() => setActing(null)} />
+            )}
+            {acting?.action === 'message' && (
+                <MessageDialog target={acting.target} onClose={() => setActing(null)} />
             )}
         </div>
     );
