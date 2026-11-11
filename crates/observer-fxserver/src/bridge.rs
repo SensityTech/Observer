@@ -45,6 +45,11 @@ const FILES: [(&str, &str); 3] = [
     ("heap.js", include_str!("../../../resource/observer/heap.js")),
 ];
 
+/// The bridge's script, which the contract's documentation reads its events and exports from.
+pub(crate) fn script() -> &'static str {
+    FILES[1].1
+}
+
 /// Draws the bridge's resource name for one start of FXServer, so that no script can target the
 /// bridge by a name known before the start.
 pub fn draw_name() -> io::Result<String> {
