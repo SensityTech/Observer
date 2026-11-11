@@ -27,6 +27,7 @@ const MIGRATIONS: &[M<'static>] = &[
     M::up(include_str!("../migrations/0016_cfg_versions.sql")),
     M::up(include_str!("../migrations/0017_tool_staged.sql")),
     M::up(include_str!("../migrations/0018_debug_hosts.sql")),
+    M::up(include_str!("../migrations/0019_stop_hold.sql")),
 ];
 
 /// The schema version this build migrates to.
@@ -251,5 +252,33 @@ mod tests {
             [],
         )
         .unwrap();
+    }
+
+    #[test]
+    fn a_0018_database_waits_a_minute_for_the_resources_that_hold_a_stop() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        let migrations = Migrations::from_slice(MIGRATIONS);
+        migrations.to_version(&mut conn, 18).unwrap();
+        conn.execute(
+            "INSERT INTO launch_settings (server_id, data_path, cfg_file, onesync, auto_start,
+                 txadmin_events, extra_arguments, version, updated_at, hang_detection, hang_timeout_seconds)
+             VALUES ('default', ?1, 'server.cfg', 'on', 1, 0, '[]', 4, '2026-11-11T09:00:00.000Z', 0, 900)",
+            [r"C:\FXServer\server-data"],
+        )
+        .unwrap();
+
+        migrations.to_latest(&mut conn).unwrap();
+
+        let stored = crate::launch::get(&conn, "default").unwrap().unwrap();
+        assert_eq!(stored.version, 4);
+        assert!(!stored.settings.hang_detection);
+        assert_eq!(stored.settings.hang_timeout_seconds, 900);
+        assert_eq!(stored.settings.stop_hold_seconds, 60);
+        for seconds in [0, 4, 601] {
+            let refused = conn.execute("UPDATE launch_settings SET stop_hold_seconds = ?1", [seconds]);
+            assert!(refused.is_err(), "{seconds}");
+        }
+        conn.execute("UPDATE launch_settings SET stop_hold_seconds = 600", [])
+            .unwrap();
     }
 }

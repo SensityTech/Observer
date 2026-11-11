@@ -1200,6 +1200,7 @@ fn launch_settings() -> LaunchSettings {
         extra_arguments: Vec::new(),
         hang_detection: true,
         hang_timeout_seconds: 360,
+        stop_hold_seconds: 60,
     }
 }
 
@@ -1222,6 +1223,7 @@ async fn launch_settings_are_stored_once_checked_with_what_changed_in_the_audit_
         }],
         hang_detection: false,
         hang_timeout_seconds: 900,
+        stop_hold_seconds: 60,
         ..launch_settings()
     };
     let second = lab
@@ -1267,6 +1269,7 @@ async fn launch_settings_are_stored_once_checked_with_what_changed_in_the_audit_
             "txadminEvents": { "before": null, "after": false },
             "hangDetection": { "before": null, "after": true },
             "hangTimeoutSeconds": { "before": null, "after": 360 },
+            "stopHoldSeconds": { "before": null, "after": 60 },
         })
     );
 }

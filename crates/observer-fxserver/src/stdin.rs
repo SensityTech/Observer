@@ -371,6 +371,7 @@ mod tests {
             },
             BridgeEvent::ShuttingDown {
                 delay_ms: 5000,
+                max_delay_ms: 60_000,
                 reason: StopReason::Stop,
                 by: text.to_owned(),
             },

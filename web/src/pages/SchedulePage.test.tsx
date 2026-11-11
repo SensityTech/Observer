@@ -65,6 +65,8 @@ const ONLINE = {
     restartAt: null,
     launch: 'ready',
     start: null,
+    stopHolders: [],
+    stop: null,
 };
 
 /** The text of what a field is described by, element by element. */

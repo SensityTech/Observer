@@ -5,6 +5,7 @@ import type { PlayerCount } from "./PlayerCount";
 import type { ServerState } from "./ServerState";
 import type { StartProgress } from "./StartProgress";
 import type { StateCause } from "./StateCause";
+import type { StopProgress } from "./StopProgress";
 
 /**
  * The `server.status` topic.
@@ -41,4 +42,13 @@ port: number | null,
 /**
  * Only while FXServer is starting, from its first second.
  */
-start: StartProgress | null, };
+start: StartProgress | null, 
+/**
+ * The resources that asked the bridge to hold each stop of the server that runs now, in name
+ * order: a stop waits for them, up to the owner's limit.
+ */
+stopHolders: Array<string>, 
+/**
+ * Only while FXServer is stopping and a resource holds the stop, or held it.
+ */
+stop: StopProgress | null, };

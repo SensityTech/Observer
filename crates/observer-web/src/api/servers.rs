@@ -132,6 +132,15 @@ pub(crate) async fn stop(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// Has the stop under way go on without the resources that still hold it.
+pub(crate) async fn stop_now(
+    State(state): State<AppState>,
+    Extension(caller): Extension<Caller>,
+) -> Result<StatusCode, Failure> {
+    state.supervision.stop_now(&caller).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 pub(crate) async fn restart(
     State(state): State<AppState>,
     Extension(caller): Extension<Caller>,

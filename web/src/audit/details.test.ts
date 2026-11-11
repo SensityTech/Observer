@@ -121,6 +121,30 @@ describe('auditDetails', () => {
                 hangTimeoutSeconds: { before: 360, after: 900 },
             }),
         ).toBe('Hang detection: yes → no · Restart a hung server after: 6 min → 15 min');
+        expect(auditDetails(en, format, { stopHoldSeconds: { before: 60, after: 120 } })).toBe(
+            'Wait for resources at a stop: 60 s → 120 s',
+        );
+    });
+
+    it('should name the resources a stop went on without, why, and after how long', () => {
+        expect(
+            auditDetails(
+                en,
+                format,
+                { resources: ['esx_vehicleshop', 'qb-inventory'], reason: 'limit', waitedSeconds: 60 },
+                'server_stop_hold_expired',
+            ),
+        ).toBe('Resources: esx_vehicleshop, qb-inventory · Reason: their limit passed · Waited: 60 s');
+        expect(
+            auditDetails(en, format, {
+                resources: ['qb-inventory'],
+                reason: 'consoleClosed',
+                waitedSeconds: 0,
+            }),
+        ).toBe("Resources: qb-inventory · Reason: Windows was closing Observer's console · Waited: 0 s");
+        expect(auditDetails(en, format, { resources: ['qb-inventory'] }, 'server_stop_hold_skipped')).toBe(
+            'Resources: qb-inventory',
+        );
     });
 
     it('should name the step a failed launch stopped at', () => {

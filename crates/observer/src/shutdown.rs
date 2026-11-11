@@ -3,8 +3,40 @@
 //! SSH session) on Unix.
 
 use std::io;
+#[cfg(any(target_os = "linux", test))]
+use std::time::{Duration, Instant};
 
 use observer_domain::audit::StopSource;
+
+/// How long Observer asks its service manager for at a time while it stops, and how often.
+#[cfg(any(target_os = "linux", test))]
+pub const EXTEND_BY: Duration = Duration::from_secs(20);
+#[cfg(target_os = "linux")]
+pub const EXTEND_EVERY: Duration = Duration::from_secs(5);
+/// What a stop still takes once no resource holds it: `quit`, the kill of what is left, then
+/// Observer's own closing.
+#[cfg(any(target_os = "linux", test))]
+const AFTER_HOLD: Duration = Duration::from_secs(40);
+
+/// Whether Observer asks its service manager for more time to stop. A stop no resource holds fits
+/// the unit's own limit, as it always did, and asks for nothing. While resources hold the stop
+/// the wait is theirs, within the owner's limit: Observer asks for as long as it lasts, then for
+/// what the stop takes after it, and no longer, so that a stop that hangs is still ended.
+#[cfg(any(target_os = "linux", test))]
+#[derive(Debug, Default)]
+pub struct StopTime {
+    until: Option<Instant>,
+}
+
+#[cfg(any(target_os = "linux", test))]
+impl StopTime {
+    pub fn asks(&mut self, held: bool, now: Instant) -> bool {
+        if held {
+            self.until = Some(now + AFTER_HOLD);
+        }
+        self.until.is_some_and(|until| now < until)
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StopRequest {
@@ -115,6 +147,40 @@ impl Signals {
     pub fn release(&self) {
         #[cfg(windows)]
         self.console.release();
+    }
+}
+
+#[cfg(test)]
+mod stop_time {
+    use super::*;
+
+    #[test]
+    fn a_stop_no_resource_holds_asks_the_service_manager_for_nothing() {
+        let mut time = StopTime::default();
+        let start = Instant::now();
+
+        for seconds in [0, 5, 30, 300] {
+            assert!(
+                !time.asks(false, start + Duration::from_secs(seconds)),
+                "{seconds} s"
+            );
+        }
+    }
+
+    #[test]
+    fn a_held_stop_asks_while_it_is_held_then_for_what_is_left_and_no_longer() {
+        let mut time = StopTime::default();
+        let start = Instant::now();
+        let at = |seconds| start + Duration::from_secs(seconds);
+
+        assert!(!time.asks(false, at(0)));
+        for seconds in [5, 60, 590] {
+            assert!(time.asks(true, at(seconds)), "{seconds} s");
+        }
+        assert!(time.asks(false, at(595)));
+        assert!(time.asks(false, at(629)));
+        assert!(!time.asks(false, at(630)));
+        assert!(EXTEND_BY < AFTER_HOLD);
     }
 }
 

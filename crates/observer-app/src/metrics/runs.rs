@@ -217,6 +217,7 @@ mod tests {
                     extra_arguments: Vec::new(),
                     hang_detection: true,
                     hang_timeout_seconds: 360,
+                    stop_hold_seconds: 60,
                 }),
             })),
             Some(Change::Spawned { at_ms })
@@ -295,6 +296,7 @@ mod tests {
                 extra_arguments: Vec::new(),
                 hang_detection: true,
                 hang_timeout_seconds: 360,
+                stop_hold_seconds: 60,
             }),
         };
         let events = [

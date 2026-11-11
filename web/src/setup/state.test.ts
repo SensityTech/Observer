@@ -37,6 +37,8 @@ const status = (overrides: Partial<ServerStatus>): ServerStatus => ({
     name: null,
     port: null,
     start: null,
+    stopHolders: [],
+    stop: null,
     ...overrides,
 });
 

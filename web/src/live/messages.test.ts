@@ -17,6 +17,8 @@ const STATUS = {
     restartAt: '2026-10-28T14:02:17Z',
     launch: 'ready',
     start: null,
+    stopHolders: [],
+    stop: null,
 };
 
 const ONLINE = {
@@ -53,6 +55,19 @@ const STARTING = {
         slowest: [{ name: 'maps', ms: 5700 }],
         stuckAt: '2026-10-28T14:10:10Z',
         extensionMinutes: 15,
+    },
+};
+
+const STOPPING = {
+    ...ONLINE,
+    state: 'stopping',
+    cause: { kind: 'restart', by: 'ada' },
+    stopHolders: ['esx_vehicleshop', 'qb-inventory'],
+    stop: {
+        since: '2026-10-28T16:00:00Z',
+        limitAt: '2026-10-28T16:01:00Z',
+        holding: ['qb-inventory'],
+        released: [{ resource: 'esx_vehicleshop', afterMs: 2400 }],
     },
 };
 
@@ -108,6 +123,8 @@ describe('parseServerMessage', () => {
             { type: 'snapshot', topic: 'audit', data: { latestId: null } },
             { type: 'snapshot', topic: 'server.status', data: STATUS },
             { type: 'event', topic: 'server.status', data: ONLINE },
+            { type: 'event', topic: 'server.status', data: { ...ONLINE, stopHolders: ['qb-inventory'] } },
+            { type: 'event', topic: 'server.status', data: STOPPING },
             { type: 'event', topic: 'server.status', data: STARTING },
             {
                 type: 'event',
@@ -196,6 +213,17 @@ describe('parseServerMessage', () => {
                 data: { ...SAMPLE, children: [{ ...SAMPLE.children[0], workingSet: -1 }] },
             },
             { type: 'snapshot', topic: 'server.status', data: { ...STATUS, state: 'exploded' } },
+            { type: 'event', topic: 'server.status', data: { ...ONLINE, stopHolders: [7] } },
+            {
+                type: 'event',
+                topic: 'server.status',
+                data: { ...STOPPING, stop: { ...STOPPING.stop, limitAt: 'soon' } },
+            },
+            {
+                type: 'event',
+                topic: 'server.status',
+                data: { ...STOPPING, stop: { ...STOPPING.stop, released: [{ resource: 'chat' }] } },
+            },
             {
                 type: 'event',
                 topic: 'server.status',

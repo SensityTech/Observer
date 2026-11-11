@@ -20,6 +20,7 @@ import {
     launchIssues,
     launchQuery,
     saveLaunch,
+    STOP_HOLD_RANGE,
 } from '../api/launch';
 import { useArtifacts } from '../artifacts/context';
 import { Button, buttonVariants } from '../components/Button';
@@ -30,6 +31,8 @@ import type { Messages } from '../i18n/en';
 import { errorMessage } from '../i18n/errors';
 import { useI18n } from '../i18n/I18nProvider';
 import { cn } from '../lib/cn';
+import { useServerStatus } from '../server/context';
+import { isRunning } from '../server/state';
 import { anchorOf, type SettingId } from './catalog';
 import { CfgConflict, CfgOnly, ConvarFacts, ConvarNames, ConvarValues, useConvars } from './Convars';
 import { keyboardLeft, SettingsForm, useSection } from './Form';
@@ -52,6 +55,7 @@ const SETTING_OF = {
     extraArguments: 'extraArguments',
     hangDetection: 'hangDetection',
     hangTimeoutSeconds: 'hangTimeout',
+    stopHoldSeconds: 'stopHold',
 } satisfies Record<keyof Settings, SettingId>;
 
 let lastRow = 0;
@@ -72,14 +76,34 @@ const minutesFit = (minutes: string) => {
     return minutes.trim() !== '' && Number.isInteger(value) && value >= 1 && value <= 60;
 };
 
-/** What a save says: hang detection reaches a running server at once, the rest its next start. */
+/** The seconds typed for the wait at a stop, as they are sent: NaN for a blank field. */
+const holdOf = (seconds: string) => (seconds.trim() === '' ? Number.NaN : Number(seconds));
+/** A whole number of seconds within what Observer takes. */
+const holdFits = (seconds: string) => {
+    const value = holdOf(seconds);
+    return Number.isInteger(value) && value >= STOP_HOLD_RANGE.min && value <= STOP_HOLD_RANGE.max;
+};
+
+/**
+ * What a save says: hang detection reaches a running server at once, the wait at a stop its next
+ * stop, the rest its next start.
+ */
 const savedMessage = (t: Messages, before: Settings, after: Settings) => {
     const changed = changedSettings(before, after);
     const hang = changed.some((key) => HANG_SETTINGS.has(key));
+    const hold = changed.includes('stopHoldSeconds');
+    const rest = changed.some((key) => !HANG_SETTINGS.has(key) && key !== 'stopHoldSeconds');
+    if (hold) {
+        return t.server.savedParts([
+            ...(hang ? (['hang'] as const) : []),
+            'stopHold',
+            ...(rest ? (['rest'] as const) : []),
+        ]);
+    }
     if (!hang) {
         return t.server.saved;
     }
-    return changed.every((key) => HANG_SETTINGS.has(key)) ? t.server.savedHang : t.server.savedBoth;
+    return rest ? t.server.savedBoth : t.server.savedHang;
 };
 
 /** How Observer starts FXServer, the owner's: what was the Server page. */
@@ -131,6 +155,8 @@ function LaunchForm({ saved }: { saved: StoredLaunch | null }) {
     const [fields, setFields] = useState<Settings>(baseline);
     const [rows, setRows] = useState<Row[]>(() => toRows(baseline));
     const [minutes, setMinutes] = useState(() => minutesOf(baseline));
+    const [hold, setHold] = useState(() => String(baseline.stopHoldSeconds));
+    const { status } = useServerStatus();
     const [issues, setIssues] = useState<LaunchIssue[]>([]);
     const [outcome, setOutcome] = useState<Outcome | null>(null);
     const notice = useRef<HTMLDivElement>(null);
@@ -161,6 +187,7 @@ function LaunchForm({ saved }: { saved: StoredLaunch | null }) {
         // so one the field cannot show exactly is never an unsaved change nobody made.
         hangTimeoutSeconds:
             minutes === minutesOf(baseline) ? baseline.hangTimeoutSeconds : secondsOf(minutes),
+        stopHoldSeconds: hold === String(baseline.stopHoldSeconds) ? baseline.stopHoldSeconds : holdOf(hold),
     };
     const changed = changedSettings(baseline, draft);
     const stale = (saved?.version ?? null) !== (shown?.version ?? null);
@@ -170,6 +197,7 @@ function LaunchForm({ saved }: { saved: StoredLaunch | null }) {
         setShown(stored);
         setFields(settings);
         setMinutes(minutesOf(settings));
+        setHold(String(settings.stopHoldSeconds));
         // Rows keep their ids by position, so their inputs, and the keyboard in one, stay put.
         setRows((current) =>
             settings.extraArguments.map((argument, index) => ({
@@ -245,11 +273,15 @@ function LaunchForm({ saved }: { saved: StoredLaunch | null }) {
             setOutcome(null);
             // A fraction or an emptied field would be refused as a malformed request rather than
             // next to its field: it is checked before sending.
-            if (!minutesFit(minutes)) {
+            const unfit: LaunchField[] = [
+                ...(minutesFit(minutes) ? [] : (['hangTimeoutSeconds'] as const)),
+                ...(holdFits(hold) ? [] : (['stopHoldSeconds'] as const)),
+            ];
+            if (unfit.length > 0) {
                 showFirstIssue.current = true;
                 setIssues((current) => [
-                    ...current.filter((each) => each.field !== 'hangTimeoutSeconds'),
-                    { field: 'hangTimeoutSeconds', index: null, problem: 'outOfRange' },
+                    ...current.filter((each) => !unfit.includes(each.field)),
+                    ...unfit.map((field) => ({ field, index: null, problem: 'outOfRange' as const })),
                 ]);
                 return;
             }
@@ -404,6 +436,44 @@ function LaunchForm({ saved }: { saved: StoredLaunch | null }) {
                                     }}
                                 />
                                 {problem && <FieldError id={`${ids.control}-error`}>{problem}</FieldError>}
+                            </>
+                        );
+                    }}
+                </SettingRow>
+            </SettingsGroup>
+
+            <SettingsGroup title={words.groups.stop}>
+                <SettingRow id="stopHold" field changed={is('stopHoldSeconds')}>
+                    {(ids) => {
+                        const problem = issue('stopHoldSeconds') && words.stopHoldRange;
+                        const holders =
+                            status !== null && isRunning(status.state) ? status.stopHolders : null;
+                        return (
+                            <>
+                                <input
+                                    id={ids.control}
+                                    type="number"
+                                    inputMode="numeric"
+                                    min={STOP_HOLD_RANGE.min}
+                                    max={STOP_HOLD_RANGE.max}
+                                    className={cn(inputClass, 'max-w-32')}
+                                    aria-invalid={problem ? true : undefined}
+                                    aria-describedby={
+                                        problem ? `${ids.control}-error ${ids.about}` : ids.about
+                                    }
+                                    value={hold}
+                                    onChange={(event) => {
+                                        setHold(event.target.value);
+                                        setOutcome(null);
+                                        forget('stopHoldSeconds');
+                                    }}
+                                />
+                                {problem && <FieldError id={`${ids.control}-error`}>{problem}</FieldError>}
+                                {holders !== null && (
+                                    <p className="mt-2 text-small text-ink-3">
+                                        {holders.length > 0 ? words.heldBy(holders) : words.heldByNone}
+                                    </p>
+                                )}
                             </>
                         );
                     }}

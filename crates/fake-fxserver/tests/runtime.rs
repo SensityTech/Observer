@@ -32,7 +32,8 @@ use observer_domain::schedule::{
     OneOffRequest, OneOffRestart, RestartSource, ScheduleChange, ScheduleSettings,
 };
 use observer_domain::server::{
-    CommandAck, ConsoleLine, Delivery, LINE_MASKED, LineKind, ServerState, ServerStatus, StateCause,
+    CommandAck, ConsoleLine, Delivery, LINE_MASKED, LineKind, ReleasedHold, ServerState, ServerStatus,
+    StateCause,
 };
 use observer_domain::server_data::{CfgCheck, FindingKind};
 use observer_fxserver::console::plain;
@@ -162,6 +163,7 @@ impl Services {
                 quit: Duration::from_secs(3),
                 shortened: Duration::from_secs(1),
                 fatal_exit: Duration::from_secs(1),
+                hold: None,
             };
             settings.recovery = RecoveryPolicy {
                 backoff: vec![Duration::from_millis(100)],
@@ -261,6 +263,7 @@ impl Observer {
                 .collect(),
             hang_detection: true,
             hang_timeout_seconds: 360,
+            stop_hold_seconds: 60,
         };
         services
             .servers
@@ -937,7 +940,8 @@ async fn a_one_off_warns_the_bridge_then_restarts_on_schedule() {
         .find(|line| line.0 == notice)
         .unwrap();
     assert!(
-        plain(&shutting_down.5).contains(r#""by":"ada","delayMs":300,"reason":"scheduled""#),
+        plain(&shutting_down.5)
+            .contains(r#""by":"ada","delayMs":300,"maxDelayMs":60000,"reason":"scheduled""#),
         "{shutting_down:?}"
     );
     assert!(restarted.started_at.is_some());
@@ -1901,4 +1905,135 @@ async fn a_crash_and_a_kick_reach_the_drops_with_their_signature_and_reason_grou
         .find(|tile| tile.kind == TileKind::Crashes)
         .unwrap();
     assert_eq!(crashes.drops, 1);
+}
+
+impl Observer {
+    /// An Observer whose server starts `inventory`, a resource that holds each stop and never
+    /// releases it, online once Observer has heard of it. The owner set the wait to its least.
+    async fn held_by_inventory() -> Self {
+        let mut arguments = FAKE.to_vec();
+        arguments.push(("fake_holders", "inventory"));
+        let observer = Self::launched(false, Duration::from_millis(50), &arguments).await;
+        let data = observer.dir.path().join("server-data");
+        let folder = data.join("resources/inventory");
+        fs::create_dir_all(&folder).unwrap();
+        fs::write(
+            folder.join("fxmanifest.lua"),
+            "fx_version 'cerulean'\ngame 'gta5'\n",
+        )
+        .unwrap();
+        let cfg = data.join("server.cfg");
+        fs::write(&cfg, fs::read_to_string(&cfg).unwrap() + "ensure inventory\n").unwrap();
+        let stored = observer
+            .servers
+            .launch_settings(Servers::DEFAULT)
+            .await
+            .unwrap()
+            .unwrap();
+        let settings = LaunchSettings {
+            stop_hold_seconds: 5,
+            ..stored.settings
+        };
+        observer
+            .servers
+            .change_launch_settings(&observer.owner, Servers::DEFAULT, settings, Some(stored.version))
+            .await
+            .unwrap();
+        observer.supervision.start_server(&observer.owner).await.unwrap();
+        observer
+            .until(|status| status.state == ServerState::Online && status.stop_holders == ["inventory"])
+            .await;
+        observer
+    }
+}
+
+#[tokio::test]
+async fn a_stop_that_went_on_without_its_resources_is_audited_with_their_names() {
+    let mut observer = Observer::held_by_inventory().await;
+
+    observer
+        .supervision
+        .restart_server(&observer.owner)
+        .await
+        .unwrap();
+
+    let held = observer
+        .until(|status| {
+            status
+                .stop
+                .as_ref()
+                .is_some_and(|stop| stop.holding == ["inventory"])
+        })
+        .await;
+    let stop = held.stop.unwrap();
+    assert_eq!(held.state, ServerState::Stopping);
+    assert_eq!(
+        stop.since.duration_until(stop.limit_at),
+        SignedDuration::from_secs(5)
+    );
+    assert_eq!(stop.released, Vec::<ReleasedHold>::new());
+    observer
+        .until(|status| status.generation == 2 && status.state == ServerState::Online)
+        .await;
+    assert_eq!(observer.supervision.status().borrow().stop, None);
+    let expired = observer.audited(AuditAction::ServerStopHoldExpired).await;
+    assert_eq!(expired.len(), 1);
+    assert_eq!(
+        (expired[0].actor_kind, expired[0].outcome),
+        (ActorKind::System, Outcome::Failure)
+    );
+    assert_eq!(expired[0].target.as_deref(), Some("default"));
+    assert_eq!(
+        expired[0].details,
+        json!({ "resources": ["inventory"], "reason": "limit", "waitedSeconds": 5 })
+    );
+    assert_eq!(
+        observer.audited(AuditAction::ServerStopHoldSkipped).await,
+        Vec::<AuditEntry>::new()
+    );
+    let told = observer.console_until("observer:shuttingDown").await;
+    assert!(plain(&told.5).contains(r#""maxDelayMs":5000"#), "{told:?}");
+    observer.stop_observer().await;
+}
+
+#[tokio::test]
+async fn whoever_skips_the_wait_is_audited_with_the_resources_left_behind() {
+    let mut observer = Observer::held_by_inventory().await;
+    let before = observer.supervision.stop_now(&observer.owner).await;
+    observer.supervision.stop_server(&observer.owner).await.unwrap();
+    observer
+        .until(|status| {
+            status
+                .stop
+                .as_ref()
+                .is_some_and(|stop| stop.holding == ["inventory"])
+        })
+        .await;
+
+    observer.supervision.stop_now(&observer.owner).await.unwrap();
+    let again = observer.supervision.stop_now(&observer.owner).await;
+
+    observer.state(ServerState::Stopped).await;
+    for refused in [&before, &again] {
+        assert!(
+            matches!(refused, Err(Error::Refused(error)) if error.code == ErrorCode::StopNotHeld),
+            "{refused:?}"
+        );
+    }
+    let skipped = observer.audited(AuditAction::ServerStopHoldSkipped).await;
+    assert_eq!(skipped.len(), 1);
+    assert_eq!(
+        (skipped[0].actor_kind, skipped[0].actor_name.as_deref()),
+        (ActorKind::User, Some("ada"))
+    );
+    assert_eq!(skipped[0].target.as_deref(), Some("default"));
+    assert_eq!(skipped[0].details, json!({ "resources": ["inventory"] }));
+    assert_eq!(
+        observer.audited(AuditAction::ServerStopHoldExpired).await,
+        Vec::<AuditEntry>::new()
+    );
+    observer
+        .console_until("ada had FXServer quit without waiting for inventory")
+        .await;
+    observer.stop_observer().await;
 }

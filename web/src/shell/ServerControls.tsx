@@ -1,9 +1,10 @@
 import { useMutation } from '@tanstack/react-query';
-import { Play, RotateCw, Square, X } from 'lucide-react';
+import { Play, RotateCw, SkipForward, Square, X } from 'lucide-react';
 import { useState } from 'react';
 
-import { restartServer, startServer, stopServer } from '../api/server';
+import { restartServer, startServer, stopNow, stopServer } from '../api/server';
 import { Permission } from '../api/generated/Permission';
+import type { StopProgress } from '../api/generated/StopProgress';
 import { allows, useMe } from '../auth/me';
 import { Button } from '../components/Button';
 import { Dialog } from '../components/Dialog';
@@ -11,6 +12,7 @@ import { Notice } from '../components/Notice';
 import { errorMessage } from '../i18n/errors';
 import { useI18n } from '../i18n/I18nProvider';
 import { cn } from '../lib/cn';
+import { useNow } from '../lib/useNow';
 import { useServerStatus } from '../server/context';
 import { blocked, isRunning, type Action } from '../server/state';
 
@@ -23,7 +25,7 @@ const SEND = { start: startServer, stop: stopServer, restart: restartServer } sa
  * Restart and Stop at the end of the status card, Start in Restart's place while no process runs.
  * A button that cannot act now stays in the tab order, marked disabled; pressed, it says why below,
  * since a touch screen or the keyboard never shows its title. Stop and Restart ask first, since
- * players are disconnected.
+ * players are disconnected. While resources hold a stop, a line under the card names them.
  */
 export function ServerControls() {
     const { t } = useI18n();
@@ -87,6 +89,8 @@ export function ServerControls() {
         );
     };
     const players = status?.players?.online ?? 0;
+    const holders = status?.stopHolders ?? [];
+    const held = status?.state === 'stopping' && status.stop !== null ? status.stop : null;
     // No process runs while FXServer waits to restart or sits in a crash loop: a stop only keeps it down.
     const keepsDown = status?.state === 'crashed' || status?.state === 'crashLoop';
 
@@ -97,6 +101,7 @@ export function ServerControls() {
                 {running ? button('restart', RotateCw, 'secondary') : button('start', Play, 'ink')}
                 {button('stop', Square, 'secondary')}
             </fieldset>
+            {held !== null && held.holding.length > 0 && <StopHold stop={held} permitted={permitted} />}
             {failure && (
                 <Notice tone={failure.tone} className="controls-failure">
                     <div className="flex items-start gap-3">
@@ -149,8 +154,76 @@ export function ServerControls() {
                         <>
                             <p>{t.controls.connected(players)}</p>
                             <p className="text-ink-3">{t.controls.noticeFirst}</p>
+                            {holders.length > 0 && <p className="text-ink-3">{t.controls.heldBy(holders)}</p>}
                         </>
                     )}
+                </Dialog>
+            )}
+        </>
+    );
+}
+
+/**
+ * A stop that resources hold through the bridge: who Observer waits for, how long at most, and
+ * the way out for whoever may stop the server. It counts down every second, so it is read where
+ * it stands and never announced.
+ */
+function StopHold({ stop, permitted }: { stop: StopProgress; permitted: boolean }) {
+    const { t, format } = useI18n();
+    const now = useNow();
+    const [confirming, setConfirming] = useState(false);
+    const quit = useMutation({ mutationFn: stopNow, onSettled: () => setConfirming(false) });
+    const left = (Date.parse(stop.limitAt) - now) / 1000;
+
+    return (
+        <>
+            <Notice live={false} className="controls-hold">
+                <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+                    <p className="min-w-0 flex-[1_1_18rem] tabular-nums">
+                        {t.controls.waiting(stop.holding)}{' '}
+                        {left >= 1 ? t.controls.quitsIn(format.elapsed(left)) : t.controls.quitsNow}
+                    </p>
+                    {permitted && (
+                        <Button
+                            size="sm"
+                            tone="secondary"
+                            icon={SkipForward}
+                            pending={quit.isPending}
+                            onClick={() => setConfirming(true)}
+                        >
+                            {t.controls.quitNow}
+                        </Button>
+                    )}
+                </div>
+                {quit.isError && (
+                    <p className="mt-2 text-danger-ink" role="alert">
+                        {t.controls.failed(t.controls.quitNow, errorMessage(t, quit.error))}
+                    </p>
+                )}
+            </Notice>
+            {confirming && (
+                <Dialog
+                    role="alertdialog"
+                    title={t.controls.quitNowTitle}
+                    onClose={() => setConfirming(false)}
+                    footer={
+                        <>
+                            <Button tone="ghost" onClick={() => setConfirming(false)}>
+                                {t.common.cancel}
+                            </Button>
+                            <Button
+                                tone="danger"
+                                icon={SkipForward}
+                                pending={quit.isPending}
+                                onClick={() => quit.mutate()}
+                            >
+                                {t.controls.quitNow}
+                            </Button>
+                        </>
+                    }
+                >
+                    <p>{t.controls.quitNowBody(stop.holding)}</p>
+                    <p className="text-ink-3">{t.controls.quitNowAudit}</p>
                 </Dialog>
             )}
         </>

@@ -10,7 +10,7 @@ import { useArtifacts } from '../artifacts/context';
 import { useSchedule } from '../schedule/context';
 import { startTotal } from '../overview/StartCard';
 import { useServerStatus } from '../server/context';
-import { STATE_INK, STATE_LED, isRunning } from '../server/state';
+import { STATE_INK, STATE_LED, isRunning, waitedFor } from '../server/state';
 
 export const LINK_LED = {
     connecting: 'led-pending',
@@ -52,7 +52,11 @@ export function StatusBar() {
     } else if (status !== null && isRunning(status.state) && status.startedAt !== null) {
         lasted = t.status.upFor(format.duration(secondsSince(status.startedAt, now)));
     } else if (status !== null && !isRunning(status.state)) {
-        lasted = t.status.forTime(format.duration(secondsSince(status.since, now)));
+        const waiting = waitedFor(t, status);
+        lasted = [
+            t.status.forTime(format.duration(secondsSince(status.since, now))),
+            ...(waiting === null ? [] : [waiting]),
+        ].join(' · ');
     }
 
     return (

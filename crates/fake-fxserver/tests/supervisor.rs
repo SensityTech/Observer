@@ -28,8 +28,8 @@ use observer_fxserver::perf::Thread;
 use observer_fxserver::recovery::RecoveryPolicy;
 use observer_fxserver::stdin::{StdinError, UserCommand};
 use observer_fxserver::supervisor::{
-    Cause, ControlError, Counting, Event, EventKind, Hooked, ProcessChange, START_EXTENSION, Settings,
-    StartStatus, State, StopTimings, Supervisor, TreeEvent,
+    Cause, ControlError, Counting, Event, EventKind, HoldEnd, Hooked, ProcessChange, START_EXTENSION,
+    Settings, StartStatus, State, StopStatus, StopTimings, Supervisor, TreeEvent,
 };
 use observer_platform::{ProcessInfo, Protocol, Socket, SocketState};
 use tempfile::TempDir;
@@ -120,6 +120,7 @@ impl Lab {
             extra_arguments,
             hang_detection: true,
             hang_timeout_seconds: 360,
+            stop_hold_seconds: 60,
         };
         let launch = ServerLaunch {
             build: dir.path().join("build"),
@@ -138,6 +139,7 @@ impl Lab {
             quit: Duration::from_secs(3),
             shortened: Duration::from_secs(1),
             fatal_exit: Duration::from_secs(1),
+            hold: Some(Duration::from_secs(2)),
         };
         settings.recovery = RecoveryPolicy {
             backoff: [100, 200, 300, 400]
@@ -1421,7 +1423,11 @@ async fn the_shortened_stop_sends_event_and_quit_at_once_and_kills_within_its_wi
         closing.elapsed()
     );
     let notice = lab.console_until("observer:shuttingDown").await;
-    assert!(lab.console()[notice].2.contains(r#""delayMs":0"#));
+    let told = &lab.console()[notice].2;
+    assert!(
+        told.contains(r#""delayMs":0"#) && told.contains(r#""maxDelayMs":0"#),
+        "{told}"
+    );
     assert!(
         lab.console()
             .iter()
@@ -2102,5 +2108,634 @@ async fn a_build_whose_scheduler_cannot_be_hooked_starts_all_the_same() {
     let reason = hooked.refused.unwrap();
     assert!(reason.contains("scheduler.lua"), "{reason}");
     lab.console_until("Debug counts nothing in this start").await;
+    lab.shut_down(false).await;
+}
+
+/// A lab whose cfg starts `resources`, each of which asks the bridge to hold the stop, online
+/// once Observer has heard of them. `cfg` adds lines to the cfg, such as a release time.
+async fn holding(resources: &[&str], extra: &[(&str, &str)], cfg: &[&str]) -> Lab {
+    holding_tuned(resources, extra, cfg, |_| {}).await
+}
+
+async fn holding_tuned(
+    resources: &[&str],
+    extra: &[(&str, &str)],
+    cfg: &[&str],
+    tune: impl FnOnce(&mut Settings),
+) -> Lab {
+    let names = resources.join(",");
+    let mut convars = extra.to_vec();
+    convars.push(("fake_holders", &names));
+    let mut lab = Lab::tuned(&convars, tune).await;
+    extend_cfg(&lab, resources, cfg);
+    lab.supervisor.start("test").await.unwrap();
+    lab.state(State::Online).await;
+    lab.holders(resources).await;
+    lab
+}
+
+fn stop_held(kind: &EventKind) -> bool {
+    matches!(kind, EventKind::StopHeld { .. })
+}
+
+impl Lab {
+    /// Waits until the bridge told Observer that exactly `resources` hold each stop.
+    async fn holders(&self, resources: &[&str]) {
+        let mut status = self.supervisor.status();
+        let told = timeout(WAIT, async {
+            loop {
+                if status.borrow_and_update().holders == resources {
+                    return;
+                }
+                status.changed().await.unwrap();
+            }
+        })
+        .await;
+        assert!(
+            told.is_ok(),
+            "the holders never came to {resources:?}: {:?}",
+            self.supervisor.status().borrow().holders
+        );
+    }
+
+    /// The stop under way once it is as `wanted`, as the status publishes it.
+    async fn stop_until(&self, wanted: impl Fn(&StopStatus) -> bool) -> StopStatus {
+        let mut status = self.supervisor.status();
+        let found = timeout(WAIT, async {
+            loop {
+                let stop = status.borrow_and_update().stop.clone();
+                if let Some(stop) = stop.filter(&wanted) {
+                    return stop;
+                }
+                status.changed().await.unwrap();
+            }
+        })
+        .await;
+        found.unwrap_or_else(|_| {
+            panic!(
+                "the stop never came to that: {:#?}",
+                self.supervisor.status().borrow().stop
+            )
+        })
+    }
+
+    /// The payloads of every `observer:shuttingDown` the bridge raised, in order.
+    fn told_of_the_stop(&self) -> Vec<serde_json::Value> {
+        self.console()
+            .iter()
+            .filter_map(|(_, _, text)| {
+                serde_json::from_str(text.split_once("observer:shuttingDown ")?.1).ok()
+            })
+            .collect()
+    }
+
+    fn notes(&self) -> Vec<String> {
+        self.console()
+            .into_iter()
+            .filter(|(kind, actor, _)| *kind == LineKind::Observer && actor.as_deref() == Some("supervisor"))
+            .map(|(_, _, text)| text)
+            .collect()
+    }
+}
+
+#[tokio::test]
+async fn a_stop_waits_for_the_resource_that_holds_it_and_quits_once_it_released() {
+    let mut lab = holding(&["inventory"], &[("fake_release_ms", "900")], &[]).await;
+    let asked = Instant::now();
+
+    lab.supervisor.stop("test").await.unwrap();
+
+    let held = lab.stop_until(|stop| stop.holding == ["inventory"]).await;
+    assert_eq!(held.limit_at_ms - held.since_ms, 2000);
+    assert_eq!(held.released, Vec::<(String, u64)>::new());
+    let ended = lab.event(stop_held).await;
+    let quit = lab.console_until("-> Quitting: stop").await;
+    assert!(
+        asked.elapsed() >= Duration::from_millis(900),
+        "quit before the release"
+    );
+    assert!(
+        matches!(&ended, EventKind::StopHeld { unreleased, end: HoldEnd::Released, .. } if unreleased.is_empty()),
+        "{ended:?}"
+    );
+    let told = lab.told_of_the_stop();
+    assert_eq!(told.len(), 1, "{told:?}");
+    assert_eq!(
+        (&told[0]["delayMs"], &told[0]["maxDelayMs"]),
+        (&300.into(), &2000.into())
+    );
+    let console = lab.console();
+    let waiting = lab
+        .console_index("waiting for inventory to release the stop, 2 s at most")
+        .unwrap();
+    let released = lab.console_index("inventory released the stop after").unwrap();
+    assert!(waiting < released && released < quit, "{console:#?}");
+    lab.state(State::Stopped).await;
+    assert_eq!(lab.supervisor.status().borrow().stop, None);
+    lab.shut_down(false).await;
+}
+
+#[tokio::test]
+async fn a_stop_no_resource_holds_quits_after_its_notice_as_it_always_did() {
+    let mut lab = Lab::online(&[]).await;
+
+    lab.supervisor.stop("test").await.unwrap();
+
+    lab.state(State::Stopped).await;
+    assert!(!lab.seen.iter().any(stop_held), "{:#?}", lab.seen);
+    assert!(
+        !lab.notes().iter().any(|note| note.contains("the stop")),
+        "{:#?}",
+        lab.notes()
+    );
+    let told = lab.told_of_the_stop();
+    assert_eq!(
+        (&told[0]["delayMs"], &told[0]["maxDelayMs"]),
+        (&300.into(), &2000.into())
+    );
+    lab.shut_down(false).await;
+}
+
+#[tokio::test]
+async fn a_resource_that_never_releases_is_named_once_the_limit_has_passed() {
+    let mut lab = holding(&["garage", "inventory"], &[], &["set fake_release_ms:garage 100"]).await;
+    let asked = Instant::now();
+
+    lab.supervisor.restart("test").await.unwrap();
+
+    let held = lab
+        .stop_until(|stop| stop.holding == ["inventory"] && stop.released.len() == 1)
+        .await;
+    assert_eq!(held.released[0].0, "garage");
+    let ended = lab.event(stop_held).await;
+    assert!(asked.elapsed() >= Duration::from_secs(2), "quit before the limit");
+    let EventKind::StopHeld {
+        unreleased,
+        waited_ms,
+        end,
+    } = ended
+    else {
+        unreachable!()
+    };
+    assert_eq!((unreleased, end), (vec!["inventory".to_owned()], HoldEnd::Limit));
+    assert!(waited_ms >= 2000, "{waited_ms}");
+    let named = lab
+        .console_until("inventory did not release the stop within 2 s; FXServer quits anyway")
+        .await;
+    let quit = lab.console_until("-> Quitting: restart").await;
+    assert!(named < quit);
+    // The restart goes on, and the new run's resources hold its stops in their turn.
+    lab.state(State::Online).await;
+    assert_eq!(lab.generation(), 2);
+    lab.holders(&["garage", "inventory"]).await;
+    lab.shut_down(true).await;
+}
+
+#[tokio::test]
+async fn a_scheduled_restart_and_one_someone_planned_wait_for_the_resources_that_hold_the_stop() {
+    for by in ["observer", "ada"] {
+        let mut lab = holding(&["inventory"], &[("fake_release_ms", "700")], &[]).await;
+
+        lab.supervisor.restart_scheduled(by).await.unwrap();
+
+        lab.stop_until(|stop| stop.holding == ["inventory"]).await;
+        let ended = lab.event(stop_held).await;
+        assert!(
+            matches!(
+                ended,
+                EventKind::StopHeld {
+                    end: HoldEnd::Released,
+                    ..
+                }
+            ),
+            "{ended:?}"
+        );
+        let released = lab.console_until("inventory released the stop after").await;
+        let quit = lab.console_until("-> Quitting: scheduled").await;
+        assert!(released < quit, "{by}");
+        assert_eq!(
+            lab.state(State::Starting).await,
+            Cause::Scheduled { by: by.to_owned() }
+        );
+        lab.state(State::Online).await;
+        assert_eq!(lab.told_of_the_stop()[0]["reason"], "scheduled");
+        lab.shut_down(true).await;
+    }
+}
+
+#[tokio::test]
+async fn observer_stopping_waits_for_the_resources_that_hold_the_stop() {
+    // By itself, as for an update installed now, and in the place of a scheduled restart.
+    for scheduled in [false, true] {
+        let mut lab = holding(&["inventory"], &[("fake_release_ms", "700")], &[]).await;
+        let asked = Instant::now();
+
+        if scheduled {
+            lab.supervisor.shutdown_scheduled().await;
+        } else {
+            lab.supervisor.shutdown(false).await;
+        }
+        timeout(WAIT, lab.task.take().unwrap())
+            .await
+            .expect("the supervisor did not stop")
+            .unwrap();
+
+        assert!(
+            asked.elapsed() >= Duration::from_millis(700),
+            "quit before the release"
+        );
+        let reason = if scheduled { "scheduled" } else { "shutdown" };
+        let released = lab.console_index("inventory released the stop after").unwrap();
+        let quit = lab.console_index(&format!("-> Quitting: {reason}")).unwrap();
+        assert!(released < quit);
+        let told = lab.told_of_the_stop();
+        assert_eq!(
+            (&told[0]["reason"], &told[0]["maxDelayMs"]),
+            (&reason.into(), &2000.into())
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_new_launch_applied_by_a_restart_waits_for_the_resources_that_hold_the_stop() {
+    let mut lab = holding(&["inventory"], &[("fake_release_ms", "700")], &[]).await;
+    let mut launch = lab.launch.clone();
+    launch.settings.extra_arguments.push(ExtraArgument {
+        name: "fake_build".to_owned(),
+        value: "36000".to_owned(),
+    });
+
+    lab.supervisor.configure(launch).await;
+    lab.supervisor.restart("test").await.unwrap();
+
+    let released = lab.console_until("inventory released the stop after").await;
+    let quit = lab.console_until("-> Quitting: restart").await;
+    assert!(released < quit);
+    lab.state(State::Online).await;
+    let mut status = lab.supervisor.status();
+    timeout(WAIT, status.wait_for(|status| status.build == Some(36_000)))
+        .await
+        .expect("the restart did not take the new launch")
+        .unwrap();
+    lab.shut_down(true).await;
+}
+
+#[tokio::test]
+async fn a_crash_or_a_hang_asks_no_resource_and_waits_for_none() {
+    let mut crashed = holding(&["inventory"], &[], &[]).await;
+    let mut hung = holding(&["inventory"], &[], &[]).await;
+
+    crashed.type_command("fake_crash", "test").await;
+    hung.type_command("fake_hang", "test").await;
+
+    assert!(matches!(
+        crashed.state(State::Crashed).await,
+        Cause::Exited { .. }
+    ));
+    assert!(matches!(hung.state(State::Hung).await, Cause::Hang { .. }));
+    hung.state(State::Crashed).await;
+    for lab in [&crashed, &hung] {
+        assert_eq!(lab.told_of_the_stop(), Vec::<serde_json::Value>::new());
+        assert!(!lab.seen.iter().any(stop_held), "{:#?}", lab.seen);
+        assert!(!lab.notes().iter().any(|note| note.contains("the stop")));
+    }
+    // The run that follows holds its own stops.
+    crashed.state(State::Online).await;
+    crashed.holders(&["inventory"]).await;
+    crashed.shut_down(true).await;
+    hung.shut_down(true).await;
+}
+
+#[tokio::test]
+async fn a_closing_console_waits_for_no_one_and_says_who_it_left() {
+    let mut lab = holding(&["inventory"], &[], &[]).await;
+    let closing = Instant::now();
+
+    lab.shut_down(true).await;
+
+    assert!(
+        closing.elapsed() < Duration::from_secs(2),
+        "took {:?}",
+        closing.elapsed()
+    );
+    let told = lab.told_of_the_stop();
+    assert_eq!(
+        (&told[0]["delayMs"], &told[0]["maxDelayMs"]),
+        (&0.into(), &0.into())
+    );
+    lab.console_index("the console is closing: no time left to wait for inventory")
+        .unwrap();
+    let mut left = None;
+    while let Ok(event) = lab.events.try_recv() {
+        if stop_held(&event.kind) {
+            left = Some(event.kind);
+        }
+    }
+    assert_eq!(
+        left,
+        Some(EventKind::StopHeld {
+            unreleased: vec!["inventory".to_owned()],
+            waited_ms: 0,
+            end: HoldEnd::Shortened,
+        })
+    );
+}
+
+#[tokio::test]
+async fn a_console_closed_during_the_wait_cuts_it_short() {
+    let mut lab = holding_tuned(&["inventory"], &[], &[], |settings| {
+        settings.stop.hold = Some(Duration::from_secs(60));
+    })
+    .await;
+    lab.supervisor.stop("test").await.unwrap();
+    lab.stop_until(|stop| stop.holding == ["inventory"]).await;
+    let closing = Instant::now();
+
+    lab.shut_down(true).await;
+
+    assert!(
+        closing.elapsed() < Duration::from_secs(5),
+        "took {:?}",
+        closing.elapsed()
+    );
+    let note = lab
+        .console_index("the console is closing: no time left to wait for inventory")
+        .unwrap();
+    let quit = lab.console_index("-> Quitting: stop").unwrap();
+    assert!(note < quit);
+    let mut ends = Vec::new();
+    while let Ok(event) = lab.events.try_recv() {
+        if let EventKind::StopHeld { end, unreleased, .. } = event.kind {
+            ends.push((end, unreleased));
+        }
+    }
+    assert_eq!(ends, [(HoldEnd::Shortened, vec!["inventory".to_owned()])]);
+}
+
+#[tokio::test]
+async fn a_server_whose_main_loop_is_stuck_is_waited_for_until_the_limit_then_killed() {
+    let mut lab = holding(&["inventory"], &[("fake_release_ms", "100")], &[]).await;
+    lab.type_command("fake_hang", "test").await;
+    let asked = Instant::now();
+
+    lab.supervisor.stop("test").await.unwrap();
+
+    let ended = lab.event(stop_held).await;
+    assert!(
+        matches!(&ended, EventKind::StopHeld { unreleased, end: HoldEnd::Limit, .. } if unreleased == &["inventory"]),
+        "{ended:?}"
+    );
+    assert!(
+        matches!(lab.event(exited).await, EventKind::Exited { expected: true, code, .. } if code == KILLED)
+    );
+    // The limit, then what `quit` gets before the kill.
+    assert!(
+        asked.elapsed() >= Duration::from_secs(5),
+        "took {:?}",
+        asked.elapsed()
+    );
+    assert!(
+        lab.told_of_the_stop().is_empty(),
+        "the stuck loop raised the event"
+    );
+    lab.state(State::Stopped).await;
+    lab.shut_down(false).await;
+}
+
+#[tokio::test]
+async fn a_resource_that_stops_or_restarts_holds_the_stop_only_while_it_runs() {
+    let mut lab = holding(&["garage", "inventory"], &[], &[]).await;
+
+    lab.type_command("stop garage", "test").await;
+    lab.holders(&["inventory"]).await;
+    lab.type_command("ensure garage", "test").await;
+    lab.holders(&["garage", "inventory"]).await;
+    lab.type_command("restart garage", "test").await;
+    lab.console_until("Stopping resource garage").await;
+    lab.holders(&["garage", "inventory"]).await;
+
+    lab.supervisor.stop("test").await.unwrap();
+    lab.stop_until(|stop| stop.holding == ["garage", "inventory"])
+        .await;
+    lab.type_command("stop garage", "test").await;
+    let held = lab.stop_until(|stop| stop.holding == ["inventory"]).await;
+    lab.type_command("fake_release inventory", "test").await;
+
+    let ended = lab.event(stop_held).await;
+    assert!(
+        matches!(&ended, EventKind::StopHeld { unreleased, end: HoldEnd::Released, .. } if unreleased.is_empty()),
+        "{ended:?}"
+    );
+    assert!(
+        held.released.is_empty(),
+        "a stopped resource released nothing: {held:?}"
+    );
+    lab.console_index("garage stopped: the stop no longer waits for it")
+        .unwrap();
+    lab.console_until("inventory released the stop after").await;
+    lab.state(State::Stopped).await;
+    lab.shut_down(false).await;
+}
+
+#[tokio::test]
+async fn a_bridge_started_again_holds_nothing_of_what_the_one_before_held() {
+    let mut lab = holding(&["inventory"], &[], &[]).await;
+    let bridge = lab.bridge();
+
+    lab.type_command(&format!("ensure {bridge}"), "test").await;
+
+    lab.holders(&[]).await;
+    lab.supervisor.stop("test").await.unwrap();
+    lab.state(State::Stopped).await;
+    assert!(!lab.seen.iter().any(stop_held), "{:#?}", lab.seen);
+    lab.shut_down(false).await;
+}
+
+#[tokio::test]
+async fn a_stop_that_overtakes_a_restart_keeps_its_wait_and_its_limit() {
+    let mut lab = holding_tuned(&["inventory"], &[], &[], |settings| {
+        settings.stop.hold = Some(Duration::from_secs(30));
+    })
+    .await;
+    lab.supervisor.restart("grace").await.unwrap();
+    lab.state(State::Stopping).await;
+    let first = lab.stop_until(|stop| stop.holding == ["inventory"]).await;
+
+    lab.supervisor.stop("ada").await.unwrap();
+
+    assert_eq!(
+        lab.state(State::Stopping).await,
+        Cause::Requested { by: "ada".to_owned() }
+    );
+    let again = lab.stop_until(|stop| stop.holding == ["inventory"]).await;
+    assert_eq!(
+        (again.since_ms, again.limit_at_ms),
+        (first.since_ms, first.limit_at_ms)
+    );
+    lab.console_until(r#""reason":"stop""#).await;
+    lab.type_command("fake_release inventory", "test").await;
+    lab.console_until("-> Quitting: stop").await;
+    lab.state(State::Stopped).await;
+    lab.none_within(Duration::from_secs(1), starting).await;
+    let told = lab.told_of_the_stop();
+    assert_eq!(told.len(), 2, "{told:?}");
+    assert_eq!(
+        (&told[0]["reason"], &told[0]["maxDelayMs"]),
+        (&"restart".into(), &30_000.into())
+    );
+    let left = told[1]["maxDelayMs"].as_u64().unwrap();
+    assert!(
+        told[1]["reason"] == "stop" && left < 30_000 && left > 0,
+        "{:?}",
+        told[1]
+    );
+    assert!(told[1]["delayMs"].as_u64().unwrap() <= 300);
+    let ends: Vec<&EventKind> = lab.seen.iter().filter(|kind| stop_held(kind)).collect();
+    assert_eq!(ends.len(), 1, "one stop, one wait: {ends:?}");
+    lab.shut_down(false).await;
+}
+
+#[tokio::test]
+async fn whoever_controls_the_server_can_have_it_quit_without_waiting() {
+    let mut lab = holding_tuned(&["garage", "inventory"], &[], &[], |settings| {
+        settings.stop.hold = Some(Duration::from_secs(60));
+    })
+    .await;
+    let while_running = lab.supervisor.quit_now("ada").await;
+    lab.supervisor.stop("test").await.unwrap();
+    lab.stop_until(|stop| stop.holding == ["garage", "inventory"])
+        .await;
+    lab.type_command("fake_release garage", "test").await;
+    lab.stop_until(|stop| stop.holding == ["inventory"]).await;
+
+    let skipped = lab.supervisor.quit_now("ada").await;
+    let again = lab.supervisor.quit_now("ada").await;
+
+    assert_eq!(while_running, Err(ControlError::NotHeld));
+    assert_eq!(skipped, Ok(vec!["inventory".to_owned()]));
+    assert_eq!(again, Err(ControlError::NotHeld));
+    let ended = lab.event(stop_held).await;
+    assert!(
+        matches!(
+            &ended,
+            EventKind::StopHeld { unreleased, end: HoldEnd::Skipped { by }, .. }
+                if unreleased == &["inventory"] && by == "ada"
+        ),
+        "{ended:?}"
+    );
+    let note = lab
+        .console_until("ada had FXServer quit without waiting for inventory")
+        .await;
+    let quit = lab.console_until("-> Quitting: stop").await;
+    assert!(note < quit);
+    lab.state(State::Stopped).await;
+    assert_eq!(lab.supervisor.status().borrow().stop, None);
+    lab.shut_down(false).await;
+}
+
+#[tokio::test]
+async fn a_stop_nobody_holds_has_no_wait_to_skip() {
+    let mut lab = Lab::online(&[]).await;
+    lab.supervisor.stop("test").await.unwrap();
+
+    let skipped = lab.supervisor.quit_now("ada").await;
+
+    assert_eq!(skipped, Err(ControlError::NotHeld));
+    lab.state(State::Stopped).await;
+    lab.shut_down(false).await;
+}
+
+#[tokio::test]
+async fn a_resource_that_asks_during_the_notice_is_waited_for_too() {
+    let mut lab = Lab::tuned(&[], |settings| {
+        settings.stop.notice = Duration::from_secs(3);
+        settings.stop.hold = Some(Duration::from_secs(60));
+    })
+    .await;
+    extend_cfg(&lab, &["garage"], &[]);
+    lab.supervisor.start("test").await.unwrap();
+    lab.state(State::Online).await;
+    lab.holders(&[]).await;
+
+    lab.supervisor.stop("test").await.unwrap();
+    lab.console_until("observer:shuttingDown").await;
+    lab.type_command("fake_hold garage", "test").await;
+
+    lab.stop_until(|stop| stop.holding == ["garage"]).await;
+    lab.console_until("garage holds the stop too").await;
+    lab.none_within(Duration::from_secs(4), exited).await;
+    lab.type_command("fake_release garage", "test").await;
+    let ended = lab.event(stop_held).await;
+    assert!(
+        matches!(
+            ended,
+            EventKind::StopHeld {
+                end: HoldEnd::Released,
+                ..
+            }
+        ),
+        "{ended:?}"
+    );
+    lab.state(State::Stopped).await;
+    lab.shut_down(false).await;
+}
+
+#[tokio::test]
+async fn a_quit_typed_during_the_wait_ends_it_there() {
+    let mut lab = holding_tuned(&["inventory"], &[], &[], |settings| {
+        settings.stop.hold = Some(Duration::from_secs(60));
+    })
+    .await;
+    lab.supervisor.restart("grace").await.unwrap();
+    lab.stop_until(|stop| stop.holding == ["inventory"]).await;
+
+    lab.type_command("quit", "alice").await;
+
+    let ended = lab.event(stop_held).await;
+    assert!(
+        matches!(&ended, EventKind::StopHeld { end: HoldEnd::Skipped { by }, .. } if by == "alice"),
+        "{ended:?}"
+    );
+    // The restart it interrupted still follows.
+    lab.state(State::Online).await;
+    assert_eq!(lab.generation(), 2);
+    lab.shut_down(true).await;
+}
+
+#[tokio::test]
+async fn the_owners_limit_bounds_the_wait_and_a_change_reaches_the_next_stop() {
+    let mut lab = holding_tuned(&["inventory"], &[], &[], |settings| {
+        settings.stop.hold = None;
+    })
+    .await;
+    let mut launch = lab.launch.clone();
+    launch.settings.extra_arguments.push(ExtraArgument {
+        name: "fake_holders".to_owned(),
+        value: "inventory".to_owned(),
+    });
+    launch.settings.stop_hold_seconds = 5;
+
+    lab.supervisor.configure(launch).await;
+    let asked = Instant::now();
+    lab.supervisor.stop("test").await.unwrap();
+
+    let held = lab.stop_until(|stop| stop.holding == ["inventory"]).await;
+    assert_eq!(held.limit_at_ms - held.since_ms, 5000);
+    let ended = lab.event(stop_held).await;
+    assert!(
+        matches!(
+            ended,
+            EventKind::StopHeld {
+                end: HoldEnd::Limit,
+                ..
+            }
+        ),
+        "{ended:?}"
+    );
+    assert!(asked.elapsed() >= Duration::from_secs(5));
+    assert_eq!(lab.told_of_the_stop()[0]["maxDelayMs"], 5000);
+    lab.console_until("inventory did not release the stop within 5 s; FXServer quits anyway")
+        .await;
+    lab.state(State::Stopped).await;
     lab.shut_down(false).await;
 }

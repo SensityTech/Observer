@@ -51,6 +51,8 @@ const ONLINE = {
     restartAt: null,
     launch: 'ready',
     start: null,
+    stopHolders: [],
+    stop: null,
 };
 
 const SCHEDULE = {

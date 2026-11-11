@@ -3,8 +3,9 @@
 Observer never shows anything to players, but for one text: the refusal message the owner writes
 for bans. It tells your resources what is about to happen to the server, with data and no text, and
 your resources decide what players see, what gets saved and when. This page is that contract: the
-server events Observer raises, what they carry, what your resources can tell Observer about players,
-how bans keep players out, and what you can rely on.
+server events Observer raises, what they carry, how your resources hold a stop until they have
+saved, what they can tell Observer about players, how bans keep players out, and what you can rely
+on.
 
 ## The bridge
 
@@ -27,10 +28,10 @@ local bridge = GetConvar('observer_bridge', '') -- empty when Observer did not s
 
 ## Version
 
-This is contract version **4**.
+This is contract version **7**.
 
 ```lua
-local version = exports[GetConvar('observer_bridge', '')]:getContractVersion() -- 4
+local version = exports[GetConvar('observer_bridge', '')]:getContractVersion() -- 7
 ```
 
 Within a version, fields and `reason` values are only ever added. Ignore fields you do not know, and
@@ -38,7 +39,9 @@ treat a `reason` you do not know as the closest one you do (`stop` for `observer
 field renamed or removed, or a change of meaning, is a new version. So is a new export of the
 bridge, so that a resource can check for it before calling it.
 
-Version 4 added bans: the bridge holds every connecting player until Observer checks them, refuses a
+Version 7 added holding a stop: `holdShutdown` and `releaseShutdown`, and `maxDelayMs` in
+`observer:shuttingDown`. A resource that never calls them sees a stop as it was before. Version 4
+added bans: the bridge holds every connecting player until Observer checks them, refuses a
 banned one, drops a connected player when they are banned, and raises `observer:playerRefused` and
 `observer:playerBanned`. Version 3 added the player labels: `setPlayerLabel` and `clearPlayerLabel`. Version 2 changed how a
 resource finds the bridge: version 1 named it `observer`, version 2 draws its name at each start and
@@ -56,7 +59,7 @@ who signs in to nothing. No account can take either name.
 | `observer:restartScheduled` | At each warning before a restart, and at once for the nearest warning when a restart is planned or moved inside the warning window. |
 | `observer:restartSkipped` | A restart announced since this start of FXServer will not happen. |
 | `observer:restartRescheduled` | A restart announced since this start of FXServer moved to another time. |
-| `observer:shuttingDown` | FXServer quits in `delayMs`: save now. |
+| `observer:shuttingDown` | FXServer is about to quit: save now. See [Holding a stop](#holding-a-stop). |
 | `observer:startChanges` | Once per start of FXServer, when its files are hashed: what changed since the start before. |
 | `observer:playerRefused` | A ban refused a connecting player. See [Bans](#bans). |
 | `observer:playerBanned` | A ban is about to drop a connected player. See [Bans](#bans). |
@@ -96,7 +99,8 @@ window.
 
 | Field | Type | Meaning |
 |---|---|---|
-| `delayMs` | integer | Milliseconds until Observer sends `quit` (5,000 by default, 0 when Windows closes Observer's console). |
+| `delayMs` | integer | Milliseconds until Observer sends `quit` when no resource holds the stop (5,000 by default, 0 when Windows closes Observer's console). |
+| `maxDelayMs` | integer | Milliseconds until Observer sends `quit` whoever still holds the stop: the owner's limit, 60,000 by default. Never less than `delayMs`, and equal to it when nothing can hold this stop. |
 | `reason` | string | `stop`, `restart` (asked in the panel or the host's window), `scheduled` (the schedule or a single restart someone planned), or `shutdown` (Observer itself is stopping). |
 | `by` | string | Who asked, `local`, or `observer`. |
 
@@ -137,12 +141,74 @@ by third parties. Nothing else of a file's name or contents is ever sent.
   again, from its nearest warning.
 - A restart that happens is always preceded by `observer:shuttingDown`, and no `observer:restart*`
   event follows it. A second `observer:shuttingDown` may follow when a stop, or Observer stopping,
-  overtakes a restart: the latest one says what happens.
-- Nothing comes after `quit`.
+  overtakes a restart: the latest one says what happens, and `delayMs` and `maxDelayMs` give what
+  is left of the first one's.
+- `quit` comes once `delayMs` has passed and no resource holds the stop, and at `maxDelayMs` at the
+  latest. Nothing comes after `quit`.
 - Delivery is best effort. A main loop that is stuck gets an event late, or never.
 - `observer:startChanges` comes once a run, never for a run that ended before its files were read.
 - An announced restart can also vanish without `observer:restartSkipped` when the server stops or
   crashes first: the run ends anyway.
+
+## Holding a stop
+
+A resource that saves when the server stops can hold the stop until it has saved. Ask once, as your
+resource starts, and release each stop once your saves are done:
+
+```lua
+local bridge = GetConvar('observer_bridge', '')
+exports[bridge]:holdShutdown()
+
+AddEventHandler('observer:shuttingDown', function(payload)
+    -- your saves go here; they may wait on your database
+    exports[bridge]:releaseShutdown()
+end)
+```
+
+From `holdShutdown()` on, every stop Observer announces waits for your resource: Observer sends
+`quit` once `delayMs` has passed and every resource that holds the stop has released it. A resource
+that never asks changes nothing: without one, `quit` comes after `delayMs`, as it did before
+version 7.
+
+- The wait has a limit, which the owner sets in the panel: 60 seconds by default, from 5 seconds to
+  10 minutes. `maxDelayMs` gives it. Past it Observer sends `quit` anyway, and names the resources
+  that had not released the stop in the console and the audit log. While it waits, the panel names
+  them too, and whoever may stop the server there can have FXServer quit without waiting for them:
+  `delayMs` still runs to its end.
+- Both exports return `true`, or `false` and why. `holdShutdown`: `tooMany` (64 resources hold the
+  stop already) or `invalid` (not called by a resource). `releaseShutdown`: `notStopping` (no stop
+  is under way: the hold stays) or `notHeld` (your resource does not hold the stop).
+- Release in every case, a failed save included: a resource that never releases costs every stop
+  the whole limit, and is named for it.
+- A hold lasts until your resource stops. Started again, it asks again as it starts. A resource
+  that stops during a stop is no longer waited for.
+- `holdShutdown()` called once a stop is under way counts as well, as long as it comes before
+  `quit`. Ask as your resource starts all the same: the stop is then held from its first instant,
+  even on a server too busy to run your handler within `delayMs`.
+- The bridge keeps the holds. Should someone stop or restart the bridge itself, they are gone until
+  each resource asks again.
+
+What waits for the resources that hold a stop, and what does not:
+
+| What ends the run | Does it wait? |
+|---|---|
+| A stop or a restart, from the panel or the host's window | Yes. |
+| A restart of the schedule, a single restart someone planned | Yes. The restart's time is when `observer:shuttingDown` is raised; FXServer is back that much later. |
+| Observer installing its own update, a build of FXServer applied by a restart, a return to the last healthy build | Yes: each is a stop or a restart like any other. |
+| Observer stopped by Ctrl+C, a signal or its service | Yes. Under systemd, Observer asks for the time it waits, which takes systemd 236 or later; anything else that stops Observer sets its own limit. |
+| A second stop that overtakes the first | It is still the same stop: a release already given stands, and the limit counts from the first event. |
+| Windows closing Observer's console, logging off or shutting down | No: Windows ends Observer within seconds. `delayMs` and `maxDelayMs` are 0, and a wait under way is cut short. |
+| A crash, or a server that stopped responding | No: no event is raised, and there is no one to wait for. Save as you go, not only at the stop. |
+| `quit` typed in the console | No: FXServer quits at once. |
+| A stop while FXServer is still starting | No: the bridge has not reported yet, and nothing is raised. |
+
+A server whose main loop is stuck when the stop begins runs no handler. The resources that hold the
+stop are then waited for until the limit, FXServer is told to quit, and 15 seconds later its
+processes are killed.
+
+The backup Observer makes of the game's database before a restart runs once FXServer has exited: it
+holds what your resource saved before it released the stop, and may miss what a resource cut off at
+the limit was still saving.
 
 ## Player labels
 
@@ -231,6 +297,9 @@ console, where only Observer writes, and never for a call from another resource.
 Any server resource can give a label: the exports are for your resources, which can already do
 anything on the server. Never call them with text a client sent you without checking it first.
 
+Any server resource can hold a stop, too. The owner's limit bounds what it can cost, and Observer
+names every resource that holds one.
+
 The drawn name keeps away scripts written against a fixed name, and no resource can take it before
 the bridge starts. It is no secret from the server's own resources: any of them can list the
 resources, read `observer_bridge` and the bridge's files. Run only server resources you trust.
@@ -249,7 +318,9 @@ no text.
 | `observer:restartRescheduled` | none | |
 | `observer:shuttingDown` | `txAdmin:events:serverShuttingDown` | `delay` (`delayMs`), `author` (`by`), `message = ''` |
 
-## Not in version 4
+txAdmin has no way to hold a stop: a resource written for it gets `delay`, and saves within it.
+
+## Not in version 7
 
 Exports to read the next restart or the server's state come later.
 
@@ -257,6 +328,7 @@ Exports to read the next restart or the server's state come later.
 
 [`observer_example`](observer_example) finds the bridge and checks the contract version when it
 starts, prints each event to the server console with its fields, and marks with short comments where
-a team plugs in its notifications, its cancellation notice and its saves. Its console command
-`observer_example_label` gives a player a label, or clears it, to try the panel's side. It shows
+a team plugs in its notifications, its cancellation notice and its saves. It holds each stop for as
+long as its convar `observer_example_save_ms` says, 0 by default, as a save would. Its console
+command `observer_example_label` gives a player a label, or clears it, to try the panel's side. It shows
 nothing to players. Copy what fits into your own resources rather than running it as is.

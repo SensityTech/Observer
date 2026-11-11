@@ -331,6 +331,8 @@ const hungFor = async (me: Me) => {
             name: null,
             port: null,
             start: null,
+            stopHolders: [],
+            stop: null,
         } satisfies ServerStatus,
     });
     return view;
@@ -940,6 +942,8 @@ describe('OverviewPage', () => {
             name: null,
             port: null,
             start: null,
+            stopHolders: [],
+            stop: null,
         } satisfies ServerStatus;
 
         say({ type: 'snapshot', topic: 'server.status', data: online });

@@ -19,6 +19,12 @@ pub const MAX_EXTRA_ARGUMENTS: usize = 64;
 pub const DEFAULT_HANG_TIMEOUT_SECONDS: u32 = 360;
 pub const MIN_HANG_TIMEOUT_SECONDS: u32 = 60;
 pub const MAX_HANG_TIMEOUT_SECONDS: u32 = 3600;
+/// How long a stop waits, at most, for the resources that hold it, in seconds: by default, and at
+/// the extremes. The least is the notice every stop gives: set to it, a stop waits for no resource
+/// longer than it does without one.
+pub const DEFAULT_STOP_HOLD_SECONDS: u32 = 60;
+pub const MIN_STOP_HOLD_SECONDS: u32 = 5;
+pub const MAX_STOP_HOLD_SECONDS: u32 = 600;
 
 /// Names an extra argument may not set. Some would make FXServer escape Observer's supervision
 /// (`exec`, `citizen_dir`) or behave as if txAdmin ran it; the rest are Observer's own: two
@@ -87,6 +93,11 @@ pub struct LaunchSettings {
     /// running server too, and the silence then counts from the change.
     #[serde(default = "hang_timeout_default")]
     pub hang_timeout_seconds: u32,
+    /// How long a stop waits, at most, for the resources that hold it through the bridge before
+    /// FXServer quits anyway: from `MIN_STOP_HOLD_SECONDS` to `MAX_STOP_HOLD_SECONDS`. A change
+    /// applies from the next stop. Settings saved before it existed have the default.
+    #[serde(default = "stop_hold_default")]
+    pub stop_hold_seconds: u32,
 }
 
 const fn hang_detection_default() -> bool {
@@ -95,6 +106,10 @@ const fn hang_detection_default() -> bool {
 
 const fn hang_timeout_default() -> u32 {
     DEFAULT_HANG_TIMEOUT_SECONDS
+}
+
+const fn stop_hold_default() -> u32 {
+    DEFAULT_STOP_HOLD_SECONDS
 }
 
 /// `GET /api/servers/default/launch` once the owner saved the settings, and what a change returns.
@@ -187,6 +202,7 @@ pub enum LaunchField {
     ArgumentName,
     ArgumentValue,
     HangTimeoutSeconds,
+    StopHoldSeconds,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
@@ -223,7 +239,8 @@ pub enum LaunchProblem {
     /// More than `MAX_EXTRA_ARGUMENTS`.
     TooMany,
     /// A hang timeout outside `MIN_HANG_TIMEOUT_SECONDS` to `MAX_HANG_TIMEOUT_SECONDS`, or not a
-    /// whole number of minutes.
+    /// whole number of minutes; a stop's wait outside `MIN_STOP_HOLD_SECONDS` to
+    /// `MAX_STOP_HOLD_SECONDS`.
     OutOfRange,
 }
 
@@ -269,6 +286,13 @@ impl LaunchSettings {
         if !timeout.contains(&self.hang_timeout_seconds) || !self.hang_timeout_seconds.is_multiple_of(60) {
             note(
                 LaunchField::HangTimeoutSeconds,
+                None,
+                Some(LaunchProblem::OutOfRange),
+            );
+        }
+        if !(MIN_STOP_HOLD_SECONDS..=MAX_STOP_HOLD_SECONDS).contains(&self.stop_hold_seconds) {
+            note(
+                LaunchField::StopHoldSeconds,
                 None,
                 Some(LaunchProblem::OutOfRange),
             );
@@ -440,6 +464,7 @@ mod tests {
             extra_arguments: vec![argument("sv_enforceGameBuild", "3258")],
             hang_detection: true,
             hang_timeout_seconds: DEFAULT_HANG_TIMEOUT_SECONDS,
+            stop_hold_seconds: DEFAULT_STOP_HOLD_SECONDS,
         }
     }
 
@@ -839,6 +864,32 @@ mod tests {
     }
 
     #[test]
+    fn a_stop_waits_for_resources_from_five_seconds_to_ten_minutes() {
+        let hold = |seconds: u32| {
+            LaunchSettings {
+                stop_hold_seconds: seconds,
+                ..settings()
+            }
+            .issues(Platform::Windows)
+        };
+
+        for seconds in [0, 4, 601, u32::MAX] {
+            assert_eq!(
+                hold(seconds),
+                [issue(
+                    LaunchField::StopHoldSeconds,
+                    None,
+                    LaunchProblem::OutOfRange
+                )],
+                "{seconds} s"
+            );
+        }
+        for seconds in [5, 6, 60, 599, 600] {
+            assert_eq!(hold(seconds), [], "{seconds} s");
+        }
+    }
+
+    #[test]
     fn issues_name_their_field_and_the_argument_they_concern() {
         let broken = LaunchSettings {
             data_path: String::new(),
@@ -881,17 +932,20 @@ mod tests {
                 "extraArguments": [{ "name": "sv_enforceGameBuild", "value": "3258" }],
                 "hangDetection": true,
                 "hangTimeoutSeconds": 360,
+                "stopHoldSeconds": 60,
             })
         );
         assert_eq!(
             serde_json::from_value::<LaunchSettings>(json.clone()).unwrap(),
             settings()
         );
-        // A body from before hang detection could be set still reads, with it on after six minutes.
+        // A body from before hang detection could be set still reads, with it on after six minutes,
+        // and one from before a stop could be held, with a minute for the resources that hold it.
         let mut before = json.clone();
         let fields = before.as_object_mut().unwrap();
         fields.remove("hangDetection");
         fields.remove("hangTimeoutSeconds");
+        fields.remove("stopHoldSeconds");
         assert_eq!(
             serde_json::from_value::<LaunchSettings>(before).unwrap(),
             settings()

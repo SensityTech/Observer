@@ -17,6 +17,7 @@ export type SettingId =
     | 'txadminEvents'
     | 'hangDetection'
     | 'hangTimeout'
+    | 'stopHold'
     | 'extraArguments'
     | 'scheduleEnabled'
     | 'scheduleMode'
@@ -123,6 +124,7 @@ export const CATEGORIES: readonly Category[] = [
             { id: 'txadminEvents', applies: 'nextStart' },
             { id: 'hangDetection', applies: 'now' },
             { id: 'hangTimeout', applies: 'now' },
+            { id: 'stopHold', applies: 'now' },
             { id: 'extraArguments', applies: 'nextStart' },
         ],
     },

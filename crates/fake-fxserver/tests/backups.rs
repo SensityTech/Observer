@@ -219,6 +219,7 @@ fn launch(data: &Path) -> LaunchSettings {
         extra_arguments: Vec::new(),
         hang_detection: true,
         hang_timeout_seconds: 360,
+        stop_hold_seconds: 60,
     }
 }
 
