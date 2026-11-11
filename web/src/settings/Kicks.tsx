@@ -4,11 +4,12 @@ import { useState } from 'react';
 import { characters } from '../api/bans';
 import type { KickSettings as Settings } from '../api/generated/KickSettings';
 import { Permission } from '../api/generated/Permission';
-import { fillKickMessage, kickSettingsQuery, MAX_KICK_MESSAGE, saveKickSettings } from '../api/moderation';
+import { kickSettingsQuery, MAX_KICK_MESSAGE, saveKickSettings } from '../api/moderation';
 import { allows, useMe } from '../auth/me';
 import { Notice } from '../components/Notice';
 import { errorMessage } from '../i18n/errors';
 import { useI18n } from '../i18n/I18nProvider';
+import { fill } from '../lib/fill';
 import { useSection } from './Form';
 import { MessageEditor } from './MessageEditor';
 import { SettingRow, SettingsGroup } from './Row';
@@ -98,7 +99,7 @@ function KickForm({ stored }: { stored: Settings }) {
                             insertLabel={words.insert}
                             problem={tried ? problem : null}
                             previewLabel={words.kickPreview}
-                            preview={fillKickMessage(message.trim(), words.kickExample)}
+                            preview={fill(message.trim(), words.kickExample)}
                         />
                     )}
                 </SettingRow>

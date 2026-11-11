@@ -13,8 +13,9 @@ import { Notice } from '../components/Notice';
 import { Switch } from '../components/Switch';
 import { errorMessage } from '../i18n/errors';
 import { useI18n } from '../i18n/I18nProvider';
+import { fill } from '../lib/fill';
 import { SettingsForm, useSection } from './Form';
-import { MessageField } from './MessageField';
+import { MessageEditor } from './MessageEditor';
 import { CategoryHead, SettingRow, SettingsGroup } from './Row';
 
 type Outcome = { tone: 'success' | 'danger'; message: string };
@@ -150,21 +151,22 @@ function AllowlistForm({ stored }: { stored: Settings }) {
                     changed={canManage && changed.includes('allowlistMessage')}
                 >
                     {(ids) => (
-                        <MessageField
+                        <MessageEditor
                             ids={ids}
                             value={draft.message}
-                            problem={tried ? messageProblem : null}
-                            placeholders={PLACEHOLDERS}
-                            example={words.example}
-                            words={words}
                             onChange={(message) => setDraft({ ...draft, message })}
+                            placeholders={PLACEHOLDERS}
+                            insertLabel={words.insert}
+                            problem={tried ? messageProblem : null}
+                            previewLabel={words.preview}
+                            preview={fill(draft.message.trim(), words.example)}
                         >
                             {!draft.message.includes('{id}') && messageProblem === null && (
                                 <Notice tone="warning" live={false}>
                                     {words.idMissing}
                                 </Notice>
                             )}
-                        </MessageField>
+                        </MessageEditor>
                     )}
                 </SettingRow>
             </SettingsGroup>

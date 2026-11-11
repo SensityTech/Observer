@@ -28,9 +28,10 @@ import { errorMessage } from '../i18n/errors';
 import { zoneDate } from '../i18n/format';
 import { useI18n } from '../i18n/I18nProvider';
 import { cn } from '../lib/cn';
+import { fill } from '../lib/fill';
 import { useDebounced } from '../lib/useDebounced';
 import { SettingsForm, useSection } from './Form';
-import { MessageField } from './MessageField';
+import { MessageEditor } from './MessageEditor';
 import { CategoryHead, SettingRow, SettingsGroup, type RowIds } from './Row';
 
 type Outcome = { tone: 'success' | 'danger'; message: string };
@@ -155,14 +156,15 @@ function MaintenanceForm({ stored }: { stored: Settings }) {
                     changed={canManage && changed.includes('maintenanceMessage')}
                 >
                     {(ids) => (
-                        <MessageField
+                        <MessageEditor
                             ids={ids}
                             value={draft.message}
-                            problem={tried ? messageProblem : null}
-                            placeholders={PLACEHOLDERS}
-                            example={words.example}
-                            words={words}
                             onChange={(message) => setDraft({ ...draft, message })}
+                            placeholders={PLACEHOLDERS}
+                            insertLabel={words.insert}
+                            problem={tried ? messageProblem : null}
+                            previewLabel={words.preview}
+                            preview={fill(draft.message.trim(), words.example)}
                         />
                     )}
                 </SettingRow>

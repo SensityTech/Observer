@@ -1,6 +1,7 @@
-import { useRef } from 'react';
+import { useRef, type ReactNode } from 'react';
 
 import { FieldError, inputClass } from '../components/Field';
+import { MessagePreview } from '../components/MessagePreview';
 import { cn } from '../lib/cn';
 import type { RowIds } from './Row';
 
@@ -17,6 +18,7 @@ export function MessageEditor<K extends string>({
     problem,
     previewLabel,
     preview,
+    children,
 }: {
     ids: RowIds;
     value: string;
@@ -27,6 +29,8 @@ export function MessageEditor<K extends string>({
     problem: string | null;
     previewLabel: string;
     preview: string;
+    /** Said between the placeholders and the preview. */
+    children?: ReactNode;
 }) {
     const field = useRef<HTMLTextAreaElement>(null);
     const insert = (key: K) => {
@@ -66,10 +70,8 @@ export function MessageEditor<K extends string>({
                     </button>
                 ))}
             </div>
-            <figure className="m-0 flex flex-col gap-1.5 rounded-box border border-line bg-bg-subtle px-3.5 py-3">
-                <figcaption className="text-meta text-ink-3">{previewLabel}</figcaption>
-                <p className="text-ui whitespace-pre-line text-ink [overflow-wrap:anywhere]">{preview}</p>
-            </figure>
+            {children}
+            <MessagePreview caption={previewLabel} message={preview} />
         </>
     );
 }
