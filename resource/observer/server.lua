@@ -7,7 +7,7 @@
 -- Bumped when a field is renamed or removed, when resources must find the bridge another way, and
 -- when the bridge gains an export, so that a resource can tell whether it is there; new fields keep
 -- the version.
-local CONTRACT_VERSION = 6
+local CONTRACT_VERSION = 7
 local HEARTBEAT_MS = 3000
 local RESOURCES_SETTLE_MS = 500
 local LABELS_SETTLE_MS = 1000
@@ -26,6 +26,9 @@ local VERDICT_POLL_MS = 50
 local POSITIONS_EVERY_MIN_MS = 1000
 local POSITIONS_EVERY_MAX_MS = 10000
 local POSITIONS_FOR_MAX_MS = 60000
+-- The most resources that can hold a stop at once.
+local HOLDS_MAX = 64
+local HOLDS_SETTLE_MS = 500
 
 -- The events Observer may raise, and nothing else.
 local EVENTS = {
@@ -191,6 +194,84 @@ exports('clearPlayerLabel', function(player)
         return false, 'notConnected'
     end
     labelChanged(id, false, GetInvokingResource())
+    return true
+end)
+
+local cfgRan = false
+
+-- The resources that hold the stop: Observer has FXServer quit once each has released it or
+-- stopped, or once the owner's limit has passed.
+local holds = {}
+local holdsCount = 0
+-- Holders that stopped during the stop, which then release nothing: told once.
+local holdsStopped = {}
+local holdsPending = false
+-- From the first observer:shuttingDown until FXServer quits.
+local stopping = false
+
+local function reportHolds()
+    holdsPending = false
+    local holding = {}
+    for resource in pairs(holds) do
+        holding[#holding + 1] = resource
+    end
+    table.sort(holding)
+    local stopped = holdsStopped
+    holdsStopped = {}
+    report('holds', {
+        stopping = stopping,
+        holding = #holding > 0 and holding or nil,
+        stopped = #stopped > 0 and stopped or nil,
+    })
+end
+
+-- During a stop each release goes out at once: Observer waits on it. Before one, the resources
+-- that ask as the server starts are told together, after `ready`.
+local function holdsChanged()
+    if not cfgRan then
+        return
+    end
+    if stopping then
+        reportHolds()
+        return
+    end
+    if not holdsPending then
+        holdsPending = true
+        SetTimeout(HOLDS_SETTLE_MS, reportHolds)
+    end
+end
+
+-- Every stop of the server waits for the calling resource from now on, until it releases the stop
+-- or stops itself. Observer waits no longer than the owner's limit, and names who held past it.
+exports('holdShutdown', function()
+    local resource = GetInvokingResource()
+    if type(resource) ~= 'string' or resource == '' then
+        return false, 'invalid'
+    end
+    if holds[resource] then
+        return true
+    end
+    if holdsCount >= HOLDS_MAX then
+        return false, 'tooMany'
+    end
+    holds[resource] = true
+    holdsCount = holdsCount + 1
+    holdsChanged()
+    return true
+end)
+
+-- The calling resource has saved what it had to: the stop under way no longer waits for it.
+exports('releaseShutdown', function()
+    if not stopping then
+        return false, 'notStopping'
+    end
+    local resource = GetInvokingResource()
+    if type(resource) ~= 'string' or not holds[resource] then
+        return false, 'notHeld'
+    end
+    holds[resource] = nil
+    holdsCount = holdsCount - 1
+    holdsChanged()
     return true
 end)
 
@@ -995,13 +1076,13 @@ AddEventHandler('onResourceListRefresh', function()
     CreateThread(reportResourceList)
 end)
 
-local cfgRan = false
-
 -- The thread first runs once the cfg has run, so `ready` means its resources were started.
 CreateThread(function()
     cfgRan = true
     report('ready', { contractVersion = CONTRACT_VERSION })
     report('resources', { started = startedResources() })
+    -- Always, even with none: a bridge started again holds nothing of what the one before held.
+    reportHolds()
     reportResourceList()
     reportPlayers()
     while true do
@@ -1044,6 +1125,15 @@ AddEventHandler('onResourceStart', function(name)
 end)
 AddEventHandler('onResourceStop', function(name)
     resourcesChanged(name, 'stop')
+    -- A stopped resource saves nothing more: no stop waits for it.
+    if holds[name] then
+        holds[name] = nil
+        holdsCount = holdsCount - 1
+        if stopping then
+            holdsStopped[#holdsStopped + 1] = name
+        end
+        holdsChanged()
+    end
 end)
 
 local function secondsUntil(at)
@@ -1136,11 +1226,20 @@ RegisterCommand('observer_cmd', function(source, args)
     if not EVENTS[command.event] then
         return
     end
+    local stop = command.event == 'shuttingDown'
+    if stop then
+        stopping = true
+    end
     TriggerEvent('observer:' .. command.event, command.payload)
     local txadmin = TXADMIN[command.event]
     if txadmin and txadminEvents() then
         for _, event in ipairs(txadmin(command.payload)) do
             TriggerEvent(event[1], event[2])
         end
+    end
+    if stop then
+        -- Who holds the stop once every handler has run up to its first wait: Observer counts on
+        -- this report to know the event was raised.
+        reportHolds()
     end
 end, true)

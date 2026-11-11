@@ -75,6 +75,8 @@ const status = (start: StartProgress): ServerStatus => ({
     name: null,
     port: null,
     start,
+    stopHolders: [],
+    stop: null,
 });
 
 const card = (start: StartProgress = START, me: Me = OWNER) =>

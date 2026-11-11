@@ -104,6 +104,7 @@ impl Lab {
                     extra_arguments: Vec::new(),
                     hang_detection: true,
                     hang_timeout_seconds: 360,
+                    stop_hold_seconds: 60,
                 }),
             },
         )
@@ -587,6 +588,7 @@ async fn the_processes_an_earlier_observer_left_running_end_when_the_next_one_st
                     extra_arguments: Vec::new(),
                     hang_detection: true,
                     hang_timeout_seconds: 360,
+                    stop_hold_seconds: 60,
                 }),
             },
         })

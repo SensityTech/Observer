@@ -181,6 +181,7 @@ impl Lab {
             }],
             hang_detection: true,
             hang_timeout_seconds: 360,
+            stop_hold_seconds: 60,
         };
         let launch = ServerLaunch {
             build: dir.path().join("build"),
@@ -199,6 +200,7 @@ impl Lab {
             quit: Duration::from_secs(3),
             shortened: Duration::from_secs(1),
             fatal_exit: Duration::from_secs(1),
+            hold: None,
         };
         settings.recovery = RecoveryPolicy {
             backoff: [100, 200, 300, 400]
@@ -738,4 +740,59 @@ async fn a_scheduled_restart_during_the_work_starts_it_over_with_the_launch_conf
         ]
     );
     lab.shut_down(false).await;
+}
+
+/// The backup before a restart is such work: it reads what the resources saved before they
+/// released the stop, since nothing of it begins before FXServer is gone.
+#[tokio::test]
+async fn the_work_before_a_restart_begins_once_the_resources_that_held_the_stop_released_it() {
+    let work = Work::new([]);
+    let mut lab = Lab::tuned(&work, |settings| {
+        settings.stop.hold = Some(Duration::from_secs(10));
+        let launch = settings.launch.as_mut().unwrap();
+        for (name, value) in [("fake_holders", "inventory"), ("fake_release_ms", "800")] {
+            launch.settings.extra_arguments.push(ExtraArgument {
+                name: name.to_owned(),
+                value: value.to_owned(),
+            });
+        }
+    })
+    .await;
+    let cfg = Path::new(&lab.launch.settings.data_path).join("server.cfg");
+    fs::write(&cfg, fs::read_to_string(&cfg).unwrap() + "ensure inventory\n").unwrap();
+    lab.supervisor.start("test").await.unwrap();
+    lab.state(State::Online).await;
+    let mut status = lab.supervisor.status();
+    timeout(WAIT, status.wait_for(|status| status.holders == ["inventory"]))
+        .await
+        .expect("the bridge never told who holds the stop")
+        .unwrap();
+    let asked = Instant::now();
+
+    lab.supervisor.restart_scheduled("observer").await.unwrap();
+    lab.state(State::Stopping).await;
+    lab.state(State::Online).await;
+
+    let seen = work.seen();
+    assert_eq!(seen.len(), 2);
+    assert!(
+        seen[1].started.duration_since(asked) >= Duration::from_millis(800),
+        "the work began before the release"
+    );
+    let console = lab.console();
+    let position = |needle: &str| {
+        console
+            .iter()
+            .position(|(_, _, text)| text.contains(needle))
+            .unwrap_or_else(|| panic!("no {needle:?} in {console:#?}"))
+    };
+    let released = position("inventory released the stop after");
+    let quit = position("-> Quitting: scheduled");
+    let exited = position("FXServer exited");
+    let checked = position("checked for generation 2");
+    assert!(
+        released < quit && quit < exited && exited < checked,
+        "{console:#?}"
+    );
+    lab.shut_down(true).await;
 }

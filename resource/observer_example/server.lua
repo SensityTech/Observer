@@ -1,10 +1,11 @@
 -- Listens to the server events of Observer's integration contract (resource/CONTRACT.md) and prints
--- each one with its fields, and gives players labels for Observer's panel from the console. It
--- shows nothing to players: the comments mark where your own notifications, cancellation notices,
--- saves, labels and the staff's announcements and messages would go.
+-- each one with its fields, holds each stop until its saves are done, and gives players labels for
+-- Observer's panel from the console. It shows nothing to players: the comments mark where your own
+-- notifications, cancellation notices, saves, labels and the staff's announcements and messages
+-- would go.
 
 -- The contract this resource was written for.
-local CONTRACT_VERSION = 6
+local CONTRACT_VERSION = 7
 
 local function log(text)
     print(('[observer_example] %s'):format(text))
@@ -38,7 +39,21 @@ CreateThread(function()
         log(('^3Observer speaks contract %s, this resource was written for %d^7'):format(
             show(version), CONTRACT_VERSION))
     end
+    -- Once, as the resource starts: from now on every stop waits until this resource has released
+    -- it, within the limit the owner set. Holding a stop came with contract 7.
+    if type(version) == 'number' and version >= 7 then
+        local ok, refused = exports[bridge]:holdShutdown()
+        if not ok then
+            log('the stop is not held: ' .. tostring(refused))
+        end
+    end
 end)
+
+-- Stands for your saves: it takes observer_example_save_ms milliseconds, 0 by default. Set the
+-- convar to try a stop that waits, and past the owner's limit to see Observer quit without it.
+local function save()
+    Wait(GetConvarInt('observer_example_save_ms', 0))
+end
 
 -- AddEventHandler only: never RegisterNetEvent these names, or clients could raise them.
 
@@ -58,8 +73,15 @@ AddEventHandler('observer:restartRescheduled', function(payload)
 end)
 
 AddEventHandler('observer:shuttingDown', function(payload)
-    log('shuttingDown ' .. fields(payload, { 'delayMs', 'reason', 'by' }))
-    -- Your saves go here: FXServer quits in payload.delayMs milliseconds.
+    log('shuttingDown ' .. fields(payload, { 'delayMs', 'maxDelayMs', 'reason', 'by' }))
+    -- Your saves go here: FXServer quits once this resource has released the stop, and after
+    -- payload.maxDelayMs milliseconds whatever it still saves. Release even when a save failed.
+    local saved, failure = pcall(save)
+    if not saved then
+        log('the save failed: ' .. tostring(failure))
+    end
+    local ok, refused = exports[GetConvar('observer_bridge', '')]:releaseShutdown()
+    log(ok and 'released the stop' or ('the stop was not released: ' .. tostring(refused)))
 end)
 
 AddEventHandler('observer:startChanges', function(payload)

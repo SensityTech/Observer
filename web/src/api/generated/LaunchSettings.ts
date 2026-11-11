@@ -38,4 +38,10 @@ hangDetection: boolean,
  * `MIN_HANG_TIMEOUT_SECONDS` to `MAX_HANG_TIMEOUT_SECONDS`. A change applies at once, to a
  * running server too, and the silence then counts from the change.
  */
-hangTimeoutSeconds: number, };
+hangTimeoutSeconds: number, 
+/**
+ * How long a stop waits, at most, for the resources that hold it through the bridge before
+ * FXServer quits anyway: from `MIN_STOP_HOLD_SECONDS` to `MAX_STOP_HOLD_SECONDS`. A change
+ * applies from the next stop. Settings saved before it existed have the default.
+ */
+stopHoldSeconds: number, };

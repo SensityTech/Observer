@@ -961,6 +961,7 @@ fn hitches_and_barks_are_counted_per_slot_while_a_run_exists() {
                     extra_arguments: Vec::new(),
                     hang_detection: true,
                     hang_timeout_seconds: 360,
+                    stop_hold_seconds: 60,
                 }),
             },
         ),

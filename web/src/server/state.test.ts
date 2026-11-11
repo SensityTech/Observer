@@ -5,7 +5,7 @@ import type { ServerStatus } from '../api/generated/ServerStatus';
 import { DEFAULT_LAUNCH } from '../api/launch';
 import { ARTIFACTS } from '../artifacts/fixtures';
 import { en } from '../i18n/en';
-import { blocked, buildFact, causeText, commandLine, hangAdvice } from './state';
+import { blocked, buildFact, causeText, commandLine, hangAdvice, waitedFor } from './state';
 
 const status = (overrides: Partial<ServerStatus>): ServerStatus => ({
     state: 'stopped',
@@ -21,6 +21,8 @@ const status = (overrides: Partial<ServerStatus>): ServerStatus => ({
     name: null,
     port: null,
     start: null,
+    stopHolders: [],
+    stop: null,
     ...overrides,
 });
 
@@ -76,6 +78,27 @@ describe('commandLine', () => {
         for (const state of ['crashed', 'crashLoop'] as const) {
             expect(commandLine(en, status({ state }))).toEqual({ open: false, note: en.console.notRunning });
         }
+    });
+});
+
+/** A stop that waits for `holding`. */
+const stop = (holding: string[]) => ({
+    since: '2026-10-28T14:00:00Z',
+    limitAt: '2026-10-28T14:01:00Z',
+    holding,
+    released: [],
+});
+
+describe('waitedFor', () => {
+    it('should count the resources a stop waits for, and say nothing of a stop that waits for none', () => {
+        const stopping = (holding: string[] | null) =>
+            status({ state: 'stopping', stop: holding === null ? null : stop(holding) });
+
+        expect(waitedFor(en, stopping(['qb-inventory']))).toBe('waiting for 1 resource');
+        expect(waitedFor(en, stopping(['esx_vehicleshop', 'qb-inventory']))).toBe('waiting for 2 resources');
+        expect(waitedFor(en, stopping([]))).toBeNull();
+        expect(waitedFor(en, stopping(null))).toBeNull();
+        expect(waitedFor(en, status({ state: 'online', stopHolders: ['qb-inventory'] }))).toBeNull();
     });
 });
 

@@ -1,9 +1,10 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { act, cleanup, fireEvent, render, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import type { LaunchReadiness } from '../api/generated/LaunchReadiness';
 import type { ServerState } from '../api/generated/ServerState';
+import type { ServerStatus } from '../api/generated/ServerStatus';
 import { MeContext } from '../auth/me';
 import { en } from '../i18n/en';
 import { I18nProvider } from '../i18n/I18nProvider';
@@ -14,7 +15,7 @@ import { ServerControls } from './ServerControls';
 
 const settle = () => act(() => new Promise((resolve) => setTimeout(resolve, 0)));
 
-const status = (state: ServerState, launch: LaunchReadiness = 'ready') => ({
+const status = (state: ServerState, launch: LaunchReadiness = 'ready'): ServerStatus => ({
     state,
     cause: null,
     since: '2026-10-28T14:00:00Z',
@@ -25,15 +26,41 @@ const status = (state: ServerState, launch: LaunchReadiness = 'ready') => ({
     players: null,
     restartAt: null,
     launch,
+    name: null,
+    port: null,
     start: null,
+    stopHolders: [],
+    stop: null,
 });
 
-/** Dashboard and server control, and with them the permission to send announcements. */
+/**
+ * Dashboard and server control, with them the permission to send announcements, and the dashboard
+ * alone.
+ */
 const OPERATOR = '9';
 const ANNOUNCER = '40000009';
+const VIEWER = '1';
 
-/** The controls of an operator who may start and stop FXServer, in `state`. */
-const controls = async (state: ServerState, launch?: LaunchReadiness, permissions = OPERATOR) => {
+/** A stop that began 14 s ago and waits 46 s more, at most, for `holding`. */
+const held = (holding: string[]): Partial<ServerStatus> => ({
+    stop: {
+        since: new Date(Date.now() - 14_000).toISOString(),
+        limitAt: new Date(Date.now() + 46_500).toISOString(),
+        holding,
+        released: [],
+    },
+});
+
+/**
+ * The controls of an operator who may start and stop FXServer, in `state`; `permissions` changes
+ * who looks at them, `more` the status they open on.
+ */
+const controls = async (
+    state: ServerState,
+    launch?: LaunchReadiness,
+    permissions = OPERATOR,
+    more: Partial<ServerStatus> = {},
+) => {
     let socket: SocketEvents | undefined;
     const live = new Realtime({
         ticket: async () => 'ticket',
@@ -69,7 +96,11 @@ const controls = async (state: ServerState, launch?: LaunchReadiness, permission
     act(() => {
         socket?.message(JSON.stringify({ type: 'hello', connectionId: 1, contract: 1 }));
         socket?.message(
-            JSON.stringify({ type: 'snapshot', topic: 'server.status', data: status(state, launch) }),
+            JSON.stringify({
+                type: 'snapshot',
+                topic: 'server.status',
+                data: { ...status(state, launch), ...more },
+            }),
         );
     });
     const changeTo = (next: ServerState) =>
@@ -94,6 +125,105 @@ describe('ServerControls', () => {
     afterEach(() => {
         cleanup();
         vi.unstubAllGlobals();
+    });
+
+    it('should name the resources a stop waits for and let whoever controls the server quit now', async () => {
+        const fetch = vi.fn(async () => new Response(null, { status: 204 }));
+        vi.stubGlobal('fetch', fetch);
+        const holding = ['esx_vehicleshop', 'qb-inventory'];
+        const { getByRole, getByText, queryByRole, live, state } = await controls(
+            'stopping',
+            'ready',
+            OPERATOR,
+            held(holding),
+        );
+
+        expect(getByText(new RegExp(`^${en.controls.waiting(holding)} `)).textContent).toBe(
+            `${en.controls.waiting(holding)} ${en.controls.quitsIn('46 s')}`,
+        );
+        fireEvent.click(getByRole('button', { name: en.controls.quitNow }));
+        const dialog = getByRole('alertdialog', { name: en.controls.quitNowTitle });
+        expect(dialog.textContent).toContain(en.controls.quitNowBody(holding));
+        fireEvent.click(
+            [...dialog.querySelectorAll('button')].find(
+                (button) => button.textContent === en.controls.quitNow,
+            ) as HTMLButtonElement,
+        );
+
+        await waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
+        const [url, init] = fetch.mock.calls[0] as unknown as [string, RequestInit];
+        expect([url, init.method]).toEqual(['/api/servers/default/stop/now', 'POST']);
+        // Once FXServer has quit, nothing of the wait is left.
+        state('stopped');
+        expect(queryByRole('button', { name: en.controls.quitNow })).toBeNull();
+        live.stop();
+    });
+
+    it('should show the wait without its way out to an account that cannot stop the server', async () => {
+        const { getByText, queryByRole, live } = await controls(
+            'stopping',
+            'ready',
+            VIEWER,
+            held(['qb-inventory']),
+        );
+
+        expect(getByText(new RegExp(`^${en.controls.waiting(['qb-inventory'])} `))).not.toBeNull();
+        expect(queryByRole('button', { name: en.controls.quitNow })).toBeNull();
+        live.stop();
+    });
+
+    it('should say nothing of a wait once every resource released the stop', async () => {
+        const { queryByText, queryByRole, live } = await controls('stopping', 'ready', OPERATOR, {
+            stop: {
+                since: new Date(Date.now() - 2_000).toISOString(),
+                limitAt: new Date(Date.now() + 58_000).toISOString(),
+                holding: [],
+                released: [{ resource: 'qb-inventory', afterMs: 1800 }],
+            },
+        });
+
+        expect(queryByText(/release the stop/)).toBeNull();
+        expect(queryByRole('button', { name: en.controls.quitNow })).toBeNull();
+        live.stop();
+    });
+
+    it('should tell who holds the stop before a stop or a restart is confirmed', async () => {
+        const holders = ['qb-inventory'];
+        const { getByRole, getByText, live } = await controls('online', 'ready', OPERATOR, {
+            stopHolders: holders,
+        });
+
+        fireEvent.click(getByRole('button', { name: en.controls.restart }));
+
+        expect(getByRole('alertdialog', { name: en.controls.restartTitle })).not.toBeNull();
+        expect(getByText(en.controls.heldBy(holders))).not.toBeNull();
+        live.stop();
+    });
+
+    it('should say why the wait was not skipped', async () => {
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(async () => Response.json({ code: 'stop_not_held' }, { status: 409 })),
+        );
+        const { getByRole, findByRole, live } = await controls(
+            'stopping',
+            'ready',
+            OPERATOR,
+            held(['qb-inventory']),
+        );
+
+        fireEvent.click(getByRole('button', { name: en.controls.quitNow }));
+        const dialog = getByRole('alertdialog', { name: en.controls.quitNowTitle });
+        fireEvent.click(
+            [...dialog.querySelectorAll('button')].find(
+                (button) => button.textContent === en.controls.quitNow,
+            ) as HTMLButtonElement,
+        );
+
+        expect((await findByRole('alert')).textContent).toBe(
+            en.controls.failed(en.controls.quitNow, en.errors.stop_not_held),
+        );
+        live.stop();
     });
 
     it('should offer Restart while the server runs, and Start in its place while it does not', async () => {

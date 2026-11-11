@@ -11,10 +11,11 @@ server events, and your own resources decide what to do with them.
 > **Status: proof of concept.** Settings, the panel and the integration contract may still change
 > between versions.
 
-- **Supervision.** Start, stop and restart with a graceful stop. Crashes and hangs are detected and
-  recovered from, a crash loop stops the retries (5 failures within 10 minutes, or 5 starts in a row
-  that never got ready), and FXServer's whole process tree stops with it. A server stuck for 6 minutes
-  is restarted; the delay can be raised, or hang detection turned off.
+- **Supervision.** Start, stop and restart with a graceful stop, which waits for the resources that
+  ask it to until they have saved. Crashes and hangs are detected and recovered from, a crash loop
+  stops the retries (5 failures within 10 minutes, or 5 starts in a row that never got ready), and
+  FXServer's whole process tree stops with it. A server stuck for 6 minutes is restarted; the delay
+  can be raised, or hang detection turned off.
 - **Live console.** Search and filters, commands gated by permission, secrets masked, daily log files.
 - **Resources.** Every resource of the running server with its state, live, and a start, a stop or a
   restart of each, the resources that stop with it named before you confirm.
@@ -217,6 +218,30 @@ detection back on never kills a server that was silent before. A crash is anothe
 FXServer's process exits on its own, Observer restarts it, whatever these settings say, until a crash loop
 stops the retries.
 
+### Stops that wait for your resources
+
+Before FXServer quits, Observer raises `observer:shuttingDown` in your resources, waits 5 seconds,
+then sends `quit`. A resource that saves for longer can hold the stop: it calls the bridge's
+`holdShutdown` export once, as it starts, and `releaseShutdown` each time it has saved. Observer then
+sends `quit` once every resource that holds the stop has released it. The
+[integration contract](resource/CONTRACT.md#holding-a-stop) has the two calls and each case.
+
+The wait has a limit, **Server → Wait for resources at a stop**: 60 seconds by default, from 5
+seconds to 10 minutes, the owner's to set, applied from the next stop. Past it FXServer quits
+anyway, and the console and the audit log name the resources that had not released the stop. Set
+to 5 seconds, no resource is waited for longer than before.
+
+While a stop waits, the status bar above every page names the resources it waits for and how long
+is left, and whoever may start and stop the server can have FXServer **Quit now**; the audit log
+keeps who did, with the resources left behind. The launch settings list which resources of the
+running server hold its stops.
+
+This holds for every graceful stop: a stop or a restart from the panel or the host's window, the
+schedule's restarts and the single ones someone planned, a build applied by a restart, and Observer
+stopping, for an update or by itself. It does not hold when there is no one to wait for or no time:
+after a crash, on a server that stopped responding, and when Windows closes Observer's console or
+ends the session, which leaves a few seconds only.
+
 ## systemd
 
 `observer service print-unit` prints a unit that runs this binary with this configuration, as the
@@ -238,7 +263,9 @@ The unit:
   update (`RestartForceExitStatus=75`, `SuccessExitStatus=75`); a unit printed before updates
   existed restarts it too, as a failure;
 - on stop, sends SIGTERM to Observer alone, which stops FXServer gracefully, then the rest of the
-  group (`KillMode=mixed`, `TimeoutStopSec=45`);
+  group (`KillMode=mixed`, `TimeoutStopSec=45`). While resources hold the stop, Observer asks
+  systemd for the time it waits (`EXTEND_TIMEOUT_USEC`, systemd 236 or later), so a unit already
+  installed needs no change; an older systemd ends the stop after its 45 seconds;
 - makes `/usr`, `/boot`, `/efi` and `/etc` read-only (`ProtectSystem=full`), with a private `/tmp`:
   keep Observer's folder and the server's elsewhere, such as `/srv` or a home folder.
 
@@ -981,7 +1008,8 @@ Observer can back up the game server's database, the one oxmysql or mysql-async 
   are copied as the dump reaches them.
 - **When**: before the schedule's restarts and the single restarts someone planned (the default), or
   before every restart; at fixed times, in the restart schedule's zone; and on request. The backup
-  before a restart is dumped once FXServer has stopped, when resources have saved what they held,
+  before a restart is dumped once FXServer has stopped, when resources have saved what they held
+  and released the stop if they hold it,
   and FXServer waits for it one minute at most by default (up to ten): past that it starts anyway,
   the dump goes on, and the run says so. Copies go out while FXServer runs. A crash restart never waits
   for a backup.
@@ -1014,6 +1042,10 @@ files of the example resource. Every section has a link of its own, and the pane
 an event, an export or one of txAdmin's events by its name. Any account reads it. To the accounts that
 see the dashboard, it also says what this server does now: the contract's version, the name the bridge
 took for this start, and whether txAdmin's events are raised, now and from the next start.
+
+A resource that saves when the server stops can hold the stop until it has saved, through the
+bridge's `holdShutdown` and `releaseShutdown` exports: see
+[Stops that wait for your resources](#stops-that-wait-for-your-resources).
 
 Your resources can also give each connected player a label, a roleplay character's name or an ID of
 your own, through the bridge's `setPlayerLabel` export. The panel shows it beside the player's FiveM

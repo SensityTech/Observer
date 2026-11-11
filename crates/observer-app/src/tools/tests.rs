@@ -70,6 +70,7 @@ impl Lab {
                 extra_arguments: Vec::new(),
                 hang_detection: true,
                 hang_timeout_seconds: 360,
+                stop_hold_seconds: 60,
             },
             version: 1,
             legacy_build_path: None,
@@ -92,6 +93,8 @@ impl Lab {
             name: None,
             port: None,
             start: None,
+            stop_holders: Vec::new(),
+            stop: None,
         });
         let tools = Tools::new(ToolsSetup {
             db: db.clone(),
@@ -190,6 +193,7 @@ impl Lab {
                     extra_arguments: Vec::new(),
                     hang_detection: true,
                     hang_timeout_seconds: 360,
+                    stop_hold_seconds: 60,
                 },
             },
             layout: Layout::new(build, Flavour::HOST),

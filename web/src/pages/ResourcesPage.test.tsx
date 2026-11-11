@@ -93,6 +93,8 @@ const STARTING: ServerStatus = {
         stuckAt: null,
         extensionMinutes: 15,
     },
+    stopHolders: [],
+    stop: null,
 };
 
 const settle = () => act(() => new Promise((resolve) => setTimeout(resolve, 0)));

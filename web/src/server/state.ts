@@ -90,6 +90,12 @@ export const causeText = (t: Messages, status: ServerStatus): string | null => {
     }
 };
 
+/** How many resources the stop under way waits for, or null when it waits for none. */
+export const waitedFor = (t: Messages, status: ServerStatus): string | null => {
+    const holding = status.state === 'stopping' ? (status.stop?.holding.length ?? 0) : 0;
+    return holding === 0 ? null : t.status.waitingFor(holding);
+};
+
 /**
  * What a hang verdict leaves the owner, who alone reads the launch settings: the delay that ran
  * out and where it is set. A first start that builds caches stays silent past the default, and

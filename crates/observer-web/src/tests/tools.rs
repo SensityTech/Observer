@@ -49,6 +49,7 @@ impl Server {
                 extra_arguments: Vec::new(),
                 hang_detection: true,
                 hang_timeout_seconds: 360,
+                stop_hold_seconds: 60,
             },
             version: 1,
             legacy_build_path: None,

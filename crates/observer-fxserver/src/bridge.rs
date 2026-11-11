@@ -1,6 +1,6 @@
 //! The bridge resource Observer installs in every build: it turns Observer's commands into
-//! server events, and reports the heartbeat, readiness, started resources, the JS heap and the
-//! players back through the structured trace channel. The resource lives in `resource/observer`;
+//! server events, and reports the heartbeat, readiness, started resources, the JS heap, the
+//! players and the resources that hold a stop back through the structured trace channel. The resource lives in `resource/observer`;
 //! in a build it takes a name drawn for each start of FXServer.
 
 use std::fs;
@@ -32,7 +32,12 @@ pub(crate) const REPORT_TYPE: &str = "observer";
 
 /// The version of the server events the bridge raises; it must match `CONTRACT_VERSION` in
 /// `server.lua`.
-pub const CONTRACT_VERSION: u32 = 6;
+pub const CONTRACT_VERSION: u32 = 7;
+
+/// The most resources that can hold a stop at once; it must match `HOLDS_MAX` in `server.lua`.
+pub const MAX_HOLDERS: usize = 64;
+/// The longest name of a resource that holds a stop Observer keeps, in characters.
+const MAX_HOLDER_CHARS: usize = 64;
 
 const FILES: [(&str, &str); 3] = [
     (
@@ -150,9 +155,11 @@ pub enum BridgeEvent {
         reason: RestartSource,
     },
     /// Raised again, with the time left, when a stop overtakes a restart before `quit`: the
-    /// latest one says what follows.
+    /// latest one says what follows. `quit` comes after `delay_ms` once no resource holds the
+    /// stop, and after `max_delay_ms` whoever still does.
     ShuttingDown {
         delay_ms: u64,
+        max_delay_ms: u64,
         reason: StopReason,
         by: String,
     },
@@ -752,6 +759,30 @@ pub enum Report {
         last: bool,
         resources: Vec<Reported>,
     },
+    /// The resources that hold the stop, all of them, whenever that changes and once the bridge
+    /// is ready. `stopping` once the bridge raised `observer:shuttingDown`: from then on, a
+    /// resource that left the list released the stop, or stopped when `stopped` names it.
+    Holds {
+        #[serde(default)]
+        stopping: bool,
+        #[serde(default)]
+        holding: Vec<String>,
+        #[serde(default)]
+        stopped: Vec<String>,
+    },
+}
+
+/// The name of a resource that holds a stop, as the console, the audit log and the panel may
+/// show it: FXServer gives the folder's name, which anyone who writes to the server folder chose.
+/// Control characters go, and what is left is cut at 64 characters; `None` when nothing is left.
+pub fn holder_name(name: &str) -> Option<String> {
+    let clean: String = name
+        .chars()
+        .filter(|character| !character.is_control())
+        .take(MAX_HOLDER_CHARS)
+        .collect();
+    let clean = clean.trim();
+    (!clean.is_empty()).then(|| clean.to_owned())
 }
 
 impl Report {
@@ -802,6 +833,7 @@ mod tests {
             },
             BridgeEvent::ShuttingDown {
                 delay_ms: 0,
+                max_delay_ms: 0,
                 reason: StopReason::Stop,
                 by: String::new(),
             },
@@ -1784,7 +1816,13 @@ mod tests {
 
         assert_eq!(
             exports,
-            ["getContractVersion", "setPlayerLabel", "clearPlayerLabel"]
+            [
+                "getContractVersion",
+                "setPlayerLabel",
+                "clearPlayerLabel",
+                "holdShutdown",
+                "releaseShutdown"
+            ]
         );
         for export in exports {
             let call = format!("]:{export}(");
@@ -1818,9 +1856,76 @@ mod tests {
     }
 
     #[test]
+    fn the_contract_gives_the_holds_refusals_and_the_bridge_keeps_as_many_holders_as_observer() {
+        let lua = FILES[1].1;
+        let start = CONTRACT
+            .find("## Holding a stop")
+            .expect("CONTRACT.md documents holding a stop");
+        let section = &CONTRACT[start..];
+        let section = &section[..section[1..].find("\n## ").map_or(section.len(), |end| end + 1)];
+
+        assert!(lua.contains(&format!("local HOLDS_MAX = {MAX_HOLDERS}\n")));
+        assert!(section.contains(&format!("{MAX_HOLDERS} resources")));
+        for refusal in ["invalid", "tooMany", "notStopping", "notHeld"] {
+            assert!(lua.contains(&format!("return false, '{refusal}'")), "{refusal}");
+            assert!(section.contains(&format!("`{refusal}`")), "{refusal}");
+        }
+        for field in ["delayMs", "maxDelayMs"] {
+            assert!(section.contains(&format!("`{field}`")), "{field}");
+        }
+        assert!(lua.contains("report('holds', {"));
+    }
+
+    #[test]
+    fn a_holds_report_tells_who_holds_the_stop_and_who_stopped() {
+        let report = |payload: Value| {
+            Report::from_trace(
+                &TraceKind::Script {
+                    resource: BRIDGE.to_owned(),
+                    payload,
+                },
+                BRIDGE,
+            )
+        };
+
+        assert_eq!(
+            report(json!({
+                "type": "observer", "kind": "holds", "stopping": true,
+                "holding": ["qb-inventory"], "stopped": ["garage"]
+            })),
+            Some(Report::Holds {
+                stopping: true,
+                holding: vec!["qb-inventory".to_owned()],
+                stopped: vec!["garage".to_owned()],
+            })
+        );
+        // No one holds: the bridge leaves an empty list out.
+        assert_eq!(
+            report(json!({ "type": "observer", "kind": "holds", "stopping": false })),
+            Some(Report::Holds {
+                stopping: false,
+                holding: Vec::new(),
+                stopped: Vec::new(),
+            })
+        );
+    }
+
+    #[test]
+    fn a_holders_name_loses_its_control_characters_and_what_passes_its_length() {
+        assert_eq!(holder_name("qb-inventory").as_deref(), Some("qb-inventory"));
+        assert_eq!(
+            holder_name("bad\u{1b}[31m\r\nname").as_deref(),
+            Some("bad[31mname")
+        );
+        assert_eq!(holder_name(&"n".repeat(80)).map(|name| name.len()), Some(64));
+        assert_eq!(holder_name(" \t\n"), None);
+    }
+
+    #[test]
     fn an_event_travels_as_lowercase_hex_json() {
         let event = BridgeEvent::ShuttingDown {
             delay_ms: 5000,
+            max_delay_ms: 60_000,
             reason: StopReason::Restart,
             by: "alice\";\r\n\\".to_owned(),
         };
@@ -1835,7 +1940,9 @@ mod tests {
             decode(&hex),
             json!({
                 "event": "shuttingDown",
-                "payload": { "delayMs": 5000, "reason": "restart", "by": "alice\";\r\n\\" }
+                "payload": {
+                    "delayMs": 5000, "maxDelayMs": 60000, "reason": "restart", "by": "alice\";\r\n\\"
+                }
             })
         );
     }

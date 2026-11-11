@@ -37,6 +37,7 @@ const LISTS = new Set<string>([
     'excluded',
     'hidden',
     'dependants',
+    'resources',
 ]);
 const NESTED = new Set<string>(['scheduled', 'dropped']);
 /** The schedule's settings counted in minutes. */
@@ -206,7 +207,12 @@ const word = (t: Messages, format: Format, key: string, value: unknown): string 
         if (key === 'generation') {
             return t.diagnostics.processes.generation(value);
         }
-        if (key === 'lateBySeconds' || key === 'everySeconds') {
+        if (
+            key === 'lateBySeconds' ||
+            key === 'everySeconds' ||
+            key === 'waitedSeconds' ||
+            key === 'stopHoldSeconds'
+        ) {
             return t.audit.seconds(format.number(value));
         }
         // Kept in seconds, in the minutes the launch settings take it in.
@@ -300,6 +306,9 @@ const word = (t: Messages, format: Format, key: string, value: unknown): string 
     }
     if (key === 'reason' && has(t.audit.missReasons, value)) {
         return t.audit.missReasons[value];
+    }
+    if (key === 'reason' && has(t.audit.holdReasons, value)) {
+        return t.audit.holdReasons[value];
     }
     if (key === 'reason' && has(t.audit.dropReasons, value)) {
         return t.audit.dropReasons[value];

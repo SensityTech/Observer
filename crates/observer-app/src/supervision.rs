@@ -24,8 +24,8 @@ use observer_domain::schedule::RestartSource;
 use observer_domain::server::{
     AssetMemory, CommandAck, CommandRefusal, ConsoleLine, ConsoleSnapshot, Delivery, HangCause,
     HealthProblem, HeavyAsset, LINE_MASKED, LINE_NO_EOL, LINE_TRUNCATED, LaunchReadiness, LineKind, LogFile,
-    MissingFile, PlayerCount, ServerState, ServerStatus, SlowResource, StartCommand, StartProgress,
-    StartWarnings, StartedResource, StateCause,
+    MissingFile, PlayerCount, ReleasedHold, ServerState, ServerStatus, SlowResource, StartCommand,
+    StartProgress, StartWarnings, StartedResource, StateCause, StopProgress,
 };
 use observer_fxserver::bridge::BridgeEvent;
 use observer_fxserver::console::{self as fx_console, ConsoleHub, ConsoleLog, LineFlags};
@@ -34,7 +34,7 @@ use observer_fxserver::launch::ServerLaunch;
 use observer_fxserver::start as fx_start;
 use observer_fxserver::stdin::{self, StdinError, UserCommand};
 use observer_fxserver::supervisor::{
-    self as fx, Cause, ControlError, EventKind, Settings, State, Supervisor,
+    self as fx, Cause, ControlError, EventKind, HoldEnd, Settings, State, Supervisor,
 };
 use observer_store::Database;
 use observer_store::artifacts::{self as stored_artifacts, ArtifactState};
@@ -467,6 +467,22 @@ impl Supervision {
         extended.map_err(control_error)
     }
 
+    /// Has the stop under way go on without the resources that still hold it: FXServer quits
+    /// once the notice every stop gives has passed. The audit log keeps who did, and which
+    /// resources had not released the stop.
+    pub async fn stop_now(&self, caller: &Caller) -> Result<(), Error> {
+        let unreleased = self
+            .inner
+            .supervisor
+            .quit_now(&caller.username)
+            .await
+            .map_err(control_error)?;
+        let record = Record::by(caller, AuditAction::ServerStopHoldSkipped)
+            .target(Servers::DEFAULT)
+            .details(json!({ "resources": unreleased }));
+        self.audit(record).await
+    }
+
     /// Stops FXServer gracefully and starts it again with the stored settings, which must be fit
     /// to start before anything stops.
     pub async fn restart_server(&self, caller: &Caller) -> Result<(), Error> {
@@ -837,8 +853,9 @@ impl Supervision {
 
 /// Keeps the panel's status in step with the supervisor's, the cause of its last change of state
 /// and the stored launch settings, which it hands to the supervisor as they change. A tripped
-/// crash loop breaker goes to the audit log: the server stays down until someone acts. What the
-/// cfg of a run that starts does against Observer goes to the console.
+/// crash loop breaker goes to the audit log: the server stays down until someone acts. So does a
+/// stop that went on without the resources that held it. What the cfg of a run that starts does
+/// against Observer goes to the console.
 #[expect(
     clippy::too_many_arguments,
     reason = "what the follower works with, each handed over once as it starts"
@@ -904,6 +921,27 @@ async fn follow(
                         restart_at = Timestamp::from_millisecond(event.at_ms)
                             .ok()
                             .and_then(|at| at.checked_add(delay).ok());
+                    }
+                    EventKind::StopHeld { unreleased, waited_ms, end } => {
+                        // Whoever skipped the wait is audited as they ask, under their own name.
+                        let reason = match end {
+                            HoldEnd::Limit => "limit",
+                            HoldEnd::Shortened => "consoleClosed",
+                            HoldEnd::Released | HoldEnd::Skipped { .. } => continue,
+                        };
+                        let record = Record::operator(ActorKind::System, AuditAction::ServerStopHoldExpired)
+                            .target(Servers::DEFAULT)
+                            .outcome(Outcome::Failure)
+                            .details(json!({
+                                "resources": unreleased,
+                                "reason": reason,
+                                "waitedSeconds": waited_ms / 1000,
+                            }));
+                        let now = clock.now();
+                        if let Err(error) = db.write(move |tx| record.write(tx, now)).await {
+                            warn!(%error, "cannot audit the stop its resources held past their limit");
+                        }
+                        continue;
                     }
                     _ => continue,
                 },
@@ -1003,6 +1041,20 @@ fn server_status(
                 stuck_at: start.stuck_at_ms.map(at),
                 extension_minutes: EXTENSION_MINUTES,
             }
+        }),
+        stop_holders: status.holders.clone(),
+        stop: status.stop.as_ref().map(|stop| StopProgress {
+            since: at(stop.since_ms),
+            limit_at: at(stop.limit_at_ms),
+            holding: stop.holding.clone(),
+            released: stop
+                .released
+                .iter()
+                .map(|(resource, after_ms)| ReleasedHold {
+                    resource: resource.clone(),
+                    after_ms: u32::try_from(*after_ms).unwrap_or(u32::MAX),
+                })
+                .collect(),
         }),
     }
 }
@@ -1110,6 +1162,7 @@ pub(crate) fn control_error(error: ControlError) -> Error {
         // The bridge is no resource of the list the page acts on.
         ControlError::Bridge => ErrorCode::ResourceNotFound.into(),
         ControlError::NotStarting => ErrorCode::ServerNotStarting.into(),
+        ControlError::NotHeld => ErrorCode::StopNotHeld.into(),
         ControlError::ShuttingDown => ErrorCode::ShuttingDown.into(),
         ControlError::Launch(error) => ApiError::new(ErrorCode::LaunchFailed)
             .with("reason", serde_json::to_value(error.failure).unwrap_or_default())

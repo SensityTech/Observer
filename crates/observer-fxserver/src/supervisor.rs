@@ -1,11 +1,15 @@
 //! The supervisor: one task that starts FXServer, watches its health, stops it gracefully, and
 //! brings it back after a crash or a hang. Every change of state goes out on an event bus.
 //!
+//! A graceful stop tells the server's resources first, through the bridge, and sends `quit` once
+//! its notice has passed and every resource that holds the stop has released it, or once the
+//! owner's limit for them has passed. A crash or a hang asks no one: there is nothing to wait for.
+//!
 //! When the settings give pre-launch work, each spawn waits for it: the server shows as starting at
 //! once, the work runs as a task while requests are still answered, and FXServer is spawned only
 //! once it has ended. A stop or a shutdown meanwhile tells it to end, waits, and spawns nothing.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
@@ -14,7 +18,7 @@ use std::sync::{Arc, Mutex, PoisonError, Weak};
 use std::time::{Duration, Instant};
 
 use observer_domain::diagnostics::ProcessKind;
-use observer_domain::launch::LaunchSettings;
+use observer_domain::launch::{DEFAULT_STOP_HOLD_SECONDS, LaunchSettings};
 use observer_domain::server::SpawnFailure;
 use observer_domain::server_data::CfgFinding;
 use observer_platform::{Exit, ExitWatch, Launch, Output, ProcessInfo, ProcessTree, TreeChange, TreeChanges};
@@ -211,6 +215,9 @@ pub struct StopTimings {
     /// After a fatal error, how long FXServer gets to exit before the tree is killed: on Windows
     /// it sometimes stays up behind an error dialog.
     pub fatal_exit: Duration,
+    /// From `observer:shuttingDown`, the longest a stop waits for the resources that hold it.
+    /// `None` takes the launch settings', which the owner sets; tests give their own.
+    pub hold: Option<Duration>,
 }
 
 impl Default for StopTimings {
@@ -220,6 +227,7 @@ impl Default for StopTimings {
             quit: Duration::from_secs(15),
             shortened: Duration::from_secs(4),
             fatal_exit: Duration::from_secs(5),
+            hold: None,
         }
     }
 }
@@ -313,6 +321,28 @@ pub enum EventKind {
     ResourceList {
         resources: usize,
     },
+    /// The wait of a stop for the resources that held it ended.
+    StopHeld {
+        /// Who had not released the stop.
+        unreleased: Vec<String>,
+        /// From `observer:shuttingDown` to the end of the wait.
+        waited_ms: u64,
+        end: HoldEnd,
+    },
+}
+
+/// How the wait for the resources that held a stop ended.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum HoldEnd {
+    /// Each of them released the stop, or stopped.
+    Released,
+    /// Their limit passed.
+    Limit,
+    /// Someone had FXServer quit without waiting for them.
+    Skipped { by: String },
+    /// The console was closing, and Windows leaves no time to wait.
+    Shortened,
 }
 
 /// A resource the server started or stopped while it ran.
@@ -436,6 +466,22 @@ pub struct Status {
     pub txadmin_events: Option<bool>,
     /// How far the start has come, while the server is starting.
     pub start: Option<StartStatus>,
+    /// The resources every stop of the run waits for, as the bridge last told them, in name order.
+    pub holders: Vec<String>,
+    /// The resources a stop waits for, while one holds it or held it.
+    pub stop: Option<StopStatus>,
+}
+
+/// A stop that resources hold: who Observer waits for before `quit`, and until when.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct StopStatus {
+    /// When `observer:shuttingDown` went out.
+    pub since_ms: i64,
+    /// When FXServer quits whoever still holds the stop.
+    pub limit_at_ms: i64,
+    pub holding: Vec<String>,
+    /// Who released the stop and how long after `since_ms`, in milliseconds, in order.
+    pub released: Vec<(String, u64)>,
 }
 
 /// A start under way: what FXServer said of it, and how long Observer still waits for more.
@@ -485,6 +531,8 @@ pub enum ControlError {
     Stopping,
     #[error("the server is not starting")]
     NotStarting,
+    #[error("no resource holds a stop of the server")]
+    NotHeld,
     #[error("Observer is shutting down")]
     ShuttingDown,
     #[error("cannot start FXServer: {0}")]
@@ -521,6 +569,10 @@ enum Request {
     RestartScheduled {
         by: String,
         reply: Reply<()>,
+    },
+    QuitNow {
+        by: String,
+        reply: Reply<Vec<String>>,
     },
     Announce {
         event: BridgeEvent,
@@ -647,6 +699,8 @@ impl Supervisor {
             bridge: None,
             txadmin_events: None,
             start: None,
+            holders: Vec::new(),
+            stop: None,
         };
         let (status_tx, status) = watch::channel(initial);
         let (readings_tx, readings) = watch::channel(Readings::default());
@@ -719,8 +773,8 @@ impl Supervisor {
         .await
     }
 
-    /// Stops the server gracefully: `observer:shuttingDown`, the notice delay, `quit`, then the
-    /// tree is killed if it is still there.
+    /// Stops the server gracefully: `observer:shuttingDown`, the notice delay and the wait for
+    /// the resources that hold the stop, `quit`, then the tree is killed if it is still there.
     pub async fn stop(&self, by: &str) -> Result<(), ControlError> {
         self.ask(|reply| Request::Stop {
             by: by.to_owned(),
@@ -815,6 +869,17 @@ impl Supervisor {
     /// after a failure, is never started by it.
     pub async fn restart_scheduled(&self, by: &str) -> Result<(), ControlError> {
         self.ask(|reply| Request::RestartScheduled {
+            by: by.to_owned(),
+            reply,
+        })
+        .await
+    }
+
+    /// Has a stop under way send `quit` without waiting any longer for the resources that hold
+    /// it, and answers which had not released it. The notice every stop gives still runs to its
+    /// end. Only of a stop that a resource holds.
+    pub async fn quit_now(&self, by: &str) -> Result<Vec<String>, ControlError> {
+        self.ask(|reply| Request::QuitNow {
             by: by.to_owned(),
             reply,
         })
@@ -976,7 +1041,8 @@ enum Phase {
         deadline: Option<Instant>,
     },
     Running,
-    /// `observer:shuttingDown` is out; `quit` follows at `quit_at`.
+    /// `observer:shuttingDown` is out; `quit` follows at `quit_at`, or once the resources that
+    /// hold the stop have released it, whichever comes last, and at their limit anyway.
     Notice {
         quit_at: Instant,
         reason: StopReason,
@@ -1064,6 +1130,29 @@ struct Run {
     ending: Option<Ending>,
     /// Observer killed the tree: the exit status says nothing about the server then.
     killed: bool,
+    /// The resources every stop of this run waits for, as the bridge last told them.
+    holders: BTreeSet<String>,
+    /// The wait of the stop under way, from `observer:shuttingDown` until `quit`.
+    hold: Option<Hold>,
+}
+
+/// The wait of one stop for the resources that hold it.
+struct Hold {
+    since: Instant,
+    since_ms: i64,
+    /// When FXServer quits whoever still holds the stop.
+    limit_at: Instant,
+    limit: Duration,
+    holding: BTreeSet<String>,
+    /// Who released the stop, and how long after it began, in order.
+    released: Vec<(String, Duration)>,
+}
+
+impl Hold {
+    /// Whether a resource holds the stop, or held it.
+    fn concerns_someone(&self) -> bool {
+        !self.holding.is_empty() || !self.released.is_empty()
+    }
 }
 
 impl Run {
@@ -1080,6 +1169,13 @@ impl Run {
     fn system(&self, line: SystemLine) {
         // Fire and forget: a line FXServer does not take is covered by the deadline that follows.
         drop(self.stdin.send(Write::System(line)));
+    }
+
+    /// How long the stop under way still waits, at most, for the resources that hold it.
+    fn limit_left(&self, now: Instant) -> Duration {
+        self.hold.as_ref().map_or(Duration::ZERO, |hold| {
+            hold.limit_at.saturating_duration_since(now)
+        })
     }
 }
 
@@ -1238,7 +1334,9 @@ impl Actor {
     fn deadline(&self) -> Instant {
         let phase = match self.phase {
             Phase::PreLaunch { deadline } => deadline,
-            Phase::Notice { quit_at, .. } => Some(quit_at),
+            Phase::Notice { quit_at, .. } => {
+                Some(self.held().map_or(quit_at, |hold| quit_at.max(hold.limit_at)))
+            }
             Phase::Quitting { kill_at } | Phase::Ending { kill_at } => Some(kill_at),
             Phase::Backoff { respawn_at } => Some(respawn_at),
             Phase::Idle | Phase::Running => None,
@@ -1269,6 +1367,9 @@ impl Actor {
             }
             Request::RestartScheduled { by, reply } => {
                 let _ = reply.send(self.restart_scheduled(by));
+            }
+            Request::QuitNow { by, reply } => {
+                let _ = reply.send(self.quit_now(by));
             }
             Request::Announce { event, reply } => {
                 let _ = reply.send(self.announce(event));
@@ -1437,9 +1538,11 @@ impl Actor {
                 // down, with the time they have left.
                 if restarting && self.state == State::Stopping {
                     if let Phase::Notice { quit_at, .. } = self.phase {
-                        let left = quit_at.saturating_duration_since(Instant::now());
+                        let now = Instant::now();
+                        let left = quit_at.saturating_duration_since(now);
                         run.system(SystemLine::Bridge(BridgeEvent::ShuttingDown {
-                            delay_ms: u64::try_from(left.as_millis()).unwrap_or(u64::MAX),
+                            delay_ms: millis(left),
+                            max_delay_ms: millis(run.limit_left(now).max(left)),
                             reason: StopReason::Stop,
                             by: by.clone(),
                         }));
@@ -1574,10 +1677,19 @@ impl Actor {
         if quits {
             run.after = Some(After::Stop);
         }
+        let quitting = command.quits();
         let written = run.stdin.send(Write::User {
             command,
             actor: actor.clone(),
         });
+        // A `quit` typed during a stop ends it there, whoever holds it.
+        if quitting && matches!(self.phase, Phase::Notice { .. }) {
+            self.end_hold(HoldEnd::Skipped { by: actor.clone() });
+            self.phase = Phase::Quitting {
+                kill_at: Instant::now() + self.settings.stop.quit,
+            };
+            self.publish_status();
+        }
         if quits {
             // FXServer quits by itself; Observer only makes sure it does.
             self.set_state(State::Stopping, Cause::ConsoleQuit { by: actor });
@@ -1622,13 +1734,15 @@ impl Actor {
                 // Resources were told of a restart: they hear that the server stays down, with
                 // the time they have left, as for a stop that overtakes a restart.
                 let reason = if restarting {
-                    let left = if shortened {
-                        Duration::ZERO
+                    let (left, limit) = if shortened {
+                        (Duration::ZERO, Duration::ZERO)
                     } else {
-                        quit_at.saturating_duration_since(now)
+                        let left = quit_at.saturating_duration_since(now);
+                        (left, run.limit_left(now).max(left))
                     };
                     run.system(SystemLine::Bridge(BridgeEvent::ShuttingDown {
-                        delay_ms: u64::try_from(left.as_millis()).unwrap_or(u64::MAX),
+                        delay_ms: millis(left),
+                        max_delay_ms: millis(limit),
                         reason: StopReason::Shutdown,
                         by: "observer".to_owned(),
                     }));
@@ -1642,6 +1756,7 @@ impl Actor {
                     reason
                 };
                 if shortened {
+                    self.end_hold(HoldEnd::Shortened);
                     self.quit(reason, self.settings.stop.shortened);
                 }
             }
@@ -1661,8 +1776,9 @@ impl Actor {
     }
 
     /// The stop sequence: the bridge event, the notice delay when the bridge is there to pass it
-    /// on and time allows, then `quit`.
+    /// on and time allows, the wait for the resources that hold the stop, then `quit`.
     fn begin_stop(&mut self, reason: StopReason, cause: Cause, after: After, shortened: bool) {
+        let limit = self.stop_hold();
         let Some(run) = &mut self.run else {
             return;
         };
@@ -1676,21 +1792,61 @@ impl Actor {
         } else {
             self.settings.stop.notice
         };
+        // Nothing holds a stop that gives no notice: Windows ends Observer within seconds.
+        let limit = if notice.is_zero() {
+            Duration::ZERO
+        } else {
+            limit.max(notice)
+        };
         let bridge_ready = run.bridge_ready;
         if bridge_ready {
             run.system(SystemLine::Bridge(BridgeEvent::ShuttingDown {
-                delay_ms: u64::try_from(notice.as_millis()).unwrap_or(u64::MAX),
+                delay_ms: millis(notice),
+                max_delay_ms: millis(limit),
                 reason,
                 by,
             }));
         }
-        self.set_state(State::Stopping, cause);
         if bridge_ready && !notice.is_zero() {
+            let now = Instant::now();
+            let holding = run.holders.clone();
+            let waiting = (!holding.is_empty()).then(|| {
+                format!(
+                    "waiting for {} to release the stop, {} at most",
+                    listed(holding.iter()),
+                    seconds(limit)
+                )
+            });
+            run.hold = Some(Hold {
+                since: now,
+                since_ms: now_ms(),
+                limit_at: now + limit,
+                limit,
+                holding,
+                released: Vec::new(),
+            });
             self.phase = Phase::Notice {
-                quit_at: Instant::now() + notice,
+                quit_at: now + notice,
                 reason,
             };
+            self.set_state(State::Stopping, cause);
+            if let Some(waiting) = waiting {
+                self.note(&waiting);
+            }
         } else {
+            let unheld: Vec<String> = run.holders.iter().cloned().collect();
+            self.set_state(State::Stopping, cause);
+            if shortened && bridge_ready && !unheld.is_empty() {
+                self.note(&format!(
+                    "the console is closing: no time left to wait for {}",
+                    listed(unheld.iter())
+                ));
+                self.emit(EventKind::StopHeld {
+                    unreleased: unheld,
+                    waited_ms: 0,
+                    end: HoldEnd::Shortened,
+                });
+            }
             let wait = if shortened {
                 self.settings.stop.shortened
             } else {
@@ -1700,13 +1856,170 @@ impl Actor {
         }
     }
 
+    /// The longest a stop waits for the resources that hold it: the owner's, from the launch
+    /// settings given last.
+    fn stop_hold(&self) -> Duration {
+        self.settings.stop.hold.unwrap_or_else(|| {
+            let seconds = self
+                .settings
+                .launch
+                .as_ref()
+                .map_or(DEFAULT_STOP_HOLD_SECONDS, |launch| {
+                    launch.settings.stop_hold_seconds
+                });
+            Duration::from_secs(u64::from(seconds))
+        })
+    }
+
+    /// The wait of the stop under way, while a resource holds it.
+    fn held(&self) -> Option<&Hold> {
+        self.run
+            .as_ref()
+            .and_then(|run| run.hold.as_ref())
+            .filter(|hold| !hold.holding.is_empty())
+    }
+
+    /// Sends `quit` once the notice has passed and no resource holds the stop, or once their
+    /// limit has.
+    fn settle_notice(&mut self, now: Instant) {
+        let Phase::Notice { quit_at, reason } = self.phase else {
+            return;
+        };
+        if now < quit_at {
+            return;
+        }
+        let end = match self.held().map(|hold| hold.limit_at) {
+            Some(limit_at) if now < limit_at => return,
+            Some(_) => HoldEnd::Limit,
+            None => HoldEnd::Released,
+        };
+        self.end_hold(end);
+        self.quit(reason, self.settings.stop.quit);
+    }
+
+    /// Ends the wait for the resources that hold the stop and answers who had not released it.
+    /// Says how it ended when a resource held the stop at all.
+    fn end_hold(&mut self, end: HoldEnd) -> Vec<String> {
+        let Some(hold) = self.run.as_mut().and_then(|run| run.hold.take()) else {
+            return Vec::new();
+        };
+        if !hold.concerns_someone() {
+            return Vec::new();
+        }
+        let unreleased: Vec<String> = hold.holding.iter().cloned().collect();
+        let end = if unreleased.is_empty() {
+            HoldEnd::Released
+        } else {
+            end
+        };
+        let who = listed(unreleased.iter());
+        match &end {
+            // Each release was told as it came.
+            HoldEnd::Released => {}
+            HoldEnd::Limit => {
+                warn!(
+                    resources = %who,
+                    limit = ?hold.limit,
+                    "resources did not release the stop in time; FXServer quits without them"
+                );
+                self.note(&format!(
+                    "{who} did not release the stop within {}; FXServer quits anyway",
+                    seconds(hold.limit)
+                ));
+            }
+            HoldEnd::Skipped { by } => {
+                self.note(&format!("{by} had FXServer quit without waiting for {who}"));
+            }
+            HoldEnd::Shortened => {
+                warn!(resources = %who, "the console is closing: the stop does not wait for its resources");
+                self.note(&format!("the console is closing: no time left to wait for {who}"));
+            }
+        }
+        self.emit(EventKind::StopHeld {
+            unreleased: unreleased.clone(),
+            waited_ms: millis(hold.since.elapsed()),
+            end,
+        });
+        unreleased
+    }
+
+    /// Has the stop under way go on without the resources that hold it. The notice every stop
+    /// gives still runs to its end.
+    fn quit_now(&mut self, by: String) -> Result<Vec<String>, ControlError> {
+        if !matches!(self.phase, Phase::Notice { .. }) || self.held().is_none() {
+            return Err(ControlError::NotHeld);
+        }
+        let unreleased = self.end_hold(HoldEnd::Skipped { by });
+        self.publish_status();
+        self.settle_notice(Instant::now());
+        Ok(unreleased)
+    }
+
+    /// What the bridge tells of the resources that hold the stop: before a stop, who every stop
+    /// of this run waits for; during one, who still holds it.
+    fn holds(&mut self, stopping: bool, holding: &[String], stopped: &[String]) {
+        let Some(run) = &mut self.run else {
+            return;
+        };
+        let clean = |names: &[String]| -> BTreeSet<String> {
+            names
+                .iter()
+                .filter_map(|name| bridge::holder_name(name))
+                .take(bridge::MAX_HOLDERS)
+                .collect()
+        };
+        let holding = clean(holding);
+        let Some(hold) = &mut run.hold else {
+            if run.holders != holding {
+                run.holders = holding;
+                self.publish_status();
+            }
+            return;
+        };
+        let mut notes = Vec::new();
+        if stopping {
+            let stopped = clean(stopped);
+            let waited = hold.since.elapsed();
+            for name in hold.holding.difference(&holding) {
+                if stopped.contains(name) {
+                    notes.push(format!("{name} stopped: the stop no longer waits for it"));
+                } else {
+                    hold.released.push((name.clone(), waited));
+                    notes.push(format!(
+                        "{name} released the stop after {:.1} s",
+                        waited.as_secs_f64()
+                    ));
+                }
+            }
+            for name in holding.difference(&hold.holding) {
+                hold.released.retain(|(released, _)| released != name);
+                notes.push(format!("{name} holds the stop too"));
+            }
+            hold.holding = holding;
+        } else {
+            // Told before the bridge heard of the stop: whoever asked meanwhile is waited for.
+            for name in holding {
+                if hold.holding.insert(name.clone()) {
+                    notes.push(format!("{name} holds the stop too"));
+                }
+            }
+        }
+        for note in notes {
+            self.note(&note);
+        }
+        self.publish_status();
+        self.settle_notice(Instant::now());
+    }
+
     fn quit(&mut self, reason: StopReason, wait: Duration) {
-        if let Some(run) = &self.run {
+        if let Some(run) = &mut self.run {
             run.system(SystemLine::Quit(reason));
+            run.hold = None;
         }
         self.phase = Phase::Quitting {
             kill_at: Instant::now() + wait,
         };
+        self.publish_status();
     }
 
     fn kill(&mut self) {
@@ -1794,9 +2107,7 @@ impl Actor {
             Phase::PreLaunch {
                 deadline: Some(deadline),
             } if now >= deadline => self.pre_launch_overdue(),
-            Phase::Notice { quit_at, reason } if now >= quit_at => {
-                self.quit(reason, self.settings.stop.quit);
-            }
+            Phase::Notice { .. } => self.settle_notice(now),
             Phase::Quitting { kill_at } | Phase::Ending { kill_at } if now >= kill_at => {
                 if self.run.is_some() {
                     self.note("FXServer did not end in time; killing its process tree");
@@ -1980,6 +2291,14 @@ impl Actor {
             Some(Report::Ready { .. } | Report::Heartbeat) => {
                 run.health.heartbeat(Instant::now());
                 run.bridge_ready = true;
+                return;
+            }
+            Some(Report::Holds {
+                stopping,
+                holding,
+                stopped,
+            }) => {
+                self.holds(stopping, &holding, &stopped);
                 return;
             }
             Some(Report::Resources {
@@ -2313,11 +2632,7 @@ impl Actor {
             warn!(%error, "cannot record FXServer's process group; a crash of Observer could leave it running");
         }
 
-        let probe = self
-            .settings
-            .probe
-            .or(prepared.endpoint)
-            .unwrap_or_else(|| SocketAddr::from((Ipv4Addr::LOCALHOST, DEFAULT_PORT)));
+        let probe = self.probe_of(prepared.endpoint);
         let cancel = CancellationToken::new();
         let (stdin, stdin_task) = StdinWriter::start(spawned.stdin, generation, Arc::clone(&self.console));
         let progress = self.progress_of(prepared.plan);
@@ -2391,8 +2706,19 @@ impl Actor {
             after: None,
             ending: None,
             killed: false,
+            holders: BTreeSet::new(),
+            hold: None,
         };
         Ok((run, probe, prepared.warnings, prepared.settings))
+    }
+
+    /// Where a spawn is probed: the address the settings give, else the cfg's first TCP endpoint,
+    /// else FXServer's default port on this host.
+    fn probe_of(&self, endpoint: Option<SocketAddr>) -> SocketAddr {
+        self.settings
+            .probe
+            .or(endpoint)
+            .unwrap_or_else(|| SocketAddr::from((Ipv4Addr::LOCALHOST, DEFAULT_PORT)))
     }
 
     /// What a spawn says of its start from now on, kept as the latest start's.
@@ -2674,6 +3000,22 @@ impl Actor {
                 .filter(|_| self.state == State::Starting)
                 .and_then(|run| run.start.as_ref())
                 .map(|(status, _)| status.clone()),
+            holders: run.map_or_else(Vec::new, |run| run.holders.iter().cloned().collect()),
+            stop: run
+                .and_then(|run| run.hold.as_ref())
+                .filter(|hold| hold.concerns_someone())
+                .map(|hold| StopStatus {
+                    since_ms: hold.since_ms,
+                    limit_at_ms: hold
+                        .since_ms
+                        .saturating_add(i64::try_from(hold.limit.as_millis()).unwrap_or(i64::MAX)),
+                    holding: hold.holding.iter().cloned().collect(),
+                    released: hold
+                        .released
+                        .iter()
+                        .map(|(name, after)| (name.clone(), millis(*after)))
+                        .collect(),
+                }),
         });
     }
 
@@ -2914,6 +3256,38 @@ fn now_ms() -> i64 {
     jiff::Timestamp::now().as_millisecond()
 }
 
+fn millis(duration: Duration) -> u64 {
+    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+}
+
+/// A wait as the console tells it: `60 s`, `1.5 s`.
+fn seconds(duration: Duration) -> String {
+    if duration.subsec_millis() == 0 {
+        format!("{} s", duration.as_secs())
+    } else {
+        format!("{:.1} s", duration.as_secs_f64())
+    }
+}
+
+/// The most names a line of the console lists before it counts the rest.
+const LISTED: usize = 8;
+
+/// `a`, `a and b`, `a, b and c`; past eight names, the rest are counted.
+fn listed<'a>(names: impl ExactSizeIterator<Item = &'a String>) -> String {
+    let total = names.len();
+    let mut shown: Vec<&str> = names.take(LISTED).map(String::as_str).collect();
+    let last = if total > LISTED {
+        format!("{} more", total - LISTED)
+    } else {
+        shown.pop().unwrap_or_default().to_owned()
+    };
+    if shown.is_empty() {
+        last
+    } else {
+        format!("{} and {last}", shown.join(", "))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2936,6 +3310,21 @@ mod tests {
             stalled_text(None, after(45)),
             "its start is stuck: it started no resource"
         );
+    }
+
+    #[test]
+    fn the_resources_that_hold_a_stop_are_listed_as_a_sentence_names_them() {
+        let names = |count: usize| -> Vec<String> { (1..=count).map(|index| format!("r{index}")).collect() };
+
+        assert_eq!(listed(names(1).iter()), "r1");
+        assert_eq!(listed(names(2).iter()), "r1 and r2");
+        assert_eq!(listed(names(3).iter()), "r1, r2 and r3");
+        assert_eq!(
+            listed(names(11).iter()),
+            "r1, r2, r3, r4, r5, r6, r7, r8 and 3 more"
+        );
+        assert_eq!(seconds(Duration::from_secs(60)), "60 s");
+        assert_eq!(seconds(Duration::from_millis(1500)), "1.5 s");
     }
 
     #[test]

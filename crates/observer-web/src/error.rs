@@ -86,6 +86,7 @@ fn status(code: ErrorCode) -> StatusCode {
         | ErrorCode::ServerNotRunning
         | ErrorCode::ServerStopping
         | ErrorCode::ServerNotStarting
+        | ErrorCode::StopNotHeld
         | ErrorCode::EntitiesNotListed
         | ErrorCode::EntitiesChanged
         | ErrorCode::EntitiesOutOfDate

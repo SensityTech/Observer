@@ -216,6 +216,32 @@ pub struct StartProgress {
     pub extension_minutes: u32,
 }
 
+/// A resource that released the stop it held.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ReleasedHold {
+    pub resource: String,
+    /// How long after `observer:shuttingDown` it released the stop, in milliseconds.
+    pub after_ms: u32,
+}
+
+/// A stop the server's resources hold through the bridge: who Observer waits for before it has
+/// FXServer quit, and until when.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct StopProgress {
+    /// When `observer:shuttingDown` went out.
+    pub since: Timestamp,
+    /// When FXServer quits whoever still holds the stop.
+    pub limit_at: Timestamp,
+    /// The resources that hold the stop now, in name order.
+    pub holding: Vec<String>,
+    /// Those that released it, in the order they did.
+    pub released: Vec<ReleasedHold>,
+}
+
 /// The memory FXServer measures a streamed file by.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -295,6 +321,11 @@ pub struct ServerStatus {
     pub port: Option<u16>,
     /// Only while FXServer is starting, from its first second.
     pub start: Option<StartProgress>,
+    /// The resources that asked the bridge to hold each stop of the server that runs now, in name
+    /// order: a stop waits for them, up to the owner's limit.
+    pub stop_holders: Vec<String>,
+    /// Only while FXServer is stopping and a resource holds the stop, or held it.
+    pub stop: Option<StopProgress>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]

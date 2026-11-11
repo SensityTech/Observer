@@ -436,6 +436,8 @@ mod tests {
             name: None,
             port: None,
             start: None,
+            stop_holders: Vec::new(),
+            stop: None,
         }
     }
 

@@ -97,6 +97,7 @@ impl Lab {
                 quit: Duration::from_secs(3),
                 shortened: Duration::from_secs(1),
                 fatal_exit: Duration::from_secs(1),
+                hold: None,
             };
         })
         .await
@@ -299,6 +300,7 @@ async fn configure(db: &Database, clock: &Clock, data: &Path) -> (Accounts, Serv
         extra_arguments: Vec::new(),
         hang_detection: true,
         hang_timeout_seconds: 360,
+        stop_hold_seconds: 60,
     };
     servers
         .change_launch_settings(&owner, Servers::DEFAULT, launch, None)

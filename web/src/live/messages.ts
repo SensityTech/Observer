@@ -191,6 +191,8 @@ const AUDIT_ACTIONS = {
     server_stopped: true,
     server_restarted: true,
     server_start_extended: true,
+    server_stop_hold_expired: true,
+    server_stop_hold_skipped: true,
     server_cfg_changed: true,
     server_cfg_restored: true,
     tool_fix_staged: true,
@@ -506,6 +508,18 @@ const isStartProgress = (value: unknown) =>
     orNull(isTimestamp)(value.stuckAt) &&
     isCount(value.extensionMinutes);
 
+const isTexts = (value: unknown): value is string[] => Array.isArray(value) && value.every(isText);
+
+const isStopProgress = (value: unknown) =>
+    isRecord(value) &&
+    isTimestamp(value.since) &&
+    isTimestamp(value.limitAt) &&
+    isTexts(value.holding) &&
+    Array.isArray(value.released) &&
+    value.released.every(
+        (released) => isRecord(released) && isText(released.resource) && isCount(released.afterMs),
+    );
+
 export const isServerStatus = (value: unknown): value is ServerStatus =>
     isRecord(value) &&
     oneOf<ServerState>(SERVER_STATES)(value.state) &&
@@ -518,7 +532,9 @@ export const isServerStatus = (value: unknown): value is ServerStatus =>
     (value.players === null || isPlayers(value.players)) &&
     orNull(isTimestamp)(value.restartAt) &&
     oneOf<LaunchReadiness>(READINESS)(value.launch) &&
-    (value.start === null || isStartProgress(value.start));
+    (value.start === null || isStartProgress(value.start)) &&
+    isTexts(value.stopHolders) &&
+    (value.stop === null || isStopProgress(value.stop));
 
 const isCounts = (value: unknown): value is number[] => Array.isArray(value) && value.every(isCount);
 

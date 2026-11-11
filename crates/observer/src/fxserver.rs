@@ -116,6 +116,7 @@ fn server_launch(args: RunArgs) -> anyhow::Result<ServerLaunch> {
                 .collect(),
             hang_detection: !args.no_hang_detection,
             hang_timeout_seconds: args.hang_timeout * 60,
+            stop_hold_seconds: observer_domain::launch::DEFAULT_STOP_HOLD_SECONDS,
         },
     })
 }

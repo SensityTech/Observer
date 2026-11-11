@@ -20,6 +20,8 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
+use crate::shutdown::{EXTEND_BY, EXTEND_EVERY, StopTime};
+
 /// The status line changes at most this often.
 const STATUS_EVERY: Duration = Duration::from_secs(1);
 
@@ -211,32 +213,40 @@ impl Notifier {
     }
 }
 
-/// `READY=1` once the panel answers, then the server's state as it changes, then `STOPPING=1`.
-/// Ready means the panel answers, not that FXServer is up.
+/// `READY=1` once the panel answers, then the server's state as it changes, then `STOPPING=1`,
+/// and more time to stop for as long as resources hold the stop. Ready means the panel answers,
+/// not that FXServer is up.
 pub struct Readiness {
     notifier: Option<Arc<Notifier>>,
     follower: Option<JoinHandle<()>>,
+    status: watch::Receiver<ServerStatus>,
     stop: CancellationToken,
+    closed: CancellationToken,
 }
 
 impl Readiness {
     pub fn start(supervision: &Supervision, port: u16) -> Self {
         let stop = CancellationToken::new();
+        let closed = CancellationToken::new();
+        let status = supervision.status();
         let Some(notifier) = Notifier::from_env().map(Arc::new) else {
             return Self {
                 notifier: None,
                 follower: None,
+                status,
                 stop,
+                closed,
             };
         };
-        let status = supervision.status();
         let state = state(&status.borrow());
         notifier.notify(&format!("READY=1\nSTATUS=Panel on port {port}, FXServer {state}"));
-        let follower = tokio::spawn(follow(Arc::clone(&notifier), status, stop.clone()));
+        let follower = tokio::spawn(follow(Arc::clone(&notifier), status.clone(), stop.clone()));
         Self {
             notifier: Some(notifier),
             follower: Some(follower),
+            status,
             stop,
+            closed,
         }
     }
 
@@ -244,13 +254,51 @@ impl Readiness {
         self.stop.cancel();
         if let Some(notifier) = &self.notifier {
             notifier.notify("STOPPING=1\nSTATUS=Stopping FXServer");
+            tokio::spawn(ask_for_time(
+                Arc::clone(notifier),
+                self.status.clone(),
+                self.closed.clone(),
+            ));
         }
     }
 
     pub async fn close(self) {
         self.stop.cancel();
+        self.closed.cancel();
         if let Some(follower) = self.follower {
             let _ = follower.await;
+        }
+    }
+}
+
+/// Asks systemd for the time the stop takes while resources hold it, which the unit's
+/// `TimeoutStopSec` does not count on: see [`StopTime`]. systemd takes the ask from 236 on.
+async fn ask_for_time(
+    notifier: Arc<Notifier>,
+    status: watch::Receiver<ServerStatus>,
+    closed: CancellationToken,
+) {
+    let mut time = StopTime::default();
+    let mut told = String::new();
+    loop {
+        let holding = status
+            .borrow()
+            .stop
+            .as_ref()
+            .map(|stop| stop.holding.join(", "))
+            .unwrap_or_default();
+        if time.asks(!holding.is_empty(), std::time::Instant::now()) {
+            notifier.notify(&format!("EXTEND_TIMEOUT_USEC={}", EXTEND_BY.as_micros()));
+        }
+        if holding != told {
+            if !holding.is_empty() {
+                notifier.notify(&format!("STATUS=Stopping FXServer, waiting for {holding}"));
+            }
+            told = holding;
+        }
+        tokio::select! {
+            () = closed.cancelled() => return,
+            () = tokio::time::sleep(EXTEND_EVERY) => {}
         }
     }
 }
@@ -454,6 +502,8 @@ mod tests {
             name: None,
             port: None,
             start: None,
+            stop_holders: Vec::new(),
+            stop: None,
         };
 
         assert_eq!(status_line(&status), "FXServer online · 12 / 64 players");

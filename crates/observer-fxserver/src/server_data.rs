@@ -872,6 +872,7 @@ exec ../shared.cfg
             }],
             hang_detection: true,
             hang_timeout_seconds: launch::DEFAULT_HANG_TIMEOUT_SECONDS,
+            stop_hold_seconds: launch::DEFAULT_STOP_HOLD_SECONDS,
         };
 
         let read = cfg_convars(&settings);

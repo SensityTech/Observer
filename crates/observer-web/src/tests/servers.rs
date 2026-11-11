@@ -16,6 +16,7 @@ use super::{Server, Session};
 const START: &str = "/api/servers/default/start";
 const EXTEND: &str = "/api/servers/default/start/extend";
 const STOP: &str = "/api/servers/default/stop";
+const STOP_NOW: &str = "/api/servers/default/stop/now";
 const RESTART: &str = "/api/servers/default/restart";
 const CONSOLE: &str = "/api/servers/default/console";
 const LOGS: &str = "/api/servers/default/console/logs";
@@ -91,14 +92,25 @@ async fn starting_stopping_and_restarting_take_server_control_and_say_why_they_c
     let owner = server.owner().await;
     let viewer = server.member(&owner, "grace", "3").await;
 
-    for path in [START, STOP, EXTEND, RESTART] {
+    for path in [START, STOP, STOP_NOW, EXTEND, RESTART] {
         let refused = server.call(Method::POST, path, Some(&viewer), None).await;
         assert_eq!(refused.status, StatusCode::FORBIDDEN, "{path}");
         assert_eq!(refused.json()["params"]["permission"], "serverControl");
     }
     let denied = server.audited("permission_denied").await;
-    assert_eq!(denied.len(), 4);
+    assert_eq!(denied.len(), 5);
     assert_eq!(denied[0]["target"], format!("POST {RESTART}"));
+
+    let now = server.call(Method::POST, STOP_NOW, Some(&owner), None).await;
+    assert_eq!(
+        (now.status, now.code()),
+        (StatusCode::CONFLICT, json!("stop_not_held")),
+        "no resource holds a stop of a server that does not run"
+    );
+    assert_eq!(
+        server.audited("server_stop_hold_skipped").await,
+        Vec::<Value>::new()
+    );
 
     let extend = server.call(Method::POST, EXTEND, Some(&owner), None).await;
     assert_eq!(
@@ -171,6 +183,7 @@ async fn stored_settings_this_host_refuses_are_named_before_anything_starts() {
             extra_arguments: Vec::new(),
             hang_detection: true,
             hang_timeout_seconds: 360,
+            stop_hold_seconds: 60,
         },
         version: 1,
         legacy_build_path: None,

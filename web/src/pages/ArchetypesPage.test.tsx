@@ -277,6 +277,8 @@ const statusOf = (state: ServerState) => ({
     restartAt: null,
     launch: 'ready',
     start: null,
+    stopHolders: [],
+    stop: null,
 });
 
 const answer = (status: number, body?: unknown) =>

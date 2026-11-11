@@ -61,6 +61,7 @@ fn settings(data_path: &str) -> Value {
         "extraArguments": [],
         "hangDetection": true,
         "hangTimeoutSeconds": 360,
+        "stopHoldSeconds": 60,
     })
 }
 

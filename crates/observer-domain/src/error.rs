@@ -58,6 +58,8 @@ pub enum ErrorCode {
     ServerStopping,
     /// Only a start whose cfg still runs can be given more time.
     ServerNotStarting,
+    /// No resource holds a stop of FXServer now: there is no wait to skip.
+    StopNotHeld,
     /// The launch's cfg is not edited from the panel. Params: `reason`, a
     /// [`CfgRefusal`](crate::cfg::CfgRefusal).
     CfgNotEditable,

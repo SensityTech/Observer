@@ -40,6 +40,14 @@ pub enum AuditAction {
     /// Someone gave a start more time before Observer takes it for stuck. `details` holds the
     /// `minutes` given.
     ServerStartExtended,
+    /// A stop went on without the resources that held it: their limit ran out (`limit`), or
+    /// Windows was closing Observer's console and left no time to wait (`consoleClosed`).
+    /// `details` holds the `resources` that had not released the stop, the `reason` and the
+    /// `waitedSeconds`.
+    ServerStopHoldExpired,
+    /// Someone had FXServer quit without waiting for the resources that held the stop.
+    /// `details` holds the `resources` that had not released it.
+    ServerStopHoldSkipped,
     /// The owner saved the launch's cfg from the panel. The target is the file; `details` holds
     /// the lines `added` and `removed`, never their text.
     ServerCfgChanged,
@@ -302,7 +310,7 @@ pub enum AuditAction {
 }
 
 impl AuditAction {
-    pub const ALL: [Self; 134] = [
+    pub const ALL: [Self; 136] = [
         Self::SetupCompleted,
         Self::SetupLinkCreated,
         Self::LoginSucceeded,
@@ -323,6 +331,8 @@ impl AuditAction {
         Self::ServerStopped,
         Self::ServerRestarted,
         Self::ServerStartExtended,
+        Self::ServerStopHoldExpired,
+        Self::ServerStopHoldSkipped,
         Self::ServerCfgChanged,
         Self::ServerCfgRestored,
         Self::ConsoleCommandSent,
@@ -462,6 +472,8 @@ impl AuditAction {
             Self::ServerStopped => "server_stopped",
             Self::ServerRestarted => "server_restarted",
             Self::ServerStartExtended => "server_start_extended",
+            Self::ServerStopHoldExpired => "server_stop_hold_expired",
+            Self::ServerStopHoldSkipped => "server_stop_hold_skipped",
             Self::ServerCfgChanged => "server_cfg_changed",
             Self::ServerCfgRestored => "server_cfg_restored",
             Self::ConsoleCommandSent => "console_command_sent",

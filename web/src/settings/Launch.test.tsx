@@ -312,6 +312,68 @@ describe('Launch settings', () => {
         expect(queryByText(en.server.problems.outOfRange)).toBeNull();
     });
 
+    it('should save the wait at a stop in seconds, and say it applies from the next stop', async () => {
+        const fetch = vi.fn(async () => Response.json(stored('server.cfg', 2)));
+        vi.stubGlobal('fetch', fetch);
+        const { getByText } = await page(stored('server.cfg', 1));
+        const hold = input(items.stopHold.label);
+        expect(hold.value).toBe('60');
+
+        fireEvent.change(hold, { target: { value: '120' } });
+        getByText(bar.changes(1));
+        getByText(`· ${bar.applies([en.settings.appliesWhen.now])}`);
+        fireEvent.click(getByText(bar.save));
+
+        await waitFor(() => getByText(en.server.savedParts(['stopHold'])));
+        expect(saved(fetch)).toEqual({
+            settings: { ...stored('server.cfg', 1).settings, stopHoldSeconds: 120 },
+            version: 1,
+        });
+    });
+
+    it('should say what each kind of setting applies from when a save changes the wait with others', async () => {
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(async () => Response.json(stored('configs/live.cfg', 2))),
+        );
+        const { getByText } = await page(stored('server.cfg', 1));
+
+        fireEvent.change(input(items.cfgFile.label), { target: { value: 'configs/live.cfg' } });
+        fireEvent.change(input(items.hangTimeout.label), { target: { value: '15' } });
+        fireEvent.change(input(items.stopHold.label), { target: { value: '30' } });
+        fireEvent.click(getByText(bar.save));
+
+        await waitFor(() =>
+            getByText(
+                'Saved. Hang detection applies at once, to a running server too; the wait for resources ' +
+                    'applies from the next stop; the other settings apply from the next start of FXServer, ' +
+                    'a restart after a crash included.',
+            ),
+        );
+    });
+
+    it('should refuse a wait that is not 5 to 600 whole seconds next to its field, without sending it', async () => {
+        const fetch = vi.fn();
+        vi.stubGlobal('fetch', fetch);
+        Element.prototype.scrollIntoView = vi.fn();
+        const { getByText, queryByText } = await page(stored('server.cfg', 1));
+        const hold = input(items.stopHold.label);
+
+        for (const typed of ['4', '601', '7.5', '']) {
+            fireEvent.change(hold, { target: { value: typed } });
+            expect(queryByText(en.settings.launch.stopHoldRange)).toBeNull();
+            fireEvent.click(getByText(bar.save));
+
+            getByText(en.settings.launch.stopHoldRange);
+            expect(hold.getAttribute('aria-invalid')).toBe('true');
+            expect(document.activeElement).toBe(hold);
+        }
+        expect(saved(fetch)).toBeUndefined();
+        expect(queryByText(en.server.problems.outOfRange)).toBeNull();
+        fireEvent.change(hold, { target: { value: '5' } });
+        expect(queryByText(en.settings.launch.stopHoldRange)).toBeNull();
+    });
+
     it('should put each refused argument message under its own field, and the keyboard on the first', async () => {
         const refusal = {
             code: 'invalid_launch_settings',

@@ -29,6 +29,7 @@ export const DEFAULT_LAUNCH: LaunchSettings = {
     extraArguments: [],
     hangDetection: true,
     hangTimeoutSeconds: 360,
+    stopHoldSeconds: 60,
 };
 
 const FIELDS = {
@@ -38,6 +39,7 @@ const FIELDS = {
     argumentName: true,
     argumentValue: true,
     hangTimeoutSeconds: true,
+    stopHoldSeconds: true,
 } satisfies Record<LaunchField, true>;
 
 const PROBLEMS = {
@@ -90,11 +92,14 @@ export const changedSettings = (saved: LaunchSettings, draft: LaunchSettings) =>
 export const countChanges = (saved: LaunchSettings, draft: LaunchSettings) =>
     changedSettings(saved, draft).length;
 
-/** The settings a running server takes at once; every other one waits for the next start. */
+/** The settings a running server takes at once. */
 export const HANG_SETTINGS: ReadonlySet<keyof LaunchSettings> = new Set([
     'hangDetection',
     'hangTimeoutSeconds',
 ]);
+
+/** The seconds a stop waits for the resources that hold it, at the least and at the most. */
+export const STOP_HOLD_RANGE = { min: 5, max: 600 } as const;
 
 /** The draft as it is sent: names and paths lose the spaces a paste leaves around them. */
 export const cleaned = (draft: LaunchSettings): LaunchSettings => ({

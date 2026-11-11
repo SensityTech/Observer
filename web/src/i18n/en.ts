@@ -569,6 +569,8 @@ export const en = {
         unknown: 'n/a',
         upFor: (uptime: string) => `up ${uptime}`,
         forTime: (lasted: string) => `for ${lasted}`,
+        waitingFor: (resources: number) =>
+            `waiting for ${count(resources, { one: 'resource', other: 'resources' })}`,
         resources: (started: number, of: number | null) =>
             of === null
                 ? count(started, { one: 'resource', other: 'resources' })
@@ -4574,6 +4576,16 @@ export const en = {
                 : `${count(players, { one: 'player is', other: 'players are' })} connected. They will be disconnected.`,
         noticeFirst:
             'Resources receive observer:shuttingDown first, then FXServer quits; whatever does not end in 15 seconds is killed.',
+        heldBy: (resources: string[]) =>
+            `${list(resources)} ${resources.length === 1 ? 'holds' : 'hold'} the stop: FXServer quits once ${resources.length === 1 ? 'it has' : 'they have'} released it, or once the limit in the launch settings has passed.`,
+        waiting: (resources: string[]) => `Waiting for ${list(resources)} to release the stop.`,
+        quitsIn: (left: string) => `FXServer quits in ${left} at the latest.`,
+        quitsNow: 'FXServer quits now.',
+        quitNow: 'Quit now',
+        quitNowTitle: 'Quit without waiting?',
+        quitNowBody: (resources: string[]) =>
+            `${list(resources)} ${resources.length === 1 ? 'has' : 'have'} not released the stop: what ${resources.length === 1 ? 'it is' : 'they are'} still saving may be lost.`,
+        quitNowAudit: 'The audit log keeps who did, and the resources left behind.',
         confirmRestart: 'Restart',
         confirmStop: 'Stop server',
         keepStoppedTitle: 'Keep FXServer stopped?',
@@ -4943,6 +4955,16 @@ export const en = {
         savedHang: 'Saved. Hang detection applies at once, to a running server too.',
         savedBoth:
             'Saved. Hang detection applies at once, to a running server too; the other settings from the next start of FXServer, a restart after a crash included.',
+        // A save that changed the wait at a stop: what each kind of setting it changed applies from.
+        savedParts: (parts: ('hang' | 'stopHold' | 'rest')[]) => {
+            const applies = {
+                hang: 'hang detection applies at once, to a running server too',
+                stopHold: 'the wait for resources applies from the next stop',
+                rest: 'the other settings apply from the next start of FXServer, a restart after a crash included',
+            };
+            const said = parts.map((part) => applies[part]).join('; ');
+            return `Saved. ${said.charAt(0).toUpperCase()}${said.slice(1)}.`;
+        },
         problems: {
             required: 'Fill this in.',
             tooLong: 'Too long: 1,024 characters at most.',
@@ -5600,6 +5622,10 @@ export const en = {
                 label: 'Wait before restarting',
                 about: 'Minutes of silence, from 1 to 60, 6 by default. While FXServer starts, each resource it starts counts as a sign of life: raise the delay if one resource alone takes longer, as a clothing pack can on a first start.',
             },
+            stopHold: {
+                label: 'Wait for resources at a stop',
+                about: 'Seconds, from 5 to 600, 60 by default. A resource that holds the stop through the bridge is waited for until it has saved, this long at most: past it FXServer quits anyway, and the console and the audit log name the resource. At 5, the notice every stop gives, no resource is waited for longer.',
+            },
             extraArguments: {
                 label: 'Convars',
                 about: "Each goes on FXServer's command line as +set <name> <value>. FXServer applies them before your cfg, so a convar your cfg sets too keeps the cfg's value. Keep secrets in the cfg: anyone on the host can read a command line.",
@@ -5929,7 +5955,11 @@ export const en = {
         launch: {
             runSetup: 'Run the setup',
             openArtifacts: 'Open the Artifacts page',
-            groups: { files: 'Files', game: 'Game', hang: 'Hang detection' },
+            groups: { files: 'Files', game: 'Game', hang: 'Hang detection', stop: 'Stop' },
+            stopHoldRange: 'A whole number of seconds, from 5 to 600.',
+            heldBy: (resources: string[]) =>
+                `${resources.length === 1 ? 'Holds' : 'Hold'} each stop now: ${list(resources)}.`,
+            heldByNone: 'No resource of the running server holds its stops.',
             onesync: {
                 on: {
                     name: 'On',
@@ -6341,6 +6371,8 @@ export const en = {
             server_stopped: 'Server stopped',
             server_restarted: 'Server restarted',
             server_start_extended: 'Start given more time',
+            server_stop_hold_expired: 'Stop not released by its resources',
+            server_stop_hold_skipped: 'Wait for resources skipped',
             server_cfg_changed: 'server.cfg saved',
             server_cfg_restored: 'server.cfg version put back',
             tool_fix_staged: 'Tool fix staged for the next start',
@@ -6530,6 +6562,11 @@ export const en = {
         argumentsRemoved: (names: string) => `removed ${names}`,
         argumentsReordered: 'reordered',
         seconds: (value: string) => `${value} s`,
+        // Why a stop went on without the resources that held it.
+        holdReasons: {
+            limit: 'their limit passed',
+            consoleClosed: "Windows was closing Observer's console",
+        },
         yes: 'yes',
         no: 'no',
         detail: {
@@ -6582,6 +6619,9 @@ export const en = {
             txadminEvents: 'txAdmin events',
             hangDetection: 'Hang detection',
             hangTimeoutSeconds: 'Restart a hung server after',
+            stopHoldSeconds: 'Wait for resources at a stop',
+            resources: 'Resources',
+            waitedSeconds: 'Waited',
             extraArguments: 'Extra arguments',
             setup: 'From the server setup',
             command: 'Command',
@@ -7012,6 +7052,7 @@ export const en = {
         server_not_running: 'FXServer is not running.',
         server_stopping: 'FXServer is stopping. Start it again once it has stopped.',
         server_not_starting: 'FXServer is no longer starting.',
+        stop_not_held: 'No resource holds the stop any more.',
         cfg_not_editable: 'The cfg is not edited from the panel.',
         cfg_changed: 'The cfg changed on disk since it was read.',
         invalid_cfg_text: (params) => {

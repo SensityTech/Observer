@@ -59,9 +59,10 @@ const WRITES: [AuditAction; 3] = [
 /// data folder.
 const SHOWN_SETTINGS: [&str; 3] = ["onesync", "autoStart", "txadminEvents"];
 const OWNER_SETTINGS: [&str; 2] = ["cfgFile", "dataPath"];
-/// Launch settings a snapshot leaves out, as `launch_record` does: they apply at once to the
-/// running server rather than at a start, so they are no part of what a start ran with.
-const UNCOMPARED_SETTINGS: [&str; 2] = ["hangDetection", "hangTimeoutSeconds"];
+/// Launch settings a snapshot leaves out, as `launch_record` does: they apply to the running
+/// server, at once or at its next stop, rather than at a start, so they are no part of what a start
+/// ran with.
+const UNCOMPARED_SETTINGS: [&str; 3] = ["hangDetection", "hangTimeoutSeconds", "stopHoldSeconds"];
 
 /// The later side of a comparison.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1576,6 +1577,9 @@ mod tests {
             &json!({ "hangDetection": switch, "hangTimeoutSeconds": delay })
         ));
         assert!(!launch(&json!({ "hangDetection": switch, "setup": true })));
+        assert!(!launch(
+            &json!({ "stopHoldSeconds": { "before": 60, "after": 120 } })
+        ));
         assert!(launch(
             &json!({ "onesync": { "before": "on", "after": "legacy" }, "hangDetection": switch })
         ));

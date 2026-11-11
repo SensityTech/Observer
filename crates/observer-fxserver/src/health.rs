@@ -915,6 +915,7 @@ mod tests {
             extra_arguments: Vec::new(),
             hang_detection,
             hang_timeout_seconds,
+            stop_hold_seconds: 60,
         }
     }
 

@@ -87,6 +87,14 @@
 //!   sweep costs for each entity and for listing them, in microseconds, which cuts a sweep short
 //!   past its budget and spaces the next ones out; `set gamename rdr3` and `onesync off` each
 //!   leave the server without entities to list;
+//! - `fake_holders <names>`, a list separated by commas: each of them asks the bridge to hold the
+//!   stop as it starts, as a resource calling `holdShutdown`, and the bridge reports who holds once
+//!   it is ready and whenever that changes. Once the bridge raised `observer:shuttingDown`, each
+//!   holder releases the stop `fake_release_ms` later, or `fake_release_ms:<name>` for one of them,
+//!   and never without either: a resource that forgot its `releaseShutdown`. On stdin,
+//!   `fake_hold <resource>` and `fake_release <resource>` are the two calls at the moment they are
+//!   typed. A holder that is stopped holds nothing any more, and a bridge started again holds
+//!   nothing of what the one before held;
 //! - on stdin: `fake_debug <resource> <list> <fields...>`, one row of a hook's report (`ev`, `np`,
 //!   `un`, `sb`, `sbl` or `http`) printed as that resource;
 //! - on stdin: `fake_crash [code]`, `fake_hang`, `fake_spin` (a busy loop), `fake_print <text>`,
@@ -114,7 +122,7 @@ mod resources;
 #[allow(unsafe_code)]
 mod traces;
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::io::{self, BufRead};
 use std::net::{TcpListener, TcpStream, UdpSocket};
 use std::path::{Path, PathBuf};
@@ -143,6 +151,8 @@ const SV_MAIN: &str = "UV loop: svMain";
 const RESOURCE_EVENTS_MAX: usize = 64;
 /// How long the bridge waits after a start or a stop before it reports, unless its script says.
 const RESOURCES_SETTLE_MS: u64 = 500;
+/// The bridge's `HOLDS_MAX`: the most resources that hold a stop at once.
+const HOLDS_MAX: usize = 64;
 
 /// What the HTTP threads share with the main loop.
 pub struct Server {
@@ -301,6 +311,10 @@ struct Fake {
     lists: u64,
     /// Every resource started, in order.
     started: Vec<String>,
+    /// The resources that hold the stop, as the bridge keeps them.
+    holds: BTreeSet<String>,
+    /// Once the bridge raised `observer:shuttingDown`: when each holder releases the stop by itself.
+    stopping: Option<Vec<(Instant, String)>>,
     quit_at: Option<Instant>,
     /// What `fake_spawn` started, reaped as they end.
     children: Vec<Child>,
@@ -421,6 +435,8 @@ fn main() {
             unreported: Unreported::default(),
             lists: 0,
             started: Vec::new(),
+            holds: BTreeSet::new(),
+            stopping: None,
             quit_at: None,
             children: Vec::new(),
             connections: Vec::new(),
@@ -536,6 +552,9 @@ impl Fake {
             self.report_resources(now);
             self.report_entities(now);
             self.beat(now);
+            if self.release_due(now) {
+                self.report_holds(&[]);
+            }
             self.count(now);
             self.server.tick();
             thread::sleep(TICK);
@@ -616,6 +635,8 @@ impl Fake {
                 }
             }
             ("fake_label", Some(id)) => self.label(id, &args[1..]),
+            ("fake_hold", Some(resource)) => self.hold(resource),
+            ("fake_release", Some(resource)) => self.release(resource),
             ("fake_drop_before_join", Some(id)) => self.drop_before_join(id),
             ("observer_cmd", Some(hex)) if self.bridge.is_some() => self.bridge_command(hex),
             // A convar's name followed by a value sets it, as FXServer's console does for a convar
@@ -709,11 +730,7 @@ impl Fake {
         }
         console::line(RESOURCES, &format!("Stopping resource {resource}"));
         self.resource_event(resource, "stop");
-        if self.bridge.as_ref().is_some_and(|bridge| bridge.name == resource) {
-            self.bridge = None;
-            self.listing = None;
-            self.unreported = Unreported::default();
-        }
+        self.stopped(resource);
     }
 
     /// FXServer's `restart`: a stop then a start, of a started resource only.
@@ -787,8 +804,13 @@ impl Fake {
         if !self.started.iter().any(|started| started == resource) {
             self.started.push(resource.to_owned());
         }
+        if listed("fake_holders") {
+            self.hold(resource);
+        }
         let script = self.bridge_script(resource);
         if let Some(contract) = script.as_deref().and_then(contract_version) {
+            self.holds.clear();
+            self.stopping = None;
             let settle = script
                 .as_deref()
                 .and_then(|script| constant(script, "RESOURCES_SETTLE_MS"))
@@ -881,6 +903,11 @@ impl Fake {
                 &bridge.name,
                 &json!({ "type": "observer", "kind": "resources", "started": self.started }),
             );
+            let mut holds = json!({ "type": "observer", "kind": "holds", "stopping": false });
+            if !self.holds.is_empty() {
+                holds["holding"] = json!(self.holds);
+            }
+            self.traces.script(&bridge.name, &holds);
             let name = bridge.name.clone();
             self.report_resource_list();
             let roster = self.server.players().roster(self.server.uptime_ms());
@@ -904,6 +931,86 @@ impl Fake {
                 &json!({ "type": "observer", "kind": "heap", "heapUsed": 18_874_368, "heapTotal": 25_165_824, "rss": 62_914_560, "external": 2_097_152 }),
             );
         }
+    }
+
+    /// The bridge's `holdShutdown`, called by `resource`: nothing without the bridge to call.
+    fn hold(&mut self, resource: &str) {
+        let full = self.holds.len() >= HOLDS_MAX;
+        if self.bridge.is_none() || full || !self.holds.insert(resource.to_owned()) {
+            return;
+        }
+        self.report_holds(&[]);
+    }
+
+    /// The bridge's `releaseShutdown`, called by `resource`: nothing while no stop is under way.
+    fn release(&mut self, resource: &str) {
+        if self.stopping.is_some() && self.holds.remove(resource) {
+            self.report_holds(&[]);
+        }
+    }
+
+    /// A resource stopped: the bridge forgets its hold, and the bridge itself forgets them all.
+    fn stopped(&mut self, resource: &str) {
+        if self.bridge.as_ref().is_some_and(|bridge| bridge.name == resource) {
+            self.bridge = None;
+            self.listing = None;
+            self.unreported = Unreported::default();
+            self.holds.clear();
+            self.stopping = None;
+            return;
+        }
+        if self.holds.remove(resource) {
+            let gone = [resource.to_owned()];
+            self.report_holds(if self.stopping.is_some() { &gone } else { &[] });
+        }
+    }
+
+    /// The bridge raised `observer:shuttingDown`: every holder's handler runs, and one that takes
+    /// no time has released the stop before the bridge reports who holds it.
+    fn shutting_down(&mut self) {
+        let now = Instant::now();
+        if self.stopping.is_none() {
+            let releases = self
+                .holds
+                .iter()
+                .filter_map(|resource| {
+                    let own = self.server.number(&format!("fake_release_ms:{resource}"));
+                    let after = own.or_else(|| self.server.number("fake_release_ms"))?;
+                    Some((now + Duration::from_millis(after), resource.clone()))
+                })
+                .collect();
+            self.stopping = Some(releases);
+        }
+        self.release_due(now);
+        self.report_holds(&[]);
+    }
+
+    /// Releases the stop for every holder whose time has come, and says whether one did.
+    fn release_due(&mut self, now: Instant) -> bool {
+        let Some(pending) = &mut self.stopping else {
+            return false;
+        };
+        let (due, later): (Vec<_>, Vec<_>) = std::mem::take(pending)
+            .into_iter()
+            .partition(|(at, _)| now >= *at);
+        *pending = later;
+        let mut released = false;
+        for (_, resource) in due {
+            released |= self.holds.remove(&resource);
+        }
+        released
+    }
+
+    /// The bridge's report of who holds the stop, an empty list left out as the bridge leaves it.
+    fn report_holds(&self, stopped: &[String]) {
+        let mut report = json!({ "type": "observer", "kind": "holds", "stopping": self.stopping.is_some() });
+        if !self.holds.is_empty() {
+            report["holding"] = json!(self.holds);
+        }
+        if !stopped.is_empty() {
+            report["stopped"] = json!(stopped);
+        }
+        self.bridge_report(&report);
     }
 
     fn quit(&mut self, reason: Option<&str>) {
@@ -1296,14 +1403,19 @@ impl Fake {
             }
             Some("serverName") => self.server_name(payload["name"].as_str()),
             Some(_) => {}
-            None => console::script(
-                &bridge,
-                &format!(
-                    "observer:{} {}",
-                    command["event"].as_str().unwrap_or("?"),
-                    payload
-                ),
-            ),
+            None => {
+                console::script(
+                    &bridge,
+                    &format!(
+                        "observer:{} {}",
+                        command["event"].as_str().unwrap_or("?"),
+                        payload
+                    ),
+                );
+                if command["event"].as_str() == Some("shuttingDown") {
+                    self.shutting_down();
+                }
+            }
         }
     }
 
