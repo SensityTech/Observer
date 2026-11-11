@@ -16,6 +16,7 @@ import { RequireOwner, RequirePermission } from './auth/RequirePermission';
 import { changesSearch, resourceSearch } from './changes/search';
 import { parseDropsSearch, type DropsSearch } from './drops/search';
 import { parseEntitiesSearch, type EntitiesSearch } from './entities/search';
+import { parseMapSearch, type MapSearch } from './map/search';
 import { parseStatisticsSearch, type StatisticsSearch } from './statistics/search';
 import { lazyCode } from './lib/lazyCode';
 import { LoginPage } from './pages/LoginPage';
@@ -299,9 +300,11 @@ const playersRoute = createRoute({
     ),
 });
 
+// An entity the list sends here is in the address: the map opens on it, its layer on.
 const mapRoute = createRoute({
     getParentRoute: () => panelRoute,
     path: '/map',
+    validateSearch: (search: Record<string, unknown>): MapSearch => parseMapSearch(search),
     component: () => (
         <RequirePermission name="PlayersMap">
             <MapPage />

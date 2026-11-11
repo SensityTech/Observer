@@ -16,6 +16,25 @@ export type Trail = { id: number; points: readonly { x: number; y: number }[] };
 
 const NO_TRAILS: readonly Trail[] = [];
 
+/** How the map places the game on the screen right now, for a layer drawn over it. */
+export type Projection = {
+    width: number;
+    height: number;
+    /** A place of the game, in pixels from the map's top left corner. */
+    place: (x: number, y: number) => { left: number; top: number };
+    /** The game units a pixel covers. */
+    unitsPerPixel: number;
+};
+
+/** The part of the game in view, and its scale. */
+export type Viewport = { bounds: MapBounds; unitsPerPixel: number };
+
+/** A press on the map that hit no player: where in the game, and how far around it a finger reaches. */
+export type Press = { x: number; y: number; reach: number };
+
+/** How far around a press something still counts as pressed, in pixels. */
+const REACH = 10;
+
 /** The marks of each colour, which also differ in shape: a colour never says it alone. */
 export const TIER_MARK: Record<Tier, string> = {
     new: 'size-3 rounded-full border-[2.5px] border-warning bg-surface',
@@ -48,6 +67,10 @@ export function MapCanvas({
     selected,
     names,
     focus,
+    frame = null,
+    renderLayer,
+    onViewport,
+    onPress,
     onSelect,
     children,
     className,
@@ -67,6 +90,14 @@ export function MapCanvas({
     names: boolean;
     /** A player to bring into view, and a count that changes each time it is asked. */
     focus: { id: number; at: number } | null;
+    /** A part of the game to bring into view, and a count that changes each time it is asked. */
+    frame?: (MapBounds & { at: number }) | null;
+    /** Drawn over the map and under the players, by what the map tells of its placing. */
+    renderLayer?: (projection: Projection) => ReactNode;
+    /** Told the part of the game in view, each time it changes. */
+    onViewport?: (viewport: Viewport) => void;
+    /** A press that hit no player, before the selection is cleared. */
+    onPress?: (press: Press) => void;
     onSelect: (id: number | null) => void;
     /** Drawn over the map: notices and the selected player's card. */
     children?: ReactNode;
@@ -169,22 +200,32 @@ export function MapCanvas({
 
     // Only a new ask moves the map, not each new position: what it reads stays out of the effect's
     // dependencies.
-    const latest = useRef({ dots, worldOf, size });
+    const latest = useRef({ dots, worldOf, size, framing });
     useLayoutEffect(() => {
-        latest.current = { dots, worldOf, size };
+        latest.current = { dots, worldOf, size, framing };
     });
     useEffect(() => {
-        const { dots: now, worldOf: place, size: frame } = latest.current;
+        const { dots: now, worldOf: place, size: sized } = latest.current;
         const dot = focus === null ? undefined : now.find((each) => each.id === focus.id);
-        if (dot === undefined || frame.width === 0) {
+        if (dot === undefined || sized.width === 0) {
             return;
         }
         const point = place(dot);
         setView((current) => {
             const scale = Math.max(current?.scale ?? 1, 1);
-            return { scale, x: frame.width / 2 - point.x * scale, y: frame.height / 2 - point.y * scale };
+            return { scale, x: sized.width / 2 - point.x * scale, y: sized.height / 2 - point.y * scale };
         });
     }, [focus]);
+
+    useEffect(() => {
+        const { worldOf: place, size: sized, framing: fitting } = latest.current;
+        if (frame === null || sized.width === 0) {
+            return;
+        }
+        const corner = place({ x: frame.west, y: frame.north });
+        const opposite = place({ x: frame.east, y: frame.south });
+        setView(fitting(corner.x, corner.y, opposite.x, opposite.y));
+    }, [frame]);
 
     const zoom = (factor: number, at = { x: size.width / 2, y: size.height / 2 }) =>
         setView((current) => {
@@ -217,8 +258,21 @@ export function MapCanvas({
     // Dragging moves the map; a press that does not move clears the selection. On the element itself,
     // so that a drag that leaves it carries on.
     const select = useRef(onSelect);
+    const press = useRef(onPress);
+    const gameAt = useRef<(left: number, top: number) => Press | null>(() => null);
     useLayoutEffect(() => {
         select.current = onSelect;
+        press.current = onPress;
+        gameAt.current = (left, top) =>
+            view === null
+                ? null
+                : {
+                      x: area.west + ((left - view.x) / view.scale / world.width) * (area.east - area.west),
+                      y:
+                          area.north -
+                          ((top - view.y) / view.scale / world.height) * (area.north - area.south),
+                      reach: (REACH * (area.east - area.west)) / (world.width * view.scale),
+                  };
     });
     useEffect(() => {
         const element = box.current;
@@ -254,6 +308,11 @@ export function MapCanvas({
             const current = drag.current;
             drag.current = null;
             if (current !== null && !current.moved) {
+                const rect = element.getBoundingClientRect();
+                const at = gameAt.current(event.clientX - rect.left, event.clientY - rect.top);
+                if (at !== null) {
+                    press.current?.(at);
+                }
                 select.current(null);
             }
             if (element.hasPointerCapture(event.pointerId)) {
@@ -277,6 +336,24 @@ export function MapCanvas({
         const point = worldOf(dot);
         return { left: shown.x + point.x * shown.scale, top: shown.y + point.y * shown.scale };
     };
+
+    const viewport = useRef(onViewport);
+    useLayoutEffect(() => {
+        viewport.current = onViewport;
+    });
+    useEffect(() => {
+        if (view === null || size.width === 0) {
+            return;
+        }
+        const across = (area.east - area.west) / (world.width * view.scale);
+        const down = (area.north - area.south) / (world.height * view.scale);
+        const west = area.west - view.x * across;
+        const north = area.north + view.y * down;
+        viewport.current?.({
+            bounds: { west, east: west + size.width * across, south: north - size.height * down, north },
+            unitsPerPixel: across,
+        });
+    }, [view, size.width, size.height, area, world.width, world.height]);
 
     return (
         <div
@@ -341,6 +418,13 @@ export function MapCanvas({
                         ))}
                 </svg>
             )}
+            {view !== null &&
+                renderLayer?.({
+                    width: size.width,
+                    height: size.height,
+                    place: (x, y) => screen({ x, y }),
+                    unitsPerPixel: (area.east - area.west) / (world.width * view.scale),
+                })}
             {view !== null &&
                 dots.map((dot) => {
                     const { left, top } = screen(dot);

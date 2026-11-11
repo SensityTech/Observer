@@ -7,6 +7,7 @@ import {
     ChevronLeft,
     ChevronRight,
     Info,
+    MapPin,
     Search,
     Trash2,
     User,
@@ -22,7 +23,7 @@ import type { EntityResult } from '../api/generated/EntityResult';
 import type { EntitySort } from '../api/generated/EntitySort';
 import { Permission } from '../api/generated/Permission';
 import { allows, useMe } from '../auth/me';
-import { Button } from '../components/Button';
+import { Button, buttonVariants } from '../components/Button';
 import { Card } from '../components/Card';
 import { Checkbox } from '../components/Checkbox';
 import { Chip } from '../components/Chip';
@@ -109,6 +110,7 @@ export function EntitiesPage() {
     const facets = page?.facets;
     const ownersShown = page?.ownersShown ?? false;
     const canDelete = allows(me, Permission.EntitiesDelete);
+    const canMap = allows(me, Permission.PlayersMap);
     const stale = live !== null && limits !== undefined && isStale(live, now, limits.staleSweeps);
     const running = status === null || RUNNING.has(status.state);
     const deletable = canDelete && !stale && run !== null && limits !== undefined;
@@ -522,6 +524,7 @@ export function EntitiesPage() {
                                                             </td>
                                                             <td className={cn(table.td, 'text-right')}>
                                                                 <div className="flex justify-end gap-0.5">
+                                                                    {canMap && <OnMap item={item} />}
                                                                     {canDelete && (
                                                                         <Button
                                                                             tone="ghost"
@@ -611,6 +614,7 @@ export function EntitiesPage() {
                                                             )}
                                                         </span>
                                                     </div>
+                                                    {canMap && <OnMap item={item} />}
                                                 </li>
                                             );
                                         })}
@@ -794,5 +798,19 @@ function Owner({ item, shown, plain = false }: { item: EntityItem; shown: boolea
                 t.entities.someOwner
             )}
         </span>
+    );
+}
+
+function OnMap({ item }: { item: EntityItem }) {
+    const { t } = useI18n();
+    return (
+        <Link
+            to="/map"
+            search={{ entity: item.netId }}
+            aria-label={t.entities.showOnMap(entityName(t, item))}
+            className={cn(buttonVariants({ size: 'icon-sm', tone: 'ghost' }), 'flex-none')}
+        >
+            <MapPin size={16} strokeWidth={1.5} aria-hidden="true" />
+        </Link>
     );
 }
