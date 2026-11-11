@@ -1,8 +1,10 @@
 //! FXServer as Observer runs it: the supervisor, started from the stored launch settings and the
 //! selected build, the status the panel shows of it, the console it fills, the commands operators
-//! send it, the console log files, and the server setup's checks of a folder and its cfg.
+//! send it, its resources as they stand, the console log files, and the server setup's checks of a
+//! folder and its cfg.
 
 mod cfg;
+mod resources;
 mod setup;
 
 use std::collections::{HashMap, VecDeque};
@@ -17,6 +19,7 @@ use observer_domain::audit::{ActorKind, AuditAction, Outcome};
 use observer_domain::error::{ApiError, ErrorCode};
 use observer_domain::launch::{Platform, StoredLaunch};
 use observer_domain::permissions::Permissions;
+use observer_domain::resources::ResourcesView;
 use observer_domain::schedule::RestartSource;
 use observer_domain::server::{
     AssetMemory, CommandAck, CommandRefusal, ConsoleLine, ConsoleSnapshot, Delivery, HangCause,
@@ -38,7 +41,7 @@ use observer_store::artifacts::{self as stored_artifacts, ArtifactState};
 use observer_store::launch;
 use serde_json::json;
 use tokio::sync::broadcast::error::{RecvError, TryRecvError};
-use tokio::sync::{Mutex as AsyncMutex, Semaphore, broadcast, oneshot, watch};
+use tokio::sync::{Mutex as AsyncMutex, Notify, Semaphore, broadcast, oneshot, watch};
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
@@ -105,6 +108,11 @@ struct Inner {
     console: Arc<ConsoleHub>,
     console_logs: PathBuf,
     status: watch::Receiver<ServerStatus>,
+    resources: watch::Receiver<ResourcesView>,
+    /// Who asked for what on the Resources page, in the run that is up.
+    orders: Arc<Mutex<resources::Orders>>,
+    /// Told at each order of the page, which the view of the resources shows at once.
+    ordered: Arc<Notify>,
     /// When each user sent their latest commands, within the window.
     commands: Mutex<HashMap<i64, VecDeque<Timestamp>>>,
     /// The setup's reads of the host's folders under way: each holds a blocking thread, which a
@@ -115,11 +123,12 @@ struct Inner {
     takeover: Mutex<Option<oneshot::Sender<()>>>,
 }
 
-/// The supervisor's task and the one that follows it for the panel. Once the supervisor has
-/// stopped FXServer and ended, [`Running::close`] ends the other.
+/// The supervisor's task and those that follow it for the panel. Once the supervisor has stopped
+/// FXServer and ended, [`Running::close`] ends the others.
 pub struct Running {
     supervisor: Option<JoinHandle<()>>,
     follower: JoinHandle<()>,
+    resources: JoinHandle<()>,
     stop: CancellationToken,
 }
 
@@ -139,6 +148,7 @@ impl Running {
         self.stopped().await;
         self.stop.cancel();
         let _ = self.follower.await;
+        let _ = self.resources.await;
     }
 }
 
@@ -274,6 +284,16 @@ impl Supervision {
             readiness,
             stop.clone(),
         ));
+        let (resources_tx, resources) = watch::channel(ResourcesView::default());
+        let orders = Arc::new(Mutex::new(resources::Orders::default()));
+        let ordered = Arc::new(Notify::new());
+        let following_resources = tokio::spawn(resources::follow(
+            supervisor.clone(),
+            Arc::clone(&orders),
+            Arc::clone(&ordered),
+            resources_tx,
+            stop.clone(),
+        ));
 
         let supervision = Self {
             inner: Arc::new(Inner {
@@ -289,6 +309,9 @@ impl Supervision {
                 console,
                 console_logs: setup.console_logs,
                 status,
+                resources,
+                orders,
+                ordered,
                 commands: Mutex::default(),
                 folder_reads: Semaphore::new(FOLDER_READS),
                 takeover: Mutex::default(),
@@ -297,6 +320,7 @@ impl Supervision {
         let running = Running {
             supervisor: Some(supervisor_task),
             follower,
+            resources: following_resources,
             stop,
         };
         Ok((supervision, running))
@@ -1083,6 +1107,8 @@ pub(crate) fn control_error(error: ControlError) -> Error {
             ErrorCode::ServerNotRunning.into()
         }
         ControlError::Stopping => ErrorCode::ServerStopping.into(),
+        // The bridge is no resource of the list the page acts on.
+        ControlError::Bridge => ErrorCode::ResourceNotFound.into(),
         ControlError::NotStarting => ErrorCode::ServerNotStarting.into(),
         ControlError::ShuttingDown => ErrorCode::ShuttingDown.into(),
         ControlError::Launch(error) => ApiError::new(ErrorCode::LaunchFailed)

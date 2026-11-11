@@ -41,9 +41,10 @@ impl Permissions {
     pub const PLAYERS_BAN: Self = Self(1 << 23);
     pub const BANS_LIFT: Self = Self(1 << 24);
     pub const PLAYERS_MAP: Self = Self(1 << 25);
-    pub const PLAYERS_KICK: Self = Self(1 << 26);
-    pub const PLAYERS_ANNOUNCE: Self = Self(1 << 27);
-    pub const PLAYERS_MESSAGE: Self = Self(1 << 28);
+    pub const RESOURCES_CONTROL: Self = Self(1 << 26);
+    pub const PLAYERS_KICK: Self = Self(1 << 27);
+    pub const PLAYERS_ANNOUNCE: Self = Self(1 << 28);
+    pub const PLAYERS_MESSAGE: Self = Self(1 << 29);
 
     /// Every permission in the catalog, which is what the owner holds.
     pub fn all() -> Self {
@@ -467,6 +468,15 @@ pub const CATALOG: &[PermissionInfo] = &[
     },
     PermissionInfo {
         bit: 26,
+        constant: "RESOURCES_CONTROL",
+        key: "resourcesControl",
+        area: PermissionArea::Server,
+        // A resource that stops takes with it every one that depends on it, under the players.
+        danger: Danger::Sensitive,
+        implies: Permissions::NONE,
+    },
+    PermissionInfo {
+        bit: 27,
         constant: "PLAYERS_KICK",
         key: "playersKick",
         area: PermissionArea::Players,
@@ -475,7 +485,7 @@ pub const CATALOG: &[PermissionInfo] = &[
         implies: Permissions::PLAYERS_VIEW,
     },
     PermissionInfo {
-        bit: 27,
+        bit: 28,
         constant: "PLAYERS_ANNOUNCE",
         key: "playersAnnounce",
         area: PermissionArea::Players,
@@ -484,7 +494,7 @@ pub const CATALOG: &[PermissionInfo] = &[
         implies: Permissions::NONE,
     },
     PermissionInfo {
-        bit: 28,
+        bit: 29,
         constant: "PLAYERS_MESSAGE",
         key: "playersMessage",
         area: PermissionArea::Players,
@@ -532,9 +542,10 @@ mod tests {
             (23, "PLAYERS_BAN", Permissions::PLAYERS_BAN),
             (24, "BANS_LIFT", Permissions::BANS_LIFT),
             (25, "PLAYERS_MAP", Permissions::PLAYERS_MAP),
-            (26, "PLAYERS_KICK", Permissions::PLAYERS_KICK),
-            (27, "PLAYERS_ANNOUNCE", Permissions::PLAYERS_ANNOUNCE),
-            (28, "PLAYERS_MESSAGE", Permissions::PLAYERS_MESSAGE),
+            (26, "RESOURCES_CONTROL", Permissions::RESOURCES_CONTROL),
+            (27, "PLAYERS_KICK", Permissions::PLAYERS_KICK),
+            (28, "PLAYERS_ANNOUNCE", Permissions::PLAYERS_ANNOUNCE),
+            (29, "PLAYERS_MESSAGE", Permissions::PLAYERS_MESSAGE),
         ];
 
         assert_eq!(CATALOG.len(), frozen.len());

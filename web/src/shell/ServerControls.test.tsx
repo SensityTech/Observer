@@ -30,7 +30,7 @@ const status = (state: ServerState, launch: LaunchReadiness = 'ready') => ({
 
 /** Dashboard and server control, and with them the permission to send announcements. */
 const OPERATOR = '9';
-const ANNOUNCER = '8000009';
+const ANNOUNCER = '10000009';
 
 /** The controls of an operator who may start and stop FXServer, in `state`. */
 const controls = async (state: ServerState, launch?: LaunchReadiness, permissions = OPERATOR) => {

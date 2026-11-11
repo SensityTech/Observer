@@ -1,5 +1,6 @@
 import {
     Ban,
+    Blocks,
     CalendarClock,
     ChartLine,
     Contact,
@@ -31,6 +32,7 @@ export type NavEntry = {
         | '/'
         | '/statistics'
         | '/console'
+        | '/resources'
         | '/schedule'
         | '/artifacts'
         | '/diagnostics'
@@ -79,6 +81,12 @@ export const navSections = (t: Messages) => ({
     main: [
         { to: '/', label: t.nav.overview, icon: LayoutDashboard, access: Permission.DashboardView },
         { to: '/console', label: t.nav.console, icon: SquareTerminal, access: Permission.ConsoleView },
+        {
+            to: '/resources',
+            label: t.nav.resources,
+            icon: Blocks,
+            access: [Permission.DashboardView, Permission.ResourcesControl],
+        },
     ] satisfies NavEntry[],
     people: [
         { to: '/players', label: t.nav.players, icon: Contact, access: Permission.PlayersView, nested: true },

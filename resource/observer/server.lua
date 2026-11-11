@@ -389,6 +389,63 @@ AddEventHandler('playerDropped', function(reason, resource, category)
     end
     report('drop', { id = id, t = GetGameTimer(), reason = reason, resource = resource, category = category, ped = ped })
 end)
+
+-- Every resource FXServer knows, for Observer alone: no part of the contract with the server's
+-- resources. In pages, as a server holds hundreds.
+local RESOURCE_LIST_PAGE = 100
+-- A table given to `dependencies` in a manifest is kept under the key less its last letter, which
+-- FXServer reads its dependencies from as well.
+local NEEDS_KEYS = { 'dependency', 'dependencie' }
+local PROVIDES_KEYS = { 'provide' }
+local resourceLists = 0
+
+local function manifestEntries(name, keys)
+    local entries = {}
+    for _, key in ipairs(keys) do
+        for index = 0, GetNumResourceMetadata(name, key) - 1 do
+            entries[#entries + 1] = GetResourceMetadata(name, key, index)
+        end
+    end
+    return #entries > 0 and entries or nil
+end
+
+local function reportResourceList()
+    resourceLists = resourceLists + 1
+    local list = resourceLists
+    local names = {}
+    for index = 0, GetNumResources() - 1 do
+        local name = GetResourceByFindIndex(index)
+        if name then
+            names[#names + 1] = name
+        end
+    end
+    table.sort(names)
+    local pages = math.max(1, math.ceil(#names / RESOURCE_LIST_PAGE))
+    for page = 1, pages do
+        local entries = {}
+        for index = (page - 1) * RESOURCE_LIST_PAGE + 1, math.min(page * RESOURCE_LIST_PAGE, #names) do
+            local name = names[index]
+            entries[#entries + 1] = {
+                name = name,
+                state = GetResourceState(name),
+                path = GetResourcePath(name),
+                version = GetResourceMetadata(name, 'version', 0),
+                needs = manifestEntries(name, NEEDS_KEYS),
+                provides = manifestEntries(name, PROVIDES_KEYS),
+            }
+        end
+        report('resource_list', { list = list, page = page, last = page == pages, resources = entries })
+        if page < pages then
+            Wait(0)
+        end
+    end
+end
+
+-- `refresh` reads every manifest again and may find new resources.
+AddEventHandler('onResourceListRefresh', function()
+    CreateThread(reportResourceList)
+end)
+
 local cfgRan = false
 
 -- The thread first runs once the cfg has run, so `ready` means its resources were started.
@@ -396,6 +453,7 @@ CreateThread(function()
     cfgRan = true
     report('ready', { contractVersion = CONTRACT_VERSION })
     report('resources', { started = startedResources() })
+    reportResourceList()
     reportPlayers()
     while true do
         report('hb')

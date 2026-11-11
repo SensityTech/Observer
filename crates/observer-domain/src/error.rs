@@ -245,6 +245,18 @@ pub enum ErrorCode {
     UpdateRestarting,
     /// Params: `reason`, an `UpdateBlock`.
     UpdateBlocked,
+    /// The server has not listed its resources in this run: it does once its cfg has run.
+    ResourcesNotListed,
+    /// FXServer listed no resource of this name in this run.
+    ResourceNotFound,
+    /// The resource's name holds what a console command cannot carry: Observer names a resource
+    /// in a command only by ASCII letters, digits, `_`, `.` and `-`, 64 at most.
+    ResourceNameRefused,
+    /// FXServer has not answered the last order of the Resources page on this resource yet.
+    ResourceBusy,
+    /// The resource is not in the state the order needs: a start needs it stopped, a stop and a
+    /// restart need it started.
+    ResourceChanged,
 }
 
 /// The body of every error response.

@@ -28,6 +28,7 @@ pub mod metrics;
 pub mod moderation;
 pub mod permissions;
 pub mod players;
+pub mod resources;
 pub mod schedule;
 pub mod server;
 pub mod server_data;

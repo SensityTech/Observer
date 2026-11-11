@@ -20,6 +20,7 @@ use observer_app::{
 };
 use observer_domain::audit::{ActorKind, AuditAction, AuditEntry, AuditFilter, Outcome};
 use observer_domain::bans::{BanFilter, BanRequest, LiftRequest};
+use observer_domain::changes::LiveChangeKind;
 use observer_domain::diagnostics::{
     Alert, AlertKind, AnalysisState, CrashFileKind, CrashKind, DiagnosticsEvent, ListenerRole, ProcessKind,
     Protocol, Scope,
@@ -33,6 +34,9 @@ use observer_domain::moderation::{
 };
 use observer_domain::permissions::Permissions;
 use observer_domain::players::{Confirmation, IdentifierKind, PlayerLabel, PlayerProfile, PlayerSort};
+use observer_domain::resources::{
+    ResourceAck, ResourceOrigin, ResourceRow, ResourceState, ResourceWarnings, ResourcesStage, ResourcesView,
+};
 use observer_domain::schedule::{
     OneOffRequest, OneOffRestart, RestartSource, ScheduleChange, ScheduleSettings,
 };
@@ -2256,4 +2260,483 @@ async fn an_announcement_and_a_message_are_raised_for_the_servers_resources() {
             "message": "Come to the staff room"
         })
     );
+}
+
+/// What the resources tests start with: a library, one resource that depends on it, one the cfg
+/// does not start, one FXServer cannot start and one it warns about, listed two a page.
+const RESOURCES_CFG: &str = "set fake_resource_page 2\nset fake_fail_start mechanic\nset fake_heavy docks\nset fake_missing docks\nensure ox_lib\nensure ox_target\nensure mechanic\nensure docks\n";
+
+impl Observer {
+    /// A resource of the server folder, under `resources`, with its manifest.
+    fn resource(&self, folder: &str, manifest: &str) {
+        let path = self.dir.path().join("server-data/resources").join(folder);
+        fs::create_dir_all(&path).unwrap();
+        fs::write(path.join("fxmanifest.lua"), manifest).unwrap();
+    }
+
+    /// An Observer whose server folder holds the resources of [`RESOURCES_CFG`], not started yet.
+    async fn with_resources() -> Self {
+        let observer = Self::new(false).await;
+        observer.resource("[core]/ox_lib", "fx_version 'cerulean'\nversion '3.30.6'\n");
+        observer.resource(
+            "[core]/[ox]/ox_target",
+            "version '1.17.2'\ndependencies {\n    '/onesync',\n    'ox_lib',\n}\n",
+        );
+        observer.resource("[jobs]/taxi", "fx_version 'cerulean'\n");
+        observer.resource("[jobs]/mechanic", "version '0.8.0'\n");
+        observer.resource("[maps]/docks", "version '0.9'\n");
+        let cfg = observer.dir.path().join("server-data/server.cfg");
+        let mut text = fs::read_to_string(&cfg).unwrap();
+        text.push_str(RESOURCES_CFG);
+        fs::write(cfg, text).unwrap();
+        observer
+    }
+
+    async fn resources_until(&self, wanted: impl Fn(&ResourcesView) -> bool) -> ResourcesView {
+        let mut view = self.supervision.resources();
+        let found = timeout(WAIT, view.wait_for(|view| wanted(view)))
+            .await
+            .map(|found| found.unwrap().clone());
+        found.unwrap_or_else(|_| panic!("the resources never came to that; last {:#?}", view.borrow()))
+    }
+
+    /// Starts the server and waits for its resources to be listed.
+    async fn listed(&self) -> ResourcesView {
+        self.supervision.start_server(&self.owner).await.unwrap();
+        self.resources_until(|view| view.stage == ResourcesStage::Listed)
+            .await
+    }
+}
+
+fn row<'a>(view: &'a ResourcesView, name: &str) -> &'a ResourceRow {
+    view.resources
+        .iter()
+        .find(|row| row.name == name)
+        .unwrap_or_else(|| panic!("no resource {name} in {view:#?}"))
+}
+
+fn is(view: &ResourcesView, name: &str, state: ResourceState) -> bool {
+    view.resources
+        .iter()
+        .any(|row| row.name == name && row.state == state)
+}
+
+#[tokio::test]
+async fn the_resources_of_a_running_server_are_listed_with_what_fxserver_says_of_each() {
+    let mut observer = Observer::with_resources().await;
+    let before = observer.supervision.resources().borrow().clone();
+
+    let view = observer.listed().await;
+
+    assert_eq!(before, ResourcesView::default(), "no server, no resource");
+    assert_eq!((view.generation, view.truncated, &view.rescan), (1, false, &None));
+    let rows: Vec<(&str, &str, ResourceState, Option<&str>)> = view
+        .resources
+        .iter()
+        .map(|row| {
+            (
+                row.name.as_str(),
+                row.folder.as_str(),
+                row.state,
+                row.version.as_deref(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        rows,
+        [
+            ("docks", "[maps]", ResourceState::Started, Some("0.9")),
+            ("mechanic", "[jobs]", ResourceState::Stopped, Some("0.8.0")),
+            ("ox_lib", "[core]", ResourceState::Started, Some("3.30.6")),
+            ("ox_target", "[core]/[ox]", ResourceState::Started, Some("1.17.2")),
+            ("taxi", "[jobs]", ResourceState::Stopped, None),
+        ],
+        "every resource of the folder, in two pages and a half, and the bridge left out"
+    );
+    for listed in &view.resources {
+        assert_eq!(listed.origin, ResourceOrigin::Server, "{}", listed.name);
+        assert!(listed.controllable, "{}", listed.name);
+        assert_eq!(
+            listed.last, None,
+            "{}: nothing happened since the cfg ran",
+            listed.name
+        );
+    }
+    assert_eq!(row(&view, "ox_lib").dependants, ["ox_target"]);
+    assert_eq!(row(&view, "ox_target").dependants, Vec::<String>::new());
+    assert_eq!(
+        row(&view, "docks").warnings,
+        Some(ResourceWarnings {
+            count: 3,
+            heavy: 2,
+            oversized: 1,
+            missing: 1
+        })
+    );
+    assert!(
+        row(&view, "mechanic").failed_at.is_some(),
+        "FXServer said it could not start it"
+    );
+    assert_eq!(row(&view, "taxi").failed_at, None, "the cfg never started it");
+
+    observer.supervision.stop_server(&observer.owner).await.unwrap();
+    let stopped = observer
+        .resources_until(|view| view.stage == ResourcesStage::Stopped)
+        .await;
+    assert_eq!(stopped.resources, Vec::new());
+    observer.stop_observer().await;
+}
+
+/// What last happened to a resource: how, who asked for it, and the resource it stopped with.
+fn last(row: &ResourceRow) -> (LiveChangeKind, Option<String>, Option<String>) {
+    let last = row.last.clone().unwrap();
+    (last.kind, last.by, last.with)
+}
+
+#[tokio::test]
+async fn a_stop_takes_what_depends_on_the_resource_and_a_start_brings_what_it_needs() {
+    let mut observer = Observer::with_resources().await;
+    observer.listed().await;
+    let owner = observer.owner.clone();
+    let ada = Some("ada".to_owned());
+
+    let stopped = observer
+        .supervision
+        .stop_resource(&owner, "ox_lib")
+        .await
+        .unwrap();
+    let view = observer
+        .resources_until(|view| is(view, "ox_lib", ResourceState::Stopped))
+        .await;
+
+    assert_eq!(
+        stopped,
+        ResourceAck {
+            delivery: Delivery::Written,
+            dependants: vec!["ox_target".to_owned()]
+        }
+    );
+    let (lib, target) = (row(&view, "ox_lib"), row(&view, "ox_target"));
+    assert_eq!(
+        target.state,
+        ResourceState::Stopped,
+        "FXServer stopped it with ox_lib"
+    );
+    assert_eq!(last(lib), (LiveChangeKind::Stopped, ada.clone(), None));
+    assert_eq!(lib.asked, None, "FXServer answered the order");
+    assert_eq!(
+        last(target),
+        (LiveChangeKind::Stopped, None, Some("ox_lib".to_owned()))
+    );
+    let echo = observer.console_until("stop ox_lib").await;
+    assert_eq!((echo.3, echo.4.as_deref()), (LineKind::Command, Some("ada")));
+    let audited = observer.audited(AuditAction::ResourceStopped).await;
+    assert_eq!(audited.len(), 1);
+    assert_eq!(
+        (audited[0].target.as_deref(), &audited[0].details),
+        (
+            Some("ox_lib"),
+            &json!({ "command": "stop ox_lib", "dependants": ["ox_target"] })
+        )
+    );
+
+    // FXServer starts what a resource depends on before the resource.
+    observer
+        .supervision
+        .start_resource(&owner, "ox_target")
+        .await
+        .unwrap();
+    let view = observer
+        .resources_until(|view| is(view, "ox_target", ResourceState::Started))
+        .await;
+
+    assert_eq!(row(&view, "ox_lib").state, ResourceState::Started);
+    assert_eq!(
+        last(row(&view, "ox_target")),
+        (LiveChangeKind::Started, ada, None)
+    );
+    assert_eq!(row(&view, "ox_lib").dependants, ["ox_target"]);
+    let audited = observer.audited(AuditAction::ResourceStarted).await;
+    assert_eq!(audited.len(), 1);
+    assert_eq!(audited[0].details, json!({ "command": "start ox_target" }));
+    observer.stop_observer().await;
+}
+
+#[tokio::test]
+async fn a_restart_starts_again_what_depends_on_the_resource_when_asked_to() {
+    let mut observer = Observer::with_resources().await;
+    observer.listed().await;
+    let ada = Some("ada".to_owned());
+
+    let restarted = observer
+        .supervision
+        .restart_resource(&observer.owner, "ox_lib", true)
+        .await
+        .unwrap();
+    let view = observer
+        .resources_until(|view| {
+            let lib = row(view, "ox_lib");
+            let back = lib.state == ResourceState::Started
+                && lib
+                    .last
+                    .as_ref()
+                    .is_some_and(|last| last.kind == LiveChangeKind::Restarted);
+            // Its stop shows first when the two lines fall in two reports of the bridge.
+            back && row(view, "ox_target")
+                .last
+                .as_ref()
+                .is_some_and(|last| last.kind != LiveChangeKind::Stopped)
+        })
+        .await;
+
+    assert_eq!(restarted.dependants, ["ox_target"]);
+    assert_eq!(
+        last(row(&view, "ox_lib")),
+        (LiveChangeKind::Restarted, ada.clone(), None)
+    );
+    let target = row(&view, "ox_target");
+    assert_eq!(target.state, ResourceState::Started);
+    assert_eq!(
+        target.last.as_ref().unwrap().by,
+        ada,
+        "started again by the same order"
+    );
+    let restart = observer.line_of("restart ox_lib").await;
+    let again = observer.console_until("start ox_target").await;
+    assert!(restart < again.0, "the resource first, then what depends on it");
+    assert_eq!((again.3, again.4.as_deref()), (LineKind::Command, Some("ada")));
+    let audited = observer.audited(AuditAction::ResourceRestarted).await;
+    assert_eq!(
+        audited[0].details,
+        json!({ "command": "restart ox_lib", "dependants": ["ox_target"], "startedAgain": true })
+    );
+    assert_eq!(
+        observer.audited(AuditAction::ResourceStarted).await.len(),
+        0,
+        "one order, one entry"
+    );
+    observer.stop_observer().await;
+}
+
+#[tokio::test]
+async fn a_restart_alone_leaves_stopped_what_fxserver_stopped_with_the_resource() {
+    let mut observer = Observer::with_resources().await;
+    observer.listed().await;
+
+    observer
+        .supervision
+        .restart_resource(&observer.owner, "ox_lib", false)
+        .await
+        .unwrap();
+    let view = observer
+        .resources_until(|view| {
+            row(view, "ox_lib")
+                .last
+                .as_ref()
+                .is_some_and(|last| last.kind == LiveChangeKind::Restarted)
+        })
+        .await;
+
+    assert_eq!(row(&view, "ox_lib").state, ResourceState::Started);
+    let target = row(&view, "ox_target");
+    assert_eq!(target.state, ResourceState::Stopped);
+    assert_eq!(
+        target.last.as_ref().and_then(|last| last.with.as_deref()),
+        Some("ox_lib")
+    );
+    assert_eq!(row(&view, "ox_lib").dependants, Vec::<String>::new());
+    observer.stop_observer().await;
+}
+
+#[tokio::test]
+async fn an_order_names_only_a_resource_fxserver_listed_and_never_the_bridge() {
+    let mut observer = Observer::with_resources().await;
+    observer.resource("bad name", "version '1'\n");
+    let cfg = observer.dir.path().join("server-data/server.cfg");
+    let mut text = fs::read_to_string(&cfg).unwrap();
+    text.push_str("ensure \"bad name\"\n");
+    fs::write(cfg, text).unwrap();
+    let owner = observer.owner.clone();
+    let refused = |result: Result<ResourceAck, Error>| result.unwrap_err().code();
+
+    assert_eq!(
+        refused(observer.supervision.stop_resource(&owner, "ox_lib").await),
+        Some(ErrorCode::ServerNotRunning)
+    );
+    assert_eq!(
+        refused(observer.supervision.rescan_resources(&owner).await),
+        Some(ErrorCode::ServerNotRunning)
+    );
+    let view = observer.listed().await;
+    let started = plain(&observer.console_until("Started resource sys_").await.5);
+    let bridge = started.rsplit(' ').next().unwrap().to_owned();
+
+    assert!(!row(&view, "bad name").controllable);
+    assert!(
+        view.resources.iter().all(|listed| listed.name != bridge),
+        "the bridge is Observer's own"
+    );
+    for name in [
+        bridge.as_str(),
+        &bridge.to_ascii_uppercase(),
+        "ghost",
+        "OX_LIB",
+        "ox_lib;quit",
+    ] {
+        assert_eq!(
+            refused(observer.supervision.stop_resource(&owner, name).await),
+            Some(ErrorCode::ResourceNotFound),
+            "{name}"
+        );
+        assert_eq!(
+            refused(observer.supervision.restart_resource(&owner, name, true).await),
+            Some(ErrorCode::ResourceNotFound),
+            "{name}"
+        );
+    }
+    assert_eq!(
+        refused(observer.supervision.stop_resource(&owner, "bad name").await),
+        Some(ErrorCode::ResourceNameRefused)
+    );
+    for action in [AuditAction::ResourceStopped, AuditAction::ResourceRestarted] {
+        assert_eq!(observer.audited(action).await.len(), 0, "{action:?}");
+    }
+    assert!(
+        observer.console().iter().all(|line| line.3 != LineKind::Command),
+        "nothing reached the console"
+    );
+    observer.stop_observer().await;
+}
+
+#[tokio::test]
+async fn an_order_is_taken_for_the_state_it_needs_and_one_at_a_time_for_a_resource() {
+    let mut observer = Observer::with_resources().await;
+    observer.listed().await;
+    let owner = observer.owner.clone();
+    let refused = |result: Result<ResourceAck, Error>| result.unwrap_err().code();
+
+    assert_eq!(
+        refused(observer.supervision.start_resource(&owner, "ox_lib").await),
+        Some(ErrorCode::ResourceChanged),
+        "it is up"
+    );
+    assert_eq!(
+        refused(observer.supervision.stop_resource(&owner, "taxi").await),
+        Some(ErrorCode::ResourceChanged),
+        "it is not"
+    );
+    assert_eq!(
+        refused(observer.supervision.restart_resource(&owner, "taxi", true).await),
+        Some(ErrorCode::ResourceChanged)
+    );
+
+    observer
+        .supervision
+        .stop_resource(&owner, "ox_lib")
+        .await
+        .unwrap();
+    let second = refused(observer.supervision.stop_resource(&owner, "ox_lib").await);
+    // FXServer answers within half a second, and the resource is stopped from then on.
+    assert!(
+        matches!(second, Some(ErrorCode::ResourceBusy | ErrorCode::ResourceChanged)),
+        "{second:?}"
+    );
+    let view = observer
+        .resources_until(|view| is(view, "ox_lib", ResourceState::Stopped))
+        .await;
+
+    assert_eq!(row(&view, "ox_lib").asked, None, "FXServer answered");
+    assert_eq!(
+        observer.audited(AuditAction::ResourceStopped).await.len(),
+        1,
+        "a refused order is not one"
+    );
+    let written = observer
+        .console()
+        .iter()
+        .filter(|line| line.3 == LineKind::Command)
+        .count();
+    assert_eq!(written, 1, "one line reached the console");
+    observer.stop_observer().await;
+}
+
+#[tokio::test]
+async fn a_rescan_says_what_fxserver_found_and_a_failed_start_shows_as_one() {
+    let mut observer = Observer::with_resources().await;
+    observer.listed().await;
+    let owner = observer.owner.clone();
+
+    observer.resource("[jobs]/bank", "version '1.0.0'\n");
+    observer.resource("[jobs]/taxi", "fx_version 'cerulean'\nversion '2.0.0'\n");
+    let asked = observer.supervision.rescan_resources(&owner).await.unwrap();
+    let view = observer.resources_until(|view| view.rescan.is_some()).await;
+
+    assert_eq!(asked.delivery, Delivery::Written);
+    assert!(!view.rescanning, "the list came again");
+    let rescan = view.rescan.clone().unwrap();
+    assert_eq!(
+        (rescan.by.as_deref(), rescan.added.as_slice(), rescan.added_count),
+        (Some("ada"), ["bank".to_owned()].as_slice(), 1)
+    );
+    assert_eq!(
+        (row(&view, "bank").state, row(&view, "bank").folder.as_str()),
+        (ResourceState::Stopped, "[jobs]")
+    );
+    assert_eq!(row(&view, "taxi").version.as_deref(), Some("2.0.0"));
+    assert_eq!(
+        row(&view, "ox_lib").state,
+        ResourceState::Started,
+        "nothing stopped"
+    );
+    let echo = observer.console_until("refresh").await;
+    assert_eq!((echo.3, echo.4.as_deref()), (LineKind::Command, Some("ada")));
+    observer
+        .console_until("Found 1 new resources, and refreshed 1/")
+        .await;
+    let view = observer
+        .resources_until(|view| {
+            view.rescan
+                .as_ref()
+                .is_some_and(|rescan| rescan.changed.is_some())
+        })
+        .await;
+    assert_eq!(view.rescan.unwrap().changed, Some(1), "taxi's manifest");
+    let audited = observer.audited(AuditAction::ResourcesRescanned).await;
+    assert_eq!(
+        (audited.len(), audited[0].target.as_deref()),
+        (1, Some("default"))
+    );
+
+    observer
+        .supervision
+        .command(
+            &owner,
+            "set fake_fail_start bank",
+            CONSOLE_ROUTE.0,
+            CONSOLE_ROUTE.1,
+        )
+        .await
+        .unwrap();
+    observer.supervision.start_resource(&owner, "bank").await.unwrap();
+    let view = observer
+        .resources_until(|view| row(view, "bank").failed_at.is_some())
+        .await;
+    assert_eq!(row(&view, "bank").state, ResourceState::Stopped);
+
+    observer
+        .supervision
+        .command(
+            &owner,
+            "set fake_fail_start nothing",
+            CONSOLE_ROUTE.0,
+            CONSOLE_ROUTE.1,
+        )
+        .await
+        .unwrap();
+    observer.supervision.start_resource(&owner, "bank").await.unwrap();
+    let view = observer
+        .resources_until(|view| is(view, "bank", ResourceState::Started))
+        .await;
+    assert_eq!(row(&view, "bank").failed_at, None, "it started since");
+    observer.stop_observer().await;
 }

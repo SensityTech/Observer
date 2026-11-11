@@ -24,7 +24,7 @@ const TIMES = new Set<string>([
     'startedAt',
 ]);
 const ACTIONS = new Set<string>(['attempted', 'action']);
-/** The schedule's lists, and the nested entries of its audit details. */
+/** The schedule's lists, the resources an order stopped, and the nested entries of the details. */
 const LISTS = new Set<string>([
     'times',
     'warnings',
@@ -33,6 +33,7 @@ const LISTS = new Set<string>([
     'extensions',
     'excluded',
     'hidden',
+    'dependants',
 ]);
 const NESTED = new Set<string>(['scheduled', 'dropped']);
 /** The schedule's settings counted in minutes. */

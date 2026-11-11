@@ -10,9 +10,9 @@ use super::{OWNER_PASSWORD, Reply, Server, Session};
 
 const SERVER_CONTROL: &str = "8";
 const SETTINGS_MANAGE: &str = "400";
-const PLAYERS_KICK: &str = "4000000";
-const PLAYERS_ANNOUNCE: &str = "8000000";
-const PLAYERS_MESSAGE: &str = "10000000";
+const PLAYERS_KICK: &str = "8000000";
+const PLAYERS_ANNOUNCE: &str = "10000000";
+const PLAYERS_MESSAGE: &str = "20000000";
 const KICKS: &str = "/api/servers/default/kicks";
 const KICK_ALL: &str = "/api/servers/default/kicks/all";
 const ANNOUNCEMENTS: &str = "/api/servers/default/announcements";

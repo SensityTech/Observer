@@ -43,7 +43,7 @@ const MODERATOR: Me = {
     mustChangePassword: false,
 };
 /** A moderator who also kicks and messages players, with what those permissions imply. */
-const KICKER: Me = { ...MODERATOR, permissions: '14014000' };
+const KICKER: Me = { ...MODERATOR, permissions: '28014000' };
 const ago = (ms: number) => new Date(NOW - ms).toISOString();
 
 const player = (fields: Partial<OnlinePlayer> & Pick<OnlinePlayer, 'netId'>): OnlinePlayer => ({
