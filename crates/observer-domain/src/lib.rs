@@ -17,6 +17,7 @@ pub mod convars;
 pub mod debug;
 pub mod delegation;
 pub mod diagnostics;
+pub mod docs;
 pub mod drops;
 pub mod error;
 pub mod features;
