@@ -13,12 +13,15 @@ mod cfg;
 mod changes;
 mod debug;
 mod diagnostics;
+mod docs;
 mod drops;
+mod entities;
 mod features;
 mod files;
 mod map;
 mod metrics;
 mod players;
+mod resources;
 mod schedule;
 mod servers;
 mod settings;
@@ -78,6 +81,9 @@ pub(crate) fn routes() -> Vec<Route> {
     // which the handler checks once it has read the line.
     let command = Permission(P::CONSOLE_WRITE);
     let logs = Permission(P::LOGS_DOWNLOAD);
+    // Starting, stopping and restarting a resource, and having FXServer read its folders again:
+    // one permission of their own, less than the console's, which runs any command.
+    let resources = Permission(P::RESOURCES_CONTROL);
     // The schedule's settings take the password again; skipping, restoring or delaying its next
     // restart are operations, and so is a single restart, which is the server control's.
     let plan = Permission(P::SCHEDULE_MANAGE);
@@ -110,6 +116,13 @@ pub(crate) fn routes() -> Vec<Route> {
     let map = Permission(P::PLAYERS_MAP);
     let map_image = ReauthenticatedOwner;
     let change_map = Reauthenticated(P::SETTINGS_MANAGE);
+    // The server's entities are seen under one permission and deleted under another. Who owns
+    // one is told only to who also sees the live map, which the service checks. How often the
+    // server lists them is a setting.
+    let entities = Permission(P::ENTITIES_VIEW);
+    let delete_entities = Permission(P::ENTITIES_DELETE);
+    let read_entities_settings = Permission(P::SETTINGS_VIEW);
+    let change_entities = Reauthenticated(P::SETTINGS_MANAGE);
     // Statistics name nobody; the log, its export and reason groups are `PLAYERS_VIEW`'s.
     let drops = Permission(P::DROPS_VIEW);
     // What changed between starts: the history for its permission, the contents behind the critical
@@ -202,6 +215,10 @@ pub(crate) fn routes() -> Vec<Route> {
         route(M::POST,   "/servers/default/console",    command,      servers::command),
         route(M::GET,    "/servers/default/console/logs",        logs, servers::log_files),
         route(M::GET,    "/servers/default/console/logs/{name}", logs, servers::download_log),
+        route(M::POST,   "/servers/default/resources/start",   resources, resources::start),
+        route(M::POST,   "/servers/default/resources/stop",    resources, resources::stop),
+        route(M::POST,   "/servers/default/resources/restart", resources, resources::restart),
+        route(M::POST,   "/servers/default/resources/rescan",  resources, resources::rescan),
         route(M::PUT,    "/servers/default/schedule",       edit_schedule, schedule::change),
         route(M::POST,   "/servers/default/schedule/skip",  plan,          schedule::skip),
         route(M::DELETE, "/servers/default/schedule/skip",  plan,          schedule::restore),
@@ -229,6 +246,7 @@ pub(crate) fn routes() -> Vec<Route> {
         route(M::GET,    "/metrics/runs",               dashboard,    metrics::runs),
         route(M::GET,    "/about",                      Session,      about::about),
         route(M::GET,    "/about/licences",             Session,      about::licences),
+        route(M::GET,    "/docs/integration",           Session,      docs::integration),
         route(M::GET,    "/servers/default/crashes/{id}/files/{name}", dumps, diagnostics::download_file),
         route(M::DELETE, "/servers/default/crashes/{id}/files",        dumps, diagnostics::delete_files),
         route(M::GET,    "/servers/default/players",           players, players::page),
@@ -243,6 +261,11 @@ pub(crate) fn routes() -> Vec<Route> {
         route(M::GET,    "/servers/default/players/map/image",     map,        map::image),
         route(M::PUT,    "/servers/default/players/map/image",     map_image,  map::set_image),
         route(M::DELETE, "/servers/default/players/map/image",     map_image,  map::remove_image),
+        route(M::GET,    "/servers/default/entities",          entities,               entities::page),
+        route(M::GET,    "/servers/default/entities/map",      entities,               entities::map),
+        route(M::POST,   "/servers/default/entities/delete",   delete_entities,        entities::delete),
+        route(M::GET,    "/servers/default/entities/settings", read_entities_settings, entities::settings),
+        route(M::PUT,    "/servers/default/entities/settings", change_entities,        entities::change_settings),
         route(M::GET,    "/servers/default/players/{id}",      players, players::profile),
         route(M::GET,    "/servers/default/players/{id}/bans", bans,    bans::of_player),
         route(M::GET,    "/servers/default/bans",              bans,    bans::page),

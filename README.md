@@ -15,6 +15,8 @@ what to do with them.
   that never got ready), and FXServer's whole process tree stops with it. A server stuck for 6 minutes
   is restarted; the delay can be raised, or hang detection turned off.
 - **Live console.** Search and filters, commands gated by permission, secrets masked, daily log files.
+- **Resources.** Every resource of the running server with its state, live, and a start, a stop or a
+  restart of each, the resources that stop with it named before you confirm.
 - **Scheduled restarts.** Fixed times or an interval in the time zone you choose, with warnings to your
   resources, skip, delay and one-off restarts.
 - **FXServer builds.** The Cfx.re catalog, verified downloads, a switch at the next start or restart,
@@ -23,6 +25,8 @@ what to do with them.
   FXServer's threads and connections, crash dumps and hangs.
 - **Live map.** Where the connected players stand, over Rockstar's map of GTA V or an image you add,
   coloured by play time, a click away from their profile and a ban.
+- **Entities.** The server's vehicles, peds and objects, each with the resource that created it and
+  the player whose game simulates it, found on the live map and deleted one at a time or a hundred.
 - **Debug.** What each resource sends and receives, writes into state bags and calls over HTTP,
   counted inside the resources: the event that floods the clients, the client that sends far more
   than the others, the resource that calls a host it never called. Off until the owner turns it on.
@@ -115,9 +119,10 @@ page, each with a temporary password that works for 72 hours and is changed at t
 
 The panel's pages are grouped by what one comes for: **Players** (the players, the live map, the
 bans), **Server** (restarts, the cfg, builds, backups, file changes), **Insights** (statistics, drops,
-diagnostics) and **Maintenance** (tools, the audit log). The search button beside the logo, or Ctrl K
-(⌘ K on a Mac) from any page, opens a search of the pages, of the settings by their name, and of the
-connected players by name or ID. Each account finds only what it may open.
+entities, diagnostics) and **Maintenance** (tools, the audit log). The search button beside the logo,
+or Ctrl K (⌘ K on a Mac) from any page, opens a search of the pages, of the settings by their name, of
+the events and exports the **Documentation** page describes (see [Integrations](#integrations)), and
+of the connected players by name or ID. Each account finds only what it may open.
 
 From the host, even while Observer runs:
 
@@ -512,6 +517,55 @@ The page edits a plain UTF-8 file of at most 512 KiB. It refuses a link, a read-
 another encoding, which a save would damage, and the files the cfg runs with `exec`: those are edited on the host or
 over SFTP, and the checks still read them.
 
+## Resources
+
+The **Resources** page lists every resource FXServer knows while the server runs: the server's own
+under their category folder (`[core]/[ox]`), then those of the build (`system_resources`). Each has
+its state, its manifest's version and what last happened to it since the start: started, stopped or
+restarted, how long ago, by whom when it was asked on this page, and with which resource when
+FXServer stopped it along with another. A resource FXServer said it could not start is marked **Did
+not start**. One it warned about as it started it carries the count of its warnings, and says what
+they were: streamed files that are heavy or oversized, files its manifest names and does not hold.
+The filters count each kind, the search narrows the list by name, a folder folds under the line that
+counts what it has started, which the browser remembers, and the page follows the server as it goes:
+nothing to reload.
+
+The list is FXServer's own. The bridge reports it once the cfg has run, and again after each rescan:
+while the server starts, the page says how many resources are up so far, and a stopped server lists
+nothing.
+
+With **Start and stop resources**, each row gets **Start**, or **Restart** and **Stop**, and the page
+gets **Rescan**. Each is FXServer's own console command, `start`, `stop`, `restart` or `refresh`,
+which Observer writes with the name FXServer listed. The line shows in the live console under the
+account's name, and every order is in the audit log. Until FXServer has answered an order, its row
+says who asked for it, to everyone who has the page open, and takes no other.
+
+- **What stops with a resource.** Before it stops a resource, FXServer stops every started resource
+  that depends on it, by the `dependency` and `dependencies` of their manifests, and it starts none
+  of them again. A restart is a stop and a start, so it does the same. The page names them before a
+  stop or a restart that takes others along, and a restart offers to start them again once the
+  resource is back, which Observer does with one `start` each.
+- **Start** starts what the resource depends on first, as FXServer does.
+- **Rescan** has FXServer read its resource folders again: a folder added since the start becomes a
+  resource, a manifest that changed is read again. Nothing starts or stops, and the page says what
+  FXServer found.
+- **Until the next restart.** What is started or stopped here lasts as long as the run: the cfg
+  decides what starts with the server (see [Editing server.cfg](#editing-servercfg)).
+
+Whoever has **View the dashboard** or **Start and stop resources** reads the page. Its buttons take
+the second, a permission of its own, and sensitive: a stopped resource is gone for every player.
+
+**Limits.**
+
+- **Names the console cannot take.** An order is a console line, so Observer only writes a name made
+  of letters, digits, `_`, `-` and `.`, 64 characters at most. A resource named otherwise is listed
+  with **Console only** in place of its buttons.
+- **Observer's bridge is not listed,** and no order reaches it: it is how Observer hears the server.
+- **A folder deleted while the server runs** stays listed until the server restarts, since FXServer
+  keeps the resource it read. A folder whose manifest is missing or broken is no resource to
+  FXServer, and is not listed.
+- **The first 5,000 resources** are listed; the page says so when FXServer knows more.
+
 ## File access over SFTP
 
 Observer can let people and CI pipelines read and change chosen parts of the server folder over SFTP,
@@ -562,7 +616,7 @@ Whatever the groups say, no one reaches the cfg files (`*.cfg`, which hold the l
 database string), `cache/`, Observer's own folders and `observer.toml`, `.git`, `.env` files and key
 files. Every change is in the audit log; uploads are written to a temporary file and swapped in only
 when complete, so FXServer never reads half a file. Observer never restarts a resource after an
-upload: restart it from the console, or let your own resource react.
+upload: restart it on the [Resources](#resources) page, or let your own resource react.
 
 ## What changed since the last start
 
@@ -867,11 +921,11 @@ are the owner's.
 
 File access over SFTP (`sftp`), file changes (`changes`), the server tools (`tools`), the diagnostics
 (`diagnostics`), the statistics (`metrics`), the players (`players`), the player drops (`drops`), the
-update checks (`updates`) and Debug (`debug`) can each be turned off; Debug alone starts off. A
-feature that is off runs none of its code: Observer does not open its port, start its tasks or open
-its database, and its API routes answer `feature_disabled`. What it recorded stays on disk, and its
-retention waits until it runs again. Supervision, the console, accounts, the audit log, the restart
-schedule and FXServer's builds are always on.
+update checks (`updates`), Debug (`debug`) and the entities (`entities`) can each be turned off; Debug
+alone starts off. A feature that is off runs none of its code: Observer does not open its port, start
+its tasks or open its database, and its API routes answer `feature_disabled`. What it recorded stays
+on disk, and its retention waits until it runs again. Supervision, the console, accounts, the audit
+log, the restart schedule and FXServer's builds are always on.
 
 `GET /api/features` (**View settings**) says for each feature whether it runs, what holds it off, and
 what it opens: its port, its tasks, its files, its routes. Only the owner turns one on or off, with
@@ -945,6 +999,13 @@ resource, is written into the build before every start of FXServer under a name 
 which the `observer_bridge` server convar gives: do not ensure it yourself. Scripts that target a
 fixed name, as they do txAdmin's `monitor`, find nothing. [`resource/observer_example`](resource/observer_example)
 listens to each event and marks where a team plugs in its notifications and its saves.
+
+The panel's **Documentation** page shows that contract as the build that runs ships it: each event with
+when it comes, its fields and a handler to copy, each export where the contract shows it called, and the
+files of the example resource. Every section has a link of its own, and the panel's search (Ctrl K) finds
+an event, an export or one of txAdmin's events by its name. Any account reads it. To the accounts that
+see the dashboard, it also says what this server does now: the contract's version, the name the bridge
+took for this start, and whether txAdmin's events are raised, now and from the next start.
 
 Your resources can also give each connected player a label, a roleplay character's name or an ID of
 your own, through the bridge's `setPlayerLabel` export. The panel shows it beside the player's FiveM
@@ -1024,6 +1085,40 @@ not send.
 Positions come from the bridge, which reads them from OneSync: without OneSync there are none. The
 server sends them every 1, 2 or 5 seconds, only while someone has the page open, and stops within 30
 seconds after the last one leaves. Observer keeps them in memory only: nothing of them is written.
+
+## Entities
+
+The Entities page lists what the game holds on the server: its vehicles, its peds and its objects, as
+OneSync knows them. Each has its type, its model, the resource that created it, the player whose game
+simulates it, its routing bucket and its position. The players' own peds are counted and never listed.
+The list is filtered by type, vehicle class, creating resource, owner and bucket, searched by net ID,
+model, resource or owner's name, sorted by any column, and read a hundred at a time. Seeing it takes
+**See the entities**.
+
+A model shows as its hash, which is all the server knows of it: Observer ships no table of GTA V's
+names. The creating resource is the one the server knew when the entity was first seen: none for the
+game's own traffic, and for what a client's script created. Who owns an entity, and whether a player
+sits in a vehicle, is told only to accounts that also hold **See the live map**: both say where a
+player is.
+
+On the [live map](#live-map), **Entities** draws them under the players, a shape for each type. Past
+5,000 in the part of the map in view, the map counts them by square instead, and zooming in shows each
+one again. A click on an entity gives what the list says of it.
+
+**Delete entities** is a permission of its own. A deletion takes up to 100 entities, asks for a word
+typed from 20, and never takes a player's own ped, a vehicle a player sits in or a train. The server
+checks each entity again before it deletes it, so one that changed since the list was read stays, and
+the panel says what became of each. Nothing is deleted from a list more than three sweeps old, nor from
+one read before the server or its bridge restarted. Every deletion is in the audit log, with what was
+deleted and by whom.
+
+The entities come from the bridge, which reads them from OneSync: without OneSync there are none, and
+only GTA V servers are read. The server lists them every 15 seconds, or as often as the settings'
+Entities category says, only while someone has the page or the map's layer open, and stops within 30
+seconds after the last one leaves. A sweep works a millisecond at a time and gives the server its frame
+back in between, and stops at 50 ms of work, its list then partial. When a sweep costs more than half
+of that, the server spaces the next ones out by itself, up to once a minute, and comes back to its
+cadence once they are cheap again. Observer keeps the list in memory only: nothing of it is written.
 
 ## Updates
 

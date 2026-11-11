@@ -35,6 +35,8 @@ import type { DropCategory } from '../api/generated/DropCategory';
 import type { DropKind } from '../api/generated/DropKind';
 import type { DropsRange } from '../api/generated/DropsRange';
 import type { EndpointProtocol } from '../api/generated/EndpointProtocol';
+import type { EntityKind } from '../api/generated/EntityKind';
+import type { EntityOutcome } from '../api/generated/EntityOutcome';
 import type { EnvironmentFact } from '../api/generated/EnvironmentFact';
 import type { ErrorCode } from '../api/generated/ErrorCode';
 import type { EscrowPolicy } from '../api/generated/EscrowPolicy';
@@ -73,6 +75,7 @@ import type { PlayersFileProblem } from '../api/generated/PlayersFileProblem';
 import type { Protection } from '../api/generated/Protection';
 import type { Range } from '../api/generated/Range';
 import type { ResourceChangeKind } from '../api/generated/ResourceChangeKind';
+import type { ResourceState } from '../api/generated/ResourceState';
 import type { ScheduleMode } from '../api/generated/ScheduleMode';
 import type { ScheduleProblem } from '../api/generated/ScheduleProblem';
 import type { ServerFolder } from '../api/generated/ServerFolder';
@@ -98,10 +101,14 @@ import type { RollbackReason } from '../api/generated/RollbackReason';
 import type { UpdateBlock } from '../api/generated/UpdateBlock';
 import type { UpdateStep } from '../api/generated/UpdateStep';
 import type { UpdateWhen } from '../api/generated/UpdateWhen';
+import type { VehicleClass } from '../api/generated/VehicleClass';
 import type { DestinationKind } from '../api/backups';
+import type { ResourceVerb } from '../api/resources';
 import { parsePermissions, permissionKeys, type PermissionKey } from '../auth/permissions';
 import type { InvisibleKind } from '../changes/invisible';
+import type { DocMatch } from '../docs/model';
 import type { LinkState } from '../live/realtime';
+import type { Filter as ResourceFilter } from '../resources/list';
 import type { Applies as SettingApplies, CategoryGroup, CategoryId, SettingId } from '../settings/catalog';
 import type { LaunchStep, SetupStep } from '../setup/state';
 import { formatBytes, formatDuration, formatNumber, plural } from './format';
@@ -218,6 +225,21 @@ const permissions = {
         name: 'See the live map',
         description: 'Where every connected player stands, as the server sees it, a few times a minute.',
     },
+    resourcesControl: {
+        name: 'Start and stop resources',
+        description:
+            'Start, stop and restart a resource of the running server, and have FXServer read its resource folders again.',
+    },
+    entitiesView: {
+        name: 'See the entities',
+        description:
+            "The server's vehicles, peds and objects: their model, the resource that created them and where they stand. Who owns one also takes See the live map.",
+    },
+    entitiesDelete: {
+        name: 'Delete entities',
+        description:
+            'Delete vehicles, peds and objects from the game, up to a hundred at a time. Players near them see them vanish.',
+    },
     bansEdit: {
         name: 'Edit bans',
         description:
@@ -240,6 +262,7 @@ const features = {
     drops: 'Player drops',
     updates: 'Updates',
     debug: 'Debug',
+    entities: 'Entities',
 } satisfies Record<Feature, string>;
 
 const isFeature = (key: string): key is Feature => Object.hasOwn(features, key);
@@ -468,6 +491,7 @@ export const en = {
         overview: 'Overview',
         statistics: 'Statistics',
         console: 'Console',
+        resources: 'Resources',
         groupPlayers: 'Players',
         groupServer: 'Server',
         groupInsights: 'Insights',
@@ -476,6 +500,7 @@ export const en = {
         debugBags: 'State bags',
         debugHttp: 'HTTP requests',
         maintenance: 'Maintenance',
+        docs: 'Documentation',
         settings: 'Settings',
         schedule: 'Restarts',
         artifacts: 'FXServer builds',
@@ -484,6 +509,7 @@ export const en = {
         players: 'Players',
         map: 'Live map',
         bans: 'Bans',
+        entities: 'Entities',
         drops: 'Drops',
         changes: 'File changes',
         tools: 'Tools',
@@ -570,10 +596,17 @@ export const en = {
     },
     palette: {
         label: 'Go to a page, a setting or a player',
-        placeholder: 'A page, a setting, a player online',
+        placeholder: 'A page, a setting, an event, a player online',
         results: 'Results',
         page: 'Page',
         tool: 'Tool',
+        doc: (kind: string) => `Documentation · ${kind}`,
+        docKinds: {
+            section: 'Section',
+            event: 'Event',
+            export: 'Export',
+            txadmin: "txAdmin's event",
+        } satisfies Record<DocMatch['kind'], string>,
         setting: (category: string) => `Setting · ${category}`,
         player: (netId: number) => `Player online · #${netId}`,
         none: 'Nothing matches.',
@@ -2526,6 +2559,180 @@ export const en = {
         stopped: 'The server is not running: no one is on the map.',
         scale: (metres: string) => `${metres} m`,
         unknownPing: 'unknown',
+        entities: {
+            layer: 'Entities',
+            shown: 'Entities shown',
+            list: 'List',
+            every: (seconds: number) =>
+                `Entities every ${count(seconds, { one: 'second', other: 'seconds' })}`,
+            waiting: 'Waiting for the server to list its entities…',
+            cells: 'Too many entities here to draw each one: the map counts them by square. Zoom in to see them.',
+            noOneSync: 'Entities need OneSync, which this server does not run.',
+            otherGame: 'Only GTA V servers list their entities.',
+            failed: 'The entities could not be read.',
+            selected: 'Selected entity',
+            script: 'Script',
+            bucket: (value: number) => `Bucket ${formatNumber('en', value)}`,
+            inList: 'In the list',
+            copyPosition: 'Copy the position',
+            gone: 'This entity is no longer on the server.',
+            delete: 'Delete',
+        },
+    },
+    entities: {
+        title: 'Entities',
+        gloss: 'The vehicles, peds and objects the server holds.',
+        list: 'Entities',
+        count: (value: number) => count(value, { one: 'entity', other: 'entities' }),
+        playerPeds: (value: number) =>
+            `and ${count(value, { one: "player's own ped", other: "players' own peds" })}, never listed`,
+        filter: 'Type',
+        filters: { all: 'All', vehicle: 'Vehicles', ped: 'Peds', object: 'Objects' } satisfies Record<
+            EntityKind | 'all',
+            string
+        >,
+        search: 'Search',
+        searchHint: 'Net id, model, resource or owner',
+        searchHintNoOwner: 'Net id, model or resource',
+        submit: 'Search',
+        class: 'Class',
+        createdBy: 'Created by',
+        owner: 'Owner',
+        bucket: 'Bucket',
+        any: 'Any',
+        anyResource: 'Any resource',
+        noResource: 'No resource',
+        anyone: 'Anyone',
+        noOwner: 'No owner',
+        someOwner: 'A player',
+        player: (netId: number, name: string | null) => (name === null ? `#${netId}` : `#${netId} ${name}`),
+        mostCommon: 'Most common',
+        modelCount: (model: string, value: number) => `${model} ×${formatNumber('en', value)}`,
+        showModel: (model: string) => `Show the entities of model ${model}`,
+        clear: 'Clear the filters',
+        caption: 'The entities the filters keep',
+        columns: {
+            kind: 'Type',
+            model: 'Model',
+            resource: 'Created by',
+            owner: 'Owner',
+            position: 'Position',
+        },
+        actions: 'Actions',
+        // A vehicle reads as its class, as `GetVehicleType` tells them apart.
+        classes: {
+            car: 'Car',
+            bike: 'Bike',
+            boat: 'Boat',
+            helicopter: 'Helicopter',
+            plane: 'Plane',
+            submarine: 'Submarine',
+            trailer: 'Trailer',
+            train: 'Train',
+            other: 'Vehicle',
+        } satisfies Record<VehicleClass, string>,
+        kindNames: { vehicle: 'Vehicle', ped: 'Ped', object: 'Object' } satisfies Record<EntityKind, string>,
+        netId: (value: number) => `#${value}`,
+        lookingUp: 'Looking it up',
+        playerInside: 'Player inside',
+        bucketOf: (value: number) => `bucket ${formatNumber('en', value)}`,
+        /** An entity said whole, for what acts on it: `Car 0x3C4E2113, #1042`. */
+        named: (kind: string, model: string, netId: number) => `${kind} ${model}, #${netId}`,
+        select: (entity: string) => `Select ${entity}`,
+        selectPage: 'Select the entities of this page',
+        never: {
+            occupied: 'A player sits inside: it is never deleted',
+            train: 'A train is never deleted',
+        },
+        showOnMap: (entity: string) => `Show ${entity} on the map`,
+        deleteOne: (entity: string) => `Delete ${entity}`,
+        selected: (value: number) => `${formatNumber('en', value)} selected`,
+        atMost: (value: number) => `${formatNumber('en', value)} at most`,
+        clearSelection: 'Clear',
+        deleteSelected: (value: number) => `Delete ${formatNumber('en', value)}`,
+        listed: (ago: string, seconds: number) =>
+            `Listed ${ago} ago, every ${count(seconds, { one: 'second', other: 'seconds' })} while this page is open`,
+        waiting: 'Waiting for the server to list its entities…',
+        cost: 'What the last sweep cost',
+        costOf: (work: string, frames: number) =>
+            `The last sweep took ${work} of the server's main thread, over ${count(frames, { one: 'frame', other: 'frames' })}.`,
+        range: (from: number, to: number, of: number) =>
+            `${formatNumber('en', from)}–${formatNumber('en', to)} of ${formatNumber('en', of)}`,
+        previous: 'Previous',
+        next: 'Next',
+        loading: 'Loading the entities…',
+        failed: 'The entities could not be read.',
+        noMatch: 'No entity matches these filters.',
+        none: 'The server holds no entity right now.',
+        stale: (age: string) =>
+            `This list is ${age} old: the server stopped answering. Nothing can be deleted from it until a new one comes.`,
+        spaced: (seconds: number) =>
+            `Listing its entities costs this server more than it should: it now lists them every ${count(seconds, { one: 'second', other: 'seconds' })}.`,
+        truncated: (value: number) =>
+            `The last sweep stopped after ${count(value, { one: 'entity', other: 'entities' })} to spare the server. The list is partial; the counts are whole.`,
+        unavailable: {
+            onesync: {
+                title: 'Entities need OneSync',
+                body: "Without OneSync the server does not know its entities, so there is nothing to list. It is one of the server's",
+                link: 'launch settings',
+            },
+            game: {
+                title: 'Only GTA V servers are read',
+                body: 'This server runs another game, whose entities Observer does not list.',
+            },
+        },
+        stopped: {
+            title: 'The server is not running',
+            body: 'Its entities are listed while FXServer runs and this page is open.',
+        },
+        deleted: (deleted: number, asked: number) =>
+            deleted === asked
+                ? `Deleted ${count(asked, { one: 'entity', other: 'entities' })}.`
+                : `Deleted ${formatNumber('en', deleted)} of ${count(asked, { one: 'entity', other: 'entities' })}.`,
+        dialog: {
+            title: (value: number) => `Delete ${count(value, { one: 'entity', other: 'entities' })}?`,
+            titleOne: (kind: string) => `Delete this ${kind.toLowerCase()}?`,
+            body: 'This cannot be undone. Players near them see them vanish, and a script that still uses one may fail.',
+            bodyOne:
+                'This cannot be undone. Players near it see it vanish, and a script that still uses it may fail.',
+            times: (value: number) => `×${formatNumber('en', value)}`,
+            more: (value: number) =>
+                `and ${count(value, { one: 'other', other: 'others' })}, in smaller groups`,
+            scripted: (value: number) =>
+                `${formatNumber('en', value)} ${plural('en', value, { one: 'was', other: 'were' })} created by a script.`,
+            scriptedWhy: 'A garage, a job or a persistence resource may still expect them.',
+            owned: (value: number) =>
+                `${formatNumber('en', value)} ${plural('en', value, { one: 'is', other: 'are' })} simulated by a connected player's game.`,
+            createdBy: (resource: string) => `It was created by ${resource}`,
+            createdByWhy: ', which may still expect it.',
+            ownedOne: "A connected player's game simulates it.",
+            word: 'DELETE',
+            type: (word: string, value: number) =>
+                `Type ${word} to delete ${count(value, { one: 'entity', other: 'entities' })}`,
+            confirm: (value: number) => `Delete ${formatNumber('en', value)}`,
+            confirmOne: 'Delete',
+        },
+        kinds: { vehicle: 'vehicle', ped: 'ped', object: 'object' } satisfies Record<EntityKind, string>,
+        /** A group of entities of one model: `8 × 0xB779A091 vehicle (qb-garages)`. */
+        group: (value: number, model: string, kind: string, resource: string | null) =>
+            `${formatNumber('en', value)} × ${model} ${kind}${resource === null ? '' : ` (${resource})`}`,
+        // What became of the entities a deletion did not delete, each said of how many.
+        notDeleted: {
+            unconfirmed: (value: number) =>
+                `${formatNumber('en', value)} ${plural('en', value, { one: 'is still there', other: 'are still there' })}`,
+            unanswered: (value: number) => `the server did not answer for ${formatNumber('en', value)}`,
+            gone: (value: number) =>
+                `${formatNumber('en', value)} ${plural('en', value, { one: 'was already gone', other: 'were already gone' })}`,
+            changed: (value: number) =>
+                `${formatNumber('en', value)} ${plural('en', value, { one: 'was no longer the entity listed', other: 'were no longer the entities listed' })}`,
+            player: (value: number) =>
+                `${formatNumber('en', value)} ${plural('en', value, { one: "is a player's own ped", other: "are players' own peds" })}`,
+            occupied: (value: number) => `${formatNumber('en', value)} had a player inside`,
+            train: (value: number) =>
+                `${formatNumber('en', value)} ${plural('en', value, { one: 'is a train', other: 'are trains' })}`,
+            late: (value: number) => `the server read the request too late for ${formatNumber('en', value)}`,
+            error: (value: number) => `${formatNumber('en', value)} failed`,
+        } satisfies Record<Exclude<EntityOutcome, 'deleted'>, (value: number) => string>,
     },
     bans: {
         title: 'Bans',
@@ -4241,6 +4448,148 @@ export const en = {
             loadFailed: 'The log files could not be listed.',
         },
     },
+    resources: {
+        title: 'Resources',
+        lead: 'Every resource FXServer knows, as it stands now. What is started or stopped here lasts until the next restart: the cfg decides what starts with the server.',
+        rescan: 'Rescan',
+        filtersLabel: 'Which resources show',
+        filters: {
+            all: 'All',
+            started: 'Started',
+            stopped: 'Stopped',
+            failed: 'Did not start',
+            warned: 'With warnings',
+        } satisfies Record<ResourceFilter, string>,
+        find: 'Find a resource',
+        noMatch: 'No resource matches.',
+        none: 'FXServer knows no resource.',
+        states: {
+            started: 'Started',
+            starting: 'Starting',
+            stopped: 'Stopped',
+            stopping: 'Stopping',
+            unknown: 'State unknown',
+        } satisfies Record<ResourceState, string>,
+        didNotStart: 'Did not start',
+        folder: {
+            started: (started: number, total: number) =>
+                `${formatNumber('en', started)} of ${formatNumber('en', total)} started`,
+            build: 'FXServer’s own',
+        },
+        verbs: { start: 'Start', stop: 'Stop', restart: 'Restart' } satisfies Record<ResourceVerb, string>,
+        actionsOn: (name: string) => `Actions on ${name}`,
+        consoleOnly: 'Console only',
+        consoleOnlyTip:
+            'Observer names a resource in a console command only by letters, digits, _, . and -. Start and stop this one from the console.',
+        ago: (duration: string | null) => (duration === null ? 'just now' : `${duration} ago`),
+        last: {
+            started: 'started',
+            stopped: 'stopped',
+            restarted: 'restarted',
+        } satisfies Record<LiveChangeKind, string>,
+        // `stopped with ox_lib, 2 min ago`: the resource it depends on, which FXServer stopped first.
+        happened: (what: string, by: string | null, along: string | null, ago: string) => {
+            const how = [along !== null && `with ${along}`, by !== null && `by ${by}`]
+                .filter((part) => part !== false)
+                .join(' ');
+            return how === '' ? `${what} ${ago}` : `${what} ${how}, ${ago}`;
+        },
+        couldNotStart: (ago: string) => `FXServer could not start it, ${ago}`,
+        asked: {
+            start: (by: string) => `start asked by ${by}`,
+            stop: (by: string) => `stop asked by ${by}`,
+            restart: (by: string) => `restart asked by ${by}`,
+        } satisfies Record<ResourceVerb, (by: string) => string>,
+        warnings: (value: number) => count(value, { one: 'warning', other: 'warnings' }),
+        warned: (times: number) =>
+            times === 1
+                ? 'FXServer warned once as it started it:'
+                : `FXServer warned ${formatNumber('en', times)} times as it started it:`,
+        heavy: (files: number, oversized: number) => {
+            const streamed = count(files, { one: 'streamed file is', other: 'streamed files are' });
+            if (oversized >= files) {
+                return `${streamed} oversized`;
+            }
+            return oversized === 0
+                ? `${streamed} heavy`
+                : `${streamed} heavy, ${formatNumber('en', oversized)} of them oversized`;
+        },
+        missing: (files: number) =>
+            `${count(files, { one: 'file its manifest names is', other: 'files its manifest names are' })} missing`,
+        otherWarnings: (value: number) =>
+            `${count(value, { one: 'other warning', other: 'other warnings' })}, in the console`,
+        restartTitle: (name: ReactNode): ReactNode => ['Restart ', name, '?'],
+        stopTitle: (name: ReactNode): ReactNode => ['Stop ', name, '?'],
+        restartStops: (dependants: number, name: ReactNode): ReactNode => [
+            'When FXServer stops a resource, it stops every resource that depends on it too, and does not start them again. ',
+            count(dependants, { one: 'started resource depends', other: 'started resources depend' }),
+            ' on ',
+            name,
+            ':',
+        ],
+        stopStops: (dependants: number, name: ReactNode): ReactNode => [
+            'When FXServer stops a resource, it stops every resource that depends on it too. ',
+            count(dependants, { one: 'started resource depends', other: 'started resources depend' }),
+            ' on ',
+            name,
+            dependants === 1 ? ' and stops with it:' : ' and stop with it:',
+        ],
+        again: (dependants: number, name: string) =>
+            dependants === 1
+                ? `Start it again once ${name} is back`
+                : `Start them again once ${name} is back`,
+        againHint: (dependants: number) =>
+            dependants === 1
+                ? 'Without it the resource stays stopped until someone starts it, or the server restarts.'
+                : 'Without it they stay stopped until someone starts them, or the server restarts.',
+        stayStopped: (dependants: number) =>
+            dependants === 1
+                ? 'It stays stopped until someone starts it, or the server restarts.'
+                : 'They stay stopped until someone starts them, or the server restarts.',
+        confirmRestart: (name: string, resources: number) =>
+            resources > 1 ? `Restart ${formatNumber('en', resources)} resources` : `Restart ${name}`,
+        confirmStop: (name: string, resources: number) =>
+            resources > 1 ? `Stop ${formatNumber('en', resources)} resources` : `Stop ${name}`,
+        rescanned: {
+            nothing: 'FXServer read its folders again: nothing new.',
+            found: (what: ReactNode): ReactNode => ['FXServer read its folders again: ', what, '.'],
+            added: (value: number) => count(value, { one: 'new resource', other: 'new resources' }),
+            more: (value: number) => `${formatNumber('en', value)} more`,
+            changed: (value: number) => count(value, { one: 'changed manifest', other: 'changed manifests' }),
+            and: ', and ',
+        },
+        ordering: {
+            start: (name: string) => `Starting ${name}`,
+            stop: (name: string) => `Stopping ${name}`,
+            restart: (name: string) => `Restarting ${name}`,
+        } satisfies Record<ResourceVerb, (name: string) => string>,
+        rescanning: 'The rescan',
+        orderFailed: (what: string, why: string) => `${what} did not go through. ${why}`,
+        truncated: (listed: number) =>
+            `FXServer knows more resources than the ${formatNumber('en', listed)} listed here.`,
+        unavailable: 'The resources show again once the live link is back.',
+        empty: {
+            stopped: {
+                title: 'The server is not running',
+                text: 'Its resources show here once it has started and run its cfg.',
+            },
+            starting: {
+                title: 'The server is starting',
+                text: (up: number | null, total: number | null) => {
+                    if (up === null) {
+                        return 'Its resources show here once its cfg has run.';
+                    }
+                    return total === null
+                        ? `Its resources show here once its cfg has run: ${count(up, { one: 'is', other: 'are' })} up so far.`
+                        : `Its resources show here once its cfg has run: ${formatNumber('en', up)} of ${formatNumber('en', total)} are up so far.`;
+                },
+            },
+            unreported: {
+                title: 'FXServer has not listed its resources',
+                text: 'The list comes from Observer’s bridge once the cfg has run. If it stays away, the bridge is not reporting: the Overview says what the server is doing.',
+            },
+        },
+    },
     notFound: {
         title: 'This page does not exist.',
         back: 'Back to the panel',
@@ -4967,6 +5316,10 @@ export const en = {
                 name: 'Live map',
                 about: 'What the Live map draws under the players, your own image and where it sits in the game, and the colours of the players on it.',
             },
+            entities: {
+                name: 'Entities',
+                about: 'How often the server lists its vehicles, peds and objects while someone looks at them. Finding and deleting them is on the Entities page and the Live map.',
+            },
             restarts: {
                 name: 'Restarts',
                 about: 'When FXServer restarts by itself, and how long before your resources hear of it. Skipping or delaying one restart is on the Schedule page.',
@@ -5133,6 +5486,10 @@ export const en = {
                 label: 'Debug',
                 about: "Counts the events, state bag writes and HTTP requests of every Lua resource, for the Debug pages. It adds two lines to the build's Lua scheduler at each start while it is on, and takes them out when it is off.",
             },
+            switchEntities: {
+                label: 'Entities',
+                about: "The server's vehicles, peds and objects, listed while someone looks at them, found on the Live map and deleted on request. Nothing of them is kept. Off, the server is never asked for them.",
+            },
             switchUpdates: {
                 label: 'Updates',
                 about: 'Every 6 hours, Observer asks GitHub for a newer release, which the owner installs from the About page. Off, Observer never contacts GitHub.',
@@ -5288,6 +5645,10 @@ export const en = {
             mapCadence: {
                 label: 'Positions sent every',
                 about: 'The server reads positions only while someone has the map open, and stops within 30 seconds after the last one leaves. They need OneSync.',
+            },
+            entitiesCadence: {
+                label: 'Entities listed every',
+                about: 'Only while someone has the Entities page or the map layer open. Shorter is fresher and costs the server more; it spaces its sweeps out by itself when one costs it too much. They need OneSync.',
             },
             tokenMatches: {
                 label: 'Hardware tokens to match',
@@ -5451,6 +5812,14 @@ export const en = {
                 'Your account can read these; changing them takes the permission to change settings, and the image the owner.',
             loadFailed: 'These settings could not be read.',
         },
+        entities: {
+            openEntities: 'Open the Entities page',
+            seconds: (value: number) => `${formatNumber('en', value)} s`,
+            saved: 'Saved. The server follows from its next sweep.',
+            discarded: 'Changes discarded.',
+            readOnly: 'Your account can read these; changing them takes the permission to change settings.',
+            loadFailed: 'These settings could not be read.',
+        },
         bans: {
             openBans: 'Open the Bans page',
             insert: 'Insert',
@@ -5577,6 +5946,7 @@ export const en = {
                 updateProbation: 'settling an update once Observer restarted',
                 hookLines: "the two lines in the build's Lua scheduler",
                 hookCounts: 'reading what the resources count',
+                entityList: 'listing the entities while someone looks at them',
             } satisfies Record<FeatureTask, string>,
             turnedOn: (name: string) => `${name} is on.`,
             turnedOnLater: (name: string, state: string) => `${name}: ${state}.`,
@@ -5740,6 +6110,8 @@ export const en = {
             bans_settings_changed: 'Ban settings changed',
             map_image_changed: 'Map image changed',
             map_settings_changed: 'Live map settings changed',
+            entities_deleted: 'Entities deleted',
+            entities_settings_changed: 'Entities settings changed',
             drop_rates_exported: 'Drop rates exported',
             drops_retention_changed: 'Drop retention changed',
             change_contents_viewed: 'Changed file read',
@@ -5767,6 +6139,10 @@ export const en = {
             observer_update_started: 'Observer update started',
             observer_update_cancelled: 'Observer update cancelled',
             observer_update_finished: 'Observer update finished',
+            resource_started: 'Resource started',
+            resource_stopped: 'Resource stopped',
+            resource_restarted: 'Resource restarted',
+            resources_rescanned: 'Resource folders rescanned',
         } satisfies Record<AuditAction, string>,
         outcomes: {
             success: 'Success',
@@ -5961,6 +6337,15 @@ export const en = {
             message: 'Refusal message',
             tokenMatches: 'Hardware tokens to match',
             templates: 'Ban templates',
+            // The started resources that depended on the one stopped or restarted.
+            dependants: 'Stopped with it',
+            startedAgain: 'Started again',
+            asked: 'Asked for',
+            deleted: 'Deleted',
+            outcomes: 'Not deleted',
+            entities: 'Entities',
+            more: 'In smaller groups',
+            everySeconds: 'Every',
         },
         days: (value: number) => count(value, { one: 'day', other: 'days' }),
         // A profile whose retention is unset is never deleted.
@@ -6152,6 +6537,83 @@ export const en = {
         missing: 'This build carries no licence list. cargo xtask web and cargo xtask dist write it.',
         loadFailed: 'The licence list could not be loaded.',
     },
+    // The contract itself is not here: the page draws the text this build of Observer ships, as it
+    // draws a licence or a release's notes. These are the panel's own words around it.
+    docs: {
+        title: 'Documentation',
+        gloss: "for your server's resources",
+        find: 'Find an event or an export',
+        toc: 'On this page',
+        contract: 'The contract',
+        copyLink: (section: string) => `Copy the link to ${section}`,
+        linkCopied: 'Link copied',
+        event: 'Event',
+        exports: 'Exports',
+        lua: 'Lua',
+        copyNamed: (what: string) => `Copy ${what}`,
+        handlerOf: (event: string) => `the handler for ${event}`,
+        codeOf: (section: string) => `the code of ${section}`,
+        lines: (value: number) => count(value, { one: 'line', other: 'lines' }),
+        loading: 'Reading the documentation',
+        failed: 'The documentation could not be read.',
+        server: {
+            title: 'This server',
+            startedAt: (when: string) => `FXServer started ${when}`,
+            running: 'FXServer is running',
+            stopped: 'FXServer is stopped',
+            contract: 'Contract',
+            version: (version: number) => `Version ${formatNumber('en', version)}`,
+            versionAbout: "What this Observer's bridge speaks.",
+            bridge: 'Bridge',
+            bridgeRunning: 'Running',
+            bridgeStarting: 'Starting',
+            bridgeName: (name: ReactNode): ReactNode => [
+                'As ',
+                name,
+                ', the name drawn for this start. The next start draws another.',
+            ],
+            bridgeStopped: 'Not running',
+            bridgeStoppedAbout: 'It starts with FXServer, under a name drawn for that start.',
+            txadmin: "txAdmin's events",
+            on: 'On',
+            off: 'Off',
+            txadminOn: "Raised right after Observer's own events.",
+            txadminOff: "Only Observer's own events are raised.",
+            txadminNext: (on: boolean) =>
+                on ? 'On from the next start of FXServer.' : 'Off from the next start of FXServer.',
+            txadminFromNext: 'From the next start of FXServer.',
+            notSet: 'Not set',
+            notSetAbout: 'The launch settings are not saved yet.',
+            launchSettings: 'Launch settings',
+        },
+        notes: {
+            panel: 'In the panel.',
+            server: 'This server.',
+            labels: (players: ReactNode): ReactNode => [
+                'Online now shows a label in place of the FiveM name, with a tag. The ',
+                players,
+                ' page finds players by it, and each profile keeps it with the resource that gave it.',
+            ],
+            startChanges: (changes: ReactNode): ReactNode => [
+                changes,
+                ' lists every resource this event names, and those it left out.',
+            ],
+            bans: (bans: ReactNode, message: ReactNode): ReactNode => [
+                'The staff bans from a profile or the ',
+                bans,
+                ' page. The ',
+                message,
+                ' banned players read is in the settings.',
+            ],
+            txadminOn: "txAdmin's events are on: the bridge raises them right after Observer's own.",
+            txadminOff: "txAdmin's events are off: the bridge raises Observer's events only.",
+            txadminStopped: (on: boolean) =>
+                on
+                    ? "txAdmin's events are on in the launch settings: the bridge raises them from the next start."
+                    : "txAdmin's events are off in the launch settings: the next start raises Observer's events only.",
+            refusalMessage: 'refusal message',
+        },
+    },
     permissions,
     permissionAreas: {
         dashboard: 'Dashboard',
@@ -6169,6 +6631,7 @@ export const en = {
         drops: 'Player drops',
         changes: 'Changes',
         backups: 'Backups',
+        entities: 'Entities',
     } satisfies Record<PermissionArea, string>,
     danger: {
         sensitive: 'Sensitive',
@@ -6363,6 +6826,17 @@ export const en = {
         no_map_image: 'No map image is set.',
         invalid_map_settings:
             'Some settings are out of range: the thresholds must be ordered, the cadence 1, 2 or 5 seconds, and the edges must enclose an area.',
+        entities_not_listed:
+            'The server has not listed its entities yet: wait for the list, then try again. Nothing was deleted.',
+        entities_changed:
+            'The server restarted since this list was read: its net IDs name other entities now. Nothing was deleted.',
+        entities_out_of_date: 'This list is out of date: the server stopped answering. Nothing was deleted.',
+        entities_deleting: 'Another deletion is still under way: try again in a few seconds.',
+        too_many_entities: (params) =>
+            typeof params.max === 'number'
+                ? `One deletion takes ${formatNumber('en', params.max)} entities at most.`
+                : 'One deletion cannot take that many entities.',
+        invalid_entities_settings: 'The server lists its entities every 5, 10, 15, 30 or 60 seconds.',
         invalid_bans_settings: (params) =>
             typeof params.maxMessage === 'number' &&
             typeof params.maxTokens === 'number' &&
@@ -6441,6 +6915,13 @@ export const en = {
             const key = stringParam(params, 'reason');
             return isUpdateBlock(key) ? updateBlocks[key] : 'This Observer cannot install a release.';
         },
+        resources_not_listed: 'FXServer has not listed its resources yet. It does once its cfg has run.',
+        resource_not_found: 'FXServer knows no resource of that name in this run.',
+        resource_name_refused:
+            'Observer puts a resource in a console command only by letters, digits, _, . and -. Start and stop this one from the console.',
+        resource_busy: 'FXServer has not answered the last order on this resource yet.',
+        resource_changed:
+            'The resource was started or stopped since: it is no longer as this order needs it.',
     } satisfies Record<ErrorCode, ErrorMessage>,
     failure: {
         unknown: 'Something went wrong. Try again.',

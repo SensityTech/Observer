@@ -185,6 +185,20 @@ pub enum ErrorCode {
     /// The thresholds are not ordered, the cadence is not 1, 2 or 5 seconds, or the edges enclose
     /// no area.
     InvalidMapSettings,
+    /// The server's entities are not listed yet: the first sweep comes a moment after someone
+    /// starts looking at them.
+    EntitiesNotListed,
+    /// The server or its bridge started again since the list was read: its net ids name other
+    /// entities now.
+    EntitiesChanged,
+    /// The list is too old to delete from: the server stopped answering.
+    EntitiesOutOfDate,
+    /// Another deletion is still under way.
+    EntitiesDeleting,
+    /// Params: `max`, the most entities one deletion takes.
+    TooManyEntities,
+    /// The cadence is not one the panel offers.
+    InvalidEntitiesSettings,
     /// The file changes' database could not be opened: it was set aside, or Observer is stopping.
     ChangesUnavailable,
     /// No start or check of the server has this id.
@@ -238,6 +252,18 @@ pub enum ErrorCode {
     UpdateRestarting,
     /// Params: `reason`, an `UpdateBlock`.
     UpdateBlocked,
+    /// The server has not listed its resources in this run: it does once its cfg has run.
+    ResourcesNotListed,
+    /// FXServer listed no resource of this name in this run.
+    ResourceNotFound,
+    /// The resource's name holds what a console command cannot carry: Observer names a resource
+    /// in a command only by ASCII letters, digits, `_`, `.` and `-`, 64 at most.
+    ResourceNameRefused,
+    /// FXServer has not answered the last order of the Resources page on this resource yet.
+    ResourceBusy,
+    /// The resource is not in the state the order needs: a start needs it stopped, a stop and a
+    /// restart need it started.
+    ResourceChanged,
 }
 
 /// The body of every error response.

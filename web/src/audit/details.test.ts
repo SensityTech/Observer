@@ -179,6 +179,17 @@ describe('auditDetails', () => {
         expect(auditDetails(en, format, { from: 'signal' })).toBe('From: a signal');
     });
 
+    it('should name the resources an order stopped along, and whether a restart started them again', () => {
+        expect(auditDetails(en, format, { command: 'start taxi' })).toBe('Command: start taxi');
+        expect(
+            auditDetails(en, format, {
+                command: 'restart ox_lib',
+                dependants: ['ox_target', 'ox_inventory'],
+                startedAgain: true,
+            }),
+        ).toBe('Command: restart ox_lib · Stopped with it: ox_target, ox_inventory · Started again: yes');
+    });
+
     it('should show what it does not know as the log stores it', () => {
         expect(auditDetails(en, format, { trigger: 'manual', refusal: 'unheard_of', extra: { a: 1 } })).toBe(
             'trigger: manual · Reason: unheard_of · extra: {"a":1}',
@@ -238,6 +249,27 @@ describe('auditDetails', () => {
             }),
         ).toBe(
             'Size: 3 MB · Read: 1,204 · Written: 1,200 · New: 1,150 · Updated: 50 · Skipped as forgotten: 3 · Invalid: 1',
+        );
+    });
+
+    it('should word what a deletion of entities took and left, and how often they are listed', () => {
+        expect(
+            auditDetails(en, format, {
+                asked: 15,
+                deleted: 12,
+                outcomes: { occupied: 2, gone: 1 },
+                entities: [
+                    { model: '0xB779A091', kind: 'vehicle', resource: 'qb-garages', count: 8 },
+                    { model: '0x705E61F2', kind: 'ped', resource: null, count: 1 },
+                ],
+                more: 3,
+            }),
+        ).toBe(
+            'Asked for: 15 · Deleted: 12 · Not deleted: 2 had a player inside, 1 was already gone · ' +
+                'Entities: 8 × 0xB779A091 vehicle (qb-garages), 1 × 0x705E61F2 ped · In smaller groups: 3',
+        );
+        expect(auditDetails(en, format, { from: { everySeconds: 15 }, to: { everySeconds: 30 } })).toBe(
+            'Before: (Every: 15 s) · After: (Every: 30 s)',
         );
     });
 

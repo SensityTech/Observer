@@ -257,11 +257,11 @@ async fn the_map_counts_who_watches_it_until_they_leave() {
 
     let (snapshot, _, first) = map.watch();
     let (_, _, second) = map.watch();
-    assert_eq!(*map.inner.watchers.borrow(), 2);
+    assert_eq!(*map.inner.watchers.subscribe().borrow(), 2);
     drop(first);
     drop(second);
 
-    assert_eq!(*map.inner.watchers.borrow(), 0);
+    assert_eq!(*map.inner.watchers.subscribe().borrow(), 0);
     assert_eq!(snapshot.players, []);
     assert!(snapshot.onesync);
     task.close().await;

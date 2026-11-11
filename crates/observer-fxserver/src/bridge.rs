@@ -11,7 +11,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::layout::Layout;
-use crate::stdin::MAX_BRIDGE_JSON;
+use crate::resources::Reported;
+use crate::stdin::{MAX_BRIDGE_JSON, safe};
 use crate::trace::TraceKind;
 
 /// The server convar that holds the bridge's name, for resources to find it. Set with `+set`,
@@ -44,6 +45,11 @@ const FILES: [(&str, &str); 3] = [
     ),
     ("heap.js", include_str!("../../../resource/observer/heap.js")),
 ];
+
+/// The bridge's script, which the contract's documentation reads its events and exports from.
+pub(crate) fn script() -> &'static str {
+    FILES[1].1
+}
 
 /// Draws the bridge's resource name for one start of FXServer, so that no script can target the
 /// bridge by a name known before the start.
@@ -290,14 +296,6 @@ pub fn start_changes(
     event(low)
 }
 
-/// Whether `text` is 1 to `max` bytes of ASCII letters, digits and `extra`.
-fn safe(text: &str, max: usize, extra: &[u8]) -> bool {
-    (1..=max).contains(&text.len())
-        && text
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || extra.contains(&byte))
-}
-
 impl BridgeEvent {
     pub fn name(&self) -> &'static str {
         match self {
@@ -352,6 +350,18 @@ pub enum BridgeAction {
     },
     /// Has the bridge report where the players stand every `every_ms` for `for_ms`, or stop with 0.
     Positions { every_ms: u32, for_ms: u32 },
+    /// Has the bridge list the server's entities every `every_ms` for `for_ms`, or stop with 0.
+    Entities { every_ms: u32, for_ms: u32 },
+    /// Has the bridge delete entities it listed, and report what became of each. `targets` holds
+    /// a net id then the serial the bridge drew for that entity, one pair after the other. The
+    /// bridge deletes nothing once `deadline`, in Unix seconds, has passed, and nothing of
+    /// another start of itself than `epoch`.
+    DeleteEntities {
+        request: u32,
+        epoch: i64,
+        deadline: i64,
+        targets: Vec<u32>,
+    },
 }
 
 /// What a banned player reads, and the `observer:playerRefused` the bridge raises for it.
@@ -387,6 +397,8 @@ impl BridgeAction {
             Self::Verdict { .. } => "verdict",
             Self::Drop { .. } => "drop",
             Self::Positions { .. } => "positions",
+            Self::Entities { .. } => "entities",
+            Self::DeleteEntities { .. } => "deleteEntities",
         }
     }
 
@@ -400,7 +412,10 @@ impl BridgeAction {
     pub fn fitted(mut self) -> Self {
         while self.encode().len() > 2 * MAX_BRIDGE_JSON {
             let (message, event) = match &mut self {
-                Self::Verdict { refusal: None, .. } | Self::Positions { .. } => return self,
+                Self::Verdict { refusal: None, .. }
+                | Self::Positions { .. }
+                | Self::Entities { .. }
+                | Self::DeleteEntities { .. } => return self,
                 Self::Verdict {
                     refusal: Some(Refusal { message, event }),
                     ..
@@ -454,6 +469,15 @@ pub enum Report {
         rss: u64,
         #[serde(default)]
         external: u64,
+    },
+    /// One page of every resource FXServer knows, in name order: once the cfg has run, and again
+    /// after each `refresh`. The pages of one list carry its number, as `list`.
+    ResourceList {
+        #[serde(rename = "list")]
+        number: u64,
+        page: u32,
+        last: bool,
+        resources: Vec<Reported>,
     },
 }
 
@@ -842,7 +866,7 @@ mod tests {
         }
     }
 
-    fn every_action() -> [BridgeAction; 3] {
+    fn every_action() -> [BridgeAction; 5] {
         [
             BridgeAction::Verdict {
                 request: 7,
@@ -860,7 +884,43 @@ mod tests {
                 every_ms: 2000,
                 for_ms: 30_000,
             },
+            BridgeAction::Entities {
+                every_ms: 15_000,
+                for_ms: 30_000,
+            },
+            BridgeAction::DeleteEntities {
+                request: 4,
+                epoch: 4210,
+                deadline: 1_793_000_009,
+                targets: vec![12, 3, 13, 8],
+            },
         ]
+    }
+
+    #[test]
+    fn the_most_entities_one_deletion_takes_fit_the_console_line() {
+        let largest = BridgeAction::DeleteEntities {
+            request: u32::MAX,
+            epoch: i64::from(u32::MAX),
+            deadline: 9_999_999_999,
+            targets: [u32::from(u16::MAX), 0x7fff_ffff].repeat(observer_domain::entities::MAX_DELETE),
+        };
+
+        assert!(crate::stdin::allowed(&format!(
+            "observer_cmd {}",
+            largest.encode()
+        )));
+        assert_eq!(
+            decode(&every_action()[4].encode()),
+            json!({
+                "action": "deleteEntities",
+                "payload": { "request": 4, "epoch": 4210, "deadline": 1_793_000_009, "targets": [12, 3, 13, 8] }
+            })
+        );
+        assert_eq!(
+            decode(&every_action()[3].encode()),
+            json!({ "action": "entities", "payload": { "everyMs": 15_000, "forMs": 30_000 } })
+        );
     }
 
     #[test]
@@ -1087,6 +1147,76 @@ mod tests {
             Report::from_trace(&trace(BRIDGE, json!({ "type": "other", "kind": "hb" })), BRIDGE),
             None
         );
+    }
+
+    #[test]
+    fn a_page_of_the_resource_list_is_read_with_what_each_manifest_says() {
+        let page = Report::from_trace(
+            &TraceKind::Script {
+                resource: BRIDGE.to_owned(),
+                payload: json!({
+                    "type": "observer",
+                    "kind": "resource_list",
+                    "list": 2,
+                    "page": 1,
+                    "last": false,
+                    "resources": [
+                        {
+                            "name": "ox_inventory",
+                            "state": "started",
+                            "path": "C:/srv/resources//[ox]/ox_inventory",
+                            "version": "2.44.1",
+                            "needs": ["/onesync", "ox_lib"],
+                            "provides": ["inventory"]
+                        },
+                        { "name": "taxi", "state": "stopped" }
+                    ]
+                }),
+            },
+            BRIDGE,
+        );
+
+        assert_eq!(
+            page,
+            Some(Report::ResourceList {
+                number: 2,
+                page: 1,
+                last: false,
+                resources: vec![
+                    Reported {
+                        name: "ox_inventory".to_owned(),
+                        state: "started".to_owned(),
+                        path: Some("C:/srv/resources//[ox]/ox_inventory".to_owned()),
+                        version: Some("2.44.1".to_owned()),
+                        needs: vec!["/onesync".to_owned(), "ox_lib".to_owned()],
+                        provides: vec!["inventory".to_owned()],
+                    },
+                    Reported {
+                        name: "taxi".to_owned(),
+                        state: "stopped".to_owned(),
+                        ..Reported::default()
+                    },
+                ],
+            })
+        );
+    }
+
+    #[test]
+    fn the_resource_reports_the_list_once_the_cfg_has_run_and_after_each_refresh() {
+        let lua = FILES[1].1;
+
+        assert!(lua.contains("report('resource_list', { list = list, page = page, last = page == pages"));
+        assert!(lua.contains("    reportResourceList()\n    reportPlayers()\n"));
+        assert!(lua.contains("AddEventHandler('onResourceListRefresh', function()"));
+        for native in [
+            "GetResourceState(name)",
+            "GetResourcePath(name)",
+            "GetResourceMetadata(name, 'version', 0)",
+            "'dependency', 'dependencie'",
+            "'provide'",
+        ] {
+            assert!(lua.contains(native), "{native}");
+        }
     }
 
     #[test]

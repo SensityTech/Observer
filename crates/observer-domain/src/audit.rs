@@ -164,6 +164,12 @@ pub enum AuditAction {
     MapImageChanged,
     /// `details` hold the live map's settings before and after.
     MapSettingsChanged,
+    /// Someone deleted entities of the game. `details` hold how many were asked for and how many
+    /// were deleted, the count of each other outcome, and the largest groups deleted, each a
+    /// model, a kind and the resource that created them.
+    EntitiesDeleted,
+    /// `details` hold the entities' settings before and after.
+    EntitiesSettingsChanged,
     /// The daily drop rates went out as CSV.
     DropRatesExported,
     /// How long players' sessions and their texts are kept changed.
@@ -242,10 +248,21 @@ pub enum AuditAction {
     /// `to`); a failure when the release could not be downloaded or verified (`reason`), or when
     /// the new version did not finish starting and the previous one came back (`rolledBack`).
     ObserverUpdateFinished,
+    /// Someone started a resource from the panel. The target is the resource; `details` hold the
+    /// `command` written to FXServer's console.
+    ResourceStarted,
+    /// Someone stopped a resource. `details` hold the `command` and the `dependants`: the started
+    /// resources that depend on it, which FXServer stops with it.
+    ResourceStopped,
+    /// Someone restarted a resource. `details` hold the `command`, the `dependants` and whether
+    /// Observer started those again (`startedAgain`).
+    ResourceRestarted,
+    /// Someone had FXServer read its resource folders again.
+    ResourcesRescanned,
 }
 
 impl AuditAction {
-    pub const ALL: [Self; 112] = [
+    pub const ALL: [Self; 118] = [
         Self::SetupCompleted,
         Self::SetupLinkCreated,
         Self::LoginSucceeded,
@@ -329,6 +346,8 @@ impl AuditAction {
         Self::BansSettingsChanged,
         Self::MapImageChanged,
         Self::MapSettingsChanged,
+        Self::EntitiesDeleted,
+        Self::EntitiesSettingsChanged,
         Self::DropRatesExported,
         Self::DropsRetentionChanged,
         Self::ChangeContentsViewed,
@@ -358,6 +377,10 @@ impl AuditAction {
         Self::ObserverUpdateStarted,
         Self::ObserverUpdateCancelled,
         Self::ObserverUpdateFinished,
+        Self::ResourceStarted,
+        Self::ResourceStopped,
+        Self::ResourceRestarted,
+        Self::ResourcesRescanned,
     ];
 
     #[expect(clippy::too_many_lines, reason = "one arm per action, read best as one list")]
@@ -446,6 +469,8 @@ impl AuditAction {
             Self::BansSettingsChanged => "bans_settings_changed",
             Self::MapImageChanged => "map_image_changed",
             Self::MapSettingsChanged => "map_settings_changed",
+            Self::EntitiesDeleted => "entities_deleted",
+            Self::EntitiesSettingsChanged => "entities_settings_changed",
             Self::DropRatesExported => "drop_rates_exported",
             Self::DropsRetentionChanged => "drops_retention_changed",
             Self::ChangeContentsViewed => "change_contents_viewed",
@@ -475,6 +500,10 @@ impl AuditAction {
             Self::ObserverUpdateStarted => "observer_update_started",
             Self::ObserverUpdateCancelled => "observer_update_cancelled",
             Self::ObserverUpdateFinished => "observer_update_finished",
+            Self::ResourceStarted => "resource_started",
+            Self::ResourceStopped => "resource_stopped",
+            Self::ResourceRestarted => "resource_restarted",
+            Self::ResourcesRescanned => "resources_rescanned",
         }
     }
 

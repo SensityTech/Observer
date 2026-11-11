@@ -10,9 +10,11 @@ use crate::artifacts::ArtifactsStatus;
 use crate::audit::AuditEntry;
 use crate::changes::ChangesLive;
 use crate::diagnostics::{AlertList, DiagnosticsEvent, DiagnosticsSnapshot};
+use crate::entities::EntitiesLive;
 use crate::error::ErrorCode;
 use crate::map::MapLive;
 use crate::metrics::{LiveSample, MetricsSnapshot};
+use crate::resources::ResourcesView;
 use crate::schedule::ScheduleStatus;
 use crate::server::{ConsoleBatch, ConsoleSnapshot, ServerStatus};
 
@@ -73,10 +75,18 @@ pub enum Topic {
     /// only then. Needs the live map permission.
     #[serde(rename = "server.map")]
     ServerMap,
+    /// Every resource FXServer knows in the run that is up, as it stands. Needs the dashboard
+    /// permission, or the one that starts and stops resources.
+    #[serde(rename = "server.resources")]
+    ServerResources,
+    /// The state of the list of the server's entities, while the topic is followed: the server
+    /// lists them only then. Needs the entities permission.
+    #[serde(rename = "server.entities")]
+    ServerEntities,
 }
 
 impl Topic {
-    pub const ALL: [Self; 11] = [
+    pub const ALL: [Self; 13] = [
         Self::Status,
         Self::Audit,
         Self::ServerStatus,
@@ -88,6 +98,8 @@ impl Topic {
         Self::ServerDiagnostics,
         Self::ServerChanges,
         Self::ServerMap,
+        Self::ServerResources,
+        Self::ServerEntities,
     ];
 }
 
@@ -165,6 +177,10 @@ pub enum TopicSnapshot {
     ServerChanges(ChangesLive),
     #[serde(rename = "server.map")]
     ServerMap(MapLive),
+    #[serde(rename = "server.resources")]
+    ServerResources(ResourcesView),
+    #[serde(rename = "server.entities")]
+    ServerEntities(EntitiesLive),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, TS)]
@@ -196,6 +212,12 @@ pub enum TopicEvent {
     /// Every placed player again, at each report of the bridge.
     #[serde(rename = "server.map")]
     ServerMap(MapLive),
+    /// Every resource again, whenever one changes: a few times a second at most.
+    #[serde(rename = "server.resources")]
+    ServerResources(ResourcesView),
+    /// The state of the list again, at each sweep of the bridge and after each deletion.
+    #[serde(rename = "server.entities")]
+    ServerEntities(EntitiesLive),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]

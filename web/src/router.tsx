@@ -15,6 +15,8 @@ import { ReauthDialog } from './auth/ReauthDialog';
 import { RequireOwner, RequirePermission } from './auth/RequirePermission';
 import { changesSearch, resourceSearch } from './changes/search';
 import { parseDropsSearch, type DropsSearch } from './drops/search';
+import { parseEntitiesSearch, type EntitiesSearch } from './entities/search';
+import { parseMapSearch, type MapSearch } from './map/search';
 import { parseStatisticsSearch, type StatisticsSearch } from './statistics/search';
 import { lazyCode } from './lib/lazyCode';
 import { LoginPage } from './pages/LoginPage';
@@ -33,6 +35,9 @@ import { FocusShell } from './shell/FocusShell';
 // audit log are no one's landing page.
 const ConsolePage = lazyCode(() =>
     import('./pages/ConsolePage').then((page) => ({ default: page.ConsolePage })),
+);
+const ResourcesPage = lazyCode(() =>
+    import('./pages/ResourcesPage').then((page) => ({ default: page.ResourcesPage })),
 );
 const SchedulePage = lazyCode(() =>
     import('./pages/SchedulePage').then((page) => ({ default: page.SchedulePage })),
@@ -63,6 +68,7 @@ const BackupsPage = lazyCode(() =>
 );
 const AuditPage = lazyCode(() => import('./pages/AuditPage').then((page) => ({ default: page.AuditPage })));
 const AboutPage = lazyCode(() => import('./pages/AboutPage').then((page) => ({ default: page.AboutPage })));
+const DocsPage = lazyCode(() => import('./pages/DocsPage').then((page) => ({ default: page.DocsPage })));
 const DiagnosticsPage = lazyCode(() =>
     import('./pages/DiagnosticsPage').then((page) => ({ default: page.DiagnosticsPage })),
 );
@@ -90,6 +96,9 @@ const ChangesResourcePage = lazyCode(() =>
     import('./pages/ChangesResourcePage').then((page) => ({ default: page.ChangesResourcePage })),
 );
 const DropsPage = lazyCode(() => import('./pages/DropsPage').then((page) => ({ default: page.DropsPage })));
+const EntitiesPage = lazyCode(() =>
+    import('./pages/EntitiesPage').then((page) => ({ default: page.EntitiesPage })),
+);
 const StatisticsPage = lazyCode(() =>
     import('./pages/StatisticsPage').then((page) => ({ default: page.StatisticsPage })),
 );
@@ -224,6 +233,16 @@ const consoleRoute = createRoute({
     ),
 });
 
+const resourcesRoute = createRoute({
+    getParentRoute: () => panelRoute,
+    path: '/resources',
+    component: () => (
+        <RequirePermission name={['DashboardView', 'ResourcesControl']}>
+            <ResourcesPage />
+        </RequirePermission>
+    ),
+});
+
 const scheduleRoute = createRoute({
     getParentRoute: () => panelRoute,
     path: '/schedule',
@@ -295,9 +314,11 @@ const playersRoute = createRoute({
     ),
 });
 
+// An entity the list sends here is in the address: the map opens on it, its layer on.
 const mapRoute = createRoute({
     getParentRoute: () => panelRoute,
     path: '/map',
+    validateSearch: (search: Record<string, unknown>): MapSearch => parseMapSearch(search),
     component: () => (
         <RequirePermission name="PlayersMap">
             <MapPage />
@@ -332,6 +353,18 @@ const dropsRoute = createRoute({
     component: () => (
         <RequirePermission name="DropsView">
             <DropsPage />
+        </RequirePermission>
+    ),
+});
+
+// The filters, the sort and the page are in the address, so that a link opens the list as it was.
+const entitiesRoute = createRoute({
+    getParentRoute: () => panelRoute,
+    path: '/entities',
+    validateSearch: (search: Record<string, unknown>): EntitiesSearch => parseEntitiesSearch(search),
+    component: () => (
+        <RequirePermission name="EntitiesView">
+            <EntitiesPage />
         </RequirePermission>
     ),
 });
@@ -496,6 +529,14 @@ const aboutRoute = createRoute({
     component: AboutPage,
 });
 
+// The contract Observer ships holds no secret: any signed-in account reads it, as the About page.
+// What the server does of it comes only to those who see the dashboard: the API leaves it out.
+const docsRoute = createRoute({
+    getParentRoute: () => panelRoute,
+    path: '/docs',
+    component: DocsPage,
+});
+
 const routeTree = rootRoute.addChildren([
     setupRoute,
     loginRoute,
@@ -504,6 +545,7 @@ const routeTree = rootRoute.addChildren([
         overviewRoute,
         statisticsRoute,
         consoleRoute,
+        resourcesRoute,
         scheduleRoute,
         artifactsRoute,
         diagnosticsRoute,
@@ -517,6 +559,7 @@ const routeTree = rootRoute.addChildren([
         changesRoute,
         changesResourceRoute,
         dropsRoute,
+        entitiesRoute,
         serverRoute,
         toolsRoute,
         archetypesRoute,
@@ -530,6 +573,7 @@ const routeTree = rootRoute.addChildren([
         settingsRoute.addChildren([settingsIndexRoute, settingsCategoryRoute]),
         accountRoute,
         aboutRoute,
+        docsRoute,
     ]),
     focusRoute.addChildren([serverSetupRoute]),
 ]);

@@ -9,6 +9,7 @@ export function Segmented<Choice extends string>({
     choices,
     value,
     words,
+    counts,
     onChange,
     className,
 }: {
@@ -17,6 +18,8 @@ export function Segmented<Choice extends string>({
     choices: readonly Choice[];
     value: Choice;
     words: Record<Choice, string>;
+    /** How many each choice shows, written after its word. */
+    counts?: Record<Choice, string>;
     onChange: (choice: Choice) => void;
     className?: string;
 }) {
@@ -34,9 +37,12 @@ export function Segmented<Choice extends string>({
                     type="button"
                     aria-pressed={value === choice}
                     onClick={() => onChange(choice)}
-                    className="inline-flex h-6.5 items-center rounded-[7px] px-2.5 text-small font-medium text-ink-3 transition-colors hover:text-ink focus-visible:outline-offset-1 aria-pressed:bg-raise aria-pressed:text-ink aria-pressed:shadow-[var(--elev-sm),0_0_0_1px_var(--line)] max-md:h-11 max-md:min-w-11 max-md:justify-center"
+                    className="inline-flex h-6.5 items-center gap-1.5 rounded-[7px] px-2.5 text-small font-medium text-ink-3 transition-colors hover:text-ink focus-visible:outline-offset-1 aria-pressed:bg-raise aria-pressed:text-ink aria-pressed:shadow-[var(--elev-sm),0_0_0_1px_var(--line)] max-md:h-11 max-md:min-w-11 max-md:justify-center"
                 >
                     {words[choice]}
+                    {counts !== undefined && (
+                        <span className="font-mono text-meta font-normal text-ink-3">{counts[choice]}</span>
+                    )}
                 </button>
             ))}
         </fieldset>

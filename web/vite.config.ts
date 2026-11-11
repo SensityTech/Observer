@@ -14,6 +14,8 @@ export default defineConfig({
         proxy: {
             '/api': { target: observer, ws: true },
         },
+        // The documentation's tests read the contract as the binary embeds it, from `resource/`.
+        fs: { allow: ['.', '../resource'] },
     },
     build: {
         outDir: 'dist',

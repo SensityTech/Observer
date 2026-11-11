@@ -2,7 +2,7 @@
 //! once it is up, and nothing of the one it is starting. The command of the cfg it is at is worked
 //! out from the resources each command starts.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -82,6 +82,12 @@ impl Plan {
 enum Said<'a> {
     /// How many resources the folder holds, said once as the scan of it ends.
     Found(u32),
+    /// What a `refresh` found: new resources, and how many of those it read again changed.
+    Refreshed {
+        added: u32,
+        changed: u32,
+        read: u32,
+    },
     /// A resource with server scripts begins to start.
     Entering(&'a str),
     Started {
@@ -132,6 +138,15 @@ impl<'a> Said<'a> {
                 return (!resource.is_empty()).then_some(Self::Started { resource, warnings });
             }
             let found = text.strip_prefix("Found ")?.strip_suffix(" resources.")?;
+            // `ServerResources.cpp` says it this way once it read again resources it knew.
+            if let Some((added, read)) = found.split_once(" new resources, and refreshed ") {
+                let (changed, read) = read.split_once('/')?;
+                return Some(Self::Refreshed {
+                    added: added.parse().ok()?,
+                    changed: changed.parse().ok()?,
+                    read: read.parse().ok()?,
+                });
+            }
             return found.parse().ok().map(Self::Found);
         }
         if channel == "c-scripting-core" {
@@ -246,6 +261,32 @@ impl Warnings {
     }
 }
 
+/// What a `refresh` found, as FXServer said it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Refreshed {
+    pub at_ms: i64,
+    /// Resources it did not know.
+    pub added: u32,
+    /// Resources whose manifest changed, of those it read again.
+    pub changed: u32,
+    pub read: u32,
+}
+
+/// What a run's console said of its resources, each by its name in lower case.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Marks {
+    /// The resources FXServer could not start and has not started since, with when it said so.
+    pub failed: HashMap<String, i64>,
+    /// What FXServer counted as it last started each resource it warned about.
+    pub warned: HashMap<String, u32>,
+    /// The heavy files it named of each resource, and how many of them oversized.
+    pub heavy: HashMap<String, (u32, u32)>,
+    /// The files a manifest names that its resource does not hold.
+    pub missing: HashMap<String, u32>,
+    /// The latest `refresh` of the run.
+    pub refreshed: Option<Refreshed>,
+}
+
 /// The last resource FXServer said it started.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Started {
@@ -303,7 +344,11 @@ struct State {
     plan: Plan,
     found: Option<u32>,
     started: HashSet<String>,
-    failed: HashSet<String>,
+    /// When FXServer said it could not start each.
+    failed: HashMap<String, i64>,
+    /// What FXServer counted as it last started each resource it warned about.
+    warned: HashMap<String, u32>,
+    refreshed: Option<Refreshed>,
     last: Option<(Instant, Started)>,
     /// When FXServer last said anything of its start, which the next resource's time counts from.
     mark: Instant,
@@ -333,7 +378,7 @@ impl State {
     }
 
     fn settled(&self, resource: &str) -> bool {
-        self.started.contains(resource) || self.failed.contains(resource)
+        self.started.contains(resource) || self.failed.contains_key(resource)
     }
 
     fn settle(&mut self, at_ms: i64) {
@@ -404,7 +449,9 @@ impl Progress {
                 plan,
                 found: None,
                 started: HashSet::new(),
-                failed: HashSet::new(),
+                failed: HashMap::new(),
+                warned: HashMap::new(),
+                refreshed: None,
                 last: None,
                 mark: spawned,
                 moved: None,
@@ -432,6 +479,15 @@ impl Progress {
         let mut state = self.state();
         match said {
             Said::Found(found) => state.found = Some(found),
+            Said::Refreshed { added, changed, read } => {
+                state.refreshed = Some(Refreshed {
+                    at_ms,
+                    added,
+                    changed,
+                    read,
+                });
+                return;
+            }
             Said::Entering(resource) => {
                 state.entering = Some(resource.to_owned());
                 return;
@@ -476,6 +532,11 @@ impl Progress {
                     state.timed(resource, took);
                 }
                 state.failed.remove(&lower);
+                if warnings == 0 {
+                    state.warned.remove(&lower);
+                } else {
+                    state.warned.insert(lower.clone(), warnings);
+                }
                 state.last = Some((
                     at,
                     Started {
@@ -492,7 +553,7 @@ impl Progress {
                 state.place_missing(resource);
                 let lower = resource.to_ascii_lowercase();
                 if !state.started.contains(&lower) {
-                    state.failed.insert(lower);
+                    state.failed.insert(lower, at_ms);
                 }
                 state.entering = None;
             }
@@ -521,9 +582,31 @@ impl Progress {
         self.state().warnings.clone()
     }
 
+    /// What the console said of each resource so far, in this run.
+    pub fn marks(&self) -> Marks {
+        let state = self.state();
+        let mut heavy: HashMap<String, (u32, u32)> = HashMap::new();
+        for asset in &state.warnings.heavy {
+            let (files, oversized) = heavy.entry(asset.resource.to_ascii_lowercase()).or_default();
+            *files += 1;
+            *oversized += u32::from(asset.oversized);
+        }
+        let mut missing: HashMap<String, u32> = HashMap::new();
+        for file in &state.warnings.missing {
+            *missing.entry(file.resource.to_ascii_lowercase()).or_default() += 1;
+        }
+        Marks {
+            failed: state.failed.clone(),
+            warned: state.warned.clone(),
+            heavy,
+            missing,
+            refreshed: state.refreshed,
+        }
+    }
+
     pub fn snapshot(&self) -> Snapshot {
         let state = self.state();
-        let count = |set: &HashSet<String>| u32::try_from(set.len()).unwrap_or(u32::MAX);
+        let count = |resources: usize| u32::try_from(resources).unwrap_or(u32::MAX);
         let at = state.plan.steps.get(state.step).map(|step| At {
             file: step.file.clone(),
             line: step.line,
@@ -535,8 +618,8 @@ impl Progress {
             resource: state.entering.clone(),
         });
         Snapshot {
-            started: count(&state.started),
-            failed: count(&state.failed),
+            started: count(state.started.len()),
+            failed: count(state.failed.len()),
             found: state.found,
             planned: state.plan.resources,
             last: state.last.as_ref().map(|(_, started)| started.clone()),
@@ -925,6 +1008,83 @@ mod tests {
         assert_eq!(
             (snapshot.found, snapshot.started, snapshot.at),
             (Some(12), 7, None)
+        );
+    }
+
+    #[test]
+    fn what_the_console_says_of_a_resource_is_kept_by_its_name_until_it_starts_clean() {
+        let start = Start::new(plan(Vec::new()));
+        start
+            .says(1, "[  resources:maps:str] Asset maps/dock.ydr uses 49.5 MiB of physical memory. Oversized assets can and WILL lead to streaming issues (such as models not loading/rendering).")
+            .says(1, "[  resources:maps:str] Asset maps/pier.ytd uses 16 MiB of virtual memory.")
+            .says(1, "[resources:Maps:strea] Warning: could not find file `x.meta` (defined in fxmanifest.lua:12)")
+            .starts(2, "Maps (3 warnings)")
+            .starts(3, "chat")
+            .says(4, "[ citizen-server-impl] Couldn't start resource Nursery.")
+            .says(5, "[ citizen-server-impl] Couldn't start resource jobs.");
+
+        let marks = start.progress.marks();
+        assert_eq!(marks.warned, HashMap::from([("maps".to_owned(), 3)]));
+        assert_eq!(marks.heavy, HashMap::from([("maps".to_owned(), (2, 1))]));
+        assert_eq!(marks.missing, HashMap::from([("maps".to_owned(), 1)]));
+        assert_eq!(
+            marks.failed,
+            HashMap::from([("nursery".to_owned(), 4000), ("jobs".to_owned(), 5000)])
+        );
+        assert_eq!(marks.refreshed, None);
+
+        start.starts(6, "maps").starts(7, "jobs");
+        let marks = start.progress.marks();
+        assert_eq!(marks.warned, HashMap::new(), "it started without a warning since");
+        assert_eq!(marks.failed, HashMap::from([("nursery".to_owned(), 4000)]));
+    }
+
+    #[test]
+    fn a_refresh_says_what_it_found_and_a_start_only_how_many() {
+        assert_eq!(
+            Said::read("[           resources] Found 2 new resources, and refreshed 3/391 resources."),
+            Some(Said::Refreshed {
+                added: 2,
+                changed: 3,
+                read: 391
+            })
+        );
+        assert_eq!(
+            Said::read("[           resources] Found 0 new resources, and refreshed 0/7 resources."),
+            Some(Said::Refreshed {
+                added: 0,
+                changed: 0,
+                read: 7
+            })
+        );
+        for line in [
+            "[           resources] Found 2 new resources, and refreshed 3 resources.",
+            "[           resources] Found x new resources, and refreshed 3/391 resources.",
+            "[         script:evil] Found 2 new resources, and refreshed 3/391 resources.",
+        ] {
+            assert_eq!(Said::read(line), None, "{line}");
+        }
+        let start = Start::new(plan(Vec::new()));
+
+        start.says(1, "[           resources] Found 391 resources.").says(
+            90,
+            "[           resources] Found 1 new resources, and refreshed 0/391 resources.",
+        );
+
+        assert_eq!(
+            start.progress.marks().refreshed,
+            Some(Refreshed {
+                at_ms: 90_000,
+                added: 1,
+                changed: 0,
+                read: 391
+            })
+        );
+        assert_eq!(start.progress.snapshot().found, Some(391));
+        assert_eq!(
+            start.progress.moved(),
+            Some(start.spawned + Duration::from_secs(1)),
+            "a refresh is no part of the start"
         );
     }
 

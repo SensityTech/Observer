@@ -71,6 +71,7 @@ fn status(code: ErrorCode) -> StatusCode {
         | ErrorCode::StartNotFound
         | ErrorCode::PlayerNotFound
         | ErrorCode::BanNotFound
+        | ErrorCode::ResourceNotFound
         | ErrorCode::NoMapImage
         | ErrorCode::FeatureDisabled => StatusCode::NOT_FOUND,
         ErrorCode::ContentNotKept => StatusCode::GONE,
@@ -82,6 +83,10 @@ fn status(code: ErrorCode) -> StatusCode {
         | ErrorCode::ServerNotRunning
         | ErrorCode::ServerStopping
         | ErrorCode::ServerNotStarting
+        | ErrorCode::EntitiesNotListed
+        | ErrorCode::EntitiesChanged
+        | ErrorCode::EntitiesOutOfDate
+        | ErrorCode::EntitiesDeleting
         | ErrorCode::CfgNotEditable
         | ErrorCode::CfgChanged
         | ErrorCode::NothingToSkip
@@ -113,7 +118,11 @@ fn status(code: ErrorCode) -> StatusCode {
         | ErrorCode::UpdateRunning
         | ErrorCode::NoUpdate
         | ErrorCode::UpdateRestarting
-        | ErrorCode::UpdateBlocked => StatusCode::CONFLICT,
+        | ErrorCode::UpdateBlocked
+        | ErrorCode::ResourcesNotListed
+        | ErrorCode::ResourceNameRefused
+        | ErrorCode::ResourceBusy
+        | ErrorCode::ResourceChanged => StatusCode::CONFLICT,
         ErrorCode::LaunchFailed
         | ErrorCode::DelayTooLong
         | ErrorCode::NotDownloadable
@@ -152,6 +161,8 @@ fn status(code: ErrorCode) -> StatusCode {
         | ErrorCode::InvalidBan
         | ErrorCode::InvalidBansSettings
         | ErrorCode::InvalidMapSettings
+        | ErrorCode::TooManyEntities
+        | ErrorCode::InvalidEntitiesSettings
         | ErrorCode::InvalidBackupSettings
         | ErrorCode::InvalidBackupDestination => StatusCode::BAD_REQUEST,
         ErrorCode::TooManyAttempts
