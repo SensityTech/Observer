@@ -153,6 +153,38 @@ test.describe.serial('Observer in a browser', () => {
         await expect(page.getByText(en.console.sent('fake_players 5'))).toBeVisible();
     });
 
+    test('a resource stops with the one that depends on it, and starting that one brings both back', async () => {
+        const words = en.resources;
+        await page.getByRole('link', { name: en.nav.resources, exact: true }).click();
+        await expect(page.getByRole('heading', { level: 1 })).toContainText(words.title);
+        const row = (name: string) =>
+            page.getByRole('listitem').filter({ has: page.getByText(name, { exact: true }) });
+        await expect(row('hello')).toContainText(words.states.started);
+        await expect(row('greeter')).toContainText(words.states.started);
+
+        // FXServer stops what depends on a resource before the resource: the page names it first.
+        await row('hello').getByRole('button', { name: words.verbs.stop, exact: true }).click();
+        const dialog = page.getByRole('alertdialog');
+        await expect(dialog.getByRole('listitem')).toHaveText(['greeter']);
+        await dialog.getByRole('button', { name: words.confirmStop('hello', 2), exact: true }).click();
+        await expect(dialog).toBeHidden();
+        const justNow = words.ago(null);
+        await expect(row('hello')).toContainText(words.happened(words.last.stopped, 'ada', null, justNow));
+        await expect(row('greeter')).toContainText(
+            words.happened(words.last.stopped, null, 'hello', justNow),
+        );
+
+        // And it starts what a resource depends on before the resource.
+        await row('greeter').getByRole('button', { name: words.verbs.start, exact: true }).click();
+        await expect(row('greeter')).toContainText(words.happened(words.last.started, 'ada', null, justNow));
+        await expect(row('hello')).toContainText(words.states.started);
+
+        await page.getByRole('link', { name: en.nav.audit, exact: true }).click();
+        const log = page.getByRole('table', { name: en.audit.caption });
+        await expect(log.getByText(en.audit.actions.resource_stopped, { exact: true })).toBeVisible();
+        await expect(log.getByText(en.audit.actions.resource_started, { exact: true })).toBeVisible();
+    });
+
     test('the Overview sums FXServer up, and its details show every measure it reports', async () => {
         await overview();
         // Folded, the details hold no region: the four figures are the only ones named so.
