@@ -34,6 +34,9 @@ import { FocusShell } from './shell/FocusShell';
 const ConsolePage = lazyCode(() =>
     import('./pages/ConsolePage').then((page) => ({ default: page.ConsolePage })),
 );
+const ResourcesPage = lazyCode(() =>
+    import('./pages/ResourcesPage').then((page) => ({ default: page.ResourcesPage })),
+);
 const SchedulePage = lazyCode(() =>
     import('./pages/SchedulePage').then((page) => ({ default: page.SchedulePage })),
 );
@@ -220,6 +223,16 @@ const consoleRoute = createRoute({
     component: () => (
         <RequirePermission name="ConsoleView">
             <ConsolePage />
+        </RequirePermission>
+    ),
+});
+
+const resourcesRoute = createRoute({
+    getParentRoute: () => panelRoute,
+    path: '/resources',
+    component: () => (
+        <RequirePermission name={['DashboardView', 'ResourcesControl']}>
+            <ResourcesPage />
         </RequirePermission>
     ),
 });
@@ -504,6 +517,7 @@ const routeTree = rootRoute.addChildren([
         overviewRoute,
         statisticsRoute,
         consoleRoute,
+        resourcesRoute,
         scheduleRoute,
         artifactsRoute,
         diagnosticsRoute,

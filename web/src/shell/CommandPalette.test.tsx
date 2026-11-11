@@ -75,7 +75,13 @@ describe('CommandPalette', () => {
         cleanup();
 
         palette(VIEWER);
-        expect(listed()).toEqual([en.nav.overview, en.nav.schedule, en.nav.statistics, en.nav.settings]);
+        expect(listed()).toEqual([
+            en.nav.overview,
+            en.nav.resources,
+            en.nav.schedule,
+            en.nav.statistics,
+            en.nav.settings,
+        ]);
     });
 
     it('should go to the page the arrows are on when Enter is pressed', () => {
