@@ -69,6 +69,18 @@ pub fn insert(tx: &Transaction<'_>, ban: &NewBan<'_>) -> Result<i64, StoreError>
     Ok(id)
 }
 
+/// What a ban holds, as [`NewBan::held`] gave it; nothing for a code no ban has.
+pub fn held(conn: &Connection, code: &str) -> Result<Vec<(String, String)>, StoreError> {
+    let mut statement = conn.prepare(
+        "SELECT i.kind, i.value FROM ban_identifier i JOIN ban b ON b.id = i.ban
+         WHERE b.code = ?1 ORDER BY i.kind, i.value",
+    )?;
+    let held = statement
+        .query_map([code], |row| Ok((row.get(0)?, row.get(1)?)))?
+        .collect::<Result<_, _>>()?;
+    Ok(held)
+}
+
 /// A known player's licence, latest name, and every identifier and token their profile links to.
 pub struct Identity {
     pub license: String,
@@ -543,6 +555,21 @@ mod tests {
         assert_eq!((by_tokens[0].identifiers, by_tokens[0].tokens), (0, 2));
         assert_eq!((by_discord[0].identifiers, by_discord[0].tokens), (1, 0));
         assert_eq!(stranger, []);
+    }
+
+    #[test]
+    fn a_ban_gives_back_what_it_holds_and_only_that() {
+        let mut conn = memory();
+        let held = [
+            ("discord".to_owned(), "123456789012345678".to_owned()),
+            (LICENSE.to_owned(), LICENSE_HEX.to_owned()),
+            token(1),
+        ];
+        write(&mut conn, "AAAA-AAAA", None, &held);
+        write(&mut conn, "BBBB-BBBB", None, &[token(2)]);
+
+        assert_eq!(super::held(&conn, "AAAA-AAAA").unwrap(), held);
+        assert_eq!(super::held(&conn, "ZZZZ-ZZZZ").unwrap(), []);
     }
 
     #[test]

@@ -1100,7 +1100,7 @@ fn command_refusal(refusal: stdin::CommandRefusal) -> CommandRefusal {
     }
 }
 
-fn control_error(error: ControlError) -> Error {
+pub(crate) fn control_error(error: ControlError) -> Error {
     match error {
         ControlError::AlreadyRunning => ErrorCode::ServerRunning.into(),
         ControlError::NotRunning | ControlError::Stdin(StdinError::Closed) => {

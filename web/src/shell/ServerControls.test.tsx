@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { act, cleanup, fireEvent, render } from '@testing-library/react';
-import { afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { act, cleanup, fireEvent, render, within } from '@testing-library/react';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import type { LaunchReadiness } from '../api/generated/LaunchReadiness';
 import type { ServerState } from '../api/generated/ServerState';
@@ -28,8 +28,12 @@ const status = (state: ServerState, launch: LaunchReadiness = 'ready') => ({
     start: null,
 });
 
+/** Dashboard and server control, and with them the permission to send announcements. */
+const OPERATOR = '9';
+const ANNOUNCER = '40000009';
+
 /** The controls of an operator who may start and stop FXServer, in `state`. */
-const controls = async (state: ServerState, launch?: LaunchReadiness) => {
+const controls = async (state: ServerState, launch?: LaunchReadiness, permissions = OPERATOR) => {
     let socket: SocketEvents | undefined;
     const live = new Realtime({
         ticket: async () => 'ticket',
@@ -47,7 +51,7 @@ const controls = async (state: ServerState, launch?: LaunchReadiness) => {
                         id: 2,
                         username: 'kenji',
                         isOwner: false,
-                        permissions: '9',
+                        permissions,
                         mustChangePassword: false,
                     }}
                 >
@@ -84,9 +88,13 @@ describe('ServerControls', () => {
         HTMLDialogElement.prototype.close ??= function (this: HTMLDialogElement) {
             this.open = false;
         };
+        HTMLElement.prototype.hidePopover ??= () => {};
     });
 
-    afterEach(cleanup);
+    afterEach(() => {
+        cleanup();
+        vi.unstubAllGlobals();
+    });
 
     it('should offer Restart while the server runs, and Start in its place while it does not', async () => {
         const { queryByRole, live, state } = await controls('online');
@@ -142,6 +150,49 @@ describe('ServerControls', () => {
         state('stopped');
 
         expect(queryByText(en.controls.unavailable(en.controls.stop, en.controls.notRunning))).toBeNull();
+        live.stop();
+    });
+
+    it('should hold what reaches every player in a menu, while the server runs, by permission', async () => {
+        const operator = await controls('online');
+        const items = (view: typeof operator) =>
+            view.queryAllByRole('menuitem', { hidden: true }).map((item) => item.textContent);
+        const kickOnly = items(operator);
+        operator.state('stopped');
+        const stopped = operator.queryByRole('button', { name: en.moderation.more });
+        operator.live.stop();
+        cleanup();
+
+        const announcer = await controls('online', undefined, ANNOUNCER);
+
+        expect(kickOnly).toEqual([en.moderation.kickAll.menu]);
+        expect(stopped).toBeNull();
+        expect(items(announcer)).toEqual([en.moderation.announce.menu, en.moderation.kickAll.menu]);
+        announcer.live.stop();
+    });
+
+    it('should kick everyone for a reason, after saying how many are connected, then how many were', async () => {
+        const fetch = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+            Response.json({ players: 3 }),
+        );
+        vi.stubGlobal('fetch', fetch);
+        const { getByRole, getByText, live } = await controls('online');
+
+        fireEvent.click(getByRole('menuitem', { name: en.moderation.kickAll.menu, hidden: true }));
+        const dialog = within(getByRole('alertdialog', { name: en.moderation.kickAll.title }));
+        const lead = dialog.getByText(en.moderation.kickAll.lead(0));
+        fireEvent.change(dialog.getByLabelText(en.moderation.kickAll.reason), {
+            target: { value: ' Maintenance ' },
+        });
+        fireEvent.click(dialog.getByRole('button', { name: en.moderation.kickAll.submit }));
+        await settle();
+        await settle();
+
+        expect(lead).not.toBeNull();
+        const [input, init] = fetch.mock.calls[0] ?? [];
+        expect(new URL(String(input), 'http://localhost').pathname).toBe('/api/servers/default/kicks/all');
+        expect(init?.body).toBe(JSON.stringify({ reason: 'Maintenance' }));
+        expect(getByText(en.moderation.kickAll.done(3))).not.toBeNull();
         live.stop();
     });
 

@@ -33,8 +33,8 @@ const me = (permissions: string): Me => ({
 const VIEWER = me('404000');
 const BANNER = me('c04000');
 const LIFTER = me('1404000');
-const EDITOR = me('20404000');
-const EDITOR_AND_LIFTER = me('21404000');
+const EDITOR = me('100404000');
+const EDITOR_AND_LIFTER = me('101404000');
 
 const KAITO: Ban = {
     code: 'K7QM-2XPA',

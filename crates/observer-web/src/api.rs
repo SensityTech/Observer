@@ -20,6 +20,7 @@ mod features;
 mod files;
 mod map;
 mod metrics;
+mod moderation;
 mod players;
 mod resources;
 mod schedule;
@@ -102,15 +103,21 @@ pub(crate) fn routes() -> Vec<Route> {
     // too, which the service checks on what is asked. Retentions and erasures are the owner's.
     let players = Permission(P::PLAYERS_VIEW);
     let erase = ReauthenticatedOwner;
-    // Bans are seen, made, edited and lifted under four permissions. The refusal message is the
-    // only text Observer shows players, so changing it takes the settings' permission and the
-    // password again; the templates are saved with it, and read by whoever bans.
+    // Bans are seen, made, edited and lifted under four permissions. The refusal message is a text
+    // Observer shows players, so changing it takes the settings' permission and the password again;
+    // the templates are saved with it, and read by whoever bans.
     let bans = Permission(P::BANS_VIEW);
     let ban = Permission(P::PLAYERS_BAN);
     let edit_ban = Permission(P::BANS_EDIT);
     let lift = Permission(P::BANS_LIFT);
     let read_ban_settings = Permission(P::SETTINGS_VIEW);
     let change_ban_settings = Reauthenticated(P::SETTINGS_MANAGE);
+    // A kick, an announcement and a message to a player are three permissions. Kicking everyone
+    // empties the server as a restart does, so it is the server control's. The kick message is the
+    // other text Observer shows players: the settings' permission and the password again.
+    let kick = Permission(P::PLAYERS_KICK);
+    let announce = Permission(P::PLAYERS_ANNOUNCE);
+    let message = Permission(P::PLAYERS_MESSAGE);
     // Where players stand is its own permission. The image comes from a host path, which is the
     // owner's to read, with the password again; the calibration and colours are settings.
     let map = Permission(P::PLAYERS_MAP);
@@ -275,6 +282,12 @@ pub(crate) fn routes() -> Vec<Route> {
         route(M::GET,    "/servers/default/bans/templates",    ban,     bans::templates),
         route(M::PATCH,  "/servers/default/bans/{code}",       edit_ban, bans::edit),
         route(M::POST,   "/servers/default/bans/{code}/lift",  lift,    bans::lift),
+        route(M::POST,   "/servers/default/kicks",             kick,     moderation::kick),
+        route(M::POST,   "/servers/default/kicks/all",         control,  moderation::kick_all),
+        route(M::GET,    "/servers/default/kicks/settings",    read_ban_settings,   moderation::settings),
+        route(M::PUT,    "/servers/default/kicks/settings",    change_ban_settings, moderation::change_settings),
+        route(M::POST,   "/servers/default/announcements",     announce, moderation::announce),
+        route(M::POST,   "/servers/default/messages",          message,  moderation::message),
         route(M::GET,    "/servers/default/drops/summary",     drops,   drops::summary),
         route(M::GET,    "/servers/default/drops/series",      drops,   drops::series),
         route(M::GET,    "/servers/default/drops/signatures",  drops,   drops::signatures),

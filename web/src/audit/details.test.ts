@@ -57,6 +57,7 @@ describe('auditDetails', () => {
     it('should list the ban templates before and after, each with its length', () => {
         expect(
             auditDetails(en, format, {
+                refusalMessage: { before: 'Banned.', after: 'Banned: {reason}' },
                 tokenMatches: { before: 1, after: 2 },
                 templates: {
                     before: [],
@@ -67,7 +68,7 @@ describe('auditDetails', () => {
                 },
             }),
         ).toBe(
-            'Hardware tokens to match: 1 → 2 · Ban templates: none → Cheating (Permanent), Insults (3 days)',
+            'Refusal message: Banned. → Banned: {reason} · Hardware tokens to match: 1 → 2 · Ban templates: none → Cheating (Permanent), Insults (3 days)',
         );
     });
 
@@ -314,6 +315,20 @@ describe('auditDetails', () => {
                 'Contents kept at most: 2 GB → 4 GB · Hashing rate: 64 MB/s → 32 MB/s · ' +
                 'Full verification every: 7 days → 1 day',
         );
+    });
+
+    it('should read a kick and a message with the server ID as it is written and the licence named', () => {
+        const license = 'license:00000000000000000000000000000000000000aa';
+
+        expect(auditDetails(en, format, { serverId: 1204, license, reason: 'RDM' }, 'player_kicked')).toBe(
+            `Server ID: 1204 · Licence: ${license} · Reason: RDM`,
+        );
+        expect(auditDetails(en, format, { reason: 'Maintenance', players: 1204 }, 'everyone_kicked')).toBe(
+            'Reason: Maintenance · Players connected: 1,204',
+        );
+        expect(
+            auditDetails(en, format, { serverId: 3, license: null, message: 'Hello' }, 'direct_message_sent'),
+        ).toBe('Server ID: 3 · Licence: not set · Message: Hello');
     });
 
     it('should leave a file group changed as the log stores it, not as changed settings', () => {

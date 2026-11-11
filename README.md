@@ -3,9 +3,9 @@
 A server manager for FiveM and RedM, written in Rust.
 
 Observer starts and supervises FXServer, installs its builds and serves a web panel for your staff,
-from one executable that keeps its state in SQLite. It never shows anything to players, but for the
-refusal message you write for bans: it raises documented server events, and your own resources decide
-what to do with them.
+from one executable that keeps its state in SQLite. It never shows anything to players, but for two
+messages you write, the one a banned player reads and the one a kicked player reads: it raises
+documented server events, and your own resources decide what to do with them.
 
 > **Status: proof of concept.** Settings, the panel and the integration contract may still change
 > between versions.
@@ -24,7 +24,7 @@ what to do with them.
 - **Statistics and diagnostics.** Players, tick times, CPU and memory of FXServer and the host,
   FXServer's threads and connections, crash dumps and hangs.
 - **Live map.** Where the connected players stand, over Rockstar's map of GTA V or an image you add,
-  coloured by play time, a click away from their profile and a ban.
+  coloured by play time, a click away from their profile, a message, a kick and a ban.
 - **Entities.** The server's vehicles, peds and objects, each with the resource that created it and
   the player whose game simulates it, found on the live map and deleted one at a time or a hundred.
 - **Debug.** What each resource sends and receives, writes into state bags and calls over HTTP,
@@ -33,6 +33,9 @@ what to do with them.
 - **Bans.** A ban holds a player's licence, other identifiers and hardware tokens, for a time or for
   good. The server refuses a banned player at connection with your message, and drops one banned while
   playing.
+- **Kicks, announcements and messages.** The staff kicks a connected player, or everyone, with a reason
+  and your kick message. An announcement to the server and a message to one player are server events,
+  which your resources show.
 - **Accounts and audit.** An owner and sub-users with fine-grained permissions, and an audit log of every
   action.
 - **Updates.** A newer release shows in the panel with its notes; the owner installs it in one click,
@@ -1014,8 +1017,10 @@ and finds players by them. Who a player is stays their licence: a label never li
 
 Resources written for txAdmin keep working with **Send txAdmin's events too**, in the launch settings
 and the setup's last step: from the next start of FXServer, the bridge also raises txAdmin's events,
-such as `txAdmin:events:scheduledRestart` and `txAdmin:events:serverShuttingDown`, right after Observer's
-own. The contract maps each one.
+such as `txAdmin:events:scheduledRestart`, `txAdmin:events:serverShuttingDown` and
+`txAdmin:events:announcement`, right after Observer's own. The contract maps each one. txAdmin showed
+its announcements and direct messages to players itself; Observer does not, so a server that counted on
+txAdmin for that needs a resource that shows them.
 
 ## Bans
 
@@ -1027,10 +1032,10 @@ and lifted bans, and finds them by name, licence, reason or ban ID; finding them
 takes **View player identifiers**. Lifting a ban takes a permission of its own and keeps the ban in the
 list, with who lifted it and why. Every ban, every edit and every lift is in the audit log.
 
-The settings' Bans category keeps **ban templates**: the reasons you ban for most, each with its usual
-length, in the order you put them. The ban dialog offers them, and picking one fills in the reason and
-the length, which the staff can still change before banning. The list is saved with the refusal
-message, by who may change settings.
+The settings' Bans and kicks category keeps **ban templates**: the reasons you ban for most, each with
+its usual length, in the order you put them. The ban dialog offers them, and picking one fills in the
+reason and the length, which the staff can still change before banning. The list is saved with the
+refusal message, by who may change settings.
 
 An active ban can be edited: its reason, its end, or both. A new length counts from the edit, as a new
 ban's counts from the ban, and a ban can be made permanent. Editing takes a permission of its own,
@@ -1040,15 +1045,37 @@ the end it replaced: the Bans page and the player's profile show them under the 
 on a connecting player is checked against the new end and reads the new reason.
 
 The bridge holds each connecting player on `playerConnecting` while Observer checks them, which takes
-milliseconds. A banned player is refused with the **refusal message** of the settings' Bans category,
-the only text Observer ever shows players: it can name the reason, when the ban ends and the ban ID to
-quote in an appeal. If Observer has not answered within 5 seconds, the player gets in, and Observer
-drops them once they joined if a ban holds them. A player banned while playing is dropped at once.
-By default one hardware token in common is enough to refuse a player; the settings can ask for more,
-or for none. Addresses are never matched: players behind one address would be refused together.
+milliseconds. A banned player is refused with the **refusal message** of the settings' Bans and kicks
+category: it can name the reason, when the ban ends and the ban ID to quote in an appeal. With the kick
+message, it is all the text Observer ever shows players. If Observer has not answered within 5
+seconds, the player gets in, and Observer drops them once they joined if a ban holds them. A player
+banned while playing is dropped at once. By default one hardware token in common is enough to refuse a
+player; the settings can ask for more, or for none. Addresses are never matched: players behind one
+address would be refused together.
 
 Your resources hear of both through `observer:playerRefused` and `observer:playerBanned`, in the
-contract.
+contract. With **Send txAdmin's events too**, each ban made while the server runs also raises
+`txAdmin:events:playerBanned`, whether or not the player is connected, and each ban lifted raises
+`txAdmin:events:actionRevoked`.
+
+## Kicks, announcements and messages
+
+The staff kicks a connected player from their row in **Online now**, from their profile or from the
+Live map, with a reason. The server drops them with the **kick message** of the settings' Bans and
+kicks category, which can name the reason and who kicked. A kick keeps no one out: the player can
+connect again at once. **Kick everyone**, in the menu beside Restart and Stop, drops every connected
+player with the same message. It empties the server as a restart does, so it takes **Start and stop
+the server** rather than **Kick players**.
+
+**Send an announcement**, in the same menu, writes to the whole server, and **Message**, where a
+player is kicked from, to one connected player. Observer shows players nothing of either: the bridge
+raises `observer:announcement` or `observer:directMessage` with the text, and your resources show it,
+in the chat or the way your server speaks to its players. Until a resource handles the event, nobody
+reads the text: [`resource/observer_example`](resource/observer_example) marks where to plug in.
+Sending announcements and messaging players are two permissions.
+
+Your resources hear of a kick through `observer:playerKicked`, raised while the player is still
+connected. Every kick, announcement and message is in the audit log, with its text.
 
 ## Live map
 
@@ -1056,8 +1083,8 @@ The Live map page shows where the connected players stand, as the server sees th
 can follow the server without joining it. Each player is a mark coloured by play time: new under 10
 hours, regular, veteran from 100 hours, not confirmed yet before their identity is; the marks differ in
 shape too, and the settings' Live map category moves the thresholds. A click on a player gives their
-play time, session, ping and position, a link to their profile and, with **Ban players**, a ban. Seeing
-the map takes **See the live map**.
+play time, session, ping and position, a link to their profile and, each with its permission, a
+message, a kick and a ban. Seeing the map takes **See the live map**.
 
 **On the map** lists the players placed, by name, with their ping: a click centres the map on one, and
 the search narrows the list by name or ID. **Follow**, on the selected player, keeps the map on them at
