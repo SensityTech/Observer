@@ -3,13 +3,16 @@
 // The helpers below are test code too, though not inside a `#[test]` function.
 #![allow(clippy::unwrap_used)]
 
+mod common;
+
 use std::fs;
 use std::net::{SocketAddr, TcpListener, UdpSocket};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, LazyLock, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
+use common::{Port, Ports};
 use observer_domain::diagnostics::ProcessKind;
 #[cfg(unix)]
 use observer_domain::diagnostics::ThreadRun;
@@ -45,28 +48,8 @@ const KILLED: Option<u32> = Some(1);
 #[cfg(unix)]
 const KILLED: Option<u32> = None;
 
-/// The ports tests may use, lent to one test at a time. 41929 and up belong to other Observers
-/// of the development host.
-static PORTS: LazyLock<Mutex<Vec<u16>>> = LazyLock::new(|| Mutex::new((41920..=41928).collect()));
-
-struct Port(u16);
-
-impl Port {
-    async fn lease() -> Self {
-        loop {
-            if let Some(port) = PORTS.lock().unwrap_or_else(PoisonError::into_inner).pop() {
-                return Self(port);
-            }
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
-    }
-}
-
-impl Drop for Port {
-    fn drop(&mut self) {
-        PORTS.lock().unwrap_or_else(PoisonError::into_inner).push(self.0);
-    }
-}
+/// The labs' ports, lent to nine at a time.
+static PORTS: Ports = Ports::new(9);
 
 struct Lab {
     dir: TempDir,
@@ -87,7 +70,7 @@ impl Lab {
     /// A lab whose supervisor settings `tune` adjusts. A hung server is killed without a snapshot
     /// unless `tune` asks for one.
     async fn tuned(extra: &[(&str, &str)], tune: impl FnOnce(&mut Settings)) -> Self {
-        let port = Port::lease().await;
+        let port = PORTS.lease().await;
         let dir = tempfile::tempdir().unwrap();
         let program = fake_program(&dir.path().join("build"));
         fs::create_dir_all(program.parent().unwrap()).unwrap();
@@ -98,7 +81,7 @@ impl Lab {
             data.join("server.cfg"),
             format!(
                 "endpoint_add_tcp \"127.0.0.1:{0}\"\nendpoint_add_udp \"127.0.0.1:{0}\"\nsv_hostname \"Observer test\"\nsv_maxclients 8\n",
-                port.0
+                port.number
             ),
         )
         .unwrap();
@@ -488,7 +471,7 @@ async fn a_started_server_goes_online_then_stops_gracefully() {
         }
     );
     let spawned = lab.event(|kind| matches!(kind, EventKind::Spawned { .. })).await;
-    assert!(matches!(spawned, EventKind::Spawned { probe, .. } if probe.port() == lab.port.0));
+    assert!(matches!(spawned, EventKind::Spawned { probe, .. } if probe.port() == lab.port.number));
     assert_eq!(lab.state(State::Online).await, Cause::Ready);
     assert!(lab.supervisor.status().borrow().pid.is_some());
     let bridge = lab.bridge();
@@ -1240,8 +1223,8 @@ async fn hang_detection_turned_back_on_reaches_the_running_server_and_counts_fro
 
 #[tokio::test]
 async fn a_taken_port_backs_off_more_each_time_without_tripping_the_breaker() {
-    let lab_port = Port::lease().await;
-    let taken = TcpListener::bind(("127.0.0.1", lab_port.0)).unwrap();
+    let lab_port = PORTS.lease().await;
+    let taken = TcpListener::bind(("127.0.0.1", lab_port.number)).unwrap();
     let mut lab = Lab::new(&[]).await;
     // Point the cfg at the taken port.
     let cfg = lab.dir.path().join("server-data/server.cfg");
@@ -1249,7 +1232,7 @@ async fn a_taken_port_backs_off_more_each_time_without_tripping_the_breaker() {
         &cfg,
         fs::read_to_string(&cfg)
             .unwrap()
-            .replace(&lab.port.0.to_string(), &lab_port.0.to_string()),
+            .replace(&lab.port.number.to_string(), &lab_port.number.to_string()),
     )
     .unwrap();
     lab.supervisor.start("test").await.unwrap();
@@ -1260,7 +1243,7 @@ async fn a_taken_port_backs_off_more_each_time_without_tripping_the_breaker() {
         assert_eq!(
             cause,
             Cause::BindError {
-                address: format!("127.0.0.1:{}", lab_port.0)
+                address: format!("127.0.0.1:{}", lab_port.number)
             }
         );
         match lab
@@ -1879,7 +1862,7 @@ async fn the_connections_the_server_opens_are_listed_with_its_listener() {
     while !(held(&sockets)
         && sockets
             .iter()
-            .any(|socket| socket.local.port() != lab.port.0 && socket.protocol == Protocol::Udp))
+            .any(|socket| socket.local.port() != lab.port.number && socket.protocol == Protocol::Udp))
         && Instant::now() < deadline
     {
         tokio::time::sleep(Duration::from_millis(50)).await;
@@ -1887,7 +1870,7 @@ async fn the_connections_the_server_opens_are_listed_with_its_listener() {
     }
 
     assert!(held(&sockets), "{sockets:#?}");
-    let listener: SocketAddr = format!("127.0.0.1:{}", lab.port.0).parse().unwrap();
+    let listener: SocketAddr = format!("127.0.0.1:{}", lab.port.number).parse().unwrap();
     assert!(
         sockets
             .iter()
@@ -1896,7 +1879,7 @@ async fn the_connections_the_server_opens_are_listed_with_its_listener() {
     );
     let udp = sockets
         .iter()
-        .find(|socket| socket.protocol == Protocol::Udp && socket.local.port() != lab.port.0)
+        .find(|socket| socket.protocol == Protocol::Udp && socket.local.port() != lab.port.number)
         .unwrap_or_else(|| panic!("no UDP socket in {sockets:#?}"));
     // Windows' table holds no remote end for UDP.
     let remote = if cfg!(windows) { None } else { Some(udp_address) };

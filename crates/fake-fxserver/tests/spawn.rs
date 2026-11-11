@@ -3,6 +3,8 @@
 // The helpers below are test code too, though not inside a `#[test]` function.
 #![allow(clippy::unwrap_used)]
 
+mod common;
+
 use std::collections::VecDeque;
 use std::ffi::OsString;
 use std::fs;
@@ -10,6 +12,7 @@ use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::time::{Duration, Instant};
 
+use common::Port;
 use observer_fxserver::bridge;
 use observer_fxserver::layout::{Flavour, Layout};
 use observer_fxserver::trace::{Trace, TraceDecoder, TraceKind};
@@ -196,7 +199,8 @@ fn main_ticks(port: u16, authorization: Option<&str>) -> u64 {
 
 #[tokio::test]
 async fn a_started_server_speaks_on_every_channel_then_quits() {
-    let mut fake = Fake::start(Some(41920), &["+set", "fake_heartbeat_ms", "100"]);
+    let port = Port::free();
+    let mut fake = Fake::start(Some(port.number), &["+set", "fake_heartbeat_ms", "100"]);
 
     fake.bridge_started().await;
     assert_eq!(fake.trace(|_| true).await, TraceKind::Probe);
@@ -208,12 +212,12 @@ async fn a_started_server_speaks_on_every_channel_then_quits() {
         fake.trace(|kind| matches!(kind, TraceKind::Script { resource, payload } if *resource == bridge && payload["kind"] == "hb"))
             .await;
     }
-    let (status, body) = get(41920, "/dynamic.json", None);
+    let (status, body) = get(port.number, "/dynamic.json", None);
     assert_eq!(status, 200);
     let dynamic: serde_json::Value = serde_json::from_str(&body).unwrap();
     assert_eq!(dynamic["hostname"], "Observer test");
     assert_eq!(dynamic["sv_maxclients"], "8");
-    assert_eq!(get(41920, "/players.json", None), (200, "[]".to_owned()));
+    assert_eq!(get(port.number, "/players.json", None), (200, "[]".to_owned()));
 
     fake.send("quit").await;
 
@@ -234,38 +238,43 @@ async fn unknown_commands_are_answered_like_fxserver_does() {
 
 #[tokio::test]
 async fn perf_requires_the_credentials_set_on_stdin() {
-    let mut fake = Fake::start(Some(41922), &[]);
+    let port = Port::free();
+    let mut fake = Fake::start(Some(port.number), &[]);
     fake.serving().await;
-    assert_eq!(get(41922, "/perf/", None).0, 200);
+    assert_eq!(get(port.number, "/perf/", None).0, 200);
 
     fake.send("set sv_prometheusBasicAuthUser observer").await;
     fake.send("set sv_prometheusBasicAuthPassword secret").await;
 
     let deadline = Instant::now() + WAIT;
-    while get(41922, "/perf/", None).0 != 401 {
+    while get(port.number, "/perf/", None).0 != 401 {
         assert!(
             Instant::now() < deadline,
             "/perf/ still answers without credentials"
         );
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
-    assert_eq!(get(41922, "/perf/", Some("Basic b2JzZXJ2ZXI6d3Jvbmc=")).0, 401);
-    assert!(main_ticks(41922, Some("Basic b2JzZXJ2ZXI6c2VjcmV0")) > 0);
+    assert_eq!(
+        get(port.number, "/perf/", Some("Basic b2JzZXJ2ZXI6d3Jvbmc=")).0,
+        401
+    );
+    assert!(main_ticks(port.number, Some("Basic b2JzZXJ2ZXI6c2VjcmV0")) > 0);
     fake.kill().await;
 }
 
 #[tokio::test]
 async fn a_hung_main_loop_freezes_the_tick_count_while_http_still_answers() {
-    let mut fake = Fake::start(Some(41921), &[]);
+    let port = Port::free();
+    let mut fake = Fake::start(Some(port.number), &[]);
     fake.serving().await;
 
     fake.send("fake_hang").await;
     tokio::time::sleep(Duration::from_millis(300)).await;
-    let frozen = main_ticks(41921, None);
+    let frozen = main_ticks(port.number, None);
     tokio::time::sleep(Duration::from_millis(500)).await;
 
-    assert_eq!(main_ticks(41921, None), frozen);
-    assert_eq!(get(41921, "/dynamic.json", None).0, 200);
+    assert_eq!(main_ticks(port.number, None), frozen);
+    assert_eq!(get(port.number, "/dynamic.json", None).0, 200);
     fake.send("quit").await;
     tokio::time::sleep(Duration::from_millis(800)).await;
     assert_eq!(fake.spawned.exit.get(), None, "a hung main loop cannot run quit");
@@ -275,8 +284,9 @@ async fn a_hung_main_loop_freezes_the_tick_count_while_http_still_answers() {
 
 #[tokio::test]
 async fn a_taken_port_is_a_bind_error_then_a_fatal_exit() {
-    let _taken = TcpListener::bind("127.0.0.1:41923").unwrap();
-    let mut fake = Fake::start(Some(41923), &[]);
+    let taken = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = taken.local_addr().unwrap();
+    let mut fake = Fake::start(Some(address.port()), &[]);
 
     let error = fake
         .trace(|kind| matches!(kind, TraceKind::BindError { .. }))
@@ -285,7 +295,7 @@ async fn a_taken_port_is_a_bind_error_then_a_fatal_exit() {
     assert_eq!(
         error,
         TraceKind::BindError {
-            address: "127.0.0.1:41923".to_owned()
+            address: address.to_string()
         }
     );
     assert_eq!(fake.exit().await, Exit::Code(1));
@@ -293,13 +303,16 @@ async fn a_taken_port_is_a_bind_error_then_a_fatal_exit() {
     while let Some(chunk) = fake.spawned.stderr.next().await {
         stderr.extend(chunk);
     }
-    assert!(String::from_utf8_lossy(&stderr).starts_with("Fatal Error: Could not bind on 127.0.0.1:41923"));
+    assert!(
+        String::from_utf8_lossy(&stderr).starts_with(&format!("Fatal Error: Could not bind on {address}"))
+    );
 }
 
 #[tokio::test]
 async fn a_fatal_error_can_leave_the_process_up_until_the_tree_is_killed() {
+    let port = Port::free();
     let mut fake = Fake::start(
-        Some(41924),
+        Some(port.number),
         &["+set", "fake_bind_error", "1", "+set", "fake_fatal_dialog", "1"],
     );
 
