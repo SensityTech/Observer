@@ -58,6 +58,8 @@ pub(super) fn allows(topic: Topic, held: Permissions) -> bool {
         Topic::ServerDiagnostics => any(&[Permissions::DIAGNOSTICS_VIEW]),
         Topic::ServerChanges => any(&[Permissions::CHANGES_VIEW]),
         Topic::ServerMap => any(&[Permissions::PLAYERS_MAP]),
+        // Names, versions and states: what the dashboard's start already shows one by one.
+        Topic::ServerResources => any(&[Permissions::DASHBOARD_VIEW, Permissions::RESOURCES_CONTROL]),
     }
 }
 
@@ -153,6 +155,14 @@ pub(super) async fn open(topic: Topic, since: Option<u64>, state: &AppState) -> 
             Ok(Feed {
                 snapshot: TopicSnapshot::ServerChanges(snapshot),
                 events: Some(status_events(live, TopicEvent::ServerChanges)),
+            })
+        }
+        Topic::ServerResources => {
+            let mut resources = state.supervision.resources();
+            let snapshot = resources.borrow_and_update().clone();
+            Ok(Feed {
+                snapshot: TopicSnapshot::ServerResources(snapshot),
+                events: Some(status_events(resources, TopicEvent::ServerResources)),
             })
         }
     }

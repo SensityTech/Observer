@@ -80,6 +80,7 @@ describe('CommandPalette', () => {
         palette(VIEWER);
         expect(listed()).toEqual([
             en.nav.overview,
+            en.nav.resources,
             en.nav.schedule,
             en.nav.statistics,
             en.nav.docs,

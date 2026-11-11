@@ -73,6 +73,7 @@ import type { PlayersFileProblem } from '../api/generated/PlayersFileProblem';
 import type { Protection } from '../api/generated/Protection';
 import type { Range } from '../api/generated/Range';
 import type { ResourceChangeKind } from '../api/generated/ResourceChangeKind';
+import type { ResourceState } from '../api/generated/ResourceState';
 import type { ScheduleMode } from '../api/generated/ScheduleMode';
 import type { ScheduleProblem } from '../api/generated/ScheduleProblem';
 import type { ServerFolder } from '../api/generated/ServerFolder';
@@ -99,10 +100,12 @@ import type { UpdateBlock } from '../api/generated/UpdateBlock';
 import type { UpdateStep } from '../api/generated/UpdateStep';
 import type { UpdateWhen } from '../api/generated/UpdateWhen';
 import type { DestinationKind } from '../api/backups';
+import type { ResourceVerb } from '../api/resources';
 import { parsePermissions, permissionKeys, type PermissionKey } from '../auth/permissions';
 import type { InvisibleKind } from '../changes/invisible';
 import type { DocMatch } from '../docs/model';
 import type { LinkState } from '../live/realtime';
+import type { Filter as ResourceFilter } from '../resources/list';
 import type { Applies as SettingApplies, CategoryGroup, CategoryId, SettingId } from '../settings/catalog';
 import type { LaunchStep, SetupStep } from '../setup/state';
 import { formatBytes, formatDuration, formatNumber, plural } from './format';
@@ -218,6 +221,11 @@ const permissions = {
     playersMap: {
         name: 'See the live map',
         description: 'Where every connected player stands, as the server sees it, a few times a minute.',
+    },
+    resourcesControl: {
+        name: 'Start and stop resources',
+        description:
+            'Start, stop and restart a resource of the running server, and have FXServer read its resource folders again.',
     },
 } satisfies Record<PermissionKey, { name: string; description: string }>;
 
@@ -464,6 +472,7 @@ export const en = {
         overview: 'Overview',
         statistics: 'Statistics',
         console: 'Console',
+        resources: 'Resources',
         groupPlayers: 'Players',
         groupServer: 'Server',
         groupInsights: 'Insights',
@@ -4211,6 +4220,148 @@ export const en = {
             loadFailed: 'The log files could not be listed.',
         },
     },
+    resources: {
+        title: 'Resources',
+        lead: 'Every resource FXServer knows, as it stands now. What is started or stopped here lasts until the next restart: the cfg decides what starts with the server.',
+        rescan: 'Rescan',
+        filtersLabel: 'Which resources show',
+        filters: {
+            all: 'All',
+            started: 'Started',
+            stopped: 'Stopped',
+            failed: 'Did not start',
+            warned: 'With warnings',
+        } satisfies Record<ResourceFilter, string>,
+        find: 'Find a resource',
+        noMatch: 'No resource matches.',
+        none: 'FXServer knows no resource.',
+        states: {
+            started: 'Started',
+            starting: 'Starting',
+            stopped: 'Stopped',
+            stopping: 'Stopping',
+            unknown: 'State unknown',
+        } satisfies Record<ResourceState, string>,
+        didNotStart: 'Did not start',
+        folder: {
+            started: (started: number, total: number) =>
+                `${formatNumber('en', started)} of ${formatNumber('en', total)} started`,
+            build: 'FXServer’s own',
+        },
+        verbs: { start: 'Start', stop: 'Stop', restart: 'Restart' } satisfies Record<ResourceVerb, string>,
+        actionsOn: (name: string) => `Actions on ${name}`,
+        consoleOnly: 'Console only',
+        consoleOnlyTip:
+            'Observer names a resource in a console command only by letters, digits, _, . and -. Start and stop this one from the console.',
+        ago: (duration: string | null) => (duration === null ? 'just now' : `${duration} ago`),
+        last: {
+            started: 'started',
+            stopped: 'stopped',
+            restarted: 'restarted',
+        } satisfies Record<LiveChangeKind, string>,
+        // `stopped with ox_lib, 2 min ago`: the resource it depends on, which FXServer stopped first.
+        happened: (what: string, by: string | null, along: string | null, ago: string) => {
+            const how = [along !== null && `with ${along}`, by !== null && `by ${by}`]
+                .filter((part) => part !== false)
+                .join(' ');
+            return how === '' ? `${what} ${ago}` : `${what} ${how}, ${ago}`;
+        },
+        couldNotStart: (ago: string) => `FXServer could not start it, ${ago}`,
+        asked: {
+            start: (by: string) => `start asked by ${by}`,
+            stop: (by: string) => `stop asked by ${by}`,
+            restart: (by: string) => `restart asked by ${by}`,
+        } satisfies Record<ResourceVerb, (by: string) => string>,
+        warnings: (value: number) => count(value, { one: 'warning', other: 'warnings' }),
+        warned: (times: number) =>
+            times === 1
+                ? 'FXServer warned once as it started it:'
+                : `FXServer warned ${formatNumber('en', times)} times as it started it:`,
+        heavy: (files: number, oversized: number) => {
+            const streamed = count(files, { one: 'streamed file is', other: 'streamed files are' });
+            if (oversized >= files) {
+                return `${streamed} oversized`;
+            }
+            return oversized === 0
+                ? `${streamed} heavy`
+                : `${streamed} heavy, ${formatNumber('en', oversized)} of them oversized`;
+        },
+        missing: (files: number) =>
+            `${count(files, { one: 'file its manifest names is', other: 'files its manifest names are' })} missing`,
+        otherWarnings: (value: number) =>
+            `${count(value, { one: 'other warning', other: 'other warnings' })}, in the console`,
+        restartTitle: (name: ReactNode): ReactNode => ['Restart ', name, '?'],
+        stopTitle: (name: ReactNode): ReactNode => ['Stop ', name, '?'],
+        restartStops: (dependants: number, name: ReactNode): ReactNode => [
+            'When FXServer stops a resource, it stops every resource that depends on it too, and does not start them again. ',
+            count(dependants, { one: 'started resource depends', other: 'started resources depend' }),
+            ' on ',
+            name,
+            ':',
+        ],
+        stopStops: (dependants: number, name: ReactNode): ReactNode => [
+            'When FXServer stops a resource, it stops every resource that depends on it too. ',
+            count(dependants, { one: 'started resource depends', other: 'started resources depend' }),
+            ' on ',
+            name,
+            dependants === 1 ? ' and stops with it:' : ' and stop with it:',
+        ],
+        again: (dependants: number, name: string) =>
+            dependants === 1
+                ? `Start it again once ${name} is back`
+                : `Start them again once ${name} is back`,
+        againHint: (dependants: number) =>
+            dependants === 1
+                ? 'Without it the resource stays stopped until someone starts it, or the server restarts.'
+                : 'Without it they stay stopped until someone starts them, or the server restarts.',
+        stayStopped: (dependants: number) =>
+            dependants === 1
+                ? 'It stays stopped until someone starts it, or the server restarts.'
+                : 'They stay stopped until someone starts them, or the server restarts.',
+        confirmRestart: (name: string, resources: number) =>
+            resources > 1 ? `Restart ${formatNumber('en', resources)} resources` : `Restart ${name}`,
+        confirmStop: (name: string, resources: number) =>
+            resources > 1 ? `Stop ${formatNumber('en', resources)} resources` : `Stop ${name}`,
+        rescanned: {
+            nothing: 'FXServer read its folders again: nothing new.',
+            found: (what: ReactNode): ReactNode => ['FXServer read its folders again: ', what, '.'],
+            added: (value: number) => count(value, { one: 'new resource', other: 'new resources' }),
+            more: (value: number) => `${formatNumber('en', value)} more`,
+            changed: (value: number) => count(value, { one: 'changed manifest', other: 'changed manifests' }),
+            and: ', and ',
+        },
+        ordering: {
+            start: (name: string) => `Starting ${name}`,
+            stop: (name: string) => `Stopping ${name}`,
+            restart: (name: string) => `Restarting ${name}`,
+        } satisfies Record<ResourceVerb, (name: string) => string>,
+        rescanning: 'The rescan',
+        orderFailed: (what: string, why: string) => `${what} did not go through. ${why}`,
+        truncated: (listed: number) =>
+            `FXServer knows more resources than the ${formatNumber('en', listed)} listed here.`,
+        unavailable: 'The resources show again once the live link is back.',
+        empty: {
+            stopped: {
+                title: 'The server is not running',
+                text: 'Its resources show here once it has started and run its cfg.',
+            },
+            starting: {
+                title: 'The server is starting',
+                text: (up: number | null, total: number | null) => {
+                    if (up === null) {
+                        return 'Its resources show here once its cfg has run.';
+                    }
+                    return total === null
+                        ? `Its resources show here once its cfg has run: ${count(up, { one: 'is', other: 'are' })} up so far.`
+                        : `Its resources show here once its cfg has run: ${formatNumber('en', up)} of ${formatNumber('en', total)} are up so far.`;
+                },
+            },
+            unreported: {
+                title: 'FXServer has not listed its resources',
+                text: 'The list comes from Observer’s bridge once the cfg has run. If it stays away, the bridge is not reporting: the Overview says what the server is doing.',
+            },
+        },
+    },
     notFound: {
         title: 'This page does not exist.',
         back: 'Back to the panel',
@@ -5714,6 +5865,10 @@ export const en = {
             observer_update_started: 'Observer update started',
             observer_update_cancelled: 'Observer update cancelled',
             observer_update_finished: 'Observer update finished',
+            resource_started: 'Resource started',
+            resource_stopped: 'Resource stopped',
+            resource_restarted: 'Resource restarted',
+            resources_rescanned: 'Resource folders rescanned',
         } satisfies Record<AuditAction, string>,
         outcomes: {
             success: 'Success',
@@ -5904,6 +6059,9 @@ export const en = {
             updated: 'Updated',
             forgotten: 'Skipped as forgotten',
             invalid: 'Invalid',
+            // The started resources that depended on the one stopped or restarted.
+            dependants: 'Stopped with it',
+            startedAgain: 'Started again',
         },
         days: (value: number) => count(value, { one: 'day', other: 'days' }),
         // A profile whose retention is unset is never deleted.
@@ -6455,6 +6613,13 @@ export const en = {
             const key = stringParam(params, 'reason');
             return isUpdateBlock(key) ? updateBlocks[key] : 'This Observer cannot install a release.';
         },
+        resources_not_listed: 'FXServer has not listed its resources yet. It does once its cfg has run.',
+        resource_not_found: 'FXServer knows no resource of that name in this run.',
+        resource_name_refused:
+            'Observer puts a resource in a console command only by letters, digits, _, . and -. Start and stop this one from the console.',
+        resource_busy: 'FXServer has not answered the last order on this resource yet.',
+        resource_changed:
+            'The resource was started or stopped since: it is no longer as this order needs it.',
     } satisfies Record<ErrorCode, ErrorMessage>,
     failure: {
         unknown: 'Something went wrong. Try again.',
