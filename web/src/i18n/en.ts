@@ -5791,7 +5791,7 @@ export const en = {
             },
             refusalMessage: {
                 label: 'Refusal message',
-                about: 'What a banned player reads when the server refuses them, or drops them. With the kick message, it is all the text Observer ever shows players. {reason}, {ends}, {id}, {name} and {by} are filled in.',
+                about: 'What a banned player reads when the server refuses them, or drops them. {reason}, {ends}, {id}, {name} and {by} are filled in.',
             },
             kickMessage: {
                 label: 'Kick message',
