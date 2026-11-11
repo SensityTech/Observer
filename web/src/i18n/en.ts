@@ -5117,6 +5117,10 @@ export const en = {
                 name: 'Live map',
                 about: 'What the Live map draws under the players, your own image and where it sits in the game, and the colours of the players on it.',
             },
+            entities: {
+                name: 'Entities',
+                about: 'How often the server lists its vehicles, peds and objects while someone looks at them. Finding and deleting them is on the Entities page and the Live map.',
+            },
             restarts: {
                 name: 'Restarts',
                 about: 'When FXServer restarts by itself, and how long before your resources hear of it. Skipping or delaying one restart is on the Schedule page.',
@@ -5443,6 +5447,10 @@ export const en = {
                 label: 'Positions sent every',
                 about: 'The server reads positions only while someone has the map open, and stops within 30 seconds after the last one leaves. They need OneSync.',
             },
+            entitiesCadence: {
+                label: 'Entities listed every',
+                about: 'Only while someone has the Entities page or the map layer open. Shorter is fresher and costs the server more; it spaces its sweeps out by itself when one costs it too much. They need OneSync.',
+            },
             tokenMatches: {
                 label: 'Hardware tokens to match',
                 about: "How many of a ban's hardware tokens a player must show to be refused by them alone. Any identifier the ban holds refuses at once; 0 never refuses on tokens alone.",
@@ -5599,6 +5607,14 @@ export const en = {
             discarded: 'Changes discarded.',
             readOnly:
                 'Your account can read these; changing them takes the permission to change settings, and the image the owner.',
+            loadFailed: 'These settings could not be read.',
+        },
+        entities: {
+            openEntities: 'Open the Entities page',
+            seconds: (value: number) => `${formatNumber('en', value)} s`,
+            saved: 'Saved. The server follows from its next sweep.',
+            discarded: 'Changes discarded.',
+            readOnly: 'Your account can read these; changing them takes the permission to change settings.',
             loadFailed: 'These settings could not be read.',
         },
         bans: {

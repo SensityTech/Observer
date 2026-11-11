@@ -39,6 +39,7 @@ export type SettingId =
     | 'mapBounds'
     | 'mapTiers'
     | 'mapCadence'
+    | 'entitiesCadence'
     | 'switchSftp'
     | 'switchChanges'
     | 'switchTools'
@@ -89,6 +90,7 @@ export type CategoryId =
     | 'backups'
     | 'bans'
     | 'map'
+    | 'entities'
     | 'features'
     | 'data'
     | 'tools'
@@ -182,6 +184,12 @@ export const CATEGORIES: readonly Category[] = [
             { id: 'mapTiers', applies: 'now' },
             { id: 'mapCadence', applies: 'now' },
         ],
+    },
+    {
+        id: 'entities',
+        group: 'server',
+        access: ['SettingsView'],
+        settings: [{ id: 'entitiesCadence', applies: 'now' }],
     },
     {
         id: 'features',
