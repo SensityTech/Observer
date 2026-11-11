@@ -144,7 +144,7 @@ pub(super) async fn open(topic: Topic, since: Option<u64>, state: &AppState) -> 
             let (snapshot, live, watching) = state.map()?.watch();
             Ok(Feed {
                 snapshot: TopicSnapshot::ServerMap(snapshot),
-                events: Some(map_events(live, watching)),
+                events: Some(watched_events(live, watching, TopicEvent::ServerMap)),
             })
         }
         Topic::ServerChanges => {
@@ -197,18 +197,18 @@ where
     }))
 }
 
-/// The map's changes, holding the guard that keeps the server sending positions: it goes with the
-/// subscription.
-fn map_events(live: watch::Receiver<observer_domain::map::MapLive>, watching: Watching) -> Events {
+/// The changes of a view the server reads for only while someone looks, holding the guard that
+/// keeps it reading: it goes with the subscription.
+fn watched_events<T>(live: watch::Receiver<T>, watching: Watching, event: fn(T) -> TopicEvent) -> Events
+where
+    T: Clone + Send + Sync + 'static,
+{
     Box::pin(stream::unfold(
         (live, watching),
-        |(mut live, watching)| async move {
+        move |(mut live, watching)| async move {
             live.changed().await.ok()?;
             let current = live.borrow_and_update().clone();
-            Some((
-                Delivery::Event(Box::new(TopicEvent::ServerMap(current))),
-                (live, watching),
-            ))
+            Some((Delivery::Event(Box::new(event(current))), (live, watching)))
         },
     ))
 }
