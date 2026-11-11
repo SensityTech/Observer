@@ -6,6 +6,7 @@ pub mod cfg_edit;
 pub mod changes;
 pub mod command;
 pub mod console;
+pub mod contract;
 pub mod crashes;
 pub mod entities;
 pub mod exit;

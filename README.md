@@ -120,8 +120,9 @@ page, each with a temporary password that works for 72 hours and is changed at t
 The panel's pages are grouped by what one comes for: **Players** (the players, the live map, the
 bans), **Server** (restarts, the cfg, builds, backups, file changes), **Insights** (statistics, drops,
 entities, diagnostics) and **Maintenance** (tools, the audit log). The search button beside the logo,
-or Ctrl K (⌘ K on a Mac) from any page, opens a search of the pages, of the settings by their name,
-and of the connected players by name or ID. Each account finds only what it may open.
+or Ctrl K (⌘ K on a Mac) from any page, opens a search of the pages, of the settings by their name, of
+the events and exports the **Documentation** page describes (see [Integrations](#integrations)), and
+of the connected players by name or ID. Each account finds only what it may open.
 
 From the host, even while Observer runs:
 
@@ -998,6 +999,13 @@ resource, is written into the build before every start of FXServer under a name 
 which the `observer_bridge` server convar gives: do not ensure it yourself. Scripts that target a
 fixed name, as they do txAdmin's `monitor`, find nothing. [`resource/observer_example`](resource/observer_example)
 listens to each event and marks where a team plugs in its notifications and its saves.
+
+The panel's **Documentation** page shows that contract as the build that runs ships it: each event with
+when it comes, its fields and a handler to copy, each export where the contract shows it called, and the
+files of the example resource. Every section has a link of its own, and the panel's search (Ctrl K) finds
+an event, an export or one of txAdmin's events by its name. Any account reads it. To the accounts that
+see the dashboard, it also says what this server does now: the contract's version, the name the bridge
+took for this start, and whether txAdmin's events are raised, now and from the next start.
 
 Your resources can also give each connected player a label, a roleplay character's name or an ID of
 your own, through the bridge's `setPlayerLabel` export. The panel shows it beside the player's FiveM

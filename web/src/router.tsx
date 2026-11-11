@@ -68,6 +68,7 @@ const BackupsPage = lazyCode(() =>
 );
 const AuditPage = lazyCode(() => import('./pages/AuditPage').then((page) => ({ default: page.AuditPage })));
 const AboutPage = lazyCode(() => import('./pages/AboutPage').then((page) => ({ default: page.AboutPage })));
+const DocsPage = lazyCode(() => import('./pages/DocsPage').then((page) => ({ default: page.DocsPage })));
 const DiagnosticsPage = lazyCode(() =>
     import('./pages/DiagnosticsPage').then((page) => ({ default: page.DiagnosticsPage })),
 );
@@ -528,6 +529,14 @@ const aboutRoute = createRoute({
     component: AboutPage,
 });
 
+// The contract Observer ships holds no secret: any signed-in account reads it, as the About page.
+// What the server does of it comes only to those who see the dashboard: the API leaves it out.
+const docsRoute = createRoute({
+    getParentRoute: () => panelRoute,
+    path: '/docs',
+    component: DocsPage,
+});
+
 const routeTree = rootRoute.addChildren([
     setupRoute,
     loginRoute,
@@ -564,6 +573,7 @@ const routeTree = rootRoute.addChildren([
         settingsRoute.addChildren([settingsIndexRoute, settingsCategoryRoute]),
         accountRoute,
         aboutRoute,
+        docsRoute,
     ]),
     focusRoute.addChildren([serverSetupRoute]),
 ]);

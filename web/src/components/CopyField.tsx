@@ -1,8 +1,9 @@
 import { Check, Copy } from 'lucide-react';
-import { useId, useRef, useState } from 'react';
+import { useId, useRef } from 'react';
 
 import { useI18n } from '../i18n/I18nProvider';
 import { cn } from '../lib/cn';
+import { useCopy } from '../lib/useCopy';
 import { Button } from './Button';
 import { inputClass } from './Field';
 
@@ -11,18 +12,7 @@ export function CopyField({ label, value }: { label: string; value: string }) {
     const { t } = useI18n();
     const id = useId();
     const input = useRef<HTMLInputElement>(null);
-    const [state, setState] = useState<'idle' | 'copied' | 'blocked'>('idle');
-
-    const copy = async () => {
-        try {
-            await navigator.clipboard.writeText(value);
-            setState('copied');
-        } catch {
-            // No clipboard outside a secure context (plain HTTP on a LAN address): select it instead.
-            input.current?.select();
-            setState('blocked');
-        }
-    };
+    const { state, copy } = useCopy({ kept: true });
 
     return (
         <div className="flex flex-col gap-1.5">
@@ -39,7 +29,15 @@ export function CopyField({ label, value }: { label: string; value: string }) {
                     className={cn(inputClass, 'min-w-0 font-mono text-ui [font-variant-ligatures:none]')}
                     onFocus={(event) => event.currentTarget.select()}
                 />
-                <Button icon={state === 'copied' ? Check : Copy} onClick={copy}>
+                <Button
+                    icon={state === 'copied' ? Check : Copy}
+                    onClick={async () => {
+                        // Where the browser refuses, the value is selected instead.
+                        if (!(await copy(value))) {
+                            input.current?.select();
+                        }
+                    }}
+                >
                     {state === 'copied' ? t.common.copied : t.common.copy}
                 </Button>
             </div>

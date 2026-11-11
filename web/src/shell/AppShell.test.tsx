@@ -184,7 +184,7 @@ describe('AppShell', () => {
         expect(without.queryByRole('button', { name: en.nav.groupDebug })).toBeNull();
     });
 
-    it('should keep the settings at the foot of the rail, for every account', async () => {
+    it('should keep the documentation and the settings at the foot of the rail, for every account', async () => {
         const { findByRole, getByRole } = shell({
             ...OWNER,
             id: 2,
@@ -197,6 +197,14 @@ describe('AppShell', () => {
         const rail = within(getByRole('complementary', { name: en.nav.label }));
         const settings = rail.getByRole('link', { name: en.nav.settings });
         expect(settings.getAttribute('href')).toBe('/settings');
+        const docs = rail.getByRole('link', { name: en.nav.docs });
+        expect(docs.getAttribute('href')).toBe('/docs');
+        expect(docs.compareDocumentPosition(settings) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
+        expect(
+            within(getByRole('navigation', { name: en.nav.sections })).queryByRole('link', {
+                name: en.nav.docs,
+            }),
+        ).toBeNull();
         expect(
             within(getByRole('navigation', { name: en.nav.sections })).queryByRole('link', {
                 name: en.nav.settings,
