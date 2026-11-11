@@ -9,6 +9,7 @@ mod cfg;
 mod changes;
 mod debug;
 mod diagnostics;
+mod docs;
 mod drops;
 mod features;
 mod files;

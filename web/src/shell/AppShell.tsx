@@ -25,6 +25,7 @@ import { StatusBar } from './StatusBar';
 import { UpdateSignal } from '../updates/UpdateSignal';
 import { CommandPalette } from './CommandPalette';
 import { navSections, opensEntry, type NavEntry } from './nav';
+import { PaletteContext } from './palette';
 import { UserMenu } from './UserMenu';
 
 export function AppShell() {
@@ -178,7 +179,9 @@ export function AppShell() {
                     <main className="content" id="content" tabIndex={-1}>
                         <PlainHttpNotice />
                         <Suspense fallback={<PageLoading />}>
-                            <Outlet />
+                            <PaletteContext value={openPalette}>
+                                <Outlet />
+                            </PaletteContext>
                         </Suspense>
                     </main>
                 </div>
