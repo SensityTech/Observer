@@ -2632,11 +2632,7 @@ impl Actor {
             warn!(%error, "cannot record FXServer's process group; a crash of Observer could leave it running");
         }
 
-        let probe = self
-            .settings
-            .probe
-            .or(prepared.endpoint)
-            .unwrap_or_else(|| SocketAddr::from((Ipv4Addr::LOCALHOST, DEFAULT_PORT)));
+        let probe = self.probe_of(prepared.endpoint);
         let cancel = CancellationToken::new();
         let (stdin, stdin_task) = StdinWriter::start(spawned.stdin, generation, Arc::clone(&self.console));
         let progress = self.progress_of(prepared.plan);
@@ -2714,6 +2710,15 @@ impl Actor {
             hold: None,
         };
         Ok((run, probe, prepared.warnings, prepared.settings))
+    }
+
+    /// Where a spawn is probed: the address the settings give, else the cfg's first TCP endpoint,
+    /// else FXServer's default port on this host.
+    fn probe_of(&self, endpoint: Option<SocketAddr>) -> SocketAddr {
+        self.settings
+            .probe
+            .or(endpoint)
+            .unwrap_or_else(|| SocketAddr::from((Ipv4Addr::LOCALHOST, DEFAULT_PORT)))
     }
 
     /// What a spawn says of its start from now on, kept as the latest start's.
