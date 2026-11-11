@@ -2,6 +2,7 @@
 //! services build their transactions from. Repositories hold SQL only; the rules live in
 //! `observer-app`.
 
+pub mod allowlist;
 pub mod artifacts;
 pub mod audit;
 mod backup;
@@ -16,6 +17,7 @@ pub mod features;
 pub mod files;
 pub mod launch;
 pub mod login_failures;
+pub mod maintenance;
 pub mod map;
 pub mod metrics;
 mod migrations;

@@ -7,12 +7,12 @@ use anyhow::Context;
 use axum::Router;
 use jiff::tz::TimeZone;
 use observer_app::{
-    Accounts, Artifacts, ArtifactsSetup, ArtifactsTask, AuditLog, Backups, BackupsHook, BackupsSetup, Bans,
-    BansSetup, BeforeSpawn, Changes, ChangesSetup, Clock, DatabaseFiles, DebugCounts, DebugSetup,
-    Diagnostics, DiagnosticsSetup, Drops, DropsSetup, Features, FeaturesSetup, LiveMap, MapSetup, Metrics,
-    MetricsSetup, OwnPaths, PRE_LAUNCH_LIMIT, PasswordCost, Players, PlayersSetup, Running, Schedule,
-    ScheduleSetup, ScheduleTask, Servers, Setup, Sources, Statistics, Supervision, Switched, Takeover, Tools,
-    ToolsHook, ToolsSetup, Updates, UpdatesSetup,
+    Accounts, Admission, AdmissionSetup, Artifacts, ArtifactsSetup, ArtifactsTask, AuditLog, Backups,
+    BackupsHook, BackupsSetup, Bans, BansSetup, BeforeSpawn, Changes, ChangesSetup, Clock, DatabaseFiles,
+    DebugCounts, DebugSetup, Diagnostics, DiagnosticsSetup, Drops, DropsSetup, Features, FeaturesSetup,
+    LiveMap, MapSetup, Metrics, MetricsSetup, OwnPaths, PRE_LAUNCH_LIMIT, PasswordCost, Players,
+    PlayersSetup, Running, Schedule, ScheduleSetup, ScheduleTask, Servers, Setup, Sources, Statistics,
+    Supervision, Switched, Takeover, Tools, ToolsHook, ToolsSetup, Updates, UpdatesSetup,
 };
 use observer_artifacts::Http;
 use observer_artifacts::catalog::Catalog;
@@ -328,6 +328,15 @@ async fn run_until_stopped(
         supervision: supervision.clone(),
         schedule: schedule.status(),
     });
+    // Before FXServer boots too: it answers every connecting player, the bans' verdict included.
+    let (admission, admitting) = Admission::start(AdmissionSetup {
+        db: db.clone(),
+        clock: clock.clone(),
+        supervision: supervision.clone(),
+        bans: bans.clone(),
+        schedule: schedule.status(),
+    })
+    .await?;
 
     let listener = TcpListener::bind(config.http.listen)
         .await
@@ -404,6 +413,7 @@ async fn run_until_stopped(
         updates: updates.clone(),
         backups,
         bans,
+        admission,
         statistics,
     };
     let state = observer_web::AppState::new(
@@ -515,6 +525,7 @@ async fn run_until_stopped(
     close(playing).await;
     close(dropping).await;
     // After the supervision: the bridge answers no one once FXServer is down.
+    admitting.close().await;
     banning.close().await;
     debugging.close().await;
     // After the supervision: a stop of FXServer ends a snapshot's job, which this joins.

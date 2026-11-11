@@ -13,6 +13,7 @@ import { useI18n } from '../i18n/I18nProvider';
 import { cn } from '../lib/cn';
 import { useServerStatus } from '../server/context';
 import { blocked, isRunning, type Action } from '../server/state';
+import { MaintenanceButton } from './Maintenance';
 
 const SEND = { start: startServer, stop: stopServer, restart: restartServer } satisfies Record<
     Action,
@@ -20,7 +21,8 @@ const SEND = { start: startServer, stop: stopServer, restart: restartServer } sa
 >;
 
 /**
- * Restart and Stop at the end of the status card, Start in Restart's place while no process runs.
+ * Restart and Stop at the end of the status card, Start in Restart's place while no process runs,
+ * and before them the way into maintenance mode for an account that controls the server.
  * A button that cannot act now stays in the tab order, marked disabled; pressed, it says why below,
  * since a touch screen or the keyboard never shows its title. Stop and Restart ask first, since
  * players are disconnected.
@@ -94,6 +96,7 @@ export function ServerControls() {
         <>
             <fieldset className="controls">
                 <legend className="sr-only">{t.controls.label}</legend>
+                {permitted && <MaintenanceButton />}
                 {running ? button('restart', RotateCw, 'secondary') : button('start', Play, 'ink')}
                 {button('stop', Square, 'secondary')}
             </fieldset>

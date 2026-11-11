@@ -62,12 +62,6 @@ export const saveBansSettings = (settings: BansSettings) =>
 /** What the server counts as the length of a reason or a message: characters, not UTF-16 units. */
 export const characters = (text: string) => [...text].length;
 
-/** The refusal message as a player reads it, with the API's placeholders filled in once each. */
-export const fillMessage = (
-    message: string,
-    values: Record<'reason' | 'ends' | 'id' | 'name' | 'by', string>,
-) => message.replace(/\{(reason|ends|id|name|by)\}/g, (_, key: keyof typeof values) => values[key]);
-
 export const MAX_REASON = 200;
 export const MAX_MESSAGE = 600;
 export const MAX_TOKENS = 8;

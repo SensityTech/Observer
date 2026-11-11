@@ -58,6 +58,12 @@ pub(super) fn allows(topic: Topic, held: Permissions) -> bool {
         Topic::ServerDiagnostics => any(&[Permissions::DIAGNOSTICS_VIEW]),
         Topic::ServerChanges => any(&[Permissions::CHANGES_VIEW]),
         Topic::ServerMap => any(&[Permissions::PLAYERS_MAP]),
+        // Counts and a switch, no player: the rail and the status card show them everywhere.
+        Topic::ServerAdmission => any(&[
+            Permissions::DASHBOARD_VIEW,
+            Permissions::PLAYERS_VIEW,
+            Permissions::SERVER_CONTROL,
+        ]),
     }
 }
 
@@ -145,6 +151,14 @@ pub(super) async fn open(topic: Topic, since: Option<u64>, state: &AppState) -> 
             Ok(Feed {
                 snapshot: TopicSnapshot::ServerMap(snapshot),
                 events: Some(map_events(live, watching)),
+            })
+        }
+        Topic::ServerAdmission => {
+            let mut status = state.admission.status();
+            let snapshot = status.borrow_and_update().clone();
+            Ok(Feed {
+                snapshot: TopicSnapshot::ServerAdmission(snapshot),
+                events: Some(status_events(status, TopicEvent::ServerAdmission)),
             })
         }
         Topic::ServerChanges => {

@@ -4,6 +4,7 @@
 //! their resources. They know nothing of HTTP; the web layer and the command line both call them.
 
 mod accounts;
+mod admission;
 mod artifacts;
 mod audit;
 mod backups;
@@ -38,6 +39,7 @@ pub mod updates;
 mod users;
 
 pub use accounts::Accounts;
+pub use admission::{Admission, AdmissionSetup, AdmissionTask};
 pub use artifacts::{ArtifactTimings, Artifacts, ArtifactsSetup, ArtifactsTask};
 pub use audit::AuditLog;
 pub use backups::{

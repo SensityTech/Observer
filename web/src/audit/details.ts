@@ -22,6 +22,8 @@ const TIMES = new Set<string>([
     'occurrence',
     'previousAt',
     'startedAt',
+    'until',
+    'since',
 ]);
 const ACTIONS = new Set<string>(['attempted', 'action']);
 /** The schedule's lists, and the nested entries of its audit details. */

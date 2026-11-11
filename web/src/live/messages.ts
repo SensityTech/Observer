@@ -1,4 +1,5 @@
 import type { ActorKind } from '../api/generated/ActorKind';
+import type { AdmissionStatus } from '../api/generated/AdmissionStatus';
 import type { AlertKind } from '../api/generated/AlertKind';
 import type { AlertList } from '../api/generated/AlertList';
 import type { AnalysisState } from '../api/generated/AnalysisState';
@@ -72,6 +73,7 @@ const TOPICS = {
     'server.diagnostics': true,
     'server.changes': true,
     'server.map': true,
+    'server.admission': true,
 } satisfies Record<Topic, true>;
 
 const UNSUBSCRIBE_REASONS = { forbidden: true, disabled: true } satisfies Record<UnsubscribeReason, true>;
@@ -268,6 +270,17 @@ const AUDIT_ACTIONS = {
     observer_update_started: true,
     observer_update_cancelled: true,
     observer_update_finished: true,
+    allowlist_request_approved: true,
+    allowlist_request_denied: true,
+    allowlist_requests_denied: true,
+    allowlist_licence_approved: true,
+    allowlist_approval_removed: true,
+    allowlist_settings_changed: true,
+    maintenance_started: true,
+    maintenance_ended: true,
+    maintenance_pass_added: true,
+    maintenance_pass_removed: true,
+    maintenance_settings_changed: true,
 } satisfies Record<AuditAction, true>;
 
 const OUTCOMES = { success: true, failure: true, denied: true } satisfies Record<Outcome, true>;
@@ -961,6 +974,19 @@ export const isMapLive = (value: unknown): value is MapLive =>
     orNull(isTimestamp)(value.at) &&
     isCount(value.waiting) &&
     isFlag(value.onesync);
+
+export const isAdmissionStatus = (value: unknown): value is AdmissionStatus =>
+    isRecord(value) &&
+    isRecord(value.allowlist) &&
+    isFlag(value.allowlist.enabled) &&
+    isCount(value.allowlist.waiting) &&
+    isCount(value.allowlist.approved) &&
+    isRecord(value.maintenance) &&
+    isFlag(value.maintenance.on) &&
+    orNull(isTimestamp)(value.maintenance.since) &&
+    orNull(isText)(value.maintenance.by) &&
+    isCount(value.maintenance.passes);
+
 const isSnapshotData = (topic: Topic, data: unknown) => {
     if (!isRecord(data)) {
         return false;
@@ -993,6 +1019,8 @@ const isSnapshotData = (topic: Topic, data: unknown) => {
             return isChangesLive(data);
         case 'server.map':
             return isMapLive(data);
+        case 'server.admission':
+            return isAdmissionStatus(data);
     }
 };
 
@@ -1020,6 +1048,8 @@ const isEventData = (topic: Topic, data: unknown) => {
             return isChangesLive(data);
         case 'server.map':
             return isMapLive(data);
+        case 'server.admission':
+            return isAdmissionStatus(data);
     }
 };
 

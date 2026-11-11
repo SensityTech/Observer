@@ -1,16 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { ArrowRight } from 'lucide-react';
-import { useRef, useState } from 'react';
+import { useState } from 'react';
 
-import {
-    bansSettingsQuery,
-    characters,
-    fillMessage,
-    MAX_MESSAGE,
-    MAX_TOKENS,
-    saveBansSettings,
-} from '../api/bans';
+import { bansSettingsQuery, characters, MAX_MESSAGE, MAX_TOKENS, saveBansSettings } from '../api/bans';
 import type { BansSettings as Settings } from '../api/generated/BansSettings';
 import { Permission } from '../api/generated/Permission';
 import { allows, useMe } from '../auth/me';
@@ -20,6 +13,7 @@ import { errorMessage } from '../i18n/errors';
 import { useI18n } from '../i18n/I18nProvider';
 import { cn } from '../lib/cn';
 import { SettingsForm, useSection } from './Form';
+import { MessageField } from './MessageField';
 import { CategoryHead, SettingRow, SettingsGroup } from './Row';
 
 type Outcome = { tone: 'success' | 'danger'; message: string };
@@ -75,7 +69,6 @@ function BansForm({ stored }: { stored: Settings }) {
     const me = useMe();
     const client = useQueryClient();
     const canManage = allows(me, Permission.SettingsManage);
-    const message = useRef<HTMLTextAreaElement>(null);
     const [draft, setDraft] = useState({
         message: stored.message,
         tokenMatches: String(stored.tokenMatches),
@@ -121,17 +114,6 @@ function BansForm({ stored }: { stored: Settings }) {
             setOutcome({ tone: 'success', message: words.discarded });
         },
     });
-    const insert = (key: (typeof PLACEHOLDERS)[number]) => {
-        const field = message.current;
-        const text = `{${key}}`;
-        const start = field?.selectionStart ?? draft.message.length;
-        const end = field?.selectionEnd ?? draft.message.length;
-        setDraft({ ...draft, message: draft.message.slice(0, start) + text + draft.message.slice(end) });
-        requestAnimationFrame(() => {
-            field?.focus();
-            field?.setSelectionRange(start + text.length, start + text.length);
-        });
-    };
 
     return (
         <fieldset disabled={!canManage} className="flex min-w-0 flex-col gap-4">
@@ -144,53 +126,21 @@ function BansForm({ stored }: { stored: Settings }) {
                     changed={canManage && changed.includes('refusalMessage')}
                 >
                     {(ids) => (
-                        <>
-                            <textarea
-                                ref={message}
-                                id={ids.control}
-                                rows={Math.min(10, Math.max(4, draft.message.split('\n').length + 1))}
-                                aria-invalid={(tried && messageProblem !== null) || undefined}
-                                aria-describedby={
-                                    tried && messageProblem !== null
-                                        ? `${ids.control}-error ${ids.about}`
-                                        : ids.about
-                                }
-                                className={cn(
-                                    inputClass,
-                                    'h-auto min-h-28 resize-y py-2.5 font-mono text-ui leading-[1.55]',
-                                )}
-                                value={draft.message}
-                                onChange={(event) => setDraft({ ...draft, message: event.target.value })}
-                            />
-                            {tried && messageProblem !== null && (
-                                <FieldError id={`${ids.control}-error`}>{messageProblem}</FieldError>
-                            )}
-                            <div className="flex flex-wrap items-center gap-1.5">
-                                <span className="mr-1 text-small text-ink-3">{words.insert}</span>
-                                {PLACEHOLDERS.map((key) => (
-                                    <button
-                                        key={key}
-                                        type="button"
-                                        className="inline-flex h-7 items-center rounded-xs border border-dashed border-line-strong px-2 font-mono text-small text-accent-ink hover:bg-hover max-md:h-11"
-                                        onClick={() => insert(key)}
-                                    >
-                                        {`{${key}}`}
-                                    </button>
-                                ))}
-                            </div>
-                            <figure className="m-0 flex flex-col gap-1.5 rounded-box border border-line bg-bg-subtle px-3.5 py-3">
-                                <figcaption className="text-meta text-ink-3">{words.preview}</figcaption>
-                                <p className="text-ui whitespace-pre-line text-ink [overflow-wrap:anywhere]">
-                                    {fillMessage(draft.message.trim(), {
-                                        reason: words.example.reason,
-                                        ends: words.example.ends,
-                                        id: words.example.code,
-                                        name: words.example.name,
-                                        by: words.example.by,
-                                    })}
-                                </p>
-                            </figure>
-                        </>
+                        <MessageField
+                            ids={ids}
+                            value={draft.message}
+                            problem={tried ? messageProblem : null}
+                            placeholders={PLACEHOLDERS}
+                            example={{
+                                reason: words.example.reason,
+                                ends: words.example.ends,
+                                id: words.example.code,
+                                name: words.example.name,
+                                by: words.example.by,
+                            }}
+                            words={words}
+                            onChange={(message) => setDraft({ ...draft, message })}
+                        />
                     )}
                 </SettingRow>
                 <SettingRow id="tokenMatches" field changed={canManage && changed.includes('tokenMatches')}>

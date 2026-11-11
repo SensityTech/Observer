@@ -1,5 +1,5 @@
 import { cva, type VariantProps } from 'class-variance-authority';
-import { CircleAlert, CircleCheck, Info, TriangleAlert } from 'lucide-react';
+import { CircleAlert, CircleCheck, Info, TriangleAlert, type LucideIcon } from 'lucide-react';
 import type { ReactNode, Ref } from 'react';
 
 import { cn } from '../lib/cn';
@@ -24,6 +24,8 @@ type NoticeProps = VariantProps<typeof noticeVariants> & {
     ref?: Ref<HTMLDivElement>;
     /** -1 for a notice the keyboard is moved to, when what it was on went away. */
     tabIndex?: number;
+    /** In place of the tone's own, for a notice about one thing the panel has an icon for. */
+    icon?: LucideIcon;
     /**
      * False for a notice that stays on the page and changes with figures read again, which would
      * be announced each time: it is read where it stands, never as a live region.
@@ -32,8 +34,8 @@ type NoticeProps = VariantProps<typeof noticeVariants> & {
 };
 
 /** A sentence about what just happened, above or below the thing it concerns. */
-export function Notice({ tone, className, children, ref, tabIndex, live = true }: NoticeProps) {
-    const Icon = ICONS[tone ?? 'neutral'];
+export function Notice({ tone, className, children, ref, tabIndex, icon, live = true }: NoticeProps) {
+    const Icon = icon ?? ICONS[tone ?? 'neutral'];
     return (
         <div
             ref={ref}

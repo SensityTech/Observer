@@ -3,9 +3,10 @@
 A server manager for FiveM and RedM, written in Rust.
 
 Observer starts and supervises FXServer, installs its builds and serves a web panel for your staff,
-from one executable that keeps its state in SQLite. It never shows anything to players, but for the
-refusal message you write for bans: it raises documented server events, and your own resources decide
-what to do with them.
+from one executable that keeps its state in SQLite. It never shows anything to players, but for what
+you write yourself: the refusal messages for bans, for maintenance and for the allowlist, and the name
+your server takes in the server list during maintenance. It raises documented server events, and your
+own resources decide what to do with them.
 
 > **Status: proof of concept.** Settings, the panel and the integration contract may still change
 > between versions.
@@ -29,6 +30,10 @@ what to do with them.
 - **Bans.** A ban holds a player's licence, other identifiers and hardware tokens, for a time or for
   good. The server refuses a banned player at connection with your message, and drops one banned while
   playing.
+- **Allowlist.** Open the server to approved players only: a refused player reads your message with
+  the ID of their request, which the staff approves or denies in the panel.
+- **Maintenance mode.** One switch closes the server to everyone but the players you list, with your
+  message, through restarts, until someone ends it.
 - **Accounts and audit.** An owner and sub-users with fine-grained permissions, and an audit log of every
   action.
 - **Updates.** A newer release shows in the panel with its notes; the owner installs it in one click,
@@ -967,15 +972,71 @@ takes **View player identifiers**. Lifting a ban takes a permission of its own a
 list, with who lifted it and why. Every ban and every lift is in the audit log.
 
 The bridge holds each connecting player on `playerConnecting` while Observer checks them, which takes
-milliseconds. A banned player is refused with the **refusal message** of the settings' Bans category,
-the only text Observer ever shows players: it can name the reason, when the ban ends and the ban ID to
-quote in an appeal. If Observer has not answered within 5 seconds, the player gets in, and Observer
-drops them once they joined if a ban holds them. A player banned while playing is dropped at once.
+milliseconds. A banned player is refused with the **refusal message** of the settings' Bans
+category: it can name the reason, when the ban ends and the ban ID to quote in an appeal. If Observer
+has not answered within 5 seconds, the player gets in, and Observer drops them once they joined if a
+ban holds them. A player banned while playing is dropped at once.
 By default one hardware token in common is enough to refuse a player; the settings can ask for more,
 or for none. Addresses are never matched: players behind one address would be refused together.
 
 Your resources hear of both through `observer:playerRefused` and `observer:playerBanned`, in the
 contract.
+
+## Allowlist
+
+With **Approved players only** on, in the settings' Allowlist category, the server lets in only the
+players the staff approved. It goes by the licence alone, and bans come first: an approved player who
+is banned stays out.
+
+A player who is not approved is refused with the allowlist's **refusal message**, which you write: it
+names the ID of their request, such as `7KQ-2XP`, for them to give your staff. The request shows on the
+Allowlist page with the player's name, their licence and how often they tried. The staff approves it,
+and the player gets in from their next connection, or denies it. A player who tries again keeps their
+request and its ID; a denied one who comes back makes a new request, under a new ID. **Approve a
+licence** lets a player in ahead of their first visit, with a note that says who it is. Taking an
+approval back keeps the player out again.
+
+Reading the page takes **View players**; answering requests, approving a licence and taking an approval
+back take **Manage the allowlist**. The switch and the message are settings, changed with the password
+asked again, like the bans' message. Every answer, approval and change is in the audit log.
+
+What it does not do: a player who shows no licence, as on a server with `sv_lan`, cannot be approved,
+and makes no request. Turning the allowlist on, or taking an approval back, drops no one: the players
+connected stay until they leave. If Observer has not answered a connection within 5 seconds, the
+player gets in. Observer keeps the 2,000 requests tried last. Your resources hear of each refusal
+through `observer:playerRefused`, with `cause = 'allowlist'`, in the contract.
+
+## Maintenance mode
+
+**Maintenance**, beside Restart and Stop above every page, closes the server to players while you
+work on it. The panel shows first what a refused player will read and how many players still get in,
+then asks. From then on the server refuses every connection with your **maintenance message**, and a
+banner on every page says since when and by whom, with **End maintenance** to open the server again.
+It holds through restarts of FXServer and of Observer.
+
+The settings' Maintenance mode category holds the message and **Who still gets in**: the players
+maintenance lets through, by licence. Type a name to pick a player Observer knows, or paste a licence,
+with a note that says who it is. A panel account has no licence, so list the player each member of
+your staff plays as. A player on the list gets in whether the allowlist has them or not; a ban still
+refuses them.
+
+**Name in the server list**, in the same category, is the name the server takes in FiveM's server
+list while maintenance is on; leave it empty and the server keeps its own. Observer's bridge sets
+`sv_hostname` to it, and `sv_projectName` when your cfg gives one, then gives both back when
+maintenance ends. FXServer sends its name to the list with each heartbeat, every three minutes or
+15 seconds after a player connects or leaves; when the list shows it is up to Cfx.re. A restart of
+FXServer during maintenance reads the names of your cfg again, and the bridge sets the maintenance
+name once the server is online.
+
+Turning maintenance on or off takes **Start and stop the server**. The message, the list and the
+name are settings, changed with the password asked again. Each switch and each change is in the audit
+log.
+Your resources hear `observer:maintenance` at each switch, and once more at each start of FXServer
+while it is on; each refusal raises `observer:playerRefused` with `cause = 'maintenance'`.
+
+What it does not do: turning maintenance on drops no one, the players connected stay until they
+leave. If Observer has not answered a connection within 5 seconds, the player gets in. A player who
+shows no licence cannot be on the list.
 
 ## Live map
 

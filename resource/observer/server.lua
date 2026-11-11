@@ -1,11 +1,13 @@
 -- Observer's side of the server: it reports health to Observer through FXServer's structured trace
 -- channel, and turns Observer's commands into server events for other resources to handle.
--- It never shows anything to players but one text: the refusal message the owner wrote for bans.
+-- It never shows anything to players but what the owner wrote: the refusal messages, one for bans,
+-- one for maintenance mode, one for the allowlist, and the name the server takes in the server list
+-- during maintenance.
 
 -- Bumped when a field is renamed or removed, when resources must find the bridge another way, and
 -- when the bridge gains an export, so that a resource can tell whether it is there; new fields keep
 -- the version.
-local CONTRACT_VERSION = 4
+local CONTRACT_VERSION = 6
 local HEARTBEAT_MS = 3000
 local RESOURCES_SETTLE_MS = 500
 local LABELS_SETTLE_MS = 1000
@@ -32,6 +34,7 @@ local EVENTS = {
     restartRescheduled = true,
     shuttingDown = true,
     startChanges = true,
+    maintenance = true,
 }
 
 local function report(kind, fields)
@@ -275,6 +278,24 @@ local function followPositions()
     end)
 end
 
+-- The convars FiveM's server list reads a server's name from, each with the server convar that
+-- keeps what it held while the server carries its maintenance name: convars, so that a bridge
+-- restarted in the middle of a run still gives the names back.
+local NAME_KEPT = 'observer_name_kept'
+local NAMES = {
+    { convar = 'sv_hostname', kept = 'observer_name_hostname' },
+    { convar = 'sv_projectName', kept = 'observer_name_project', info = true },
+}
+
+-- `sv_projectName` is a server info variable, set as the cfg sets it, with `sets`.
+local function setName(name, value)
+    if name.info then
+        SetConvarServerInfo(name.convar, value)
+    else
+        SetConvar(name.convar, value)
+    end
+end
+
 -- What Observer has the bridge do itself, and nothing else.
 local ACTIONS = {
     verdict = function(payload)
@@ -299,6 +320,36 @@ local ACTIONS = {
         positionsEvery = math.max(POSITIONS_EVERY_MIN_MS, math.min(POSITIONS_EVERY_MAX_MS, math.floor(payload.everyMs)))
         positionsUntil = GetGameTimer() + math.max(0, math.min(POSITIONS_FOR_MAX_MS, math.floor(payload.forMs)))
         followPositions()
+    end,
+    serverName = function(payload)
+        local kept = GetConvar(NAME_KEPT, '')
+        if type(payload.name) == 'string' and payload.name ~= '' then
+            if kept == '' then
+                -- A server without a project name is listed by its host name alone: it gets none.
+                local renamed = {}
+                for _, name in ipairs(NAMES) do
+                    local held = GetConvar(name.convar, '')
+                    if held ~= '' or name.convar == 'sv_hostname' then
+                        SetConvar(name.kept, held)
+                        renamed[#renamed + 1] = name.convar
+                    end
+                end
+                kept = table.concat(renamed, ' ')
+                SetConvar(NAME_KEPT, kept)
+            end
+            for _, name in ipairs(NAMES) do
+                if kept:find(name.convar, 1, true) then
+                    setName(name, payload.name)
+                end
+            end
+        elseif kept ~= '' then
+            for _, name in ipairs(NAMES) do
+                if kept:find(name.convar, 1, true) then
+                    setName(name, GetConvar(name.kept, ''))
+                end
+            end
+            SetConvar(NAME_KEPT, '')
+        end
     end,
 }
 

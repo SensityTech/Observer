@@ -1,5 +1,5 @@
 //! Bans: who the server refuses, for how long and why, and the refusal message the owner writes,
-//! the one text Observer ever shows players.
+//! one of the few texts Observer ever shows players.
 
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
@@ -19,7 +19,7 @@ pub const MAX_BANNED_IDENTIFIERS: usize = 64;
 /// to the console with the event that comes with it, within what the console takes.
 pub const MAX_REFUSAL_BYTES: usize = 700;
 /// Unambiguous when read aloud or typed from a screenshot: no I, O, 0 or 1.
-const CODE_ALPHABET: &[u8; 32] = b"ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+pub(crate) const CODE_ALPHABET: &[u8; 32] = b"ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const DEFAULT_MESSAGE: &str =
     "You are banned from this server.\nReason: {reason}\nEnds: {ends}\nBan ID: {id}";
 
@@ -165,7 +165,7 @@ pub fn clean_line(text: &str, max: usize) -> Option<String> {
 
 /// The owner's message, line by line: hidden characters removed from each, blank lines at its
 /// ends dropped.
-fn clean_message(text: &str) -> Option<String> {
+pub(crate) fn clean_message(text: &str) -> Option<String> {
     let lines: Vec<String> = text
         .lines()
         .map(|line| {
@@ -192,16 +192,23 @@ pub struct RefusalValues<'a> {
     pub by: &'a str,
 }
 
-/// The message with its placeholders filled in, in one pass: a value that holds `{name}` stays as
-/// written. Cut to [`MAX_REFUSAL_BYTES`] on a character boundary.
+/// The ban's refusal message, its placeholders filled in.
 pub fn refusal(message: &str, values: &RefusalValues<'_>) -> String {
-    let placeholders = [
-        ("{reason}", values.reason),
-        ("{ends}", values.ends),
-        ("{id}", values.code),
-        ("{name}", values.name),
-        ("{by}", values.by),
-    ];
+    fill(
+        message,
+        &[
+            ("{reason}", values.reason),
+            ("{ends}", values.ends),
+            ("{id}", values.code),
+            ("{name}", values.name),
+            ("{by}", values.by),
+        ],
+    )
+}
+
+/// A message the owner wrote with its placeholders filled in, in one pass: a value that holds
+/// `{name}` stays as written. Cut to [`MAX_REFUSAL_BYTES`] on a character boundary.
+pub fn fill(message: &str, placeholders: &[(&str, &str)]) -> String {
     let mut text = String::with_capacity(message.len());
     let mut rest = message;
     while let Some(start) = rest.find('{') {

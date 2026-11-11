@@ -169,6 +169,22 @@ describe('parseServerMessage', () => {
             { type: 'resync', topic: 'metrics.live' },
             { type: 'unsubscribed', topic: 'status', reason: 'forbidden' },
             { type: 'unsubscribed', topic: 'metrics.live', reason: 'disabled' },
+            {
+                type: 'snapshot',
+                topic: 'server.admission',
+                data: {
+                    allowlist: { enabled: false, waiting: 0, approved: 0 },
+                    maintenance: { on: false, since: null, by: null, passes: 0 },
+                },
+            },
+            {
+                type: 'event',
+                topic: 'server.admission',
+                data: {
+                    allowlist: { enabled: true, waiting: 3, approved: 41 },
+                    maintenance: { on: true, since: '2026-11-11T20:40:00Z', by: 'maxime', passes: 3 },
+                },
+            },
             { type: 'pong' },
             { type: 'error', code: 'invalid_request' },
         ]) {
@@ -185,6 +201,36 @@ describe('parseServerMessage', () => {
             { type: 'snapshot', topic: 'audit' },
             { type: 'unsubscribed', topic: 'audit', reason: 'bored' },
             { type: 'resync', topic: 'metrics.history' },
+            { type: 'snapshot', topic: 'server.admission', data: {} },
+            {
+                type: 'event',
+                topic: 'server.admission',
+                data: {
+                    allowlist: { enabled: 'yes', waiting: 3, approved: 41 },
+                    maintenance: { on: false, since: null, by: null, passes: 0 },
+                },
+            },
+            {
+                type: 'event',
+                topic: 'server.admission',
+                data: {
+                    allowlist: { enabled: true, waiting: -1, approved: 41 },
+                    maintenance: { on: false, since: null, by: null, passes: 0 },
+                },
+            },
+            {
+                type: 'event',
+                topic: 'server.admission',
+                data: { allowlist: { enabled: true, waiting: 3, approved: 41 } },
+            },
+            {
+                type: 'event',
+                topic: 'server.admission',
+                data: {
+                    allowlist: { enabled: true, waiting: 3, approved: 41 },
+                    maintenance: { on: true, since: 'tonight', by: 'maxime', passes: 3 },
+                },
+            },
             { type: 'snapshot', topic: 'metrics.live', data: {} },
             { type: 'event', topic: 'metrics.live', data: { ...SAMPLE, values: { players: '187' } } },
             { type: 'event', topic: 'metrics.live', data: { ...SAMPLE, values: { fxs_cpu: 3 } } },

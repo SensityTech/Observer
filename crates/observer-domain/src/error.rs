@@ -176,6 +176,28 @@ pub enum ErrorCode {
     /// The refusal message is empty or too long, or the tokens needed are out of range. Params:
     /// `maxMessage`, `maxTokens`.
     InvalidBansSettings,
+    /// No request waits under this code: answered already, or never made.
+    AllowlistRequestNotFound,
+    /// No licence is approved under this id.
+    ApprovalNotFound,
+    /// The licence is approved already.
+    AlreadyApproved,
+    /// A licence cannot be approved as asked. Params: `field`, `license` or `note`; `maxNote`.
+    InvalidApproval,
+    /// The allowlist's message is empty or too long. Params: `maxMessage`.
+    InvalidAllowlistSettings,
+    /// No one is on the maintenance list under this id.
+    PassNotFound,
+    /// The licence is on the maintenance list already.
+    PassExists,
+    /// A licence cannot go on the maintenance list as asked. Params: `field`, `license` or
+    /// `note`; `maxNote`.
+    InvalidPass,
+    /// The maintenance list is full. Params: `max`.
+    TooManyPasses,
+    /// The maintenance message is empty or too long, or the server's maintenance name too long.
+    /// Params: `maxMessage`, `maxName`.
+    InvalidMaintenanceSettings,
     /// The live map's image was refused. Params: `problem`, `notLocal`, `missing`, `unreadable`,
     /// `tooLarge` or `notAnImage`.
     InvalidMapImage,

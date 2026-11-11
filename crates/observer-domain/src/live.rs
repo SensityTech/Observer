@@ -6,6 +6,7 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
+use crate::admission::AdmissionStatus;
 use crate::artifacts::ArtifactsStatus;
 use crate::audit::AuditEntry;
 use crate::changes::ChangesLive;
@@ -73,10 +74,14 @@ pub enum Topic {
     /// only then. Needs the live map permission.
     #[serde(rename = "server.map")]
     ServerMap,
+    /// Who the server lets in: whether the allowlist is on, how many requests wait and how many
+    /// licences are approved. Needs the dashboard, players or server control permission.
+    #[serde(rename = "server.admission")]
+    ServerAdmission,
 }
 
 impl Topic {
-    pub const ALL: [Self; 11] = [
+    pub const ALL: [Self; 12] = [
         Self::Status,
         Self::Audit,
         Self::ServerStatus,
@@ -88,6 +93,7 @@ impl Topic {
         Self::ServerDiagnostics,
         Self::ServerChanges,
         Self::ServerMap,
+        Self::ServerAdmission,
     ];
 }
 
@@ -165,6 +171,8 @@ pub enum TopicSnapshot {
     ServerChanges(ChangesLive),
     #[serde(rename = "server.map")]
     ServerMap(MapLive),
+    #[serde(rename = "server.admission")]
+    ServerAdmission(AdmissionStatus),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, TS)]
@@ -196,6 +204,9 @@ pub enum TopicEvent {
     /// Every placed player again, at each report of the bridge.
     #[serde(rename = "server.map")]
     ServerMap(MapLive),
+    /// The whole status again, whenever any of it changes.
+    #[serde(rename = "server.admission")]
+    ServerAdmission(AdmissionStatus),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]

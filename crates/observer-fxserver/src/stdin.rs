@@ -374,6 +374,11 @@ mod tests {
                 reason: StopReason::Stop,
                 by: text.to_owned(),
             },
+            BridgeEvent::Maintenance {
+                on: true,
+                at: 1,
+                by: text.to_owned(),
+            },
         ]
     }
 
