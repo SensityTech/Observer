@@ -1,16 +1,29 @@
 import { useQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
-import { PanelRightClose, PanelRightOpen, Search, Tag, TriangleAlert, Users, X } from 'lucide-react';
+import {
+    Ellipsis,
+    LogOut,
+    MessageSquare,
+    PanelRightClose,
+    PanelRightOpen,
+    Search,
+    Tag,
+    TriangleAlert,
+    Users,
+    X,
+} from 'lucide-react';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 
 import { Permission } from '../api/generated/Permission';
 import type { OnlinePlayer } from '../api/generated/OnlinePlayer';
 import { ApiError } from '../api/client';
 import { seriesQuery } from '../api/metrics';
+import type { Target } from '../api/moderation';
 import { onlineQuery } from '../api/players';
 import { allows, useMe } from '../auth/me';
 import { buttonVariants } from '../components/Button';
 import { inputClass } from '../components/Field';
+import { Menu, type MenuItem } from '../components/Menu';
 import { Notice } from '../components/Notice';
 import { Segmented } from '../components/Segmented';
 import { Sparkline } from '../components/Sparkline';
@@ -18,6 +31,7 @@ import { useI18n } from '../i18n/I18nProvider';
 import { cn } from '../lib/cn';
 import { PHONE, useMedia } from '../lib/useMedia';
 import { secondsSince, useNow } from '../lib/useNow';
+import { KickDialog, MessageDialog } from '../moderation/dialogs';
 import { nameOf } from '../players/words';
 import { useServerStatus } from '../server/context';
 
@@ -31,6 +45,21 @@ export const COLUMN_WIDE = '(min-width: 1281px)';
 export const HIGH_PING = 150;
 
 export type Sort = 'name' | 'id' | 'time' | 'ping';
+
+/** What the staff does to a player of the list, from their row. */
+type Acting = { action: 'kick' | 'message'; target: Target };
+
+/** Whether a dialog or a menu is open over the page. */
+const overlaid = () =>
+    document.querySelector('dialog[open]') !== null ||
+    [...document.querySelectorAll('[popover]')].some((popover) => {
+        try {
+            return popover.matches(':popover-open');
+        } catch {
+            // A browser without popovers has none open.
+            return false;
+        }
+    });
 const SORTS = ['name', 'id', 'time', 'ping'] as const satisfies readonly Sort[];
 
 const readFolded = () => {
@@ -138,6 +167,8 @@ export function OnlineColumn({
     const docked = wide && !folded;
     const close = useRef<HTMLButtonElement>(null);
     const opener = useRef<HTMLElement | null>(null);
+    // Held here, above the drawer, so that a dialog outlives the list that opened it.
+    const [acting, setActing] = useState<Acting | null>(null);
 
     const fold = (next: boolean) => {
         setFolded(next);
@@ -158,7 +189,8 @@ export function OnlineColumn({
         opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
         close.current?.focus();
         const closeOnEscape = (event: KeyboardEvent) => {
-            if (event.key === 'Escape') {
+            // Escape closes what is open over the drawer first: a row's menu, or a dialog.
+            if (event.key === 'Escape' && !overlaid()) {
                 onClose();
             }
         };
@@ -183,6 +215,7 @@ export function OnlineColumn({
                 <aside className="online-wrap" aria-label={t.online.label}>
                     <div className="online">
                         <OnlinePanel
+                            onAct={setActing}
                             action={
                                 <button
                                     type="button"
@@ -237,6 +270,7 @@ export function OnlineColumn({
                         <div className="online">
                             {open && (
                                 <OnlinePanel
+                                    onAct={setActing}
                                     action={
                                         <button
                                             ref={close}
@@ -254,6 +288,12 @@ export function OnlineColumn({
                     </aside>
                     {open && <div className="scrim" aria-hidden="true" onClick={onClose} />}
                 </>
+            )}
+            {acting?.action === 'kick' && (
+                <KickDialog target={acting.target} onClose={() => setActing(null)} />
+            )}
+            {acting?.action === 'message' && (
+                <MessageDialog target={acting.target} onClose={() => setActing(null)} />
             )}
         </>
     );
@@ -285,7 +325,7 @@ export function OnlineButton({ open, onOpen }: { open: boolean; onOpen: () => vo
     );
 }
 
-function OnlinePanel({ action }: { action: ReactNode }) {
+function OnlinePanel({ action, onAct }: { action: ReactNode; onAct: (acting: Acting) => void }) {
     const { t, locale, format } = useI18n();
     const me = useMe();
     const words = t.online;
@@ -332,7 +372,7 @@ function OnlinePanel({ action }: { action: ReactNode }) {
         list = (
             <ul className="flex flex-col px-2 py-1.5">
                 {visible.map((player) => (
-                    <PlayerRow key={player.netId} player={player} />
+                    <PlayerRow key={player.netId} player={player} onAct={onAct} />
                 ))}
             </ul>
         );
@@ -404,8 +444,9 @@ function OnlinePanel({ action }: { action: ReactNode }) {
     );
 }
 
-function PlayerRow({ player }: { player: OnlinePlayer }) {
+function PlayerRow({ player, onAct }: { player: OnlinePlayer; onAct: (acting: Acting) => void }) {
     const { t, format } = useI18n();
+    const me = useMe();
     const words = t.online;
     const confirmed = player.confirmation === 'confirmed';
     const shown = nameOf(player.name, player.label);
@@ -450,9 +491,35 @@ function PlayerRow({ player }: { player: OnlinePlayer }) {
         </>
     );
     const label = words.row(name, player.netId, time, high ? `${ping}, ${words.highPing}` : ping);
-    const row = 'flex h-9.5 items-center gap-2.5 rounded-sm px-2 max-md:h-11';
+    const row = 'flex h-9.5 min-w-0 flex-1 items-center gap-2.5 rounded-sm px-2 max-md:h-11';
+    const target: Target = {
+        netId: player.netId,
+        name: shown === null || shown === '' ? words.someone(player.netId) : shown,
+        license: player.license,
+    };
+    const actions: MenuItem[] = [
+        ...(allows(me, Permission.PlayersMessage)
+            ? [
+                  {
+                      label: t.moderation.message,
+                      icon: MessageSquare,
+                      onSelect: () => onAct({ action: 'message', target }),
+                  },
+              ]
+            : []),
+        ...(allows(me, Permission.PlayersKick)
+            ? [
+                  {
+                      label: t.moderation.kick,
+                      icon: LogOut,
+                      danger: true,
+                      onSelect: () => onAct({ action: 'kick', target }),
+                  },
+              ]
+            : []),
+    ];
     return (
-        <li>
+        <li className="flex items-center">
             {player.player === null ? (
                 <div className={row}>{cells}</div>
             ) : (
@@ -464,6 +531,19 @@ function PlayerRow({ player }: { player: OnlinePlayer }) {
                 >
                     {cells}
                 </Link>
+            )}
+            {actions.length > 0 && (
+                <Menu
+                    label={t.moderation.actions(target.name)}
+                    buttonClassName={cn(
+                        buttonVariants({ tone: 'ghost', size: 'icon-sm' }),
+                        'flex-none text-ink-3',
+                    )}
+                    items={actions}
+                    placement="below-end"
+                >
+                    <Ellipsis size={16} strokeWidth={1.5} aria-hidden="true" />
+                </Menu>
             )}
         </li>
     );

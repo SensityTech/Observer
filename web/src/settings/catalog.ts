@@ -35,11 +35,19 @@ export type SettingId =
     | 'backupsLast'
     | 'refusalMessage'
     | 'tokenMatches'
+    | 'banTemplates'
+    | 'kickMessage'
+    | 'allowlistEnabled'
+    | 'allowlistMessage'
+    | 'maintenanceMessage'
+    | 'maintenancePasses'
+    | 'maintenanceServerName'
     | 'mapImagery'
     | 'mapImage'
     | 'mapBounds'
     | 'mapTiers'
     | 'mapCadence'
+    | 'entitiesCadence'
     | 'switchSftp'
     | 'switchChanges'
     | 'switchTools'
@@ -49,6 +57,7 @@ export type SettingId =
     | 'switchDrops'
     | 'switchUpdates'
     | 'switchDebug'
+    | 'switchEntities'
     | 'changesEnabled'
     | 'startEvent'
     | 'extensions'
@@ -88,7 +97,10 @@ export type CategoryId =
     | 'builds'
     | 'backups'
     | 'bans'
+    | 'allowlist'
+    | 'maintenance'
     | 'map'
+    | 'entities'
     | 'features'
     | 'data'
     | 'tools'
@@ -170,6 +182,27 @@ export const CATEGORIES: readonly Category[] = [
         settings: [
             { id: 'refusalMessage', applies: 'now' },
             { id: 'tokenMatches', applies: 'now' },
+            { id: 'banTemplates', applies: 'now' },
+            { id: 'kickMessage', applies: 'now' },
+        ],
+    },
+    {
+        id: 'allowlist',
+        group: 'server',
+        access: ['SettingsView'],
+        settings: [
+            { id: 'allowlistEnabled', applies: 'now' },
+            { id: 'allowlistMessage', applies: 'now' },
+        ],
+    },
+    {
+        id: 'maintenance',
+        group: 'server',
+        access: ['SettingsView'],
+        settings: [
+            { id: 'maintenanceMessage', applies: 'now' },
+            { id: 'maintenancePasses', applies: 'now' },
+            { id: 'maintenanceServerName', applies: 'now' },
         ],
     },
     {
@@ -185,6 +218,12 @@ export const CATEGORIES: readonly Category[] = [
         ],
     },
     {
+        id: 'entities',
+        group: 'server',
+        access: ['SettingsView'],
+        settings: [{ id: 'entitiesCadence', applies: 'now' }],
+    },
+    {
         id: 'features',
         group: 'observer',
         access: ['SettingsView'],
@@ -198,6 +237,7 @@ export const CATEGORIES: readonly Category[] = [
             { id: 'switchDrops' },
             { id: 'switchUpdates' },
             { id: 'switchDebug' },
+            { id: 'switchEntities' },
         ],
     },
     {
@@ -283,6 +323,7 @@ export const SWITCH_OF = {
     drops: 'switchDrops',
     updates: 'switchUpdates',
     debug: 'switchDebug',
+    entities: 'switchEntities',
 } satisfies Record<Feature, SettingId>;
 
 /** When each setting applies, found by its id. */

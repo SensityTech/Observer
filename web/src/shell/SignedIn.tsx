@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { useEffect, type ReactNode } from 'react';
 
+import { AdmissionProvider } from '../admission/context';
 import { meQuery } from '../api/auth';
 import { MeContext } from '../auth/me';
 import { AlertsProvider } from '../diagnostics/alerts';
@@ -11,7 +12,7 @@ import { ServerStatusProvider } from '../server/context';
 
 /**
  * What every signed-in screen stands on, the panel's shell or a full-screen flow: the account, the
- * live socket, and FXServer's state, schedule, builds and alerts as they change.
+ * live socket, and FXServer's state, schedule, builds, alerts and admission as they change.
  */
 export function SignedIn({ children }: { children: ReactNode }) {
     const { data: me } = useQuery(meQuery);
@@ -32,7 +33,9 @@ export function SignedIn({ children }: { children: ReactNode }) {
             <ServerStatusProvider>
                 <ScheduleProvider>
                     <ArtifactsProvider>
-                        <AlertsProvider>{children}</AlertsProvider>
+                        <AlertsProvider>
+                            <AdmissionProvider>{children}</AdmissionProvider>
+                        </AlertsProvider>
                     </ArtifactsProvider>
                 </ScheduleProvider>
             </ServerStatusProvider>

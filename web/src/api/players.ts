@@ -52,6 +52,14 @@ export const playersQuery = (search: string, sort: PlayerSort) =>
         getNextPageParam: (page) => page.next ?? undefined,
     });
 
+/** The first players a name finds, those seen latest first: what a field that picks a player lists. */
+export const playersFoundQuery = (search: string) =>
+    queryOptions({
+        queryKey: ['players', 'found', search],
+        queryFn: ({ signal }) => getJson<PlayerPage>(`${PATH}${playersSearch(search, 'lastSeen')}`, signal),
+        staleTime: 10_000,
+    });
+
 export const profileQuery = (id: number) =>
     queryOptions({
         queryKey: ['players', 'profile', id],

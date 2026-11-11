@@ -3,8 +3,9 @@
 //! its main loop, writes structured traces on fd 3 and serves `/dynamic.json`, `/perf/`,
 //! `/players.json` and `/info.json` on the cfg's `endpoint_add_tcp`. Started, a folder of the
 //! build's `citizen/system_resources` that holds Observer's bridge plays it, under the folder's name
-//! as FXServer knows the bridge: `ready` and the started resources once, then a heartbeat and the
-//! heap. The build's `citizen/` is the `citizen_dir` convar, as on Linux, or else the one next to the
+//! as FXServer knows the bridge: `ready`, the started resources and the list of every resource once,
+//! then a heartbeat and the heap, the started resources again half a second after one starts or
+//! stops, and the list again after a `refresh`. The build's `citizen/` is the `citizen_dir` convar, as on Linux, or else the one next to the
 //! executable.
 //!
 //! Failures on demand, through convars (`+set fake_x y`, in the cfg, or in a `fake-build.cfg` next
@@ -17,6 +18,14 @@
 //!   for one of them. FXServer 38435 prints `Started resource` once a resource is up and nothing
 //!   while it reads its stream files, which took a clothing pack minutes on a first start;
 //! - `fake_fail_start <name>`: that resource does not start, as one whose asset is disabled;
+//! - `start`, `stop`, `restart`, `ensure` and `refresh` do what `ServerResources.cpp`,
+//!   `ServerResourceList.cpp` and `ResourceDependencyLoader.cpp` say they do, read at the commit of
+//!   build 38435 and measured on no server: a resource starts after those its manifest depends
+//!   on; one that stops takes with it, first, every started one that depends on it, and nothing
+//!   starts those again; `restart` leaves a stopped resource stopped, with `Can't restart a
+//!   stopped resource.`; `refresh` scans the folders again and says what it found. The line
+//!   FXServer prints of a dependency it cannot find is not printed;
+//! - `fake_resource_page <n>` (100): how many resources one page of the bridge's list holds;
 //! - `fake_heavy <names>`, `fake_missing <names>`, each a list separated by commas: as it starts
 //!   one of them, FXServer warns of two heavy streamed files, one of them oversized, or of a script
 //!   its manifest names and it does not hold, on the channel `resources:<name>:stream` cut at
@@ -56,10 +65,28 @@
 //! - on stdin: `fake_connecting [name] [identifier,...] [token,...]`, a player the bridge holds at
 //!   `playerConnecting`: it reports them and waits for Observer's verdict, `fake_verdict_ms`
 //!   (5000) at most, then lets them in as `fake_join` does, or refuses them; a verdict to drop a
-//!   connected player drops them with category 1, the bridge as the resource;
+//!   connected player drops them with category 1, the bridge as the resource, and so does a kick,
+//!   of the players it lists or of everyone; a ban made or lifted, told to txAdmin's listeners, is
+//!   printed as `txAdmin:events:playerBanned` or `txAdmin:events:actionRevoked` when
+//!   `observer_txadmin_events` is 1, which the launch sets;
 //! - on stdin: `fake_move <id> <x> <y> <z>`, which puts a player at a position the bridge reports
 //!   while Observer asks for positions; the others go round a circle. With `onesync off` the bridge
 //!   reports no position, as it reads them from OneSync;
+//! - on stdin or in the cfg: `fake_entity <vehicle|bike|boat|heli|train|ped|object> <x> <y> <z>
+//!   [resource or -] [owner or -] [bucket]`, an entity of the game under the next net id, from 1,
+//!   and `fake_entities <vehicles> <peds> <objects>`, as many spread over the map as a small busy
+//!   server holds; the bridge lists them while Observer asks, in sweeps of 500 rows a part, with
+//!   every player's own ped counted and left out, and deletes those Observer names. Nothing here
+//!   was measured on a real FXServer: the entities are the fake's own, and the bridge's natives
+//!   are taken to do what their names say. `fake_entity_gone <net id>` removes one as the game
+//!   does by itself, `fake_entity_stays <net id>` has the game keep one it is asked to delete,
+//!   `fake_enter <player> [net id]` seats a player in a vehicle or takes them out, and
+//!   `fake_possess <player> <net id>` makes a ped a player's own;
+//! - `fake_entities_every_ms`: how often the bridge sweeps, whatever Observer asks, for tests that
+//!   cannot wait five seconds; `fake_entities_row_us` (2) and `fake_entities_list_us`: what a
+//!   sweep costs for each entity and for listing them, in microseconds, which cuts a sweep short
+//!   past its budget and spaces the next ones out; `set gamename rdr3` and `onesync off` each
+//!   leave the server without entities to list;
 //! - `fake_holders <names>`, a list separated by commas: each of them asks the bridge to hold the
 //!   stop as it starts, as a resource calling `holdShutdown`, and the bridge reports who holds once
 //!   it is ready and whenever that changes. Once the bridge raised `observer:shuttingDown`, each
@@ -81,14 +108,17 @@
 //! The main loop runs in a thread named `UV loop: svMain`, as FXServer's does.
 //!
 //! The bridge's `observer_cmd <hex>` prints the event it decodes, which the real bridge does not, so
-//! that tests can see it arrive; a refusal prints the message as JSON after `refused`, which the
-//! real bridge shows the player instead. A convar typed alone gets the first line FXServer prints
-//! for it, ` "name" is "value"`; unknown commands get FXServer's `No such command <name>.`
+//! that tests can see it arrive; a refusal prints the message as JSON after `refused`, and a kick
+//! after `kicked` and the player's id, which the real bridge shows the player instead. A convar
+//! typed alone gets the first line FXServer prints for it, ` "name" is "value"`; unknown commands
+//! get FXServer's `No such command <name>.`
 
 mod console;
 mod dump;
+mod entities;
 mod http;
 mod players;
+mod resources;
 #[allow(unsafe_code)]
 mod traces;
 
@@ -106,6 +136,7 @@ use serde_json::json;
 
 use crate::console::{CMD, LICENSE, MAIN, NET, RESOURCES, SCRIPTING, SERVER};
 use crate::players::{Player, Players};
+use crate::resources::Registry;
 use crate::traces::Traces;
 
 const TICK: Duration = Duration::from_millis(50);
@@ -116,6 +147,10 @@ const HOLD_PIPES: &str = "--fake-hold-pipes";
 const DUMP_SERVER: &str = "-dumpserver:";
 /// FXServer's main thread, as FXServer 35245 names it.
 const SV_MAIN: &str = "UV loop: svMain";
+/// Starts and stops the bridge tells in one report, past which it only counts them.
+const RESOURCE_EVENTS_MAX: usize = 64;
+/// How long the bridge waits after a start or a stop before it reports, unless its script says.
+const RESOURCES_SETTLE_MS: u64 = 500;
 /// The bridge's `HOLDS_MAX`: the most resources that hold a stop at once.
 const HOLDS_MAX: usize = 64;
 
@@ -146,6 +181,12 @@ impl Server {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .insert(name.to_ascii_lowercase(), value.to_owned());
+    }
+
+    /// `sv_hostname`, which FXServer declares with a value of its own.
+    pub fn hostname(&self) -> String {
+        self.convar("sv_hostname")
+            .unwrap_or_else(|| "FXServer, but unconfigured".to_owned())
     }
 
     fn number(&self, name: &str) -> Option<u64> {
@@ -212,6 +253,16 @@ struct Bridge {
     ready: bool,
     /// The `CONTRACT_VERSION` of the script, which the real bridge reports when it is ready.
     contract: u64,
+    /// The script's `RESOURCES_SETTLE_MS`: one report covers the starts and stops of that long.
+    settle: Duration,
+}
+
+/// The starts and stops the bridge has not reported yet.
+#[derive(Default)]
+struct Unreported {
+    events: Vec<[String; 2]>,
+    dropped: u64,
+    report_at: Option<Instant>,
 }
 
 /// While the build's scheduler loads Observer's hook: every resource counts and reports.
@@ -241,12 +292,23 @@ struct Fake {
     server: Arc<Server>,
     waiting: Vec<Waiting>,
     following: Option<Following>,
+    /// While Observer asks for the entities.
+    listing: Option<Following>,
+    world: entities::World,
+    /// The answers to deletions, each sent once the bridge has checked what is left.
+    deleted: Vec<(Instant, serde_json::Value)>,
     placed: HashMap<u32, [f64; 3]>,
     last_request: u32,
     traces: Traces,
     endpoint: Option<String>,
     bridge: Option<Bridge>,
     counting: Option<Counting>,
+    registry: Registry,
+    /// The cfg has run: from then on `ensure` stops a started resource before it starts it.
+    configured: bool,
+    unreported: Unreported,
+    /// The lists of resources the bridge sent, which number their pages.
+    lists: u64,
     /// Every resource started, in order.
     started: Vec<String>,
     /// The resources that hold the stop, as the bridge keeps them.
@@ -360,11 +422,18 @@ fn main() {
             traces,
             waiting: Vec::new(),
             following: None,
+            listing: None,
+            world: entities::World::default(),
+            deleted: Vec::new(),
             placed: HashMap::new(),
             last_request: 0,
             endpoint: None,
             bridge: None,
             counting: None,
+            registry: Registry::default(),
+            configured: false,
+            unreported: Unreported::default(),
+            lists: 0,
             started: Vec::new(),
             holds: BTreeSet::new(),
             stopping: None,
@@ -417,6 +486,7 @@ impl Fake {
         for command in commands.iter().filter(|command| is_set(command)) {
             self.execute(command);
         }
+        self.registry = Registry::scan(&server_folder(), self.system_resources().as_deref());
         console::line(RESOURCES, "\x1b[32mScanning resources.\x1b[0m");
         console::line(RESOURCES, "\x1b[32mFound 4 resources.\x1b[0m");
         console::line(LICENSE, "Authenticating server license key...");
@@ -437,6 +507,7 @@ impl Fake {
         for command in commands.iter().filter(|command| !is_set(command)) {
             self.execute(command);
         }
+        self.configured = true;
 
         if let Some(address) = self.endpoint.clone() {
             if self.server.flag("fake_bind_error") {
@@ -478,6 +549,8 @@ impl Fake {
                 .retain_mut(|child| matches!(child.try_wait(), Ok(None)));
             self.admit_unanswered(now);
             self.report_positions(now);
+            self.report_resources(now);
+            self.report_entities(now);
             self.beat(now);
             if self.release_due(now) {
                 self.report_holds(&[]);
@@ -503,19 +576,11 @@ impl Fake {
             ("ensure" | "start", Some(category)) if category.starts_with('[') && category.ends_with(']') => {
                 self.ensure_category(category);
             }
-            ("ensure" | "start", Some(resource)) => self.ensure(resource),
-            ("restart", Some(resource)) => {
-                stop(resource);
-                self.stopped(resource);
-                self.start(resource);
-                self.resources_changed(resource, &["stop", "start"]);
-            }
-            ("stop", Some(resource)) => {
-                stop(resource);
-                self.started.retain(|started| started != resource);
-                self.stopped(resource);
-                self.resources_changed(resource, &["stop"]);
-            }
+            ("ensure", Some(resource)) => self.ensure(resource),
+            ("start", Some(resource)) => self.start_command(resource),
+            ("restart", Some(resource)) => self.restart(resource),
+            ("stop", Some(resource)) => self.stop(resource),
+            ("refresh", None) => self.refresh(),
             ("quit", reason) => self.quit(reason),
             ("fake_crash", code) => self.crash(code.and_then(|code| code.parse().ok())),
             ("fake_hang", _) => hang(),
@@ -555,6 +620,7 @@ impl Fake {
             ("fake_join", _) => self.join(args.first(), args.get(1), args.get(2)),
             ("fake_connecting", _) => self.connecting(args.first(), args.get(1), args.get(2)),
             ("fake_move", Some(id)) => self.place(id, &args[1..]),
+            (entity, Some(_)) if entities::COMMANDS.contains(&entity) => self.world.command(entity, args),
             ("fake_drop", Some(id)) => {
                 let category = args
                     .get(1)
@@ -613,18 +679,88 @@ impl Fake {
         }
     }
 
+    fn is_started(&self, resource: &str) -> bool {
+        self.started.iter().any(|started| started == resource)
+    }
+
+    /// FXServer's `ensure`: a start, after a stop of a started resource once the cfg has run.
     fn ensure(&mut self, resource: &str) {
-        if self.server.convar("fake_fail_start").as_deref() == Some(resource) {
-            console::line(SERVER, &format!("Couldn't start resource {resource}."));
-            return;
+        if self.configured && self.is_started(resource) {
+            self.stop(resource);
         }
-        let restarted = self.started.iter().any(|started| started == resource);
-        if self.bridge.as_ref().is_some_and(|bridge| bridge.name == resource) {
-            stop(resource);
+        self.start_command(resource);
+    }
+
+    /// FXServer's `start`: nothing for a resource that is up.
+    fn start_command(&mut self, resource: &str) {
+        if !self.is_started(resource) && !self.start_after_needs(resource, &mut Vec::new()) {
+            console::line(SERVER, &format!("Couldn't start resource {resource}."));
+        }
+    }
+
+    /// Starts `resource` once every resource its manifest depends on is up, each started in turn.
+    /// `starting` holds those on the way, so that two that depend on each other end.
+    fn start_after_needs(&mut self, resource: &str, starting: &mut Vec<String>) -> bool {
+        if self.server.convar("fake_fail_start").as_deref() == Some(resource) {
+            return false;
+        }
+        starting.push(resource.to_owned());
+        for need in self.registry.needs(resource) {
+            let on = self.registry.resolve(&need, &self.started);
+            let up = self.is_started(&on) || starting.contains(&on);
+            if !up && !self.start_after_needs(&on, starting) {
+                return false;
+            }
         }
         self.start(resource);
-        let events: &[&str] = if restarted { &["stop", "start"] } else { &["start"] };
-        self.resources_changed(resource, events);
+        self.resource_event(resource, "start");
+        true
+    }
+
+    /// FXServer's `stop`: every started resource that depends on this one stops first, and
+    /// nothing starts it again.
+    fn stop(&mut self, resource: &str) {
+        if !self.is_started(resource) {
+            return;
+        }
+        // Out of the started ones first, so that two that depend on each other end.
+        self.started.retain(|started| started != resource);
+        for dependant in self.registry.dependants(resource, &self.started) {
+            self.stop(&dependant);
+        }
+        console::line(RESOURCES, &format!("Stopping resource {resource}"));
+        self.resource_event(resource, "stop");
+        self.stopped(resource);
+    }
+
+    /// FXServer's `restart`: a stop then a start, of a started resource only.
+    fn restart(&mut self, resource: &str) {
+        if !self.is_started(resource) {
+            console::line(SERVER, "Can't restart a stopped resource.");
+            return;
+        }
+        self.stop(resource);
+        self.start_command(resource);
+    }
+
+    /// FXServer's `refresh`: the folders are scanned again, and the bridge hears of it.
+    fn refresh(&mut self) {
+        console::line(RESOURCES, "\x1b[32mScanning resources.\x1b[0m");
+        let refreshed = self
+            .registry
+            .refresh(&server_folder(), self.system_resources().as_deref());
+        let found = if refreshed.read > 0 {
+            format!(
+                "Found {} new resources, and refreshed {}/{} resources.",
+                refreshed.added, refreshed.changed, refreshed.read
+            )
+        } else {
+            format!("Found {} resources.", refreshed.added)
+        };
+        console::line(RESOURCES, &format!("\x1b[32m{found}\x1b[0m"));
+        if self.bridge.as_ref().is_some_and(|bridge| bridge.ready) {
+            self.report_resource_list();
+        }
     }
 
     fn start(&mut self, resource: &str) {
@@ -671,35 +807,84 @@ impl Fake {
         if listed("fake_holders") {
             self.hold(resource);
         }
-        if let Some(contract) = self.bridge_script(resource).as_deref().and_then(contract_version) {
+        let script = self.bridge_script(resource);
+        if let Some(contract) = script.as_deref().and_then(contract_version) {
             self.holds.clear();
             self.stopping = None;
+            let settle = script
+                .as_deref()
+                .and_then(|script| constant(script, "RESOURCES_SETTLE_MS"))
+                .unwrap_or(RESOURCES_SETTLE_MS);
             let heap_period = Duration::from_millis(self.server.number("fake_heap_ms").unwrap_or(10_000));
             self.counting = self.hooked(resource).then(|| Counting {
                 next: Instant::now(),
                 second: 0,
                 greeted: 0,
             });
+            self.listing = None;
+            self.deleted.clear();
+            self.world.bridge_started(self.server.uptime_ms());
             self.bridge = Some(Bridge {
                 name: resource.to_owned(),
                 next_heartbeat: Instant::now(),
                 next_heap: Instant::now() + heap_period,
                 ready: false,
                 contract,
+                settle: Duration::from_millis(settle),
             });
         }
     }
 
-    /// The bridge's report of a resource started or stopped once the cfg has run.
-    fn resources_changed(&mut self, resource: &str, changes: &[&str]) {
+    /// A start or a stop the bridge hears of once the cfg has run: it reports them together a
+    /// moment later, 64 of them at most.
+    fn resource_event(&mut self, resource: &str, change: &str) {
         let Some(bridge) = self.bridge.as_ref().filter(|bridge| bridge.ready) else {
             return;
         };
-        let events: Vec<[&str; 2]> = changes.iter().map(|change| [resource, *change]).collect();
-        self.traces.script(
-            &bridge.name,
-            &json!({ "type": "observer", "kind": "resources", "started": self.started, "events": events }),
-        );
+        if self.unreported.events.len() < RESOURCE_EVENTS_MAX {
+            self.unreported
+                .events
+                .push([resource.to_owned(), change.to_owned()]);
+        } else {
+            self.unreported.dropped += 1;
+        }
+        self.unreported
+            .report_at
+            .get_or_insert_with(|| Instant::now() + bridge.settle);
+    }
+
+    /// The bridge's report of the resources started, with the starts and stops since the last.
+    fn report_resources(&mut self, now: Instant) {
+        if self.unreported.report_at.is_none_or(|at| now < at) {
+            return;
+        }
+        let unreported = std::mem::take(&mut self.unreported);
+        let mut report = json!({ "type": "observer", "kind": "resources", "started": self.started });
+        if !unreported.events.is_empty() {
+            report["events"] = json!(unreported.events);
+        }
+        if unreported.dropped > 0 {
+            report["dropped"] = json!(unreported.dropped);
+        }
+        self.bridge_report(&report);
+    }
+
+    /// The bridge's list of every resource FXServer knows, in pages.
+    fn report_resource_list(&mut self) {
+        self.lists += 1;
+        let per_page = usize::try_from(self.server.number("fake_resource_page").unwrap_or(100))
+            .unwrap_or(100)
+            .max(1);
+        let listed = self.registry.listed(&self.started);
+        let pages = listed.len().div_ceil(per_page).max(1);
+        for page in 0..pages {
+            let resources: Vec<&serde_json::Value> =
+                listed.iter().skip(page * per_page).take(per_page).collect();
+            self.bridge_report(&json!({
+                "type": "observer", "kind": "resource_list", "list": self.lists,
+                "page": page + 1, "last": page + 1 == pages, "resources": resources,
+            }));
+        }
     }
 
     /// The bridge's traces. They come from the main loop, so they stop while it is hung.
@@ -723,11 +908,16 @@ impl Fake {
                 holds["holding"] = json!(self.holds);
             }
             self.traces.script(&bridge.name, &holds);
+            let name = bridge.name.clone();
+            self.report_resource_list();
             let roster = self.server.players().roster(self.server.uptime_ms());
             for page in roster {
-                self.traces.script(&bridge.name, &page);
+                self.traces.script(&name, &page);
             }
         }
+        let Some(bridge) = &mut self.bridge else {
+            return;
+        };
         if now >= bridge.next_heartbeat {
             bridge.next_heartbeat = now + period;
             self.traces
@@ -763,6 +953,8 @@ impl Fake {
     fn stopped(&mut self, resource: &str) {
         if self.bridge.as_ref().is_some_and(|bridge| bridge.name == resource) {
             self.bridge = None;
+            self.listing = None;
+            self.unreported = Unreported::default();
             self.holds.clear();
             self.stopping = None;
             return;
@@ -932,6 +1124,47 @@ impl Fake {
         }
     }
 
+    /// The entities, swept while Observer asks, and the answers to its deletions once due.
+    fn report_entities(&mut self, now: Instant) {
+        let (due, later): (Vec<_>, Vec<_>) = std::mem::take(&mut self.deleted)
+            .into_iter()
+            .partition(|(at, _)| now >= *at);
+        self.deleted = later;
+        for (_, reply) in due {
+            self.bridge_report(&reply);
+        }
+        let Some(listing) = self.listing.as_mut() else {
+            return;
+        };
+        if now >= listing.until {
+            self.listing = None;
+            self.world.unspaced();
+            return;
+        }
+        if now < listing.next {
+            return;
+        }
+        let every_ms = u64::try_from(listing.every.as_millis()).unwrap_or(u64::MAX);
+        let parts = self.world.sweep(&entities::Server {
+            players: self.server.players().len(),
+            onesync: self.server.convar("onesync").is_some_and(|value| value != "off"),
+            gta: self.server.convar("gamename").is_none_or(|game| game == "gta5"),
+            every_ms,
+            row_us: self.server.number("fake_entities_row_us").unwrap_or(2),
+            list_us: self.server.number("fake_entities_list_us"),
+        });
+        let cadence = self
+            .server
+            .number("fake_entities_every_ms")
+            .unwrap_or_else(|| self.world.cadence_ms(every_ms));
+        if let Some(listing) = self.listing.as_mut() {
+            listing.next = now + Duration::from_millis(cadence);
+        }
+        for part in parts {
+            self.bridge_report(&part);
+        }
+    }
+
     /// Who waited for a verdict longer than the bridge waits gets in.
     fn admit_unanswered(&mut self, now: Instant) {
         let (due, waiting): (Vec<Waiting>, Vec<Waiting>) = std::mem::take(&mut self.waiting)
@@ -1083,9 +1316,13 @@ impl Fake {
         self.traces.script(resource, &report);
     }
 
+    /// The build's own resources, where the bridge is written too.
+    fn system_resources(&self) -> Option<PathBuf> {
+        Some(self.citizen()?.join("system_resources"))
+    }
+
     fn bridge_script(&self, resource: &str) -> Option<String> {
-        let citizen = self.citizen()?;
-        let script = citizen.join("system_resources").join(resource).join("server.lua");
+        let script = self.system_resources()?.join(resource).join("server.lua");
         std::fs::read_to_string(script)
             .ok()
             .filter(|script| script.contains("RegisterCommand('observer_cmd'"))
@@ -1118,6 +1355,31 @@ impl Fake {
                     next: now,
                 });
             }
+            Some("entities") => {
+                let every = payload["everyMs"].as_u64().unwrap_or(15_000).clamp(5000, 60_000);
+                let lasting = payload["forMs"].as_u64().unwrap_or(0).min(60_000);
+                let now = Instant::now();
+                // An ask that renews one keeps the sweeps where they were.
+                let next = self.listing.as_ref().map_or(now, |listing| listing.next);
+                self.listing = (lasting > 0).then(|| Following {
+                    every: Duration::from_millis(every),
+                    until: now + Duration::from_millis(lasting),
+                    next,
+                });
+                if self.listing.is_none() {
+                    self.world.unspaced();
+                }
+            }
+            Some("deleteEntities") => {
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |since| i64::try_from(since.as_secs()).unwrap_or(i64::MAX));
+                if let Some(reply) = self.world.delete(payload, now) {
+                    // The real bridge looks again a quarter of a second after it asked the game.
+                    self.deleted
+                        .push((Instant::now() + Duration::from_millis(250), reply));
+                }
+            }
             Some("drop") => {
                 let (Some(id), Some(message)) = (
                     payload["player"].as_u64().and_then(|id| u32::try_from(id).ok()),
@@ -1128,6 +1390,18 @@ impl Fake {
                 console::script(&bridge, &format!("observer:playerBanned {}", payload["event"]));
                 self.drop_player(id, 1, &bridge, message);
             }
+            Some("kick") => self.kick(&bridge, payload),
+            Some(action @ ("banned" | "lifted"))
+                if self.server.convar("observer_txadmin_events").as_deref() == Some("1") =>
+            {
+                let event = if action == "banned" {
+                    "playerBanned"
+                } else {
+                    "actionRevoked"
+                };
+                console::script(&bridge, &format!("txAdmin:events:{event} {}", payload["event"]));
+            }
+            Some("serverName") => self.server_name(payload["name"].as_str()),
             Some(_) => {}
             None => {
                 console::script(
@@ -1142,6 +1416,83 @@ impl Fake {
                     self.shutting_down();
                 }
             }
+        }
+    }
+
+    /// A kick of the players listed, or of everyone with `all`: `observer:playerKicked` for each
+    /// one connected, then their drops, with category 1 and the bridge as the resource.
+    fn kick(&self, bridge: &str, payload: &serde_json::Value) {
+        let (Some(message), Some(event)) = (
+            payload["message"].as_str().filter(|message| !message.is_empty()),
+            payload["event"].as_object(),
+        ) else {
+            return;
+        };
+        let mut connected = self.server.players().ids();
+        connected.sort_unstable();
+        let kicked: Vec<u32> = if payload["all"] == json!(true) {
+            connected
+        } else {
+            payload["players"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|id| id.as_u64().and_then(|id| u32::try_from(id).ok()))
+                .filter(|id| connected.contains(id))
+                .collect()
+        };
+        for &id in &kicked {
+            let mut event = event.clone();
+            event.insert("player".to_owned(), json!(id));
+            console::script(
+                bridge,
+                &format!("observer:playerKicked {}", serde_json::Value::Object(event)),
+            );
+        }
+        for id in kicked {
+            console::script(bridge, &format!("kicked {id} {}", json!(message)));
+            self.drop_player(id, 1, bridge, message);
+        }
+    }
+
+    /// What the real bridge does with the server's maintenance name: the convars the server list
+    /// reads take it, what they held kept aside, and get it back when no name comes.
+    fn server_name(&self, name: Option<&str>) {
+        const KEPT: &str = "observer_name_kept";
+        const NAMES: [(&str, &str); 2] = [
+            ("sv_hostname", "observer_name_hostname"),
+            ("sv_projectName", "observer_name_project"),
+        ];
+        let held = |convar: &str| match convar {
+            "sv_hostname" => self.server.hostname(),
+            other => self.server.convar(other).unwrap_or_default(),
+        };
+        let mut kept = self.server.convar(KEPT).unwrap_or_default();
+        if let Some(name) = name.filter(|name| !name.is_empty()) {
+            if kept.is_empty() {
+                let mut renamed = Vec::new();
+                for (convar, aside) in NAMES {
+                    let held = held(convar);
+                    if !held.is_empty() {
+                        self.server.set(aside, &held);
+                        renamed.push(convar);
+                    }
+                }
+                kept = renamed.join(" ");
+                self.server.set(KEPT, &kept);
+            }
+            for (convar, _) in NAMES {
+                if kept.contains(convar) {
+                    self.server.set(convar, name);
+                }
+            }
+        } else {
+            for (convar, aside) in NAMES {
+                if kept.contains(convar) {
+                    self.server.set(convar, &held(aside));
+                }
+            }
+            self.server.set(KEPT, "");
         }
     }
 
@@ -1340,8 +1691,9 @@ fn dump_id() -> String {
     )
 }
 
-fn stop(resource: &str) {
-    console::line(RESOURCES, &format!("Stopping resource {resource}"));
+/// The server folder, which FXServer runs in.
+fn server_folder() -> PathBuf {
+    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
 }
 
 /// FXServer 35245 exits with code 1 after `quit` on Windows, and dies of SIGSEGV on Linux.
@@ -1422,9 +1774,15 @@ fn build_cfg() -> Vec<Vec<String>> {
 
 /// The `local CONTRACT_VERSION = <n>` a bridge script reports when it is ready.
 fn contract_version(script: &str) -> Option<u64> {
+    constant(script, "CONTRACT_VERSION")
+}
+
+/// The number a bridge script gives one of its constants, as `local NAME = <n>`.
+fn constant(script: &str, name: &str) -> Option<u64> {
+    let declared = format!("local {name} = ");
     script
         .lines()
-        .find_map(|line| line.strip_prefix("local CONTRACT_VERSION = "))?
+        .find_map(|line| line.strip_prefix(declared.as_str()))?
         .trim()
         .parse()
         .ok()

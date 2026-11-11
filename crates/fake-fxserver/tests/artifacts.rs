@@ -7,14 +7,17 @@
 // The helpers below are test code too, though not inside a `#[test]` function.
 #![allow(clippy::unwrap_used)]
 
+mod common;
+
 use std::fs;
 use std::io::{BufRead, BufReader};
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::{LazyLock, Mutex, PoisonError};
+use std::sync::LazyLock;
 use std::time::Duration;
 
+use common::{Port, Ports};
 use jiff::{SignedDuration, Timestamp, Unit};
 use observer_app::{
     Accounts, ArtifactTimings, Artifacts, ArtifactsSetup, ArtifactsTask, AuditLog, Caller, Client, Clock,
@@ -46,8 +49,8 @@ const NEW: u32 = 37900;
 const OTHER: u32 = 37950;
 /// The build the fake's own archive holds.
 const ARCHIVED: u32 = 99001;
-/// Where the fake serves its archive, apart from the browser tests' 41955.
-const ARCHIVE_PORT: u16 = 41956;
+/// Where the fake serves its archive.
+static ARCHIVE: LazyLock<Port> = LazyLock::new(Port::free);
 const COMMIT: &str = "0cfcdb5ead57a4a26fcb6ebad98adbcd0273e607";
 const SELECTION_ROUTE: (&str, &str) = ("PUT", "/api/servers/default/artifacts/selection");
 /// The build on probation crashes late enough that Observer has seen it online and read its
@@ -56,27 +59,8 @@ const CRASH_ON_PROBATION: &str = "set fake_crash_after_ms 8000";
 /// The main loop of the build on probation freezes once it is ready, well before its window ends.
 const HANG_ON_PROBATION: &str = "set fake_hang_after_ms 5000";
 
-/// Ports of their own, apart from the other test binaries'.
-static PORTS: LazyLock<Mutex<Vec<u16>>> = LazyLock::new(|| Mutex::new((41960..=41962).collect()));
-
-struct Port(u16);
-
-impl Port {
-    async fn lease() -> Self {
-        loop {
-            if let Some(port) = PORTS.lock().unwrap_or_else(PoisonError::into_inner).pop() {
-                return Self(port);
-            }
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
-    }
-}
-
-impl Drop for Port {
-    fn drop(&mut self) {
-        PORTS.lock().unwrap_or_else(PoisonError::into_inner).push(self.0);
-    }
-}
+/// The labs' ports, lent to three at a time.
+static PORTS: Ports = Ports::new(3);
 
 struct Lab {
     dir: TempDir,
@@ -99,7 +83,7 @@ impl Lab {
     /// healthy, and 37900 installed beside it doing what `new_build` says. Its catalog lists
     /// 99001, downloaded from the fake's own archive.
     async fn new(stable_for: Duration, new_build: &str) -> Self {
-        let port = Port::lease().await;
+        let port = PORTS.lease().await;
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("observer-data/artifacts");
         install_fake(&root, HEALTHY, "");
@@ -110,7 +94,7 @@ impl Lab {
             data.join("server.cfg"),
             format!(
                 "endpoint_add_tcp \"127.0.0.1:{0}\"\nendpoint_add_udp \"127.0.0.1:{0}\"\nsv_maxclients 8\n",
-                port.0
+                port.number
             ),
         )
         .unwrap();
@@ -153,7 +137,7 @@ impl Lab {
                 supervision: supervision.clone(),
                 schedule: schedule.status(),
                 catalog: Catalog::fixed(Ok(listing)),
-                http: Http::local(ARCHIVE_PORT),
+                http: Http::local(ARCHIVE.number),
             },
             |timings: &mut ArtifactTimings| timings.stable_for = stable_for,
         )
@@ -293,7 +277,7 @@ async fn supervise(
             accounts: accounts.clone(),
             servers: servers.clone(),
             data_dir: dir.join("observer-data"),
-            panel: SocketAddr::from(([127, 0, 0, 1], 41975)),
+            panel: common::panel(),
             artifacts: dir.join("observer-data/artifacts"),
             console_logs: dir.join("observer-data/logs/console"),
             log: None,
@@ -397,7 +381,8 @@ fn archived() -> CatalogBuild {
         latest: false,
         availability: Availability::Downloadable {
             url: format!(
-                "http://127.0.0.1:{ARCHIVE_PORT}/{ARCHIVED}-{COMMIT}/{}",
+                "http://127.0.0.1:{}/{ARCHIVED}-{COMMIT}/{}",
+                ARCHIVE.number,
                 kind.file_name()
             )
             .parse()
@@ -413,7 +398,7 @@ fn archived() -> CatalogBuild {
     }
 }
 
-/// `fake-archive` serving the fake on `ARCHIVE_PORT`, until dropped.
+/// `fake-archive` serving the fake on [`ARCHIVE`]'s port, until dropped.
 struct ArchiveServer(Child);
 
 impl ArchiveServer {
@@ -421,7 +406,7 @@ impl ArchiveServer {
     /// port would answer too, so the line is waited for rather than a connection.
     fn start() -> Self {
         let mut server = Command::new(env!("CARGO_BIN_EXE_fake-archive"))
-            .arg(ARCHIVE_PORT.to_string())
+            .arg(ARCHIVE.number.to_string())
             .stdout(Stdio::piped())
             .spawn()
             .unwrap();
@@ -431,7 +416,8 @@ impl ArchiveServer {
             .unwrap();
         assert!(
             !said.is_empty(),
-            "fake-archive could not serve on port {ARCHIVE_PORT}, see its error above"
+            "fake-archive could not serve on port {}, see its error above",
+            ARCHIVE.number
         );
         Self(server)
     }

@@ -1,5 +1,8 @@
 import {
     Ban,
+    Blocks,
+    BookOpen,
+    Boxes,
     CalendarClock,
     ChartLine,
     Contact,
@@ -9,6 +12,7 @@ import {
     GitCompare,
     Globe,
     LayoutDashboard,
+    ListChecks,
     Map as MapIcon,
     Package,
     Radar,
@@ -31,6 +35,7 @@ export type NavEntry = {
         | '/'
         | '/statistics'
         | '/console'
+        | '/resources'
         | '/schedule'
         | '/artifacts'
         | '/diagnostics'
@@ -40,8 +45,11 @@ export type NavEntry = {
         | '/players'
         | '/map'
         | '/bans'
+        | '/allowlist'
         | '/changes'
         | '/drops'
+        | '/docs'
+        | '/entities'
         | '/settings'
         | '/tools'
         | '/cfg'
@@ -56,6 +64,8 @@ export type NavEntry = {
     access: bigint | bigint[] | 'owner' | 'everyone';
     /** Shows how many alerts are live. */
     alerts?: boolean;
+    /** Shows how many requests wait while the allowlist is on. */
+    waiting?: boolean;
     /**
      * Stays current on the pages under it, as a player's profile is under the players and a resource
      * under the changes, and whatever its address holds, as the drops' filters.
@@ -73,17 +83,30 @@ export const opensEntry = (me: Me, { access }: Pick<NavEntry, 'access'>) =>
 
 /**
  * The panel's pages as the rail lists them, by what one comes for: a person, the server's setup,
- * what the server did, the upkeep. The settings sit at the rail's foot.
+ * what the server did, the upkeep. The documentation and the settings sit at the rail's foot.
  */
 export const navSections = (t: Messages) => ({
     main: [
         { to: '/', label: t.nav.overview, icon: LayoutDashboard, access: Permission.DashboardView },
         { to: '/console', label: t.nav.console, icon: SquareTerminal, access: Permission.ConsoleView },
+        {
+            to: '/resources',
+            label: t.nav.resources,
+            icon: Blocks,
+            access: [Permission.DashboardView, Permission.ResourcesControl],
+        },
     ] satisfies NavEntry[],
     people: [
         { to: '/players', label: t.nav.players, icon: Contact, access: Permission.PlayersView, nested: true },
         { to: '/map', label: t.nav.map, icon: MapIcon, access: Permission.PlayersMap },
         { to: '/bans', label: t.nav.bans, icon: Ban, access: Permission.BansView },
+        {
+            to: '/allowlist',
+            label: t.nav.allowlist,
+            icon: ListChecks,
+            access: Permission.PlayersView,
+            waiting: true,
+        },
     ] satisfies NavEntry[],
     server: [
         {
@@ -107,6 +130,13 @@ export const navSections = (t: Messages) => ({
         { to: '/statistics', label: t.nav.statistics, icon: ChartLine, access: Permission.DashboardView },
         { to: '/drops', label: t.nav.drops, icon: Unplug, access: Permission.DropsView, nested: true },
         {
+            to: '/entities',
+            label: t.nav.entities,
+            icon: Boxes,
+            access: Permission.EntitiesView,
+            nested: true,
+        },
+        {
             to: '/diagnostics',
             label: t.nav.diagnostics,
             icon: Stethoscope,
@@ -129,8 +159,10 @@ export const navSections = (t: Messages) => ({
         { to: '/tools', label: t.nav.tools, icon: Wrench, access: 'owner', nested: true },
         { to: '/audit', label: t.nav.audit, icon: ScrollText, access: Permission.AuditView },
     ] satisfies NavEntry[],
-    // Every account opens its own settings, and the categories its permissions open.
+    // Every account reads the documentation, which holds no secret, and opens its own settings and
+    // the categories its permissions open.
     settings: [
+        { to: '/docs', label: t.nav.docs, icon: BookOpen, access: 'everyone' },
         { to: '/settings', label: t.nav.settings, icon: Settings, access: 'everyone', nested: true },
     ] satisfies NavEntry[],
 });

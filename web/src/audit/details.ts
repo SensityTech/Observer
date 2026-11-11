@@ -9,7 +9,7 @@ type Format = {
     timestamp: (rfc3339: string) => string;
 };
 
-const IDS = new Set<string>(['userId', 'sessionId', 'pid', 'crash']);
+const IDS = new Set<string>(['userId', 'sessionId', 'pid', 'crash', 'serverId']);
 /** FXServer build numbers, which read as they are written, not as quantities. */
 const BUILDS = new Set<string>(['build', 'from', 'to', 'previous']);
 const MASKS = new Set<string>(['permissions', 'added', 'removed']);
@@ -22,9 +22,12 @@ const TIMES = new Set<string>([
     'occurrence',
     'previousAt',
     'startedAt',
+    'endsAt',
+    'until',
+    'since',
 ]);
 const ACTIONS = new Set<string>(['attempted', 'action']);
-/** The schedule's lists, and the nested entries of its audit details. */
+/** The schedule's lists, the resources an order stopped, and the nested entries of the details. */
 const LISTS = new Set<string>([
     'times',
     'warnings',
@@ -33,6 +36,7 @@ const LISTS = new Set<string>([
     'extensions',
     'excluded',
     'hidden',
+    'dependants',
     'resources',
 ]);
 const NESTED = new Set<string>(['scheduled', 'dropped']);
@@ -74,6 +78,16 @@ const isArgumentChange = (value: unknown): value is { set: string[]; removed: st
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
     typeof value === 'object' && value !== null && !Array.isArray(value);
+
+/** Entities a deletion took together: one model, one kind, one creating resource. */
+const isEntityGroup = (
+    value: unknown,
+): value is { model: string; kind: string; resource: string | null; count: number } =>
+    isRecord(value) &&
+    typeof value.model === 'string' &&
+    typeof value.kind === 'string' &&
+    (value.resource === null || typeof value.resource === 'string') &&
+    typeof value.count === 'number';
 
 /** Settings the log records whole, before and after: change tracking's. */
 const isWholeChange = (
@@ -151,7 +165,23 @@ const word = (t: Messages, format: Format, key: string, value: unknown): string 
         if (key === 'profileDays') {
             return t.audit.keptForGood;
         }
+        if (key === 'endsAt') {
+            return t.audit.neverEnds;
+        }
         return key === 'timeZone' ? t.audit.hostZone : t.audit.unset;
+    }
+    if (key === 'templates' && Array.isArray(value)) {
+        return value.length === 0
+            ? t.audit.noTemplate
+            : value
+                  .filter(isRecord)
+                  .map((template) =>
+                      t.audit.template(
+                          String(template.reason),
+                          t.bans.lengthOf(typeof template.minutes === 'number' ? template.minutes : null),
+                      ),
+                  )
+                  .join(', ');
     }
     if (HIDDEN.has(key) && value === true) {
         return t.audit.changed;
@@ -177,7 +207,12 @@ const word = (t: Messages, format: Format, key: string, value: unknown): string 
         if (key === 'generation') {
             return t.diagnostics.processes.generation(value);
         }
-        if (key === 'lateBySeconds' || key === 'waitedSeconds' || key === 'stopHoldSeconds') {
+        if (
+            key === 'lateBySeconds' ||
+            key === 'everySeconds' ||
+            key === 'waitedSeconds' ||
+            key === 'stopHoldSeconds'
+        ) {
             return t.audit.seconds(format.number(value));
         }
         // Kept in seconds, in the minutes the launch settings take it in.
@@ -213,6 +248,30 @@ const word = (t: Messages, format: Format, key: string, value: unknown): string 
     }
     if ((NESTED.has(key) || key === 'from' || key === 'to') && isRecord(value)) {
         return `(${pairs(t, format, value).join(', ')})`;
+    }
+    // What a deletion of entities left, by what became of each, then what it took.
+    if (key === 'outcomes' && isRecord(value)) {
+        return Object.entries(value)
+            .map(([outcome, left]) =>
+                has(t.entities.notDeleted, outcome) && typeof left === 'number'
+                    ? t.entities.notDeleted[outcome](left)
+                    : `${outcome}: ${JSON.stringify(left)}`,
+            )
+            .join(', ');
+    }
+    if (key === 'entities' && Array.isArray(value)) {
+        return value
+            .map((group) =>
+                isEntityGroup(group)
+                    ? t.entities.group(
+                          group.count,
+                          group.model,
+                          has(t.entities.kinds, group.kind) ? t.entities.kinds[group.kind] : group.kind,
+                          group.resource,
+                      )
+                    : JSON.stringify(group),
+            )
+            .join(', ');
     }
     if (typeof value !== 'string') {
         return JSON.stringify(value);

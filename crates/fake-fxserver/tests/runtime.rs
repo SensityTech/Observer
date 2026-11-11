@@ -3,31 +3,48 @@
 // The helpers below are test code too, though not inside a `#[test]` function.
 #![allow(clippy::unwrap_used)]
 
+mod common;
+
 use std::fs;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::io::{Read as _, Write as _};
+use std::net::{IpAddr, Ipv4Addr, TcpStream};
 use std::path::{Path, PathBuf};
-use std::sync::{LazyLock, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
+use common::{Port, Ports};
 use jiff::{SignedDuration, Timestamp, Unit};
 use observer_app::{
-    Accounts, AuditLog, Bans, BansSetup, Caller, Client, Clock, DatabaseFiles, Diagnostics, DiagnosticsSetup,
-    DiagnosticsTask, Drops, DropsSetup, Error, LiveMap, LogQuery, MapSetup, Metrics, MetricsSetup,
+    Accounts, Admission, AdmissionSetup, AdmissionTask, AuditLog, Bans, BansSetup, BansTask, Caller, Client,
+    Clock, DatabaseFiles, Diagnostics, DiagnosticsSetup, DiagnosticsTask, Drops, DropsSetup, Entities,
+    EntitiesSetup, Error, LiveMap, LogQuery, MapSetup, Metrics, MetricsSetup, Moderation, ModerationSetup,
     PasswordCost, Players, PlayersSetup, PlayersTask, Running, Sampling, Schedule, ScheduleSetup,
     ScheduleTask, Servers, Setup, Sources, Supervision,
 };
+use observer_domain::allowlist::AllowlistSettings;
 use observer_domain::audit::{ActorKind, AuditAction, AuditEntry, AuditFilter, Outcome};
-use observer_domain::bans::{BanFilter, BanRequest};
+use observer_domain::bans::{BanFilter, BanRequest, LiftRequest};
+use observer_domain::changes::LiveChangeKind;
 use observer_domain::diagnostics::{
     Alert, AlertKind, AnalysisState, CrashFileKind, CrashKind, DiagnosticsEvent, ListenerRole, ProcessKind,
     Protocol, Scope,
 };
 use observer_domain::drops::{DropCategory, DropsRange, TileKind};
+use observer_domain::entities::{
+    EntitiesLive, EntitiesUnavailable, EntityDeleteRequest, EntityFilters, EntityKind, EntityOutcome,
+    EntityPage, EntitySort, EntityTarget, VehicleClass,
+};
 use observer_domain::error::ErrorCode;
 use observer_domain::launch::{ExtraArgument, LaunchSettings, OneSync};
+use observer_domain::maintenance::{AddPass, MaintenanceSettings, SetMaintenance};
 use observer_domain::metrics::{LiveSample, MarkerKind, Range, Series, ThreadGroup, ThreadShares};
+use observer_domain::moderation::{
+    AnnouncementRequest, DirectMessageRequest, KickAllRequest, KickRequest, KickSettings,
+};
 use observer_domain::permissions::Permissions;
 use observer_domain::players::{Confirmation, IdentifierKind, PlayerLabel, PlayerProfile, PlayerSort};
+use observer_domain::resources::{
+    ResourceAck, ResourceOrigin, ResourceRow, ResourceState, ResourceWarnings, ResourcesStage, ResourcesView,
+};
 use observer_domain::schedule::{
     OneOffRequest, OneOffRestart, RestartSource, ScheduleChange, ScheduleSettings,
 };
@@ -59,27 +76,8 @@ const FAKE: [(&str, &str); 3] = [
     ("fake_tick_ms", "12"),
 ];
 
-/// Ports of their own: test binaries run one after the other, but this one's tests run together.
-static PORTS: LazyLock<Mutex<Vec<u16>>> = LazyLock::new(|| Mutex::new((41926..=41928).collect()));
-
-struct Port(u16);
-
-impl Port {
-    async fn lease() -> Self {
-        loop {
-            if let Some(port) = PORTS.lock().unwrap_or_else(PoisonError::into_inner).pop() {
-                return Self(port);
-            }
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
-    }
-}
-
-impl Drop for Port {
-    fn drop(&mut self) {
-        PORTS.lock().unwrap_or_else(PoisonError::into_inner).push(self.0);
-    }
-}
+/// The Observers' ports, lent to three at a time.
+static PORTS: Ports = Ports::new(3);
 
 struct Observer {
     dir: TempDir,
@@ -145,7 +143,7 @@ impl Services {
             accounts: self.accounts.clone(),
             servers: self.servers.clone(),
             data_dir: dir.join("observer-data"),
-            panel: SocketAddr::from(([127, 0, 0, 1], 41975)),
+            panel: common::panel(),
             artifacts: dir.join("observer-data/artifacts"),
             console_logs: dir.join("observer-data/logs/console"),
             log: None,
@@ -214,7 +212,7 @@ impl Observer {
 
     /// The fake takes `arguments` instead of [`FAKE`]'s.
     async fn launched(auto_start: bool, longest_sleep: Duration, arguments: &[(&str, &str)]) -> Self {
-        let port = Port::lease().await;
+        let port = PORTS.lease().await;
         let dir = tempfile::tempdir().unwrap();
         let build = dir.path().join("observer-data/artifacts").join(BUILD.to_string());
         let program = fake_program(&build);
@@ -226,7 +224,7 @@ impl Observer {
             data.join("server.cfg"),
             format!(
                 "endpoint_add_tcp \"127.0.0.1:{0}\"\nendpoint_add_udp \"127.0.0.1:{0}\"\nsv_maxclients 8\nsets sv_projectName \"^2Observer ^7lab\"\n",
-                port.0
+                port.number
             ),
         )
         .unwrap();
@@ -514,7 +512,7 @@ async fn a_server_started_from_the_panel_runs_a_command_then_stops_gracefully() 
     assert_eq!(online.cause, Some(StateCause::Ready));
     assert_eq!(online.build, Some(35245));
     assert_eq!(online.name.as_deref(), Some("Observer lab"));
-    assert_eq!(online.port, Some(observer.port.0));
+    assert_eq!(online.port, Some(observer.port.number));
     assert!(online.started_at.is_some());
     assert_eq!(
         delivery,
@@ -1550,24 +1548,34 @@ async fn players_are_confirmed_followed_and_credited_and_their_address_is_kept_n
     );
 }
 
-#[tokio::test]
-async fn a_banned_player_is_refused_at_connection_and_dropped_when_banned_while_playing() {
-    let mut observer = Observer::new(false).await;
-    let (bans, banning) = Bans::start(BansSetup {
+/// The bans over `observer`'s data.
+fn bans_over(observer: &Observer) -> (Bans, BansTask) {
+    Bans::start(BansSetup {
         db: observer.db.clone(),
         clock: Clock::system(),
         supervision: observer.supervision.clone(),
         schedule: observer.schedule.status(),
-    });
-    let cheater = format!("license:{}", "a".repeat(40));
-    let ada = format!("license:{}", "b".repeat(40));
-    let ban = |license: &str| BanRequest {
+    })
+}
+
+/// A ban of one licence typed by hand, for `minutes` or for good.
+fn ban_of(license: &str, minutes: Option<u32>) -> BanRequest {
+    BanRequest {
         player: None,
         identifiers: vec![license.to_owned()],
         reason: "Aimbot".to_owned(),
-        minutes: None,
-    };
-    let first = bans.ban(&observer.owner, ban(&cheater)).await.unwrap();
+        minutes,
+    }
+}
+
+#[tokio::test]
+async fn a_banned_player_is_refused_at_connection_and_dropped_when_banned_while_playing() {
+    let mut observer = Observer::new(false).await;
+    let (bans, banning) = bans_over(&observer);
+    let (_admission, admitting) = admission_over(&observer, &bans).await;
+    let cheater = format!("license:{}", "a".repeat(40));
+    let ada = format!("license:{}", "b".repeat(40));
+    let first = bans.ban(&observer.owner, ban_of(&cheater, None)).await.unwrap();
     let send = |line: String| {
         let observer = &observer;
         async move {
@@ -1586,7 +1594,7 @@ async fn a_banned_player_is_refused_at_connection_and_dropped_when_banned_while_
     let refused_event = observer.console_until("observer:playerRefused").await;
     send(format!("fake_connecting Ada {ada}")).await;
     observer.console_until("Player Ada connected").await;
-    let second = bans.ban(&observer.owner, ban(&ada)).await.unwrap();
+    let second = bans.ban(&observer.owner, ban_of(&ada, None)).await.unwrap();
     let banned_event = observer.console_until("observer:playerBanned").await;
     let listed = bans
         .page(BanFilter::Active, None, None, Permissions::all())
@@ -1594,6 +1602,7 @@ async fn a_banned_player_is_refused_at_connection_and_dropped_when_banned_while_
         .unwrap();
     observer.supervision.stop_server(&observer.owner).await.unwrap();
     observer.state(ServerState::Stopped).await;
+    admitting.close().await;
     banning.close().await;
     observer.stop_observer().await;
 
@@ -1611,6 +1620,11 @@ Ban ID: {}",
     );
     assert!(
         plain(&refused_event.5).contains(&first.code),
+        "{}",
+        refused_event.5
+    );
+    assert!(
+        plain(&refused_event.5).contains("\"cause\":\"ban\""),
         "{}",
         refused_event.5
     );
@@ -1637,6 +1651,464 @@ Ban ID: {}",
         .map(|ban| (ban.code.clone(), ban.refused))
         .collect();
     assert_eq!(refusals, [(second.code.clone(), 1), (first.code.clone(), 1)]);
+}
+
+/// Has the owner check **Send txAdmin's events too**, which the next start of the server takes.
+async fn ask_for_txadmin_events(observer: &Observer) {
+    let stored = observer
+        .servers
+        .launch_settings(Servers::DEFAULT)
+        .await
+        .unwrap()
+        .unwrap();
+    let with_txadmin = LaunchSettings {
+        txadmin_events: true,
+        ..stored.settings
+    };
+    observer
+        .servers
+        .change_launch_settings(
+            &observer.owner,
+            Servers::DEFAULT,
+            with_txadmin,
+            Some(stored.version),
+        )
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn a_ban_is_told_to_txadmin_s_listeners_once_before_it_drops_anyone() {
+    let mut observer = Observer::new(false).await;
+    ask_for_txadmin_events(&observer).await;
+    let (bans, banning) = bans_over(&observer);
+    let (_admission, admitting) = admission_over(&observer, &bans).await;
+    let owner = observer.owner.clone();
+    let absent = format!("license:{}", "a".repeat(40));
+    let ada = format!("license:{}", "b".repeat(40));
+
+    observer.supervision.start_server(&owner).await.unwrap();
+    observer.state(ServerState::Online).await;
+    let offline = bans.ban(&owner, ban_of(&absent, None)).await.unwrap();
+    let told_offline = plain(&observer.console_until("txAdmin:events:playerBanned").await.5);
+    observer.type_line(&format!("fake_connecting Ada {ada}")).await;
+    observer.console_until("Player Ada connected").await;
+    let online = bans.ban(&owner, ban_of(&ada, Some(2 * 24 * 60))).await.unwrap();
+    observer.console_until("observer:playerBanned").await;
+    let lines: Vec<String> = observer.console().iter().map(|line| plain(&line.5)).collect();
+    observer.supervision.stop_server(&owner).await.unwrap();
+    observer.state(ServerState::Stopped).await;
+    admitting.close().await;
+    banning.close().await;
+    observer.stop_observer().await;
+
+    for field in [
+        format!(r#""actionId":"{}""#, offline.code),
+        r#""author":"ada""#.to_owned(),
+        r#""reason":"Aimbot""#.to_owned(),
+        r#""expiration":false"#.to_owned(),
+        r#""durationInput":"permanent""#.to_owned(),
+        format!(r#""targetIds":["{absent}"]"#),
+        r#""targetHwids":[]"#.to_owned(),
+        r#""targetName":"identifiers""#.to_owned(),
+    ] {
+        assert!(told_offline.contains(&field), "{field} in {told_offline}");
+    }
+    assert!(
+        !told_offline.contains("targetNetId") && !told_offline.contains("durationTranslated"),
+        "{told_offline}"
+    );
+    let told: Vec<usize> = (0..lines.len())
+        .filter(|&index| lines[index].contains("txAdmin:events:playerBanned"))
+        .collect();
+    assert_eq!(told.len(), 2, "{lines:#?}");
+    let told_online = &lines[told[1]];
+    for field in [
+        format!(r#""actionId":"{}""#, online.code),
+        format!(r#""expiration":{}"#, online.ends_at.unwrap().as_second()),
+        r#""durationInput":"2 days""#.to_owned(),
+        r#""durationTranslated":"2 days""#.to_owned(),
+        r#""targetNetId":1"#.to_owned(),
+        r#""kickMessage":"You are banned from this server.\nReason: Aimbot\nEnds: 2"#.to_owned(),
+        format!(r#"\nBan ID: {}""#, online.code),
+    ] {
+        assert!(told_online.contains(&field), "{field} in {told_online}");
+    }
+    let dropped = lines
+        .iter()
+        .position(|line| line.contains("observer:playerBanned"));
+    assert!(
+        Some(told[1]) < dropped,
+        "the player was dropped before txAdmin's event"
+    );
+}
+
+#[tokio::test]
+async fn a_lifted_ban_is_told_to_txadmin_s_listeners() {
+    let mut observer = Observer::new(false).await;
+    ask_for_txadmin_events(&observer).await;
+    let (bans, banning) = bans_over(&observer);
+    let owner = observer.owner.clone();
+    let license = format!("license:{}", "a".repeat(40));
+    let ban = bans.ban(&owner, ban_of(&license, None)).await.unwrap();
+
+    observer.supervision.start_server(&owner).await.unwrap();
+    observer.state(ServerState::Online).await;
+    let appeal = LiftRequest {
+        reason: Some("Appeal accepted".to_owned()),
+    };
+    bans.lift(&owner, &ban.code, appeal).await.unwrap();
+    let revoked = plain(&observer.console_until("txAdmin:events:actionRevoked").await.5);
+    observer.supervision.stop_server(&owner).await.unwrap();
+    observer.state(ServerState::Stopped).await;
+    banning.close().await;
+    observer.stop_observer().await;
+
+    for field in [
+        format!(r#""actionId":"{}""#, ban.code),
+        r#""actionType":"ban""#.to_owned(),
+        r#""actionReason":"Aimbot""#.to_owned(),
+        r#""actionAuthor":"ada""#.to_owned(),
+        r#""playerName":false"#.to_owned(),
+        format!(r#""playerIds":["{license}"]"#),
+        r#""playerHwids":[]"#.to_owned(),
+        r#""revokedBy":"ada""#.to_owned(),
+    ] {
+        assert!(revoked.contains(&field), "{field} in {revoked}");
+    }
+}
+
+#[tokio::test]
+async fn a_ban_and_its_lift_write_nothing_for_txadmin_s_listeners_unless_the_owner_asked() {
+    let mut observer = Observer::new(false).await;
+    let (bans, banning) = bans_over(&observer);
+    let owner = observer.owner.clone();
+
+    observer.supervision.start_server(&owner).await.unwrap();
+    observer.state(ServerState::Online).await;
+    let ban = bans
+        .ban(&owner, ban_of(&format!("license:{}", "a".repeat(40)), None))
+        .await
+        .unwrap();
+    bans.lift(&owner, &ban.code, LiftRequest { reason: None })
+        .await
+        .unwrap();
+    observer.type_line("fake_print after the lift").await;
+    observer.console_until("] after the lift").await;
+    let lines: Vec<String> = observer.console().iter().map(|line| plain(&line.5)).collect();
+    observer.supervision.stop_server(&owner).await.unwrap();
+    observer.state(ServerState::Stopped).await;
+    banning.close().await;
+    observer.stop_observer().await;
+
+    assert!(
+        !lines.iter().any(|line| {
+            ["observer_cmd banned", "observer_cmd lifted", "txAdmin:events:"]
+                .iter()
+                .any(|needle| line.contains(needle))
+        }),
+        "{lines:#?}"
+    );
+}
+
+#[tokio::test]
+async fn the_allowlist_refuses_a_player_until_their_request_is_approved() {
+    let mut observer = Observer::new(false).await;
+    let (admission, admitting, banning) = admit(&observer).await;
+    admission
+        .change_allowlist_settings(
+            &observer.owner,
+            AllowlistSettings {
+                enabled: true,
+                message: "Approved players only. Ask the staff: {id}".to_owned(),
+            },
+        )
+        .await
+        .unwrap();
+    let ada = format!("license:{}", "c".repeat(40));
+    let send = |line: String| {
+        let observer = &observer;
+        async move {
+            observer
+                .supervision
+                .command(&observer.owner, &line, CONSOLE_ROUTE.0, CONSOLE_ROUTE.1)
+                .await
+                .unwrap();
+        }
+    };
+
+    observer.supervision.start_server(&observer.owner).await.unwrap();
+    observer.state(ServerState::Online).await;
+    send(format!("fake_connecting Ada {ada}")).await;
+    let refused = observer.console_until("refused ").await;
+    let refused_event = observer.console_until("observer:playerRefused").await;
+    let waiting = admission.requests(None, None).await.unwrap().requests;
+    let got_in_before = observer
+        .console()
+        .iter()
+        .any(|line| plain(&line.5).contains("Player Ada connected"));
+    admission
+        .approve_request(&observer.owner, &waiting[0].code)
+        .await
+        .unwrap();
+    send(format!("fake_connecting Ada {ada}")).await;
+    observer.console_until("Player Ada connected").await;
+    observer.supervision.stop_server(&observer.owner).await.unwrap();
+    observer.state(ServerState::Stopped).await;
+    admitting.close().await;
+    banning.close().await;
+    observer.stop_observer().await;
+
+    let code = &waiting[0].code;
+    assert_eq!((waiting.len(), waiting[0].license.as_str()), (1, ada.as_str()));
+    assert_eq!(waiting[0].name.as_deref(), Some("Ada"));
+    let message = json!(format!("Approved players only. Ask the staff: {code}")).to_string();
+    assert!(plain(&refused.5).contains(&message), "{}", refused.5);
+    for part in [
+        "\"cause\":\"allowlist\"".to_owned(),
+        format!("\"request\":\"{code}\""),
+        format!("\"license\":\"{ada}\""),
+    ] {
+        assert!(plain(&refused_event.5).contains(&part), "{}", refused_event.5);
+    }
+    assert!(!got_in_before, "Ada got in before her request was approved");
+}
+
+/// What the server's game port answers at `path`, as FiveM's server list reads it. The fake
+/// closes the connection after each answer.
+fn served(port: u16, path: &str) -> serde_json::Value {
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+    stream.set_read_timeout(Some(WAIT)).unwrap();
+    write!(stream, "GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n").unwrap();
+    let mut response = String::new();
+    stream.read_to_string(&mut response).unwrap();
+    let body = response.split_once("\r\n\r\n").map_or("", |(_, body)| body);
+    serde_json::from_str(body).unwrap()
+}
+
+/// The names FiveM's server list reads from the server: its project name and its host name.
+fn listed_names(port: u16) -> (String, String) {
+    let name = |value: &serde_json::Value| value.as_str().unwrap_or_default().to_owned();
+    (
+        name(&served(port, "/info.json")["vars"]["sv_projectName"]),
+        name(&served(port, "/dynamic.json")["hostname"]),
+    )
+}
+
+/// The admission over `observer`'s data, which answers each connecting player, the verdict of
+/// `bans` included.
+async fn admission_over(observer: &Observer, bans: &Bans) -> (Admission, AdmissionTask) {
+    Admission::start(AdmissionSetup {
+        db: observer.db.clone(),
+        clock: Clock::system(),
+        supervision: observer.supervision.clone(),
+        bans: bans.clone(),
+        schedule: observer.schedule.status(),
+    })
+    .await
+    .unwrap()
+}
+
+/// The bans and the admission over `observer`'s data, as `observer run` starts them.
+async fn admit(observer: &Observer) -> (Admission, AdmissionTask, BansTask) {
+    let (bans, banning) = bans_over(observer);
+    let (admission, admitting) = admission_over(observer, &bans).await;
+    (admission, admitting, banning)
+}
+
+/// What the resources heard of maintenance in the run `generation`, the latest last.
+fn heard_of_maintenance(observer: &Observer, generation: u32) -> Vec<String> {
+    observer
+        .console()
+        .into_iter()
+        .filter(|line| line.2 == generation)
+        .map(|line| plain(&line.5))
+        .filter(|line| line.contains("observer:maintenance "))
+        .collect()
+}
+
+/// Waits until `met`, or fails saying `what` never came.
+async fn eventually(what: &str, met: impl Fn() -> bool) {
+    let deadline = Instant::now() + WAIT;
+    while !met() {
+        assert!(Instant::now() < deadline, "{what}");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+#[tokio::test]
+async fn maintenance_refuses_at_connection_and_tells_the_resources_at_each_start() {
+    let mut observer = Observer::new(false).await;
+    let (admission, admitting, banning) = admit(&observer).await;
+    let (ada, grace) = (
+        format!("license:{}", "c".repeat(40)),
+        format!("license:{}", "d".repeat(40)),
+    );
+    admission
+        .add_pass(
+            &observer.owner,
+            AddPass {
+                license: grace.clone(),
+                note: None,
+            },
+        )
+        .await
+        .unwrap();
+    let send = |line: String| {
+        let observer = &observer;
+        async move {
+            observer
+                .supervision
+                .command(&observer.owner, &line, CONSOLE_ROUTE.0, CONSOLE_ROUTE.1)
+                .await
+                .unwrap();
+        }
+    };
+    let switch = |on: bool| admission.set_maintenance(&observer.owner, SetMaintenance { on });
+
+    observer.supervision.start_server(&observer.owner).await.unwrap();
+    observer.state(ServerState::Online).await;
+    let before = heard_of_maintenance(&observer, 1);
+    switch(true).await.unwrap();
+    observer.console_until("observer:maintenance ").await;
+    let since = admission.status().borrow().maintenance.since.unwrap();
+    send(format!("fake_connecting Ada {ada}")).await;
+    let refused = observer.console_until("refused ").await;
+    let refused_event = observer.console_until("observer:playerRefused").await;
+    send(format!("fake_connecting Grace {grace}")).await;
+    observer.console_until("Player Grace connected").await;
+    observer
+        .supervision
+        .restart_server(&observer.owner)
+        .await
+        .unwrap();
+    observer
+        .until(|status| status.generation == 2 && status.state == ServerState::Online)
+        .await;
+    eventually("the second start heard nothing of maintenance", || {
+        !heard_of_maintenance(&observer, 2).is_empty()
+    })
+    .await;
+    switch(false).await.unwrap();
+    eventually("the end of maintenance was not raised", || {
+        heard_of_maintenance(&observer, 2).len() == 2
+    })
+    .await;
+    send(format!("fake_connecting Ada {ada}")).await;
+    observer.console_until("Player Ada connected").await;
+    let (first, second) = (
+        heard_of_maintenance(&observer, 1),
+        heard_of_maintenance(&observer, 2),
+    );
+    let renames = observer
+        .console()
+        .iter()
+        .filter(|line| plain(&line.5).contains("observer_cmd serverName"))
+        .count();
+    observer.supervision.stop_server(&observer.owner).await.unwrap();
+    observer.state(ServerState::Stopped).await;
+    admitting.close().await;
+    banning.close().await;
+    observer.stop_observer().await;
+
+    assert_eq!(before, [] as [String; 0]);
+    let turned_on = format!("\"at\":{},\"by\":\"ada\",\"on\":true", since.as_millisecond());
+    assert_eq!(first.len(), 1, "{first:?}");
+    assert!(first[0].contains(&turned_on), "{first:?}");
+    assert_eq!(second.len(), 2, "{second:?}");
+    assert!(second[0].contains(&turned_on), "{second:?}");
+    assert!(second[1].contains("\"on\":false"), "{second:?}");
+    let message = json!(MaintenanceSettings::default().message).to_string();
+    assert!(plain(&refused.5).contains(&message), "{}", refused.5);
+    for part in [
+        "\"cause\":\"maintenance\"".to_owned(),
+        format!("\"license\":\"{ada}\""),
+    ] {
+        assert!(plain(&refused_event.5).contains(&part), "{}", refused_event.5);
+    }
+    assert_eq!(
+        renames, 1,
+        "without a maintenance name, only its end gives a name back"
+    );
+}
+
+#[tokio::test]
+async fn the_server_carries_its_maintenance_name_in_the_list_and_gets_its_own_back() {
+    let mut observer = Observer::new(false).await;
+    let (admission, admitting, banning) = admit(&observer).await;
+    admission
+        .change_maintenance_settings(
+            &observer.owner,
+            MaintenanceSettings {
+                server_name: Some("Observer lab | maintenance".to_owned()),
+                ..MaintenanceSettings::default()
+            },
+        )
+        .await
+        .unwrap();
+    let switch = |on: bool| admission.set_maintenance(&observer.owner, SetMaintenance { on });
+    let maintenance = (
+        "Observer lab | maintenance".to_owned(),
+        "Observer lab | maintenance".to_owned(),
+    );
+
+    observer.supervision.start_server(&observer.owner).await.unwrap();
+    let port = observer.state(ServerState::Online).await.port.unwrap();
+    let own = listed_names(port);
+    switch(true).await.unwrap();
+    eventually("the server kept its own name", || {
+        listed_names(port) == maintenance
+    })
+    .await;
+    observer
+        .supervision
+        .restart_server(&observer.owner)
+        .await
+        .unwrap();
+    observer
+        .until(|status| status.generation == 2 && status.state == ServerState::Online)
+        .await;
+    eventually("the second start kept its own name", || {
+        listed_names(port) == maintenance
+    })
+    .await;
+    // `/info.json` is read once a run, after the rename as likely as before it.
+    tokio::time::sleep(Duration::from_secs(6)).await;
+    let shown = observer.supervision.status().borrow().name.clone();
+    admission
+        .change_maintenance_settings(
+            &observer.owner,
+            MaintenanceSettings {
+                server_name: Some("Back at 8".to_owned()),
+                ..MaintenanceSettings::default()
+            },
+        )
+        .await
+        .unwrap();
+    eventually(
+        "a name changed during maintenance did not reach the server",
+        || listed_names(port).0 == "Back at 8",
+    )
+    .await;
+    switch(false).await.unwrap();
+    eventually("the server kept its maintenance name", || {
+        listed_names(port) == own
+    })
+    .await;
+    observer.supervision.stop_server(&observer.owner).await.unwrap();
+    observer.state(ServerState::Stopped).await;
+    admitting.close().await;
+    banning.close().await;
+    observer.stop_observer().await;
+
+    assert_eq!(
+        own,
+        (
+            "^2Observer ^7lab".to_owned(),
+            "FXServer, but unconfigured".to_owned()
+        )
+    );
+    assert_eq!(shown.as_deref(), Some("Observer lab"));
 }
 
 #[tokio::test]
@@ -1905,6 +2377,982 @@ async fn a_crash_and_a_kick_reach_the_drops_with_their_signature_and_reason_grou
         .find(|tile| tile.kind == TileKind::Crashes)
         .unwrap();
     assert_eq!(crashes.drops, 1);
+}
+
+/// The moderation over `observer`'s data, with the bans whose list of connected players it reads.
+fn moderate(observer: &Observer) -> (Moderation, BansTask) {
+    let (bans, banning) = bans_over(observer);
+    let moderation = Moderation::new(ModerationSetup {
+        db: observer.db.clone(),
+        clock: Clock::system(),
+        supervision: observer.supervision.clone(),
+        bans,
+    });
+    (moderation, banning)
+}
+
+/// Starts the server and has Ada, Grace and Linus join it, with ids 1, 2 and 3.
+async fn three_join(observer: &Observer, ada: &str, grace: &str) {
+    observer.supervision.start_server(&observer.owner).await.unwrap();
+    observer.state(ServerState::Online).await;
+    for line in [
+        format!("fake_join Ada {ada}"),
+        format!("fake_join Grace {grace}"),
+        "fake_join Linus".to_owned(),
+    ] {
+        observer
+            .supervision
+            .command(&observer.owner, &line, CONSOLE_ROUTE.0, CONSOLE_ROUTE.1)
+            .await
+            .unwrap();
+    }
+}
+
+/// Asks until the player it names is connected for the moderation, or no longer is when `gone`:
+/// the bridge's reports reach it a moment after a join or a drop.
+async fn once_reported<T, F>(gone: bool, mut ask: impl FnMut() -> F) -> Result<T, Error>
+where
+    F: Future<Output = Result<T, Error>>,
+{
+    let deadline = Instant::now() + WAIT;
+    loop {
+        let answer = ask().await;
+        let missing = matches!(&answer, Err(error) if error.code() == Some(ErrorCode::PlayerNotConnected));
+        if missing == gone {
+            return answer;
+        }
+        assert!(Instant::now() < deadline, "the bridge's report never came");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+#[tokio::test]
+async fn the_staff_kicks_a_player_then_everyone_with_the_owners_message() {
+    let mut observer = Observer::new(false).await;
+    let (moderation, banning) = moderate(&observer);
+    let owner = observer.owner.clone();
+    let grace = format!("license:{}", "b".repeat(40));
+    let kick = |player: u32, license: Option<&str>| KickRequest {
+        player,
+        license: license.map(str::to_owned),
+        reason: " RDM ".to_owned(),
+    };
+    three_join(&observer, &format!("license:{}", "a".repeat(40)), &grace).await;
+    let message = KickSettings {
+        message: "Kicked by {by}: {reason}".to_owned(),
+    };
+    moderation.change_settings(&owner, message).await.unwrap();
+
+    once_reported(false, || moderation.kick(&owner, kick(2, Some(&grace))))
+        .await
+        .unwrap();
+    let kicked_event = observer.console_until("observer:playerKicked").await;
+    let kicked = observer.console_until("kicked 2 ").await;
+    let another_player = moderation.kick(&owner, kick(1, Some(&grace))).await;
+    let left = once_reported(true, || moderation.kick(&owner, kick(2, None))).await;
+    let reason = "Maintenance".to_owned();
+    let everyone = moderation
+        .kick_all(&owner, KickAllRequest { reason })
+        .await
+        .unwrap();
+    let last = observer.console_until("kicked 3 ").await;
+    let lines: Vec<String> = observer.console().iter().map(|line| plain(&line.5)).collect();
+    let kicks = observer.audited(AuditAction::PlayerKicked).await;
+    let kick_alls = observer.audited(AuditAction::EveryoneKicked).await;
+    observer.supervision.stop_server(&owner).await.unwrap();
+    observer.state(ServerState::Stopped).await;
+    banning.close().await;
+    observer.stop_observer().await;
+
+    assert_eq!(
+        another_player.unwrap_err().code(),
+        Some(ErrorCode::PlayerNotConnected)
+    );
+    let kicked_event = plain(&kicked_event.5);
+    for field in [
+        r#""player":2"#,
+        r#""reason":"RDM""#,
+        r#""by":"ada""#,
+        r#""cause":"kick""#,
+    ] {
+        assert!(kicked_event.contains(field), "{field} in {kicked_event}");
+    }
+    assert!(
+        plain(&kicked.5).contains(r#"kicked 2 "Kicked by ada: RDM""#),
+        "{}",
+        kicked.5
+    );
+    assert_eq!(left.unwrap_err().code(), Some(ErrorCode::PlayerNotConnected));
+    assert_eq!(everyone.players, 2);
+    assert!(
+        plain(&last.5).contains(r#"kicked 3 "Kicked by ada: Maintenance""#),
+        "{}",
+        last.5
+    );
+    let of_everyone: Vec<&String> = lines
+        .iter()
+        .filter(|line| line.contains("observer:playerKicked") && line.contains(r#""cause":"kickAll""#))
+        .collect();
+    assert_eq!(of_everyone.len(), 2, "{of_everyone:?}");
+    assert!(of_everyone[0].contains(r#""player":1"#) && of_everyone[1].contains(r#""player":3"#));
+    let last_event = lines
+        .iter()
+        .rposition(|line| line.contains("observer:playerKicked"));
+    let first_drop = lines.iter().position(|line| line.contains("kicked 1 "));
+    assert!(
+        last_event < first_drop,
+        "a player was dropped before the last event"
+    );
+    assert!(lines.iter().any(|line| line.contains("observer_cmd kick")));
+    assert_eq!(kicks.len(), 1);
+    assert_eq!(
+        (kicks[0].target.as_deref(), kicks[0].actor_name.as_deref()),
+        (Some("Grace"), Some("ada"))
+    );
+    assert_eq!(
+        kicks[0].details,
+        json!({ "serverId": 2, "license": grace, "reason": "RDM" })
+    );
+    assert_eq!(
+        kick_alls[0].details,
+        json!({ "reason": "Maintenance", "players": 2 })
+    );
+}
+
+#[tokio::test]
+async fn an_announcement_and_a_message_are_raised_for_the_servers_resources() {
+    let mut observer = Observer::new(false).await;
+    let (moderation, banning) = moderate(&observer);
+    let owner = observer.owner.clone();
+    let grace = format!("license:{}", "b".repeat(40));
+    let direct = |player: u32, license: Option<&str>| DirectMessageRequest {
+        player,
+        license: license.map(str::to_owned),
+        message: "  Come to the staff room\u{202E} ".to_owned(),
+    };
+    let announcement = || AnnouncementRequest {
+        message: "Restart in five minutes\nPark your cars".to_owned(),
+    };
+
+    let stopped = moderation.announce(&owner, announcement()).await;
+    three_join(&observer, &format!("license:{}", "a".repeat(40)), &grace).await;
+    once_reported(false, || moderation.message(&owner, direct(3, None)))
+        .await
+        .unwrap();
+    let to_linus = observer.console_until("observer:directMessage").await;
+    moderation.announce(&owner, announcement()).await.unwrap();
+    let announced = observer.console_until("observer:announcement").await;
+    let another_player = moderation.message(&owner, direct(1, Some(&grace))).await;
+    let nobody = moderation.message(&owner, direct(9, None)).await;
+    let announcements = observer.audited(AuditAction::AnnouncementSent).await;
+    let messages = observer.audited(AuditAction::DirectMessageSent).await;
+    observer.supervision.stop_server(&owner).await.unwrap();
+    observer.state(ServerState::Stopped).await;
+    banning.close().await;
+    observer.stop_observer().await;
+
+    assert_eq!(stopped.unwrap_err().code(), Some(ErrorCode::ServerNotRunning));
+    let to_linus = plain(&to_linus.5);
+    assert!(
+        to_linus.contains(r#""player":3"#) && to_linus.contains(r#""message":"Come to the staff room""#),
+        "{to_linus}"
+    );
+    let announced = plain(&announced.5);
+    assert!(
+        announced.contains(r#""message":"Restart in five minutes\nPark your cars""#)
+            && announced.contains(r#""by":"ada""#),
+        "{announced}"
+    );
+    for refused in [another_player, nobody] {
+        assert_eq!(refused.unwrap_err().code(), Some(ErrorCode::PlayerNotConnected));
+    }
+    assert_eq!(announcements.len(), 1);
+    assert_eq!(
+        announcements[0].details,
+        json!({ "message": "Restart in five minutes\nPark your cars" })
+    );
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0].target.as_deref(), Some("Linus"));
+    assert_eq!(
+        messages[0].details,
+        json!({
+            "serverId": 3,
+            "license": format!("license:{:040}", 3),
+            "message": "Come to the staff room"
+        })
+    );
+}
+
+/// What the resources tests start with: a library, one resource that depends on it, one the cfg
+/// does not start, one FXServer cannot start and one it warns about, listed two a page.
+const RESOURCES_CFG: &str = "set fake_resource_page 2\nset fake_fail_start mechanic\nset fake_heavy docks\nset fake_missing docks\nensure ox_lib\nensure ox_target\nensure mechanic\nensure docks\n";
+
+impl Observer {
+    /// A resource of the server folder, under `resources`, with its manifest.
+    fn resource(&self, folder: &str, manifest: &str) {
+        let path = self.dir.path().join("server-data/resources").join(folder);
+        fs::create_dir_all(&path).unwrap();
+        fs::write(path.join("fxmanifest.lua"), manifest).unwrap();
+    }
+
+    /// An Observer whose server folder holds the resources of [`RESOURCES_CFG`], not started yet.
+    async fn with_resources() -> Self {
+        let observer = Self::new(false).await;
+        observer.resource("[core]/ox_lib", "fx_version 'cerulean'\nversion '3.30.6'\n");
+        observer.resource(
+            "[core]/[ox]/ox_target",
+            "version '1.17.2'\ndependencies {\n    '/onesync',\n    'ox_lib',\n}\n",
+        );
+        observer.resource("[jobs]/taxi", "fx_version 'cerulean'\n");
+        observer.resource("[jobs]/mechanic", "version '0.8.0'\n");
+        observer.resource("[maps]/docks", "version '0.9'\n");
+        let cfg = observer.dir.path().join("server-data/server.cfg");
+        let mut text = fs::read_to_string(&cfg).unwrap();
+        text.push_str(RESOURCES_CFG);
+        fs::write(cfg, text).unwrap();
+        observer
+    }
+
+    async fn resources_until(&self, wanted: impl Fn(&ResourcesView) -> bool) -> ResourcesView {
+        let mut view = self.supervision.resources();
+        let found = timeout(WAIT, view.wait_for(|view| wanted(view)))
+            .await
+            .map(|found| found.unwrap().clone());
+        found.unwrap_or_else(|_| panic!("the resources never came to that; last {:#?}", view.borrow()))
+    }
+
+    /// Starts the server and waits for its resources to be listed.
+    async fn listed(&self) -> ResourcesView {
+        self.supervision.start_server(&self.owner).await.unwrap();
+        self.resources_until(|view| view.stage == ResourcesStage::Listed)
+            .await
+    }
+}
+
+fn row<'a>(view: &'a ResourcesView, name: &str) -> &'a ResourceRow {
+    view.resources
+        .iter()
+        .find(|row| row.name == name)
+        .unwrap_or_else(|| panic!("no resource {name} in {view:#?}"))
+}
+
+fn is(view: &ResourcesView, name: &str, state: ResourceState) -> bool {
+    view.resources
+        .iter()
+        .any(|row| row.name == name && row.state == state)
+}
+
+#[tokio::test]
+async fn the_resources_of_a_running_server_are_listed_with_what_fxserver_says_of_each() {
+    let mut observer = Observer::with_resources().await;
+    let before = observer.supervision.resources().borrow().clone();
+
+    let view = observer.listed().await;
+
+    assert_eq!(before, ResourcesView::default(), "no server, no resource");
+    assert_eq!((view.generation, view.truncated, &view.rescan), (1, false, &None));
+    let rows: Vec<(&str, &str, ResourceState, Option<&str>)> = view
+        .resources
+        .iter()
+        .map(|row| {
+            (
+                row.name.as_str(),
+                row.folder.as_str(),
+                row.state,
+                row.version.as_deref(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        rows,
+        [
+            ("docks", "[maps]", ResourceState::Started, Some("0.9")),
+            ("mechanic", "[jobs]", ResourceState::Stopped, Some("0.8.0")),
+            ("ox_lib", "[core]", ResourceState::Started, Some("3.30.6")),
+            ("ox_target", "[core]/[ox]", ResourceState::Started, Some("1.17.2")),
+            ("taxi", "[jobs]", ResourceState::Stopped, None),
+        ],
+        "every resource of the folder, in two pages and a half, and the bridge left out"
+    );
+    for listed in &view.resources {
+        assert_eq!(listed.origin, ResourceOrigin::Server, "{}", listed.name);
+        assert!(listed.controllable, "{}", listed.name);
+        assert_eq!(
+            listed.last, None,
+            "{}: nothing happened since the cfg ran",
+            listed.name
+        );
+    }
+    assert_eq!(row(&view, "ox_lib").dependants, ["ox_target"]);
+    assert_eq!(row(&view, "ox_target").dependants, Vec::<String>::new());
+    assert_eq!(
+        row(&view, "docks").warnings,
+        Some(ResourceWarnings {
+            count: 3,
+            heavy: 2,
+            oversized: 1,
+            missing: 1
+        })
+    );
+    assert!(
+        row(&view, "mechanic").failed_at.is_some(),
+        "FXServer said it could not start it"
+    );
+    assert_eq!(row(&view, "taxi").failed_at, None, "the cfg never started it");
+
+    observer.supervision.stop_server(&observer.owner).await.unwrap();
+    let stopped = observer
+        .resources_until(|view| view.stage == ResourcesStage::Stopped)
+        .await;
+    assert_eq!(stopped.resources, Vec::new());
+    observer.stop_observer().await;
+}
+
+/// What last happened to a resource: how, who asked for it, and the resource it stopped with.
+fn last(row: &ResourceRow) -> (LiveChangeKind, Option<String>, Option<String>) {
+    let last = row.last.clone().unwrap();
+    (last.kind, last.by, last.with)
+}
+
+#[tokio::test]
+async fn a_stop_takes_what_depends_on_the_resource_and_a_start_brings_what_it_needs() {
+    let mut observer = Observer::with_resources().await;
+    observer.listed().await;
+    let owner = observer.owner.clone();
+    let ada = Some("ada".to_owned());
+
+    let stopped = observer
+        .supervision
+        .stop_resource(&owner, "ox_lib")
+        .await
+        .unwrap();
+    let view = observer
+        .resources_until(|view| is(view, "ox_lib", ResourceState::Stopped))
+        .await;
+
+    assert_eq!(
+        stopped,
+        ResourceAck {
+            delivery: Delivery::Written,
+            dependants: vec!["ox_target".to_owned()]
+        }
+    );
+    let (lib, target) = (row(&view, "ox_lib"), row(&view, "ox_target"));
+    assert_eq!(
+        target.state,
+        ResourceState::Stopped,
+        "FXServer stopped it with ox_lib"
+    );
+    assert_eq!(last(lib), (LiveChangeKind::Stopped, ada.clone(), None));
+    assert_eq!(lib.asked, None, "FXServer answered the order");
+    assert_eq!(
+        last(target),
+        (LiveChangeKind::Stopped, None, Some("ox_lib".to_owned()))
+    );
+    let echo = observer.console_until("stop ox_lib").await;
+    assert_eq!((echo.3, echo.4.as_deref()), (LineKind::Command, Some("ada")));
+    let audited = observer.audited(AuditAction::ResourceStopped).await;
+    assert_eq!(audited.len(), 1);
+    assert_eq!(
+        (audited[0].target.as_deref(), &audited[0].details),
+        (
+            Some("ox_lib"),
+            &json!({ "command": "stop ox_lib", "dependants": ["ox_target"] })
+        )
+    );
+
+    // FXServer starts what a resource depends on before the resource.
+    observer
+        .supervision
+        .start_resource(&owner, "ox_target")
+        .await
+        .unwrap();
+    let view = observer
+        .resources_until(|view| is(view, "ox_target", ResourceState::Started))
+        .await;
+
+    assert_eq!(row(&view, "ox_lib").state, ResourceState::Started);
+    assert_eq!(
+        last(row(&view, "ox_target")),
+        (LiveChangeKind::Started, ada, None)
+    );
+    assert_eq!(row(&view, "ox_lib").dependants, ["ox_target"]);
+    let audited = observer.audited(AuditAction::ResourceStarted).await;
+    assert_eq!(audited.len(), 1);
+    assert_eq!(audited[0].details, json!({ "command": "start ox_target" }));
+    observer.stop_observer().await;
+}
+
+#[tokio::test]
+async fn a_restart_starts_again_what_depends_on_the_resource_when_asked_to() {
+    let mut observer = Observer::with_resources().await;
+    observer.listed().await;
+    let ada = Some("ada".to_owned());
+
+    let restarted = observer
+        .supervision
+        .restart_resource(&observer.owner, "ox_lib", true)
+        .await
+        .unwrap();
+    let view = observer
+        .resources_until(|view| {
+            let lib = row(view, "ox_lib");
+            let back = lib.state == ResourceState::Started
+                && lib
+                    .last
+                    .as_ref()
+                    .is_some_and(|last| last.kind == LiveChangeKind::Restarted);
+            // Its stop shows first when the two lines fall in two reports of the bridge.
+            back && row(view, "ox_target")
+                .last
+                .as_ref()
+                .is_some_and(|last| last.kind != LiveChangeKind::Stopped)
+        })
+        .await;
+
+    assert_eq!(restarted.dependants, ["ox_target"]);
+    assert_eq!(
+        last(row(&view, "ox_lib")),
+        (LiveChangeKind::Restarted, ada.clone(), None)
+    );
+    let target = row(&view, "ox_target");
+    assert_eq!(target.state, ResourceState::Started);
+    assert_eq!(
+        target.last.as_ref().unwrap().by,
+        ada,
+        "started again by the same order"
+    );
+    let restart = observer.line_of("restart ox_lib").await;
+    let again = observer.console_until("start ox_target").await;
+    assert!(restart < again.0, "the resource first, then what depends on it");
+    assert_eq!((again.3, again.4.as_deref()), (LineKind::Command, Some("ada")));
+    let audited = observer.audited(AuditAction::ResourceRestarted).await;
+    assert_eq!(
+        audited[0].details,
+        json!({ "command": "restart ox_lib", "dependants": ["ox_target"], "startedAgain": true })
+    );
+    assert_eq!(
+        observer.audited(AuditAction::ResourceStarted).await.len(),
+        0,
+        "one order, one entry"
+    );
+    observer.stop_observer().await;
+}
+
+#[tokio::test]
+async fn a_restart_alone_leaves_stopped_what_fxserver_stopped_with_the_resource() {
+    let mut observer = Observer::with_resources().await;
+    observer.listed().await;
+
+    observer
+        .supervision
+        .restart_resource(&observer.owner, "ox_lib", false)
+        .await
+        .unwrap();
+    let view = observer
+        .resources_until(|view| {
+            row(view, "ox_lib")
+                .last
+                .as_ref()
+                .is_some_and(|last| last.kind == LiveChangeKind::Restarted)
+        })
+        .await;
+
+    assert_eq!(row(&view, "ox_lib").state, ResourceState::Started);
+    let target = row(&view, "ox_target");
+    assert_eq!(target.state, ResourceState::Stopped);
+    assert_eq!(
+        target.last.as_ref().and_then(|last| last.with.as_deref()),
+        Some("ox_lib")
+    );
+    assert_eq!(row(&view, "ox_lib").dependants, Vec::<String>::new());
+    observer.stop_observer().await;
+}
+
+#[tokio::test]
+async fn an_order_names_only_a_resource_fxserver_listed_and_never_the_bridge() {
+    let mut observer = Observer::with_resources().await;
+    observer.resource("bad name", "version '1'\n");
+    let cfg = observer.dir.path().join("server-data/server.cfg");
+    let mut text = fs::read_to_string(&cfg).unwrap();
+    text.push_str("ensure \"bad name\"\n");
+    fs::write(cfg, text).unwrap();
+    let owner = observer.owner.clone();
+    let refused = |result: Result<ResourceAck, Error>| result.unwrap_err().code();
+
+    assert_eq!(
+        refused(observer.supervision.stop_resource(&owner, "ox_lib").await),
+        Some(ErrorCode::ServerNotRunning)
+    );
+    assert_eq!(
+        refused(observer.supervision.rescan_resources(&owner).await),
+        Some(ErrorCode::ServerNotRunning)
+    );
+    let view = observer.listed().await;
+    let started = plain(&observer.console_until("Started resource sys_").await.5);
+    let bridge = started.rsplit(' ').next().unwrap().to_owned();
+
+    assert!(!row(&view, "bad name").controllable);
+    assert!(
+        view.resources.iter().all(|listed| listed.name != bridge),
+        "the bridge is Observer's own"
+    );
+    for name in [
+        bridge.as_str(),
+        &bridge.to_ascii_uppercase(),
+        "ghost",
+        "OX_LIB",
+        "ox_lib;quit",
+    ] {
+        assert_eq!(
+            refused(observer.supervision.stop_resource(&owner, name).await),
+            Some(ErrorCode::ResourceNotFound),
+            "{name}"
+        );
+        assert_eq!(
+            refused(observer.supervision.restart_resource(&owner, name, true).await),
+            Some(ErrorCode::ResourceNotFound),
+            "{name}"
+        );
+    }
+    assert_eq!(
+        refused(observer.supervision.stop_resource(&owner, "bad name").await),
+        Some(ErrorCode::ResourceNameRefused)
+    );
+    for action in [AuditAction::ResourceStopped, AuditAction::ResourceRestarted] {
+        assert_eq!(observer.audited(action).await.len(), 0, "{action:?}");
+    }
+    assert!(
+        observer.console().iter().all(|line| line.3 != LineKind::Command),
+        "nothing reached the console"
+    );
+    observer.stop_observer().await;
+}
+
+#[tokio::test]
+async fn an_order_is_taken_for_the_state_it_needs_and_one_at_a_time_for_a_resource() {
+    let mut observer = Observer::with_resources().await;
+    observer.listed().await;
+    let owner = observer.owner.clone();
+    let refused = |result: Result<ResourceAck, Error>| result.unwrap_err().code();
+
+    assert_eq!(
+        refused(observer.supervision.start_resource(&owner, "ox_lib").await),
+        Some(ErrorCode::ResourceChanged),
+        "it is up"
+    );
+    assert_eq!(
+        refused(observer.supervision.stop_resource(&owner, "taxi").await),
+        Some(ErrorCode::ResourceChanged),
+        "it is not"
+    );
+    assert_eq!(
+        refused(observer.supervision.restart_resource(&owner, "taxi", true).await),
+        Some(ErrorCode::ResourceChanged)
+    );
+
+    observer
+        .supervision
+        .stop_resource(&owner, "ox_lib")
+        .await
+        .unwrap();
+    let second = refused(observer.supervision.stop_resource(&owner, "ox_lib").await);
+    // FXServer answers within half a second, and the resource is stopped from then on.
+    assert!(
+        matches!(second, Some(ErrorCode::ResourceBusy | ErrorCode::ResourceChanged)),
+        "{second:?}"
+    );
+    let view = observer
+        .resources_until(|view| is(view, "ox_lib", ResourceState::Stopped))
+        .await;
+
+    assert_eq!(row(&view, "ox_lib").asked, None, "FXServer answered");
+    assert_eq!(
+        observer.audited(AuditAction::ResourceStopped).await.len(),
+        1,
+        "a refused order is not one"
+    );
+    let written = observer
+        .console()
+        .iter()
+        .filter(|line| line.3 == LineKind::Command)
+        .count();
+    assert_eq!(written, 1, "one line reached the console");
+    observer.stop_observer().await;
+}
+
+#[tokio::test]
+async fn a_rescan_says_what_fxserver_found_and_a_failed_start_shows_as_one() {
+    let mut observer = Observer::with_resources().await;
+    observer.listed().await;
+    let owner = observer.owner.clone();
+
+    observer.resource("[jobs]/bank", "version '1.0.0'\n");
+    observer.resource("[jobs]/taxi", "fx_version 'cerulean'\nversion '2.0.0'\n");
+    let asked = observer.supervision.rescan_resources(&owner).await.unwrap();
+    let view = observer.resources_until(|view| view.rescan.is_some()).await;
+
+    assert_eq!(asked.delivery, Delivery::Written);
+    assert!(!view.rescanning, "the list came again");
+    let rescan = view.rescan.clone().unwrap();
+    assert_eq!(
+        (rescan.by.as_deref(), rescan.added.as_slice(), rescan.added_count),
+        (Some("ada"), ["bank".to_owned()].as_slice(), 1)
+    );
+    assert_eq!(
+        (row(&view, "bank").state, row(&view, "bank").folder.as_str()),
+        (ResourceState::Stopped, "[jobs]")
+    );
+    assert_eq!(row(&view, "taxi").version.as_deref(), Some("2.0.0"));
+    assert_eq!(
+        row(&view, "ox_lib").state,
+        ResourceState::Started,
+        "nothing stopped"
+    );
+    let echo = observer.console_until("refresh").await;
+    assert_eq!((echo.3, echo.4.as_deref()), (LineKind::Command, Some("ada")));
+    observer
+        .console_until("Found 1 new resources, and refreshed 1/")
+        .await;
+    let view = observer
+        .resources_until(|view| {
+            view.rescan
+                .as_ref()
+                .is_some_and(|rescan| rescan.changed.is_some())
+        })
+        .await;
+    assert_eq!(view.rescan.unwrap().changed, Some(1), "taxi's manifest");
+    let audited = observer.audited(AuditAction::ResourcesRescanned).await;
+    assert_eq!(
+        (audited.len(), audited[0].target.as_deref()),
+        (1, Some("default"))
+    );
+
+    observer
+        .supervision
+        .command(
+            &owner,
+            "set fake_fail_start bank",
+            CONSOLE_ROUTE.0,
+            CONSOLE_ROUTE.1,
+        )
+        .await
+        .unwrap();
+    observer.supervision.start_resource(&owner, "bank").await.unwrap();
+    let view = observer
+        .resources_until(|view| row(view, "bank").failed_at.is_some())
+        .await;
+    assert_eq!(row(&view, "bank").state, ResourceState::Stopped);
+
+    observer
+        .supervision
+        .command(
+            &owner,
+            "set fake_fail_start nothing",
+            CONSOLE_ROUTE.0,
+            CONSOLE_ROUTE.1,
+        )
+        .await
+        .unwrap();
+    observer.supervision.start_resource(&owner, "bank").await.unwrap();
+    let view = observer
+        .resources_until(|view| is(view, "bank", ResourceState::Started))
+        .await;
+    assert_eq!(row(&view, "bank").failed_at, None, "it started since");
+    observer.stop_observer().await;
+}
+
+/// The whole list, by net id.
+async fn entities_page(entities: &Entities, observer: &Observer) -> EntityPage {
+    entities
+        .page(
+            &observer.owner,
+            &EntityFilters::default(),
+            EntitySort::NetId,
+            false,
+            0,
+        )
+        .await
+        .unwrap()
+}
+
+/// The list's state once `wanted` holds, which a sweep of the bridge brings.
+async fn entities_live(
+    live: &mut watch::Receiver<EntitiesLive>,
+    wanted: impl FnMut(&EntitiesLive) -> bool,
+) -> EntitiesLive {
+    timeout(WAIT, live.wait_for(wanted))
+        .await
+        .expect("the bridge sent no such sweep while the list was followed")
+        .unwrap()
+        .clone()
+}
+
+fn entity_target(page: &EntityPage, net_id: u16) -> EntityTarget {
+    let item = page
+        .items
+        .iter()
+        .find(|item| item.net_id == net_id)
+        .unwrap_or_else(|| panic!("no entity {net_id} in {:?}", page.items));
+    EntityTarget {
+        net_id,
+        serial: item.serial,
+        model: item.model,
+    }
+}
+
+#[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one run of a server: its list, a deletion and what the audit log keeps of it"
+)]
+async fn the_entities_are_listed_while_someone_looks_and_deleted_one_by_one() {
+    let mut observer = Observer::new(false).await;
+    let (metrics, sampling, players, playing) = follow_players(&observer).await;
+    let (entities, listing) = Entities::start(EntitiesSetup {
+        db: observer.db.clone(),
+        clock: Clock::system(),
+        supervision: observer.supervision.clone(),
+        players: Some(players.clone()),
+    });
+    let send = |line: &'static str| {
+        let observer = &observer;
+        async move {
+            observer
+                .supervision
+                .command(&observer.owner, line, CONSOLE_ROUTE.0, CONSOLE_ROUTE.1)
+                .await
+                .unwrap();
+        }
+    };
+    observer.supervision.start_server(&observer.owner).await.unwrap();
+    observer.state(ServerState::Online).await;
+    // A car from a resource that Ada's game simulates, a train, two objects, and a helicopter
+    // Ada sits in: net ids 1 to 5.
+    send(
+        "fake_join Ada; fake_entity vehicle 412.6 -1208.3 32.1 qb-garages 1 2; fake_entity train 0 0 0; \
+         fake_entity object 1 2 3 ox_inventory; fake_entity object 5 6 7; fake_entity heli 9 9 9; \
+         fake_enter 1 5",
+    )
+    .await;
+    confirmed(&players, 1).await;
+
+    let (before, mut live, watching) = entities.watch();
+    let listed = entities_live(&mut live, |live| live.run.is_some()).await;
+    let page = entities_page(&entities, &observer).await;
+    // Ada steps into the car after the sweep: the list does not know, the bridge does.
+    send("fake_enter 1 1").await;
+    let deletion = entities
+        .delete(
+            &observer.owner,
+            EntityDeleteRequest {
+                run: listed.run.clone().unwrap(),
+                targets: vec![
+                    entity_target(&page, 5),
+                    entity_target(&page, 2),
+                    entity_target(&page, 3),
+                    entity_target(&page, 1),
+                    EntityTarget {
+                        model: 7,
+                        ..entity_target(&page, 4)
+                    },
+                ],
+            },
+        )
+        .await
+        .unwrap();
+    let after = entities_page(&entities, &observer).await;
+    send("fake_entity_gone 4").await;
+    let gone = entities
+        .delete(
+            &observer.owner,
+            EntityDeleteRequest {
+                run: listed.run.clone().unwrap(),
+                targets: vec![entity_target(&page, 4)],
+            },
+        )
+        .await
+        .unwrap();
+    drop(watching);
+    let forgotten = entities_live(&mut live, |live| live.run.is_none()).await;
+    let audited = observer.audited(AuditAction::EntitiesDeleted).await;
+    observer.supervision.stop_server(&observer.owner).await.unwrap();
+    observer.state(ServerState::Stopped).await;
+    listing.close().await;
+    playing.close().await;
+    sampling.close().await;
+    metrics.close().await.unwrap();
+    observer.stop_observer().await;
+
+    assert_eq!(before, EntitiesLive::default());
+    assert_eq!((listed.sweep, listed.listed, listed.every_ms), (1, 5, 15_000));
+    let counts = listed.counts.unwrap();
+    assert_eq!(
+        (counts.vehicles, counts.objects, counts.peds, counts.player_peds),
+        (Some(3), Some(2), Some(1), 1)
+    );
+    assert!(!listed.truncated && !listed.spaced && listed.unavailable.is_none());
+    assert_eq!(page.items.len(), 5);
+    let car = &page.items[0];
+    assert_eq!(
+        (car.net_id, car.kind, car.class),
+        (1, EntityKind::Vehicle, Some(VehicleClass::Car))
+    );
+    assert_eq!((car.x, car.y, car.z, car.bucket), (412.6, -1208.3, 32.1, 2));
+    assert_eq!(car.resource.as_deref(), Some("qb-garages"));
+    assert_eq!(
+        (car.owned, car.owner, car.owner_name.as_deref(), car.occupied),
+        (true, Some(1), Some("Ada"), false)
+    );
+    assert_eq!(page.items[1].class, Some(VehicleClass::Train));
+    assert!(page.items[4].occupied);
+    assert_eq!(page.facets.kinds.vehicles, 3);
+    let outcomes = |deletion: &observer_domain::entities::EntityDeletion| -> Vec<(u16, EntityOutcome)> {
+        deletion
+            .results
+            .iter()
+            .map(|result| (result.net_id, result.outcome))
+            .collect()
+    };
+    assert_eq!(
+        outcomes(&deletion),
+        [
+            (5, EntityOutcome::Occupied),
+            (2, EntityOutcome::Train),
+            (3, EntityOutcome::Deleted),
+            (1, EntityOutcome::Occupied),
+            (4, EntityOutcome::Changed),
+        ]
+    );
+    let left: Vec<u16> = after.items.iter().map(|item| item.net_id).collect();
+    assert_eq!(
+        left,
+        [1, 2, 4, 5],
+        "the list shows the deletion before the next sweep"
+    );
+    assert_eq!((after.live.listed, after.live.sweep), (4, 1));
+    assert_eq!(outcomes(&gone), [(4, EntityOutcome::Gone)]);
+    assert_eq!(forgotten, EntitiesLive::default());
+    assert_eq!(audited.len(), 2);
+    let first = &audited[1];
+    assert_eq!(first.actor_name.as_deref(), Some("ada"));
+    assert_eq!(first.outcome, Outcome::Success);
+    assert_eq!(
+        first.details,
+        json!({
+            "asked": 5,
+            "deleted": 1,
+            "outcomes": { "occupied": 2, "train": 1, "changed": 1 },
+            "entities": [{ "model": "0xE0FAF6D2", "kind": "object", "resource": "ox_inventory", "count": 1 }],
+        })
+    );
+    assert_eq!(audited[0].details["outcomes"], json!({ "gone": 1 }));
+    let console: Vec<String> = observer.console().iter().map(|line| plain(&line.5)).collect();
+    assert!(
+        console
+            .iter()
+            .any(|line| line.contains("observer_cmd deleteEntities")),
+        "a deletion shows in the console"
+    );
+    assert!(
+        !console.iter().any(|line| line.contains("observer_cmd entities")),
+        "the asks for the list fill the console"
+    );
+}
+
+#[tokio::test]
+async fn the_server_lists_its_entities_only_while_someone_looks() {
+    let mut observer = Observer::launched(
+        false,
+        Duration::from_millis(50),
+        &[("fake_heartbeat_ms", "200"), ("fake_entities_every_ms", "100")],
+    )
+    .await;
+    let (entities, listing) = Entities::start(EntitiesSetup {
+        db: observer.db.clone(),
+        clock: Clock::system(),
+        supervision: observer.supervision.clone(),
+        players: None,
+    });
+    observer.supervision.start_server(&observer.owner).await.unwrap();
+    observer.state(ServerState::Online).await;
+    observer
+        .supervision
+        .command(
+            &observer.owner,
+            "fake_entities 4 3 20; fake_entity_stays 1",
+            CONSOLE_ROUTE.0,
+            CONSOLE_ROUTE.1,
+        )
+        .await
+        .unwrap();
+
+    let (_, mut live, watching) = entities.watch();
+    let swept = entities_live(&mut live, |live| live.sweep >= 3).await;
+    let page = entities_page(&entities, &observer).await;
+    let kept = entities
+        .delete(
+            &observer.owner,
+            EntityDeleteRequest {
+                run: swept.run.clone().unwrap(),
+                targets: vec![entity_target(&page, 1)],
+            },
+        )
+        .await
+        .unwrap();
+    drop(watching);
+    entities_live(&mut live, |live| live.run.is_none()).await;
+    // Twenty sweeps' worth of time, had the bridge gone on without anyone looking.
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    let (_, mut live, watching) = entities.watch();
+    let again = entities_live(&mut live, |live| live.run.is_some()).await;
+    drop(watching);
+    observer.supervision.stop_server(&observer.owner).await.unwrap();
+    observer.state(ServerState::Stopped).await;
+    let stopped = entities_page(&entities, &observer).await;
+    listing.close().await;
+    observer.stop_observer().await;
+
+    assert_eq!(swept.listed, 27);
+    assert_eq!(swept.run, again.run, "the same server, the same bridge");
+    assert_eq!(kept.results[0].outcome, EntityOutcome::Unconfirmed);
+    assert!(
+        again.sweep <= swept.sweep + 8,
+        "the bridge went on sweeping with nobody looking: {} then {}",
+        swept.sweep,
+        again.sweep
+    );
+    assert_eq!(stopped.live, EntitiesLive::default());
+}
+
+#[tokio::test]
+async fn a_server_without_onesync_has_no_entities_to_list() {
+    let mut observer = Observer::new(false).await;
+    let cfg = observer.dir.path().join("server-data/server.cfg");
+    let mut text = fs::read_to_string(&cfg).unwrap();
+    text.push_str("set onesync off\nfake_entities 2 2 2\n");
+    fs::write(&cfg, text).unwrap();
+    let (entities, listing) = Entities::start(EntitiesSetup {
+        db: observer.db.clone(),
+        clock: Clock::system(),
+        supervision: observer.supervision.clone(),
+        players: None,
+    });
+    observer.supervision.start_server(&observer.owner).await.unwrap();
+    observer.state(ServerState::Online).await;
+
+    let (_, mut live, watching) = entities.watch();
+    let told = entities_live(&mut live, |live| live.unavailable.is_some()).await;
+    let page = entities_page(&entities, &observer).await;
+    drop(watching);
+    observer.supervision.stop_server(&observer.owner).await.unwrap();
+    observer.state(ServerState::Stopped).await;
+    listing.close().await;
+    observer.stop_observer().await;
+
+    assert_eq!(told.unavailable, Some(EntitiesUnavailable::Onesync));
+    assert_eq!((told.run, told.listed, told.counts), (None, 0, None));
+    assert_eq!(page.items, []);
 }
 
 impl Observer {

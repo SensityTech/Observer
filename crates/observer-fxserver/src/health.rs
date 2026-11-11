@@ -616,7 +616,7 @@ fn parse_info(body: &[u8]) -> Result<Info, ProbeError> {
 
 /// A project name without FXServer's colour codes (`^1`) or control characters, trimmed, at most
 /// [`MAX_PROJECT_NAME`] characters; none when nothing is left.
-fn project_name(raw: &str) -> Option<String> {
+pub(crate) fn project_name(raw: &str) -> Option<String> {
     let mut name = String::with_capacity(raw.len());
     let mut chars = raw.chars().peekable();
     while let Some(char) = chars.next() {

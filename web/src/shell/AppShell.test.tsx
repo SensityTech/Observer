@@ -7,7 +7,7 @@ import {
     createRouter,
     RouterProvider,
 } from '@tanstack/react-router';
-import { cleanup, fireEvent, render, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { meQuery } from '../api/auth';
@@ -18,15 +18,19 @@ import { formatPermissions } from '../auth/permissions';
 import { en } from '../i18n/en';
 import { I18nProvider } from '../i18n/I18nProvider';
 import { LiveContext } from '../live/context';
-import { Realtime } from '../live/realtime';
+import { Realtime, type SocketEvents } from '../live/realtime';
 import { AppShell } from './AppShell';
 
 const OWNER: Me = { id: 1, username: 'ada', isOwner: true, permissions: 'fff', mustChangePassword: false };
 
 const rect = (top: number, bottom: number) => ({ top, bottom }) as DOMRect;
 
-/** The signed-in shell around an Overview that stands in by its heading, its socket never answering. */
+/**
+ * The signed-in shell around an Overview that stands in by its heading. Its socket says what `say`
+ * is given, and nothing else.
+ */
 const shell = (me: Me = OWNER) => {
+    let socket: SocketEvents | undefined;
     const root = createRootRoute({ component: AppShell });
     const overview = createRoute({
         getParentRoute: () => root,
@@ -42,10 +46,13 @@ const shell = (me: Me = OWNER) => {
     client.setQueryData(onlineQuery.queryKey, { players: [] });
     const live = new Realtime({
         ticket: async () => 'ticket',
-        connect: () => ({ send: () => {}, close: () => {} }),
+        connect: (_, events) => {
+            socket = events;
+            return { send: () => {}, close: () => {} };
+        },
         refetch: () => {},
     });
-    return render(
+    const view = render(
         <I18nProvider>
             <QueryClientProvider client={client}>
                 <LiveContext value={live}>
@@ -54,6 +61,8 @@ const shell = (me: Me = OWNER) => {
             </QueryClientProvider>
         </I18nProvider>,
     );
+    const say = (message: unknown) => act(() => socket?.message(JSON.stringify(message)));
+    return { ...view, say };
 };
 
 describe('AppShell', () => {
@@ -105,9 +114,11 @@ describe('AppShell', () => {
         ).toEqual([
             en.nav.overview,
             en.nav.console,
+            en.nav.resources,
             en.nav.players,
             en.nav.map,
             en.nav.bans,
+            en.nav.allowlist,
             en.nav.schedule,
             en.nav.cfg,
             en.nav.artifacts,
@@ -115,6 +126,7 @@ describe('AppShell', () => {
             en.nav.changes,
             en.nav.statistics,
             en.nav.drops,
+            en.nav.entities,
             en.nav.diagnostics,
             en.nav.tools,
             en.nav.audit,
@@ -126,6 +138,37 @@ describe('AppShell', () => {
             en.nav.groupDebug,
             en.nav.maintenance,
         ]);
+    });
+
+    it('should count the waiting requests on the Allowlist entry while the allowlist refuses', async () => {
+        const { findByRole, getByRole, say } = shell({ ...OWNER, isOwner: false, permissions: '4001' });
+        await findByRole('heading', { name: 'Overview' });
+        await act(() => new Promise((resolve) => setTimeout(resolve, 0)));
+        const entry = within(getByRole('link', { name: new RegExp(`^${en.nav.allowlist}`) }));
+        const before = entry.queryByText(en.nav.waitingCount(3));
+
+        say({ type: 'hello', connectionId: 1, contract: 1 });
+        say({
+            type: 'snapshot',
+            topic: 'server.admission',
+            data: {
+                allowlist: { enabled: true, waiting: 3, approved: 41 },
+                maintenance: { on: false, since: null, by: null, passes: 0 },
+            },
+        });
+        const counted = entry.queryByText(en.nav.waitingCount(3));
+        say({
+            type: 'event',
+            topic: 'server.admission',
+            data: {
+                allowlist: { enabled: false, waiting: 3, approved: 41 },
+                maintenance: { on: false, since: null, by: null, passes: 0 },
+            },
+        });
+
+        expect(before).toBeNull();
+        expect(counted).not.toBeNull();
+        expect(entry.queryByText(en.nav.waitingCount(3))).toBeNull();
     });
 
     it("should scroll the rail to the current page's entry when a short window hides it", async () => {
@@ -182,7 +225,7 @@ describe('AppShell', () => {
         expect(without.queryByRole('button', { name: en.nav.groupDebug })).toBeNull();
     });
 
-    it('should keep the settings at the foot of the rail, for every account', async () => {
+    it('should keep the documentation and the settings at the foot of the rail, for every account', async () => {
         const { findByRole, getByRole } = shell({
             ...OWNER,
             id: 2,
@@ -195,6 +238,14 @@ describe('AppShell', () => {
         const rail = within(getByRole('complementary', { name: en.nav.label }));
         const settings = rail.getByRole('link', { name: en.nav.settings });
         expect(settings.getAttribute('href')).toBe('/settings');
+        const docs = rail.getByRole('link', { name: en.nav.docs });
+        expect(docs.getAttribute('href')).toBe('/docs');
+        expect(docs.compareDocumentPosition(settings) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
+        expect(
+            within(getByRole('navigation', { name: en.nav.sections })).queryByRole('link', {
+                name: en.nav.docs,
+            }),
+        ).toBeNull();
         expect(
             within(getByRole('navigation', { name: en.nav.sections })).queryByRole('link', {
                 name: en.nav.settings,

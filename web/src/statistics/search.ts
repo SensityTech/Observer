@@ -1,5 +1,6 @@
 import type { DropsRange } from '../api/generated/DropsRange';
 import type { Range } from '../api/generated/Range';
+import { oneOf } from '../lib/search';
 
 // The page keeps its tab, its ranges, the zoom, the lanes added and the comparison in the address,
 // so that a view is shared by its link. What the address bar holds is the user's to edit: what does
@@ -29,9 +30,6 @@ export type StatisticsSearch = {
 
 const second = (value: unknown) =>
     typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? value : undefined;
-
-const oneOf = <T extends string>(choices: readonly T[], value: unknown): T | undefined =>
-    choices.find((choice) => choice === value);
 
 export const parseStatisticsSearch = (search: Record<string, unknown>): StatisticsSearch => {
     const from = second(search.from);

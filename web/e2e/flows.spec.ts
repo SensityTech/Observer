@@ -153,6 +153,38 @@ test.describe.serial('Observer in a browser', () => {
         await expect(page.getByText(en.console.sent('fake_players 5'))).toBeVisible();
     });
 
+    test('a resource stops with the one that depends on it, and starting that one brings both back', async () => {
+        const words = en.resources;
+        await page.getByRole('link', { name: en.nav.resources, exact: true }).click();
+        await expect(page.getByRole('heading', { level: 1 })).toContainText(words.title);
+        const row = (name: string) =>
+            page.getByRole('listitem').filter({ has: page.getByText(name, { exact: true }) });
+        await expect(row('hello')).toContainText(words.states.started);
+        await expect(row('greeter')).toContainText(words.states.started);
+
+        // FXServer stops what depends on a resource before the resource: the page names it first.
+        await row('hello').getByRole('button', { name: words.verbs.stop, exact: true }).click();
+        const dialog = page.getByRole('alertdialog');
+        await expect(dialog.getByRole('listitem')).toHaveText(['greeter']);
+        await dialog.getByRole('button', { name: words.confirmStop('hello', 2), exact: true }).click();
+        await expect(dialog).toBeHidden();
+        const justNow = words.ago(null);
+        await expect(row('hello')).toContainText(words.happened(words.last.stopped, 'ada', null, justNow));
+        await expect(row('greeter')).toContainText(
+            words.happened(words.last.stopped, null, 'hello', justNow),
+        );
+
+        // And it starts what a resource depends on before the resource.
+        await row('greeter').getByRole('button', { name: words.verbs.start, exact: true }).click();
+        await expect(row('greeter')).toContainText(words.happened(words.last.started, 'ada', null, justNow));
+        await expect(row('hello')).toContainText(words.states.started);
+
+        await page.getByRole('link', { name: en.nav.audit, exact: true }).click();
+        const log = page.getByRole('table', { name: en.audit.caption });
+        await expect(log.getByText(en.audit.actions.resource_stopped, { exact: true })).toBeVisible();
+        await expect(log.getByText(en.audit.actions.resource_started, { exact: true })).toBeVisible();
+    });
+
     test('the Overview sums FXServer up, and its details show every measure it reports', async () => {
         await overview();
         // Folded, the details hold no region: the four figures are the only ones named so.
@@ -229,6 +261,43 @@ test.describe.serial('Observer in a browser', () => {
         await expect(page.getByRole('heading', { level: 1 })).toContainText('Ada');
         const labels = page.getByRole('region', { name: en.players.profile.labels.title, exact: true });
         await expect(labels.getByRole('cell', { name: /CHAR-1234/ })).toBeVisible();
+    });
+
+    test('the staff writes to a player from the players column, then kicks them with the kick message', async () => {
+        await page.getByRole('link', { name: en.nav.console, exact: true }).click();
+        const command = page.getByRole('textbox', { name: en.console.commandLabel });
+        await command.fill('fake_join Bo');
+        await command.press('Enter');
+        await expect(page.getByText(en.console.sent('fake_join Bo'))).toBeVisible();
+        // The column reads who is connected every 10 s, and names a player once they are confirmed.
+        const column = page.getByRole('complementary', { name: en.online.label });
+        const actions = column.getByRole('button', { name: en.moderation.actions('Bo') });
+        await expect(actions).toBeVisible({ timeout: 30_000 });
+
+        await actions.click();
+        await page.getByRole('menuitem', { name: en.moderation.message }).click();
+        const message = page.getByRole('dialog', { name: en.moderation.messageDialog.title('Bo') });
+        await message.getByLabel(en.moderation.messageDialog.text).fill('Come to the staff room');
+        await message.getByRole('button', { name: en.moderation.messageDialog.submit, exact: true }).click();
+        await expect(page.getByText(en.moderation.messageDialog.done('Bo'))).toBeVisible();
+        await page.getByRole('button', { name: en.common.close, exact: true }).click();
+        // The fake's bridge prints the event the real one raises for the server's resources.
+        await expect(
+            page.getByText(/observer:directMessage .*"message":"Come to the staff room"/),
+        ).toBeVisible();
+
+        await actions.click();
+        await page.getByRole('menuitem', { name: en.moderation.kick }).click();
+        const kick = page.getByRole('dialog', { name: en.moderation.kickDialog.title('Bo') });
+        await kick.getByLabel(en.moderation.kickDialog.reason).fill('AFK on the runway');
+        await kick.getByRole('button', { name: en.moderation.kickDialog.submit, exact: true }).click();
+        await expect(page.getByText(en.moderation.kickDialog.done('Bo'))).toBeVisible();
+        await page.getByRole('button', { name: en.common.close, exact: true }).click();
+        // And what the player read, in place of showing it.
+        await expect(
+            page.getByText(/kicked 2 "You were kicked from this server\.\\nReason: AFK on the runway"/),
+        ).toBeVisible();
+        await expect(actions).toBeHidden({ timeout: 30_000 });
     });
 
     test('a player who crashes shows in the drop log, then with their crash signature', async () => {

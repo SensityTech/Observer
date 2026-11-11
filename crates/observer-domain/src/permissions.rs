@@ -41,6 +41,14 @@ impl Permissions {
     pub const PLAYERS_BAN: Self = Self(1 << 23);
     pub const BANS_LIFT: Self = Self(1 << 24);
     pub const PLAYERS_MAP: Self = Self(1 << 25);
+    pub const RESOURCES_CONTROL: Self = Self(1 << 26);
+    pub const ENTITIES_VIEW: Self = Self(1 << 27);
+    pub const ENTITIES_DELETE: Self = Self(1 << 28);
+    pub const PLAYERS_KICK: Self = Self(1 << 29);
+    pub const PLAYERS_ANNOUNCE: Self = Self(1 << 30);
+    pub const PLAYERS_MESSAGE: Self = Self(1 << 31);
+    pub const BANS_EDIT: Self = Self(1 << 32);
+    pub const ALLOWLIST_MANAGE: Self = Self(1 << 33);
 
     /// Every permission in the catalog, which is what the owner holds.
     pub fn all() -> Self {
@@ -209,6 +217,7 @@ pub enum PermissionArea {
     Drops,
     Changes,
     Backups,
+    Entities,
 }
 
 /// One permission of the catalog, as `GET /api/permissions` returns it.
@@ -462,6 +471,80 @@ pub const CATALOG: &[PermissionInfo] = &[
         danger: Danger::Sensitive,
         implies: Permissions::PLAYERS_VIEW,
     },
+    PermissionInfo {
+        bit: 26,
+        constant: "RESOURCES_CONTROL",
+        key: "resourcesControl",
+        area: PermissionArea::Server,
+        // A resource that stops takes with it every one that depends on it, under the players.
+        danger: Danger::Sensitive,
+        implies: Permissions::NONE,
+    },
+    PermissionInfo {
+        bit: 27,
+        constant: "ENTITIES_VIEW",
+        key: "entitiesView",
+        area: PermissionArea::Entities,
+        // Models, creating resources and where each entity stands. Who owns one, and whether a
+        // player sits in it, stay behind PLAYERS_MAP: they say where a player is.
+        danger: Danger::Normal,
+        implies: Permissions::NONE,
+    },
+    PermissionInfo {
+        bit: 28,
+        constant: "ENTITIES_DELETE",
+        key: "entitiesDelete",
+        area: PermissionArea::Entities,
+        // Players see the entity vanish, and a script still using it may fail.
+        danger: Danger::Sensitive,
+        implies: Permissions::ENTITIES_VIEW,
+    },
+    PermissionInfo {
+        bit: 29,
+        constant: "PLAYERS_KICK",
+        key: "playersKick",
+        area: PermissionArea::Players,
+        // A kick drops a connected player, who reads the owner's message and may come back.
+        danger: Danger::Sensitive,
+        implies: Permissions::PLAYERS_VIEW,
+    },
+    PermissionInfo {
+        bit: 30,
+        constant: "PLAYERS_ANNOUNCE",
+        key: "playersAnnounce",
+        area: PermissionArea::Players,
+        // An announcement goes to every connected player, in whatever the server's resources show.
+        danger: Danger::Sensitive,
+        implies: Permissions::NONE,
+    },
+    PermissionInfo {
+        bit: 31,
+        constant: "PLAYERS_MESSAGE",
+        key: "playersMessage",
+        area: PermissionArea::Players,
+        // A message reaches one connected player, in the staff's name.
+        danger: Danger::Sensitive,
+        implies: Permissions::PLAYERS_VIEW,
+    },
+    PermissionInfo {
+        bit: 32,
+        constant: "BANS_EDIT",
+        key: "bansEdit",
+        area: PermissionArea::Players,
+        // Anyone's active ban: the reason its player reads, and its end, which brought closer
+        // lets them back in sooner.
+        danger: Danger::Sensitive,
+        implies: Permissions::BANS_VIEW,
+    },
+    PermissionInfo {
+        bit: 33,
+        constant: "ALLOWLIST_MANAGE",
+        key: "allowlistManage",
+        area: PermissionArea::Players,
+        // Approving a licence lets its player in while the server is closed to the others.
+        danger: Danger::Sensitive,
+        implies: Permissions::PLAYERS_VIEW,
+    },
 ];
 
 #[cfg(test)]
@@ -502,6 +585,14 @@ mod tests {
             (23, "PLAYERS_BAN", Permissions::PLAYERS_BAN),
             (24, "BANS_LIFT", Permissions::BANS_LIFT),
             (25, "PLAYERS_MAP", Permissions::PLAYERS_MAP),
+            (26, "RESOURCES_CONTROL", Permissions::RESOURCES_CONTROL),
+            (27, "ENTITIES_VIEW", Permissions::ENTITIES_VIEW),
+            (28, "ENTITIES_DELETE", Permissions::ENTITIES_DELETE),
+            (29, "PLAYERS_KICK", Permissions::PLAYERS_KICK),
+            (30, "PLAYERS_ANNOUNCE", Permissions::PLAYERS_ANNOUNCE),
+            (31, "PLAYERS_MESSAGE", Permissions::PLAYERS_MESSAGE),
+            (32, "BANS_EDIT", Permissions::BANS_EDIT),
+            (33, "ALLOWLIST_MANAGE", Permissions::ALLOWLIST_MANAGE),
         ];
 
         assert_eq!(CATALOG.len(), frozen.len());

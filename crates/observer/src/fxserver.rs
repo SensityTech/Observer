@@ -347,7 +347,8 @@ async fn print_events(mut events: broadcast::Receiver<Event>, terminal: Terminal
         match &event.kind {
             EventKind::State { .. } => {}
             // Routine reports, every few seconds.
-            kind @ (EventKind::Heap { .. } | EventKind::Resources { .. }) => {
+            kind
+            @ (EventKind::Heap { .. } | EventKind::Resources { .. } | EventKind::ResourceList { .. }) => {
                 debug!(generation = event.generation, ?kind, "bridge report");
             }
             kind => {

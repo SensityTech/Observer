@@ -27,7 +27,10 @@ const MIGRATIONS: &[M<'static>] = &[
     M::up(include_str!("../migrations/0016_cfg_versions.sql")),
     M::up(include_str!("../migrations/0017_tool_staged.sql")),
     M::up(include_str!("../migrations/0018_debug_hosts.sql")),
-    M::up(include_str!("../migrations/0019_stop_hold.sql")),
+    M::up(include_str!("../migrations/0019_ban_edits_templates.sql")),
+    M::up(include_str!("../migrations/0020_allowlist.sql")),
+    M::up(include_str!("../migrations/0021_maintenance.sql")),
+    M::up(include_str!("../migrations/0022_stop_hold.sql")),
 ];
 
 /// The schema version this build migrates to.
@@ -217,6 +220,27 @@ mod tests {
     }
 
     #[test]
+    fn a_0018_database_keeps_its_bans_without_an_edit_or_a_template() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        let migrations = Migrations::from_slice(MIGRATIONS);
+        migrations.to_version(&mut conn, 18).unwrap();
+        conn.execute(
+            "INSERT INTO ban (code, name, reason, by_name, created_at, ends_at)
+             VALUES ('K7QM-2XPA', 'kaito', 'Aimbot on stream', 'maxime', '2026-11-09T20:00:00.000Z', NULL)",
+            [],
+        )
+        .unwrap();
+
+        migrations.to_latest(&mut conn).unwrap();
+
+        let now = "2026-11-10T00:00:00Z".parse().unwrap();
+        let ban = crate::bans::by_code(&conn, "K7QM-2XPA", now).unwrap().unwrap();
+        assert_eq!(ban.reason, "Aimbot on stream");
+        assert_eq!(ban.edits, []);
+        assert_eq!(crate::bans::templates(&conn).unwrap(), []);
+    }
+
+    #[test]
     fn a_0010_database_detects_hangs_after_six_minutes_and_keeps_its_launch_settings() {
         let mut conn = Connection::open_in_memory().unwrap();
         let migrations = Migrations::from_slice(MIGRATIONS);
@@ -255,10 +279,10 @@ mod tests {
     }
 
     #[test]
-    fn a_0018_database_waits_a_minute_for_the_resources_that_hold_a_stop() {
+    fn a_0021_database_waits_a_minute_for_the_resources_that_hold_a_stop() {
         let mut conn = Connection::open_in_memory().unwrap();
         let migrations = Migrations::from_slice(MIGRATIONS);
-        migrations.to_version(&mut conn, 18).unwrap();
+        migrations.to_version(&mut conn, 21).unwrap();
         conn.execute(
             "INSERT INTO launch_settings (server_id, data_path, cfg_file, onesync, auto_start,
                  txadmin_events, extra_arguments, version, updated_at, hang_detection, hang_timeout_seconds)

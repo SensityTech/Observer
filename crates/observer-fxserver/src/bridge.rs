@@ -7,11 +7,12 @@ use std::fs;
 use std::io;
 
 use observer_domain::schedule::RestartSource;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Serializer};
 use serde_json::Value;
 
 use crate::layout::Layout;
-use crate::stdin::MAX_BRIDGE_JSON;
+use crate::resources::Reported;
+use crate::stdin::{MAX_BRIDGE_JSON, safe};
 use crate::trace::TraceKind;
 
 /// The server convar that holds the bridge's name, for resources to find it. Set with `+set`,
@@ -49,6 +50,11 @@ const FILES: [(&str, &str); 3] = [
     ),
     ("heap.js", include_str!("../../../resource/observer/heap.js")),
 ];
+
+/// The bridge's script, which the contract's documentation reads its events and exports from.
+pub(crate) fn script() -> &'static str {
+    FILES[1].1
+}
 
 /// Draws the bridge's resource name for one start of FXServer, so that no script can target the
 /// bridge by a name known before the start.
@@ -175,6 +181,17 @@ pub enum BridgeEvent {
         /// Resources left out to keep the event within what the console takes.
         truncated: bool,
     },
+    /// The staff's announcement to the whole server, which the server's resources show.
+    Announcement { message: String, by: String },
+    /// The staff's message to one connected player, which the server's resources show.
+    DirectMessage {
+        player: u32,
+        message: String,
+        by: String,
+    },
+    /// Maintenance mode was turned on or off, and again at each start while it is on. `at` is
+    /// when it was turned on, or off.
+    Maintenance { on: bool, at: i64, by: String },
 }
 
 /// A number before and after.
@@ -297,14 +314,6 @@ pub fn start_changes(
     event(low)
 }
 
-/// Whether `text` is 1 to `max` bytes of ASCII letters, digits and `extra`.
-fn safe(text: &str, max: usize, extra: &[u8]) -> bool {
-    (1..=max).contains(&text.len())
-        && text
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || extra.contains(&byte))
-}
-
 impl BridgeEvent {
     pub fn name(&self) -> &'static str {
         match self {
@@ -313,6 +322,9 @@ impl BridgeEvent {
             Self::RestartRescheduled { .. } => "restartRescheduled",
             Self::ShuttingDown { .. } => "shuttingDown",
             Self::StartChanges { .. } => "startChanges",
+            Self::Announcement { .. } => "announcement",
+            Self::DirectMessage { .. } => "directMessage",
+            Self::Maintenance { .. } => "maintenance",
         }
     }
 
@@ -359,16 +371,95 @@ pub enum BridgeAction {
     },
     /// Has the bridge report where the players stand every `every_ms` for `for_ms`, or stop with 0.
     Positions { every_ms: u32, for_ms: u32 },
+    /// Has the bridge list the server's entities every `every_ms` for `for_ms`, or stop with 0.
+    Entities { every_ms: u32, for_ms: u32 },
+    /// Has the bridge delete entities it listed, and report what became of each. `targets` holds
+    /// a net id then the serial the bridge drew for that entity, one pair after the other. The
+    /// bridge deletes nothing once `deadline`, in Unix seconds, has passed, and nothing of
+    /// another start of itself than `epoch`.
+    DeleteEntities {
+        request: u32,
+        epoch: i64,
+        deadline: i64,
+        targets: Vec<u32>,
+    },
+    /// Drops `players`, or everyone connected with `all`, with the message they read, after
+    /// `observer:playerKicked` for each.
+    Kick {
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        players: Vec<u32>,
+        #[serde(skip_serializing_if = "std::ops::Not::not")]
+        all: bool,
+        message: String,
+        event: KickEvent,
+    },
+    /// Has the bridge raise txAdmin's `playerBanned` for a ban just made, when the owner asked for
+    /// txAdmin's events. Observer has no event of its own for a ban that drops nobody.
+    Banned { event: TxAdminBan },
+    /// Has the bridge raise txAdmin's `actionRevoked` for a ban just lifted, when the owner asked
+    /// for txAdmin's events. Observer has no event of its own for a lifted ban.
+    Lifted { event: TxAdminRevocation },
+    /// Gives the server the name the owner chose for FiveM's server list during maintenance, or
+    /// its own back without one.
+    ServerName {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+    },
 }
 
-/// What a banned player reads, and the `observer:playerRefused` the bridge raises for it.
+/// What a refused player reads, and the `observer:playerRefused` the bridge raises for it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Refusal {
     pub message: String,
-    pub event: BanEvent,
+    pub event: Refused,
 }
 
-/// The payload of `observer:playerRefused` and `observer:playerBanned`.
+/// The payload of `observer:playerRefused`: what refused the player, as `cause`, and what goes
+/// with it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "cause", rename_all = "camelCase")]
+pub enum Refused {
+    Ban(BanEvent),
+    Maintenance(MaintenanceEvent),
+    Allowlist(AllowlistEvent),
+}
+
+impl Refused {
+    /// What a player or the staff typed, which a long event is cut by.
+    fn texts(&mut self) -> Vec<&mut String> {
+        match self {
+            Self::Ban(event) => event.texts(),
+            Self::Maintenance(MaintenanceEvent { name, .. })
+            | Self::Allowlist(AllowlistEvent { name, .. }) => name.as_mut().into_iter().collect(),
+        }
+    }
+}
+
+/// What `observer:playerRefused` carries for a player refused during maintenance.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MaintenanceEvent {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub license: Option<String>,
+}
+
+/// What `observer:playerRefused` carries for a player the allowlist refused.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AllowlistEvent {
+    /// The code of the player's request; absent for a player who shows no licence, and asks
+    /// nothing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub license: Option<String>,
+}
+
+/// What a ban carries in `observer:playerRefused` and `observer:playerBanned`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BanEvent {
@@ -388,35 +479,232 @@ pub struct BanEvent {
     pub player: Option<u32>,
 }
 
+impl BanEvent {
+    fn texts(&mut self) -> Vec<&mut String> {
+        std::iter::once(&mut self.reason)
+            .chain(self.name.as_mut())
+            .collect()
+    }
+}
+
+/// Why players are kicked, from a closed list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum KickCause {
+    /// The staff kicked this player.
+    Kick,
+    /// The staff kicked everyone.
+    KickAll,
+}
+
+/// The payload of `txAdmin:events:playerBanned`, under txAdmin's own names.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TxAdminBan {
+    pub author: String,
+    pub reason: String,
+    /// The ban's code.
+    pub action_id: String,
+    /// Unix seconds; `false` for a permanent ban.
+    #[serde(serialize_with = "or_false")]
+    pub expiration: Option<i64>,
+    /// As [`TxAdminBan::duration`] words it.
+    pub duration_input: String,
+    /// The same words, since Observer translates nothing; absent for a permanent ban.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration_translated: Option<String>,
+    /// The connected player the ban drops; absent when it drops nobody.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_net_id: Option<u32>,
+    /// `kind:value`, the licence first.
+    pub target_ids: Vec<String>,
+    /// Hardware tokens, as FXServer gives them.
+    pub target_hwids: Vec<String>,
+    /// txAdmin writes `identifiers` for a ban that names no player.
+    pub target_name: String,
+    /// What a player the ban drops reads.
+    pub kick_message: String,
+}
+
+impl TxAdminBan {
+    /// A ban's length in the words txAdmin's panel sends: `permanent`, or a count of the largest
+    /// of its units that holds the length whole, a month being 30 days. A length txAdmin cannot
+    /// make, with minutes left over, is counted in minutes.
+    pub fn duration(minutes: Option<u32>) -> String {
+        const UNITS: [(u32, &str); 4] = [
+            (30 * 24 * 60, "month"),
+            (7 * 24 * 60, "week"),
+            (24 * 60, "day"),
+            (60, "hour"),
+        ];
+        let Some(minutes) = minutes else {
+            return "permanent".to_owned();
+        };
+        let (count, unit) = UNITS
+            .iter()
+            .find(|(length, _)| minutes % length == 0)
+            .map_or((minutes, "minute"), |(length, unit)| (minutes / length, *unit));
+        format!("{count} {unit}{}", if count == 1 { "" } else { "s" })
+    }
+}
+
+/// The payload of `txAdmin:events:actionRevoked` for a lifted ban, under txAdmin's own names.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TxAdminRevocation {
+    /// The ban's code.
+    pub action_id: String,
+    pub action_type: TxAdminAction,
+    pub action_reason: String,
+    /// Who made the ban.
+    pub action_author: String,
+    /// `false` for a ban that names no player.
+    #[serde(serialize_with = "or_false")]
+    pub player_name: Option<String>,
+    /// `kind:value`, the licence first.
+    pub player_ids: Vec<String>,
+    /// Hardware tokens, as FXServer gives them.
+    pub player_hwids: Vec<String>,
+    /// Who lifted the ban.
+    pub revoked_by: String,
+}
+
+/// What txAdmin revoked. It also revokes warnings, which Observer has not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TxAdminAction {
+    Ban,
+}
+
+/// A value txAdmin may not have, which it then writes as `false`.
+#[expect(clippy::ref_option, reason = "serde hands the field over by reference")]
+fn or_false<T: Serialize, S: Serializer>(value: &Option<T>, serializer: S) -> Result<S::Ok, S::Error> {
+    match value {
+        Some(value) => value.serialize(serializer),
+        None => serializer.serialize_bool(false),
+    }
+}
+
+/// The payload of `observer:playerKicked`, to which the bridge adds the `player` it drops.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct KickEvent {
+    pub reason: String,
+    pub by: String,
+    pub cause: KickCause,
+}
+
 impl BridgeAction {
     pub fn name(&self) -> &'static str {
         match self {
             Self::Verdict { .. } => "verdict",
             Self::Drop { .. } => "drop",
             Self::Positions { .. } => "positions",
+            Self::Entities { .. } => "entities",
+            Self::DeleteEntities { .. } => "deleteEntities",
+            Self::Kick { .. } => "kick",
+            Self::Banned { .. } => "banned",
+            Self::Lifted { .. } => "lifted",
+            Self::ServerName { .. } => "serverName",
         }
+    }
+
+    /// The kick of everyone connected, as the server counts them when it runs the action.
+    pub fn kick_all(message: String, event: KickEvent) -> Self {
+        Self::Kick {
+            players: Vec::new(),
+            all: true,
+            message,
+            event,
+        }
+        .fitted()
+    }
+
+    /// The kicks that drop `players`, each within the console's line: one action while the list
+    /// fits beside the message, several past that. None for an empty list.
+    pub fn kicks(players: &[u32], message: String, event: KickEvent) -> Vec<Self> {
+        // Fitted around the longest id, so that every list of one fits.
+        let fitted = Self::Kick {
+            players: vec![u32::MAX],
+            all: false,
+            message,
+            event,
+        }
+        .fitted();
+        let Self::Kick { message, event, .. } = &fitted else {
+            return Vec::new();
+        };
+        // What the ids and the commas between them may take of the line.
+        let room = (MAX_BRIDGE_JSON + u32::MAX.to_string().len()).saturating_sub(fitted.encode().len() / 2);
+        let mut lists = Vec::new();
+        let mut listed = Vec::new();
+        let mut used = 0;
+        for &player in players {
+            let digits = player.to_string().len();
+            if !listed.is_empty() && used + 1 + digits > room {
+                lists.push(std::mem::take(&mut listed));
+                used = 0;
+            }
+            used += digits + usize::from(!listed.is_empty());
+            listed.push(player);
+        }
+        if !listed.is_empty() {
+            lists.push(listed);
+        }
+        lists
+            .into_iter()
+            .map(|players| Self::Kick {
+                players,
+                all: false,
+                message: message.clone(),
+                event: event.clone(),
+            })
+            .collect()
     }
 
     pub fn encode(&self) -> String {
         hex_json(self)
     }
 
-    /// The action shortened until it fits the console's line: the message first, then the
-    /// event's name and reason, each cut on a character boundary.
+    /// The action shortened until it fits the console's line: the longest of its message and of
+    /// what its event holds of typed text first, each cut on a character boundary. A list of
+    /// players is never cut: [`BridgeAction::kicks`] splits it. A ban made or lifted, told to
+    /// txAdmin's listeners, first loses its tokens, then its identifiers past the first, from the
+    /// last.
     #[must_use]
     pub fn fitted(mut self) -> Self {
         while self.encode().len() > 2 * MAX_BRIDGE_JSON {
-            let (message, event) = match &mut self {
-                Self::Verdict { refusal: None, .. } | Self::Positions { .. } => return self,
+            let held = match &mut self {
+                Self::Banned { event } => Some((&mut event.target_hwids, &mut event.target_ids)),
+                Self::Lifted { event } => Some((&mut event.player_hwids, &mut event.player_ids)),
+                _ => None,
+            };
+            if let Some((hwids, ids)) = held
+                && (hwids.pop().is_some() || (ids.len() > 1 && ids.pop().is_some()))
+            {
+                continue;
+            }
+            let texts: Vec<&mut String> = match &mut self {
+                Self::Verdict { refusal: None, .. }
+                | Self::Positions { .. }
+                | Self::ServerName { .. }
+                | Self::Entities { .. }
+                | Self::DeleteEntities { .. } => return self,
                 Self::Verdict {
                     refusal: Some(Refusal { message, event }),
                     ..
+                } => std::iter::once(message).chain(event.texts()).collect(),
+                Self::Drop { message, event, .. } => std::iter::once(message).chain(event.texts()).collect(),
+                Self::Kick { message, event, .. } => vec![message, &mut event.reason],
+                Self::Banned { event } => {
+                    vec![&mut event.kick_message, &mut event.reason, &mut event.target_name]
                 }
-                | Self::Drop { message, event, .. } => (message, event),
+                Self::Lifted { event } => [&mut event.action_reason]
+                    .into_iter()
+                    .chain(event.player_name.as_mut())
+                    .collect(),
             };
-            let longest = [message, &mut event.reason]
+            let longest = texts
                 .into_iter()
-                .chain(event.name.as_mut())
                 .max_by_key(|text| text.len())
                 .expect("a message is always there");
             if longest.is_empty() {
@@ -462,6 +750,15 @@ pub enum Report {
         #[serde(default)]
         external: u64,
     },
+    /// One page of every resource FXServer knows, in name order: once the cfg has run, and again
+    /// after each `refresh`. The pages of one list carry its number, as `list`.
+    ResourceList {
+        #[serde(rename = "list")]
+        number: u64,
+        page: u32,
+        last: bool,
+        resources: Vec<Reported>,
+    },
     /// The resources that hold the stop, all of them, whenever that changes and once the bridge
     /// is ready. `stopping` once the bridge raised `observer:shuttingDown`: from then on, a
     /// resource that left the list released the stop, or stopped when `stopped` names it.
@@ -505,6 +802,7 @@ impl Report {
 
 #[cfg(test)]
 mod tests {
+    use observer_domain::moderation::MAX_TEXT_CHARS;
     use observer_domain::players::{MAX_LABEL_ID_CHARS, MAX_LABEL_NAME_CHARS};
     use serde_json::json;
 
@@ -515,7 +813,7 @@ mod tests {
     const CONTRACT: &str = include_str!("../../../resource/CONTRACT.md");
     const EXAMPLE: &str = include_str!("../../../resource/observer_example/server.lua");
 
-    fn every_event() -> [BridgeEvent; 5] {
+    fn every_event() -> [BridgeEvent; 8] {
         [
             BridgeEvent::RestartScheduled {
                 at: 0,
@@ -555,6 +853,20 @@ mod tests {
                 resources: Vec::new(),
                 skipped: 0,
                 truncated: false,
+            },
+            BridgeEvent::Announcement {
+                message: String::new(),
+                by: String::new(),
+            },
+            BridgeEvent::DirectMessage {
+                player: 0,
+                message: String::new(),
+                by: String::new(),
+            },
+            BridgeEvent::Maintenance {
+                on: true,
+                at: 0,
+                by: String::new(),
             },
         ]
     }
@@ -874,13 +1186,56 @@ mod tests {
         }
     }
 
-    fn every_action() -> [BridgeAction; 3] {
+    fn kick_event() -> KickEvent {
+        KickEvent {
+            reason: "RDM".to_owned(),
+            by: "maxime".to_owned(),
+            cause: KickCause::Kick,
+        }
+    }
+
+    fn txadmin_ban() -> TxAdminBan {
+        TxAdminBan {
+            author: "maxime".to_owned(),
+            reason: "Aimbot".to_owned(),
+            action_id: "K7QM-2XPA".to_owned(),
+            expiration: Some(1_794_000_000),
+            duration_input: "2 days".to_owned(),
+            duration_translated: Some("2 days".to_owned()),
+            target_net_id: Some(3),
+            target_ids: vec![
+                format!("license:{}", "a".repeat(40)),
+                "discord:123456789012345678".to_owned(),
+            ],
+            target_hwids: vec![format!("4:{}", "ab".repeat(32))],
+            target_name: "kaito".to_owned(),
+            kick_message: "Banned".to_owned(),
+        }
+    }
+
+    fn txadmin_revocation() -> TxAdminRevocation {
+        TxAdminRevocation {
+            action_id: "K7QM-2XPA".to_owned(),
+            action_type: TxAdminAction::Ban,
+            action_reason: "Aimbot".to_owned(),
+            action_author: "maxime".to_owned(),
+            player_name: Some("kaito".to_owned()),
+            player_ids: vec![
+                format!("license:{}", "a".repeat(40)),
+                "discord:123456789012345678".to_owned(),
+            ],
+            player_hwids: vec![format!("4:{}", "ab".repeat(32))],
+            revoked_by: "sarah".to_owned(),
+        }
+    }
+
+    fn every_action() -> [BridgeAction; 9] {
         [
             BridgeAction::Verdict {
                 request: 7,
                 refusal: Some(Refusal {
                     message: "Banned".to_owned(),
-                    event: ban_event(None),
+                    event: Refused::Ban(ban_event(None)),
                 }),
             },
             BridgeAction::Drop {
@@ -892,7 +1247,56 @@ mod tests {
                 every_ms: 2000,
                 for_ms: 30_000,
             },
+            BridgeAction::Entities {
+                every_ms: 15_000,
+                for_ms: 30_000,
+            },
+            BridgeAction::DeleteEntities {
+                request: 4,
+                epoch: 4210,
+                deadline: 1_793_000_009,
+                targets: vec![12, 3, 13, 8],
+            },
+            BridgeAction::Kick {
+                players: vec![3],
+                all: false,
+                message: "Kicked".to_owned(),
+                event: kick_event(),
+            },
+            BridgeAction::Banned { event: txadmin_ban() },
+            BridgeAction::Lifted {
+                event: txadmin_revocation(),
+            },
+            BridgeAction::ServerName {
+                name: Some("Aperture RP | maintenance".to_owned()),
+            },
         ]
+    }
+
+    #[test]
+    fn the_most_entities_one_deletion_takes_fit_the_console_line() {
+        let largest = BridgeAction::DeleteEntities {
+            request: u32::MAX,
+            epoch: i64::from(u32::MAX),
+            deadline: 9_999_999_999,
+            targets: [u32::from(u16::MAX), 0x7fff_ffff].repeat(observer_domain::entities::MAX_DELETE),
+        };
+
+        assert!(crate::stdin::allowed(&format!(
+            "observer_cmd {}",
+            largest.encode()
+        )));
+        assert_eq!(
+            decode(&every_action()[4].encode()),
+            json!({
+                "action": "deleteEntities",
+                "payload": { "request": 4, "epoch": 4210, "deadline": 1_793_000_009, "targets": [12, 3, 13, 8] }
+            })
+        );
+        assert_eq!(
+            decode(&every_action()[3].encode()),
+            json!({ "action": "entities", "payload": { "everyMs": 15_000, "forMs": 30_000 } })
+        );
     }
 
     #[test]
@@ -941,12 +1345,82 @@ mod tests {
             ),
             json!({ "action": "verdict", "payload": { "request": 9 } })
         );
+        assert_eq!(
+            decode(&BridgeAction::ServerName { name: None }.encode()),
+            json!({ "action": "serverName", "payload": {} })
+        );
+    }
+
+    fn maintenance_event() -> MaintenanceEvent {
+        MaintenanceEvent {
+            name: Some("kaito".to_owned()),
+            license: Some(format!("license:{}", "a".repeat(40))),
+        }
+    }
+
+    fn allowlist_event() -> AllowlistEvent {
+        AllowlistEvent {
+            request: Some("7KQ-2XP".to_owned()),
+            name: Some("kaito".to_owned()),
+            license: Some(format!("license:{}", "a".repeat(40))),
+        }
     }
 
     #[test]
-    fn the_contract_and_the_example_cover_the_ban_events_with_every_field() {
-        for (name, player) in [("playerRefused", None), ("playerBanned", Some(3))] {
-            let wire = serde_json::to_value(ban_event(player)).unwrap();
+    fn a_refusal_says_what_refused_the_player_beside_what_it_carries() {
+        assert_eq!(
+            serde_json::to_value(Refused::Ban(ban_event(None))).unwrap(),
+            json!({
+                "cause": "ban", "ban": "K7QM-2XPA", "reason": "Aimbot", "endsAt": 1_794_000_000_000_i64,
+                "by": "maxime", "name": "kaito", "license": format!("license:{}", "a".repeat(40)),
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(Refused::Allowlist(allowlist_event())).unwrap(),
+            json!({
+                "cause": "allowlist", "request": "7KQ-2XP", "name": "kaito",
+                "license": format!("license:{}", "a".repeat(40)),
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(Refused::Allowlist(AllowlistEvent {
+                request: None,
+                name: None,
+                license: None
+            }))
+            .unwrap(),
+            json!({ "cause": "allowlist" })
+        );
+        assert_eq!(
+            serde_json::to_value(Refused::Maintenance(maintenance_event())).unwrap(),
+            json!({
+                "cause": "maintenance", "name": "kaito",
+                "license": format!("license:{}", "a".repeat(40)),
+            })
+        );
+    }
+
+    #[test]
+    fn the_contract_and_the_example_cover_the_refusals_and_the_ban_with_every_field() {
+        let events = [
+            (
+                "playerRefused",
+                serde_json::to_value(Refused::Ban(ban_event(None))).unwrap(),
+            ),
+            (
+                "playerRefused",
+                serde_json::to_value(Refused::Allowlist(allowlist_event())).unwrap(),
+            ),
+            (
+                "playerRefused",
+                serde_json::to_value(Refused::Maintenance(maintenance_event())).unwrap(),
+            ),
+            ("playerBanned", serde_json::to_value(ban_event(Some(3))).unwrap()),
+        ];
+        for (name, wire) in events {
+            if let Some(cause) = wire["cause"].as_str() {
+                assert!(CONTRACT.contains(&format!("`{cause}`")), "{cause}");
+            }
             let heading = format!("### `observer:{name}`");
             let start = CONTRACT
                 .find(&heading)
@@ -972,6 +1446,322 @@ mod tests {
     }
 
     #[test]
+    fn the_contract_and_the_example_cover_the_kick_event_with_every_field() {
+        let mut wire = serde_json::to_value(kick_event()).unwrap();
+        wire["player"] = json!(3);
+        let heading = "### `observer:playerKicked`";
+        let start = CONTRACT
+            .find(heading)
+            .unwrap_or_else(|| panic!("CONTRACT.md has no section {heading}"));
+        let section = &CONTRACT[start + heading.len()..];
+        let section = &section[..section.find("\n#").unwrap_or(section.len())];
+
+        assert!(CONTRACT.contains("| `observer:playerKicked` |"));
+        assert!(FILES[1].1.contains("TriggerEvent('observer:playerKicked'"));
+        assert!(FILES[1].1.contains("copy.player = id"));
+        assert!(EXAMPLE.contains("AddEventHandler('observer:playerKicked'"));
+        for field in wire.as_object().unwrap().keys() {
+            assert!(
+                section.contains(&format!("| `{field}` |")),
+                "{heading} does not document `{field}`"
+            );
+        }
+        for cause in [KickCause::Kick, KickCause::KickAll] {
+            let wire = serde_json::to_value(cause).unwrap();
+            assert!(
+                section.contains(&format!("`{}`", wire.as_str().unwrap())),
+                "{cause:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_kick_names_its_players_or_everyone_and_never_both() {
+        let kicks = BridgeAction::kicks(&[3, 12], "Kicked".to_owned(), kick_event());
+        let everyone = BridgeAction::kick_all(
+            "Kicked".to_owned(),
+            KickEvent {
+                cause: KickCause::KickAll,
+                ..kick_event()
+            },
+        );
+
+        assert_eq!(kicks.len(), 1);
+        assert_eq!(
+            decode(&kicks[0].encode()),
+            json!({
+                "action": "kick",
+                "payload": {
+                    "players": [3, 12],
+                    "message": "Kicked",
+                    "event": { "reason": "RDM", "by": "maxime", "cause": "kick" }
+                }
+            })
+        );
+        assert_eq!(
+            decode(&everyone.encode()),
+            json!({
+                "action": "kick",
+                "payload": {
+                    "all": true,
+                    "message": "Kicked",
+                    "event": { "reason": "RDM", "by": "maxime", "cause": "kickAll" }
+                }
+            })
+        );
+        assert_eq!(BridgeAction::kicks(&[], "Kicked".to_owned(), kick_event()), []);
+    }
+
+    #[test]
+    fn a_long_list_of_players_is_kicked_in_as_many_actions_as_the_console_line_asks() {
+        let players: Vec<u32> = (1..=2048).map(|id| id * 2_000_000).collect();
+        let event = KickEvent {
+            reason: "é".repeat(1500),
+            ..kick_event()
+        };
+
+        let kicks = BridgeAction::kicks(&players, "\"".repeat(900), event);
+
+        assert!(kicks.len() > 1);
+        let mut listed: Vec<u32> = Vec::new();
+        for kick in &kicks {
+            assert!(crate::stdin::allowed(&format!("observer_cmd {}", kick.encode())));
+            let BridgeAction::Kick {
+                players,
+                all,
+                message,
+                event,
+            } = kick
+            else {
+                panic!("not a kick");
+            };
+            assert!(!all && !players.is_empty());
+            assert_ne!(message, "");
+            assert_ne!(event.reason, "");
+            listed.extend(players.iter().copied());
+        }
+        assert_eq!(listed, players);
+        let one_line = BridgeAction::kicks(&players[..40], "Kicked".to_owned(), kick_event());
+        assert_eq!(one_line.len(), 1);
+    }
+
+    #[test]
+    fn an_announcement_or_a_message_at_its_longest_fits_the_console_line() {
+        let longest = "\u{1F697}".repeat(MAX_TEXT_CHARS);
+        let by = "m".repeat(32);
+
+        for event in [
+            BridgeEvent::Announcement {
+                message: longest.clone(),
+                by: by.clone(),
+            },
+            BridgeEvent::DirectMessage {
+                player: u32::MAX,
+                message: longest.clone(),
+                by: by.clone(),
+            },
+            BridgeEvent::Announcement {
+                message: "\n".repeat(MAX_TEXT_CHARS),
+                by,
+            },
+        ] {
+            assert!(
+                crate::stdin::allowed(&format!("observer_cmd {}", event.encode())),
+                "{} bytes",
+                event.encode().len() / 2
+            );
+        }
+    }
+
+    #[test]
+    fn a_ban_is_told_to_txadmin_s_listeners_under_txadmin_s_own_names() {
+        let temporary = BridgeAction::Banned { event: txadmin_ban() };
+        let permanent = BridgeAction::Banned {
+            event: TxAdminBan {
+                expiration: None,
+                duration_input: TxAdminBan::duration(None),
+                duration_translated: None,
+                target_net_id: None,
+                target_ids: vec!["discord:123456789012345678".to_owned()],
+                target_hwids: Vec::new(),
+                target_name: "identifiers".to_owned(),
+                ..txadmin_ban()
+            },
+        };
+
+        assert_eq!(
+            decode(&temporary.encode()),
+            json!({
+                "action": "banned",
+                "payload": { "event": {
+                    "author": "maxime",
+                    "reason": "Aimbot",
+                    "actionId": "K7QM-2XPA",
+                    "expiration": 1_794_000_000,
+                    "durationInput": "2 days",
+                    "durationTranslated": "2 days",
+                    "targetNetId": 3,
+                    "targetIds": [format!("license:{}", "a".repeat(40)), "discord:123456789012345678"],
+                    "targetHwids": [format!("4:{}", "ab".repeat(32))],
+                    "targetName": "kaito",
+                    "kickMessage": "Banned"
+                } }
+            })
+        );
+        assert_eq!(
+            decode(&permanent.encode())["payload"]["event"],
+            json!({
+                "author": "maxime",
+                "reason": "Aimbot",
+                "actionId": "K7QM-2XPA",
+                "expiration": false,
+                "durationInput": "permanent",
+                "targetIds": ["discord:123456789012345678"],
+                "targetHwids": [],
+                "targetName": "identifiers",
+                "kickMessage": "Banned"
+            })
+        );
+    }
+
+    #[test]
+    fn a_ban_s_length_reads_in_the_words_txadmin_s_panel_sends() {
+        for (minutes, words) in [
+            (None, "permanent"),
+            (Some(60), "1 hour"),
+            (Some(120), "2 hours"),
+            (Some(24 * 60), "1 day"),
+            (Some(3 * 24 * 60), "3 days"),
+            (Some(7 * 24 * 60), "1 week"),
+            (Some(14 * 24 * 60), "2 weeks"),
+            (Some(30 * 24 * 60), "1 month"),
+            (Some(365 * 24 * 60), "365 days"),
+            (Some(90), "90 minutes"),
+            (Some(1), "1 minute"),
+        ] {
+            assert_eq!(TxAdminBan::duration(minutes), words, "{minutes:?}");
+        }
+    }
+
+    #[test]
+    fn a_ban_told_to_txadmin_loses_tokens_then_identifiers_to_fit_the_console_line() {
+        let token = |n: u32| format!("4:{n:064x}");
+        let mut event = txadmin_ban();
+        event.target_hwids = (0..200).map(token).collect();
+        let many_tokens = BridgeAction::Banned { event: event.clone() }.fitted();
+        event.target_ids = (0..64).map(|n| format!("discord:{n:018}")).collect();
+        event.kick_message = "é".repeat(600);
+        let many_of_both = BridgeAction::Banned { event }.fitted();
+
+        let (BridgeAction::Banned { event: tokens_cut }, BridgeAction::Banned { event: both_cut }) =
+            (&many_tokens, &many_of_both)
+        else {
+            panic!("not bans");
+        };
+        for fitted in [&many_tokens, &many_of_both] {
+            assert!(crate::stdin::allowed(&format!(
+                "observer_cmd {}",
+                fitted.encode()
+            )));
+        }
+        assert_eq!(tokens_cut.target_ids, txadmin_ban().target_ids);
+        assert!((1..200).contains(&tokens_cut.target_hwids.len()));
+        assert_eq!(tokens_cut.target_hwids[0], token(0));
+        assert_eq!(both_cut.target_hwids, Vec::<String>::new());
+        assert!((1..64).contains(&both_cut.target_ids.len()));
+        assert_eq!(both_cut.target_ids[0], format!("discord:{:018}", 0));
+        assert_eq!(both_cut.kick_message, "é".repeat(600));
+    }
+
+    #[test]
+    fn a_lifted_ban_is_told_to_txadmin_s_listeners_under_txadmin_s_own_names() {
+        let named = BridgeAction::Lifted {
+            event: txadmin_revocation(),
+        };
+        let unnamed = BridgeAction::Lifted {
+            event: TxAdminRevocation {
+                player_name: None,
+                player_ids: vec!["discord:123456789012345678".to_owned()],
+                player_hwids: Vec::new(),
+                ..txadmin_revocation()
+            },
+        };
+
+        assert_eq!(
+            decode(&named.encode()),
+            json!({
+                "action": "lifted",
+                "payload": { "event": {
+                    "actionId": "K7QM-2XPA",
+                    "actionType": "ban",
+                    "actionReason": "Aimbot",
+                    "actionAuthor": "maxime",
+                    "playerName": "kaito",
+                    "playerIds": [format!("license:{}", "a".repeat(40)), "discord:123456789012345678"],
+                    "playerHwids": [format!("4:{}", "ab".repeat(32))],
+                    "revokedBy": "sarah"
+                } }
+            })
+        );
+        assert_eq!(
+            decode(&unnamed.encode())["payload"]["event"]["playerName"],
+            json!(false)
+        );
+    }
+
+    #[test]
+    fn a_lifted_ban_told_to_txadmin_loses_tokens_then_identifiers_to_fit_the_console_line() {
+        let mut event = txadmin_revocation();
+        event.player_hwids = (0..200).map(|n| format!("4:{n:064x}")).collect();
+        event.player_ids = (0..64).map(|n| format!("discord:{n:018}")).collect();
+        event.action_reason = "é".repeat(200);
+
+        let fitted = BridgeAction::Lifted { event }.fitted();
+
+        assert!(crate::stdin::allowed(&format!(
+            "observer_cmd {}",
+            fitted.encode()
+        )));
+        let BridgeAction::Lifted { event } = fitted else {
+            panic!("not a lift");
+        };
+        assert_eq!(event.player_hwids, Vec::<String>::new());
+        assert!((1..64).contains(&event.player_ids.len()));
+        assert_eq!(event.player_ids[0], format!("discord:{:018}", 0));
+        assert_eq!(event.action_reason, "é".repeat(200));
+    }
+
+    #[test]
+    fn the_contract_names_every_field_of_txadmin_s_ban_events() {
+        for (name, wire) in [
+            ("playerBanned", serde_json::to_value(txadmin_ban()).unwrap()),
+            (
+                "actionRevoked",
+                serde_json::to_value(txadmin_revocation()).unwrap(),
+            ),
+        ] {
+            let start = CONTRACT
+                .find(&format!("`txAdmin:events:{name}` |"))
+                .unwrap_or_else(|| panic!("CONTRACT.md does not map txAdmin's {name}"));
+            let row = &CONTRACT[start..];
+            let row = &row[..row.find('\n').unwrap_or(row.len())];
+
+            assert!(
+                FILES[1]
+                    .1
+                    .contains(&format!("txadminEvent('txAdmin:events:{name}', payload)")),
+                "the bridge does not raise txAdmin's {name}"
+            );
+            for field in wire.as_object().unwrap().keys() {
+                assert!(
+                    row.contains(&format!("`{field}`")),
+                    "CONTRACT.md does not name {name}'s `{field}`"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn an_action_is_cut_to_fit_the_console_line() {
         let mut event = ban_event(Some(3));
         event.reason = "r".repeat(3000);
@@ -982,6 +1772,17 @@ mod tests {
         };
 
         let fitted = long.fitted();
+        let named = BridgeAction::Verdict {
+            request: 7,
+            refusal: Some(Refusal {
+                message: "Ask the staff: 7KQ-2XP".to_owned(),
+                event: Refused::Allowlist(AllowlistEvent {
+                    name: Some("é".repeat(3000)),
+                    ..allowlist_event()
+                }),
+            }),
+        }
+        .fitted();
 
         assert!(crate::stdin::allowed(&format!(
             "observer_cmd {}",
@@ -994,6 +1795,15 @@ mod tests {
         assert!(message.chars().all(|c| c == 'é'));
         assert_ne!(event.reason, "");
         assert_eq!(every_action()[0].clone().fitted(), every_action()[0]);
+        assert!(crate::stdin::allowed(&format!("observer_cmd {}", named.encode())));
+        let BridgeAction::Verdict {
+            refusal: Some(refusal),
+            ..
+        } = named
+        else {
+            panic!("not a refusal");
+        };
+        assert_eq!(refusal.message, "Ask the staff: 7KQ-2XP");
     }
 
     #[test]
@@ -1194,6 +2004,76 @@ mod tests {
             Report::from_trace(&trace(BRIDGE, json!({ "type": "other", "kind": "hb" })), BRIDGE),
             None
         );
+    }
+
+    #[test]
+    fn a_page_of_the_resource_list_is_read_with_what_each_manifest_says() {
+        let page = Report::from_trace(
+            &TraceKind::Script {
+                resource: BRIDGE.to_owned(),
+                payload: json!({
+                    "type": "observer",
+                    "kind": "resource_list",
+                    "list": 2,
+                    "page": 1,
+                    "last": false,
+                    "resources": [
+                        {
+                            "name": "ox_inventory",
+                            "state": "started",
+                            "path": "C:/srv/resources//[ox]/ox_inventory",
+                            "version": "2.44.1",
+                            "needs": ["/onesync", "ox_lib"],
+                            "provides": ["inventory"]
+                        },
+                        { "name": "taxi", "state": "stopped" }
+                    ]
+                }),
+            },
+            BRIDGE,
+        );
+
+        assert_eq!(
+            page,
+            Some(Report::ResourceList {
+                number: 2,
+                page: 1,
+                last: false,
+                resources: vec![
+                    Reported {
+                        name: "ox_inventory".to_owned(),
+                        state: "started".to_owned(),
+                        path: Some("C:/srv/resources//[ox]/ox_inventory".to_owned()),
+                        version: Some("2.44.1".to_owned()),
+                        needs: vec!["/onesync".to_owned(), "ox_lib".to_owned()],
+                        provides: vec!["inventory".to_owned()],
+                    },
+                    Reported {
+                        name: "taxi".to_owned(),
+                        state: "stopped".to_owned(),
+                        ..Reported::default()
+                    },
+                ],
+            })
+        );
+    }
+
+    #[test]
+    fn the_resource_reports_the_list_once_the_cfg_has_run_and_after_each_refresh() {
+        let lua = FILES[1].1;
+
+        assert!(lua.contains("report('resource_list', { list = list, page = page, last = page == pages"));
+        assert!(lua.contains("    reportResourceList()\n    reportPlayers()\n"));
+        assert!(lua.contains("AddEventHandler('onResourceListRefresh', function()"));
+        for native in [
+            "GetResourceState(name)",
+            "GetResourcePath(name)",
+            "GetResourceMetadata(name, 'version', 0)",
+            "'dependency', 'dependencie'",
+            "'provide'",
+        ] {
+            assert!(lua.contains(native), "{native}");
+        }
     }
 
     #[test]

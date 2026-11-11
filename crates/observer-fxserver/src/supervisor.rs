@@ -32,6 +32,7 @@ use crate::bridge::{self, BridgeAction, BridgeEvent, Report, StopReason};
 use crate::cfg;
 use crate::console::{ConsoleHub, LineAssembler, LineFlags, LineKind, on_channel, plain, sanitize};
 use crate::crashes::{self, Collected, DumpLimits, HangSnapshotLimits, SnapshotFailure};
+use crate::entities::{EntityReport, EntityReportKind};
 use crate::exit;
 use crate::health::{self, HangCause, Health, HealthLimits, PlayerList, Players, Probe, Problem, Verdict};
 use crate::hook;
@@ -41,8 +42,12 @@ use crate::perf::TickReport;
 use crate::players::{PlayerReport, PlayerReportKind};
 use crate::pre_launch::{self, PreLaunch, PreLaunchRequest, PreLaunchResult, TOOLS};
 use crate::recovery::{Next, Recovery, RecoveryPolicy};
+use crate::resources::Book;
 use crate::start::{self, Progress};
-use crate::stdin::{CommandRefusal, Credentials, StdinError, StdinWriter, SystemLine, UserCommand, Write};
+use crate::stdin::{
+    CommandRefusal, Credentials, ResourceName, ResourceVerb, StdinError, StdinWriter, SystemLine,
+    UserCommand, Write,
+};
 use crate::trace::{self, Trace, TraceDecoder, TraceKind};
 use crate::tree::{self, TreeContext};
 
@@ -66,6 +71,8 @@ const PROCESS_EVENTS: usize = 1024;
 const PLAYER_REPORTS: usize = 8192;
 /// Every resource of a server that counts reports each second it had something to count.
 const HOOK_REPORTS: usize = 8192;
+/// A sweep of the entities comes in a few dozen parts.
+const ENTITY_REPORTS: usize = 256;
 /// How often the tree's members are compared with what its notifications said.
 const RECONCILE_EVERY: Duration = Duration::from_secs(5);
 /// A member younger than this is the notifications' to report: a fork may not have run its program
@@ -309,6 +316,11 @@ pub enum EventKind {
         rss: u64,
         external: u64,
     },
+    /// The bridge listed every resource FXServer knows, once its cfg has run and after each
+    /// `refresh`: [`Supervisor::resources`] has them.
+    ResourceList {
+        resources: usize,
+    },
     /// The wait of a stop for the resources that held it ended.
     StopHeld {
         /// Who had not released the stop.
@@ -450,6 +462,8 @@ pub struct Status {
     pub port: Option<u16>,
     /// The bridge's resource name in the server that runs now, drawn for its start.
     pub bridge: Option<String>,
+    /// Whether the server that runs now raises txAdmin's events too, as it was launched.
+    pub txadmin_events: Option<bool>,
     /// How far the start has come, while the server is starting.
     pub start: Option<StartStatus>,
     /// The resources every stop of the run waits for, as the bridge last told them, in name order.
@@ -527,9 +541,13 @@ pub enum ControlError {
     Refused(#[from] CommandRefusal),
     #[error(transparent)]
     Stdin(#[from] StdinError),
+    #[error("Observer's bridge is not a resource to start or stop")]
+    Bridge,
 }
 
 type Reply<T> = oneshot::Sender<Result<T, ControlError>>;
+/// How a line handed to the stdin writer went, once it is known.
+type Written = oneshot::Receiver<Result<(), StdinError>>;
 
 enum Request {
     Start {
@@ -567,7 +585,17 @@ enum Request {
     Command {
         command: UserCommand,
         actor: String,
-        reply: Reply<oneshot::Receiver<Result<(), StdinError>>>,
+        reply: Reply<Written>,
+    },
+    Resource {
+        verb: ResourceVerb,
+        name: ResourceName,
+        by: String,
+        reply: Reply<Written>,
+    },
+    RefreshResources {
+        by: String,
+        reply: Reply<Written>,
     },
     Shutdown {
         shortened: bool,
@@ -579,19 +607,68 @@ enum Request {
     SkipHangSnapshots,
 }
 
+/// The bridge's report of the resources started, with the starts and stops since the one before
+/// as `[name, "start" | "stop"]`: taken into what the run knows of its resources, and handed on.
+fn resources_started(
+    held: &RunResources,
+    started: Vec<String>,
+    events: Vec<(String, String)>,
+    dropped: u32,
+) -> EventKind {
+    let events: Vec<ResourceEvent> = events
+        .into_iter()
+        .filter_map(|(name, change)| {
+            let started = match change.as_str() {
+                "start" => true,
+                "stop" => false,
+                _ => return None,
+            };
+            Some(ResourceEvent { name, started })
+        })
+        .collect();
+    let turns: Vec<(String, bool)> = events
+        .iter()
+        .map(|event| (event.name.clone(), event.started))
+        .collect();
+    if let Some((_, book)) = &mut *held.lock().unwrap_or_else(PoisonError::into_inner) {
+        book.started(&started, &turns, now_ms());
+    }
+    EventKind::Resources {
+        started,
+        events,
+        dropped,
+    }
+}
+
 /// The latest spawn's progress and when it was spawned: what FXServer said as it started, kept
 /// after the start and until the next one.
 type LatestStart = Arc<Mutex<Option<(i64, Arc<Progress>)>>>;
+
+/// What the bridge of the run that is up reported of its resources, with the run's generation:
+/// none while no server runs.
+type RunResources = Arc<Mutex<Option<(u32, Book)>>>;
+
+/// The resources of the run that is up.
+#[derive(Debug, Clone)]
+pub struct Resources {
+    pub generation: u32,
+    /// As the bridge reported them: nothing listed until the cfg has run.
+    pub book: Book,
+    /// What the console said of them.
+    pub marks: start::Marks,
+}
 
 /// The handle to the supervisor task. Clones talk to the same task.
 #[derive(Clone)]
 pub struct Supervisor {
     latest_start: LatestStart,
+    resources: RunResources,
     latest_hook: LatestHook,
     requests: mpsc::Sender<Request>,
     events: broadcast::Sender<Event>,
     processes: broadcast::Sender<TreeEvent>,
     players: broadcast::Sender<PlayerReport>,
+    entities: broadcast::Sender<EntityReport>,
     counts: broadcast::Sender<HookReport>,
     status: watch::Receiver<Status>,
     readings: watch::Receiver<Readings>,
@@ -605,6 +682,7 @@ impl Supervisor {
         let events = broadcast::channel(EVENTS).0;
         let processes = broadcast::channel(PROCESS_EVENTS).0;
         let players = broadcast::channel(PLAYER_REPORTS).0;
+        let entities = broadcast::channel(ENTITY_REPORTS).0;
         let counts = broadcast::channel(HOOK_REPORTS).0;
         let initial = Status {
             state: State::Stopped,
@@ -619,6 +697,7 @@ impl Supervisor {
             name: None,
             port: None,
             bridge: None,
+            txadmin_events: None,
             start: None,
             holders: Vec::new(),
             stop: None,
@@ -629,9 +708,11 @@ impl Supervisor {
         let (signals_tx, signals) = mpsc::channel(CHANNEL);
         let (probes_tx, probes) = mpsc::channel(CHANNEL);
         let latest_start = LatestStart::default();
+        let resources = RunResources::default();
         let latest_hook = LatestHook::default();
         let actor = Actor {
             latest_start: Arc::clone(&latest_start),
+            resources: Arc::clone(&resources),
             latest_hook: Arc::clone(&latest_hook),
             counts: counts.clone(),
             recovery: Recovery::new(settings.recovery.clone()),
@@ -640,6 +721,7 @@ impl Supervisor {
             events: events.clone(),
             processes: processes.clone(),
             players: players.clone(),
+            entities: entities.clone(),
             status: status_tx,
             readings: readings_tx,
             requests: requests_rx,
@@ -668,11 +750,13 @@ impl Supervisor {
         (
             Self {
                 latest_start,
+                resources,
                 latest_hook,
                 requests,
                 events,
                 processes,
                 players,
+                entities,
                 counts,
                 status,
                 readings,
@@ -714,6 +798,60 @@ impl Supervisor {
         latest
             .as_ref()
             .map(|(spawned_ms, progress)| (*spawned_ms, progress.warnings()))
+    }
+
+    /// The resources of the run that is up, as its bridge reported them and as its console spoke
+    /// of them. None while no server runs.
+    pub fn resources(&self) -> Option<Resources> {
+        let (generation, book) = self
+            .resources
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()?;
+        let marks = self
+            .latest_start
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()
+            .map(|(_, progress)| progress.marks())
+            .unwrap_or_default();
+        Some(Resources {
+            generation,
+            book,
+            marks,
+        })
+    }
+
+    /// Writes FXServer's own `start`, `stop` or `restart` of `name` to its console, echoed there
+    /// as `by`'s command: only on a running server whose bridge has reported, and never for the
+    /// bridge itself.
+    pub async fn resource(
+        &self,
+        verb: ResourceVerb,
+        name: ResourceName,
+        by: &str,
+    ) -> Result<(), ControlError> {
+        let written = self
+            .ask(|reply| Request::Resource {
+                verb,
+                name,
+                by: by.to_owned(),
+                reply,
+            })
+            .await?;
+        Ok(written.await.map_err(|_| StdinError::Closed)??)
+    }
+
+    /// Writes FXServer's `refresh`, which reads its resource folders again, under the conditions
+    /// of [`Supervisor::resource`].
+    pub async fn refresh_resources(&self, by: &str) -> Result<(), ControlError> {
+        let written = self
+            .ask(|reply| Request::RefreshResources {
+                by: by.to_owned(),
+                reply,
+            })
+            .await?;
+        Ok(written.await.map_err(|_| StdinError::Closed)??)
     }
 
     /// Gives the start under way [`START_EXTENSION`] more before it is taken for stuck, counted
@@ -820,6 +958,12 @@ impl Supervisor {
     /// logged, since a join carries the player's address.
     pub fn player_reports(&self) -> broadcast::Receiver<PlayerReport> {
         self.players.subscribe()
+    }
+
+    /// What the bridge reports about the server's entities, while Observer asks for them: the
+    /// parts of each sweep, and the answers to deletions.
+    pub fn entity_reports(&self) -> broadcast::Receiver<EntityReport> {
+        self.entities.subscribe()
     }
 
     /// What the resources of a start that counts report, each second. Off the event bus too:
@@ -964,6 +1108,8 @@ struct Run {
     layout: Layout,
     /// The bridge's name in this run: only its reports are taken.
     bridge: String,
+    /// Whether this run was launched to raise txAdmin's events too.
+    txadmin_events: bool,
     exit: ExitWatch,
     tree: Arc<ProcessTree>,
     stdin: StdinWriter,
@@ -976,6 +1122,9 @@ struct Run {
     /// The start as published last, and the instant its `stuck_at_ms` was worked out from.
     start: Option<(StartStatus, Option<Instant>)>,
     bridge_ready: bool,
+    /// The name the bridge gave the server for maintenance, as `/info.json` shows it: not the
+    /// server's own.
+    maintenance_name: Option<String>,
     ready_at: Option<Instant>,
     after: Option<After>,
     ending: Option<Ending>,
@@ -1108,12 +1257,14 @@ enum Wake {
 
 struct Actor {
     latest_start: LatestStart,
+    resources: RunResources,
     latest_hook: LatestHook,
     settings: Settings,
     console: Arc<ConsoleHub>,
     events: broadcast::Sender<Event>,
     processes: broadcast::Sender<TreeEvent>,
     players: broadcast::Sender<PlayerReport>,
+    entities: broadcast::Sender<EntityReport>,
     counts: broadcast::Sender<HookReport>,
     status: watch::Sender<Status>,
     readings: watch::Sender<Readings>,
@@ -1224,7 +1375,15 @@ impl Actor {
                 let _ = reply.send(self.announce(event));
             }
             Request::Act { action, reply } => {
-                let _ = reply.send(self.to_bridge(SystemLine::Action(action)));
+                let renamed = match &action {
+                    BridgeAction::ServerName { name } => Some(name.as_deref().and_then(health::project_name)),
+                    _ => None,
+                };
+                let written = self.to_bridge(SystemLine::Action(action));
+                if let (Ok(()), Some(name), Some(run)) = (&written, renamed, self.run.as_mut()) {
+                    run.maintenance_name = name;
+                }
+                let _ = reply.send(written);
             }
             Request::Command {
                 command,
@@ -1232,6 +1391,17 @@ impl Actor {
                 reply,
             } => {
                 let _ = reply.send(self.command(command, actor));
+            }
+            Request::Resource {
+                verb,
+                name,
+                by,
+                reply,
+            } => {
+                let _ = reply.send(self.resource(verb, name, by));
+            }
+            Request::RefreshResources { by, reply } => {
+                let _ = reply.send(self.asked(SystemLine::Refresh, by));
             }
             Request::Shutdown { shortened, reason } => self.shutdown(shortened, reason),
             Request::Configure(launch) => self.configure(*launch),
@@ -1263,15 +1433,18 @@ impl Actor {
                 run.players = Some(*players);
                 true
             }
-            Probe::Info(Ok(info))
-                if run.build != Some(info.build)
+            Probe::Info(Ok(info)) => {
+                // Read after the bridge renamed the server for maintenance, the name is not its own.
+                let own = info.name.is_none() || info.name != run.maintenance_name;
+                let changed = run.build != Some(info.build)
                     || run.game_build != info.game_build
-                    || self.name != info.name =>
-            {
+                    || (own && self.name != info.name);
                 run.build = Some(info.build);
                 run.game_build = info.game_build;
-                self.name.clone_from(&info.name);
-                true
+                if own {
+                    self.name.clone_from(&info.name);
+                }
+                changed
             }
             _ => false,
         };
@@ -1472,11 +1645,31 @@ impl Actor {
         }
     }
 
-    fn command(
-        &mut self,
-        command: UserCommand,
-        actor: String,
-    ) -> Result<oneshot::Receiver<Result<(), StdinError>>, ControlError> {
+    /// The bridge is Observer's own: it ends with the server, and by nothing asked for here.
+    fn resource(&self, verb: ResourceVerb, name: ResourceName, by: String) -> Result<Written, ControlError> {
+        let bridge = self
+            .run
+            .as_ref()
+            .is_some_and(|run| name.as_str().eq_ignore_ascii_case(&run.bridge));
+        if bridge {
+            return Err(ControlError::Bridge);
+        }
+        self.asked(SystemLine::Resource(verb, name), by)
+    }
+
+    /// Writes a line of Observer's that `by` asked for, on a running server whose bridge has
+    /// reported: nothing is queued for a server still starting or already stopping.
+    fn asked(&self, line: SystemLine, by: String) -> Result<Written, ControlError> {
+        match (&self.run, self.phase) {
+            (Some(run), Phase::Running) if run.bridge_ready => {
+                Ok(run.stdin.send(Write::Asked { line, actor: by }))
+            }
+            (Some(_), Phase::Notice { .. } | Phase::Quitting { .. }) => Err(ControlError::Stopping),
+            _ => Err(ControlError::NotRunning),
+        }
+    }
+
+    fn command(&mut self, command: UserCommand, actor: String) -> Result<Written, ControlError> {
         let Some(run) = &mut self.run else {
             return Err(ControlError::NotRunning);
         };
@@ -2087,6 +2280,13 @@ impl Actor {
             });
             return;
         }
+        if let Some(kind) = EntityReportKind::from_trace(&trace.kind, &run.bridge) {
+            let _ = self.entities.send(EntityReport {
+                generation: trace.generation,
+                kind,
+            });
+            return;
+        }
         let event = match Report::from_trace(&trace.kind, &run.bridge) {
             Some(Report::Ready { .. } | Report::Heartbeat) => {
                 run.health.heartbeat(Instant::now());
@@ -2105,21 +2305,24 @@ impl Actor {
                 started,
                 events,
                 dropped,
-            }) => EventKind::Resources {
-                started,
-                events: events
-                    .into_iter()
-                    .filter_map(|(name, change)| {
-                        let started = match change.as_str() {
-                            "start" => true,
-                            "stop" => false,
-                            _ => return None,
-                        };
-                        Some(ResourceEvent { name, started })
-                    })
-                    .collect(),
-                dropped,
-            },
+            }) => resources_started(&self.resources, started, events, dropped),
+            Some(Report::ResourceList {
+                number,
+                page,
+                last,
+                resources,
+            }) => {
+                let mut held = self.resources.lock().unwrap_or_else(PoisonError::into_inner);
+                let Some((_, book)) = &mut *held else {
+                    return;
+                };
+                if !book.page(number, page, last, resources, &run.bridge, now_ms()) {
+                    return;
+                }
+                EventKind::ResourceList {
+                    resources: book.resources().len(),
+                }
+            }
             Some(Report::Heap {
                 heap_used,
                 heap_total,
@@ -2437,6 +2640,7 @@ impl Actor {
         let cancel = CancellationToken::new();
         let (stdin, stdin_task) = StdinWriter::start(spawned.stdin, generation, Arc::clone(&self.console));
         let progress = self.progress_of(prepared.plan);
+        *self.resources.lock().unwrap_or_else(PoisonError::into_inner) = Some((generation, Book::default()));
         let mut tasks = vec![
             tokio::spawn(read_console(
                 spawned.stdout,
@@ -2490,6 +2694,7 @@ impl Actor {
             game_build: None,
             layout,
             bridge: prepared.bridge,
+            txadmin_events: prepared.settings.txadmin_events,
             exit: spawned.exit,
             tree,
             stdin,
@@ -2500,6 +2705,7 @@ impl Actor {
             progress,
             start: None,
             bridge_ready: false,
+            maintenance_name: None,
             ready_at: None,
             after: None,
             ending: None,
@@ -2613,6 +2819,7 @@ impl Actor {
         let Some(run) = self.run.take() else {
             return;
         };
+        *self.resources.lock().unwrap_or_else(PoisonError::into_inner) = None;
         self.readings.send_replace(Readings::default());
         self.collect_dumps(&run.layout).await;
         let Run { after, ending, .. } = run;
@@ -2783,6 +2990,7 @@ impl Actor {
             name: self.name.clone(),
             port: self.port,
             bridge: run.map(|run| run.bridge.clone()),
+            txadmin_events: run.map(|run| run.txadmin_events),
             start: run
                 .filter(|_| self.state == State::Starting)
                 .and_then(|run| run.start.as_ref())

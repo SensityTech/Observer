@@ -4,6 +4,7 @@
 
 mod about;
 mod account;
+mod allowlist;
 mod artifacts;
 mod audit;
 mod auth;
@@ -13,12 +14,17 @@ mod cfg;
 mod changes;
 mod debug;
 mod diagnostics;
+mod docs;
 mod drops;
+mod entities;
 mod features;
 mod files;
+mod maintenance;
 mod map;
 mod metrics;
+mod moderation;
 mod players;
+mod resources;
 mod schedule;
 mod servers;
 mod settings;
@@ -78,6 +84,9 @@ pub(crate) fn routes() -> Vec<Route> {
     // which the handler checks once it has read the line.
     let command = Permission(P::CONSOLE_WRITE);
     let logs = Permission(P::LOGS_DOWNLOAD);
+    // Starting, stopping and restarting a resource, and having FXServer read its folders again:
+    // one permission of their own, less than the console's, which runs any command.
+    let resources = Permission(P::RESOURCES_CONTROL);
     // The schedule's settings take the password again; skipping, restoring or delaying its next
     // restart are operations, and so is a single restart, which is the server control's.
     let plan = Permission(P::SCHEDULE_MANAGE);
@@ -96,18 +105,42 @@ pub(crate) fn routes() -> Vec<Route> {
     // too, which the service checks on what is asked. Retentions and erasures are the owner's.
     let players = Permission(P::PLAYERS_VIEW);
     let erase = ReauthenticatedOwner;
-    // Bans are seen, made and lifted under three permissions. The refusal message is the only text
-    // Observer shows players, so changing it takes the settings' permission and the password again.
+    // Bans are seen, made, edited and lifted under four permissions. The refusal message is a text
+    // Observer shows players, so changing it takes the settings' permission and the password again;
+    // the templates are saved with it, and read by whoever bans.
     let bans = Permission(P::BANS_VIEW);
     let ban = Permission(P::PLAYERS_BAN);
+    let edit_ban = Permission(P::BANS_EDIT);
     let lift = Permission(P::BANS_LIFT);
     let read_ban_settings = Permission(P::SETTINGS_VIEW);
     let change_ban_settings = Reauthenticated(P::SETTINGS_MANAGE);
+    // A kick, an announcement and a message to a player are three permissions. Kicking everyone
+    // empties the server as a restart does, so it is the server control's. The kick message is
+    // shown to players as the bans' message is: the settings' permission and the password again.
+    let kick = Permission(P::PLAYERS_KICK);
+    let announce = Permission(P::PLAYERS_ANNOUNCE);
+    let message = Permission(P::PLAYERS_MESSAGE);
+    // The allowlist's lists hold names and licences, the players' own; answering a request,
+    // approving a licence or taking an approval back is its own permission. Its switch and its
+    // message go by the rule of the bans' message.
+    let allowlist = Permission(P::PLAYERS_VIEW);
+    let admit = Permission(P::ALLOWLIST_MANAGE);
+    // Maintenance closes the server to players as a stop does: turning it on or off is the server
+    // control's, and so is reading the message players will get before doing it. That message and
+    // the list of those who still get in go by the rule of the bans' message.
+    let maintain = Permission(P::SERVER_CONTROL);
     // Where players stand is its own permission. The image comes from a host path, which is the
     // owner's to read, with the password again; the calibration and colours are settings.
     let map = Permission(P::PLAYERS_MAP);
     let map_image = ReauthenticatedOwner;
     let change_map = Reauthenticated(P::SETTINGS_MANAGE);
+    // The server's entities are seen under one permission and deleted under another. Who owns
+    // one is told only to who also sees the live map, which the service checks. How often the
+    // server lists them is a setting.
+    let entities = Permission(P::ENTITIES_VIEW);
+    let delete_entities = Permission(P::ENTITIES_DELETE);
+    let read_entities_settings = Permission(P::SETTINGS_VIEW);
+    let change_entities = Reauthenticated(P::SETTINGS_MANAGE);
     // Statistics name nobody; the log, its export and reason groups are `PLAYERS_VIEW`'s.
     let drops = Permission(P::DROPS_VIEW);
     // What changed between starts: the history for its permission, the contents behind the critical
@@ -201,6 +234,10 @@ pub(crate) fn routes() -> Vec<Route> {
         route(M::POST,   "/servers/default/console",    command,      servers::command),
         route(M::GET,    "/servers/default/console/logs",        logs, servers::log_files),
         route(M::GET,    "/servers/default/console/logs/{name}", logs, servers::download_log),
+        route(M::POST,   "/servers/default/resources/start",   resources, resources::start),
+        route(M::POST,   "/servers/default/resources/stop",    resources, resources::stop),
+        route(M::POST,   "/servers/default/resources/restart", resources, resources::restart),
+        route(M::POST,   "/servers/default/resources/rescan",  resources, resources::rescan),
         route(M::PUT,    "/servers/default/schedule",       edit_schedule, schedule::change),
         route(M::POST,   "/servers/default/schedule/skip",  plan,          schedule::skip),
         route(M::DELETE, "/servers/default/schedule/skip",  plan,          schedule::restore),
@@ -228,6 +265,7 @@ pub(crate) fn routes() -> Vec<Route> {
         route(M::GET,    "/metrics/runs",               dashboard,    metrics::runs),
         route(M::GET,    "/about",                      Session,      about::about),
         route(M::GET,    "/about/licences",             Session,      about::licences),
+        route(M::GET,    "/docs/integration",           Session,      docs::integration),
         route(M::GET,    "/servers/default/crashes/{id}/files/{name}", dumps, diagnostics::download_file),
         route(M::DELETE, "/servers/default/crashes/{id}/files",        dumps, diagnostics::delete_files),
         route(M::GET,    "/servers/default/players",           players, players::page),
@@ -242,13 +280,42 @@ pub(crate) fn routes() -> Vec<Route> {
         route(M::GET,    "/servers/default/players/map/image",     map,        map::image),
         route(M::PUT,    "/servers/default/players/map/image",     map_image,  map::set_image),
         route(M::DELETE, "/servers/default/players/map/image",     map_image,  map::remove_image),
+        route(M::GET,    "/servers/default/entities",          entities,               entities::page),
+        route(M::GET,    "/servers/default/entities/map",      entities,               entities::map),
+        route(M::POST,   "/servers/default/entities/delete",   delete_entities,        entities::delete),
+        route(M::GET,    "/servers/default/entities/settings", read_entities_settings, entities::settings),
+        route(M::PUT,    "/servers/default/entities/settings", change_entities,        entities::change_settings),
         route(M::GET,    "/servers/default/players/{id}",      players, players::profile),
         route(M::GET,    "/servers/default/players/{id}/bans", bans,    bans::of_player),
         route(M::GET,    "/servers/default/bans",              bans,    bans::page),
         route(M::POST,   "/servers/default/bans",              ban,     bans::create),
         route(M::GET,    "/servers/default/bans/settings",     read_ban_settings,   bans::settings),
         route(M::PUT,    "/servers/default/bans/settings",     change_ban_settings, bans::change_settings),
+        route(M::GET,    "/servers/default/bans/templates",    ban,     bans::templates),
+        route(M::PATCH,  "/servers/default/bans/{code}",       edit_ban, bans::edit),
         route(M::POST,   "/servers/default/bans/{code}/lift",  lift,    bans::lift),
+        route(M::POST,   "/servers/default/kicks",             kick,     moderation::kick),
+        route(M::POST,   "/servers/default/kicks/all",         control,  moderation::kick_all),
+        route(M::GET,    "/servers/default/kicks/settings",    read_ban_settings,   moderation::settings),
+        route(M::PUT,    "/servers/default/kicks/settings",    change_ban_settings, moderation::change_settings),
+        route(M::POST,   "/servers/default/announcements",     announce, moderation::announce),
+        route(M::POST,   "/servers/default/messages",          message,  moderation::message),
+        route(M::GET,    "/servers/default/allowlist/requests",                allowlist, allowlist::requests),
+        route(M::POST,   "/servers/default/allowlist/requests/deny",           admit,     allowlist::deny_requests),
+        route(M::POST,   "/servers/default/allowlist/requests/{code}/approve", admit,     allowlist::approve_request),
+        route(M::DELETE, "/servers/default/allowlist/requests/{code}",         admit,     allowlist::deny_request),
+        route(M::GET,    "/servers/default/allowlist/approved",                allowlist, allowlist::approved),
+        route(M::POST,   "/servers/default/allowlist/approved",                admit,     allowlist::approve),
+        route(M::DELETE, "/servers/default/allowlist/approved/{id}",           admit,     allowlist::remove_approval),
+        route(M::GET,    "/servers/default/allowlist/settings",     read_ban_settings,   allowlist::settings),
+        route(M::PUT,    "/servers/default/allowlist/settings",     change_ban_settings, allowlist::change_settings),
+        route(M::GET,    "/servers/default/maintenance",                maintain,            maintenance::preview),
+        route(M::PUT,    "/servers/default/maintenance",                maintain,            maintenance::set),
+        route(M::GET,    "/servers/default/maintenance/settings",       read_ban_settings,   maintenance::settings),
+        route(M::PUT,    "/servers/default/maintenance/settings",       change_ban_settings, maintenance::change_settings),
+        route(M::GET,    "/servers/default/maintenance/passes",         read_ban_settings,   maintenance::passes),
+        route(M::POST,   "/servers/default/maintenance/passes",         change_ban_settings, maintenance::add_pass),
+        route(M::DELETE, "/servers/default/maintenance/passes/{id}",    change_ban_settings, maintenance::remove_pass),
         route(M::GET,    "/servers/default/drops/summary",     drops,   drops::summary),
         route(M::GET,    "/servers/default/drops/series",      drops,   drops::series),
         route(M::GET,    "/servers/default/drops/signatures",  drops,   drops::signatures),

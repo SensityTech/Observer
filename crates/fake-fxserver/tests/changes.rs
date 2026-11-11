@@ -3,12 +3,14 @@
 // The helpers below are test code too, though not inside a `#[test]` function.
 #![allow(clippy::unwrap_used)]
 
+mod common;
+
 use std::fs;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr};
 use std::path::{Path, PathBuf};
-use std::sync::{LazyLock, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
+use common::{Port, Ports};
 use jiff::Timestamp;
 use observer_app::{
     Accounts, Caller, Changes, ChangesSetup, ChangesTask, Client, Clock, ComparedTo, DiffOptions,
@@ -39,26 +41,8 @@ const CONSOLE_ROUTE: (&str, &str) = ("POST", "/api/servers/default/console");
 /// A webhook planted in a resource, which no stored text may hold.
 const WEBHOOK: &str = "https://discord.com/api/webhooks/123456/PlantedTokenThatMustNeverBeStored";
 
-static PORTS: LazyLock<Mutex<Vec<u16>>> = LazyLock::new(|| Mutex::new((41940..=41942).collect()));
-
-struct Port(u16);
-
-impl Port {
-    async fn lease() -> Self {
-        loop {
-            if let Some(port) = PORTS.lock().unwrap_or_else(PoisonError::into_inner).pop() {
-                return Self(port);
-            }
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
-    }
-}
-
-impl Drop for Port {
-    fn drop(&mut self) {
-        PORTS.lock().unwrap_or_else(PoisonError::into_inner).push(self.0);
-    }
-}
+/// The labs' ports, lent to three at a time.
+static PORTS: Ports = Ports::new(3);
 
 struct Lab {
     dir: TempDir,
@@ -74,7 +58,7 @@ struct Lab {
 
 impl Lab {
     async fn new() -> Self {
-        let port = Port::lease().await;
+        let port = PORTS.lease().await;
         let dir = tempfile::tempdir().unwrap();
         let observer_data = dir.path().join("observer-data");
         let build = observer_data.join("artifacts").join(BUILD.to_string());
@@ -82,7 +66,7 @@ impl Lab {
         fs::create_dir_all(program.parent().unwrap()).unwrap();
         fs::copy(env!("CARGO_BIN_EXE_fake-fxserver"), &program).unwrap();
         let data = dir.path().join("server-data");
-        plant(&data, port.0);
+        plant(&data, port.number);
         let db = Database::open(dir.path().join("observer.sqlite3"), dir.path().join("backups"))
             .await
             .unwrap();
@@ -95,7 +79,7 @@ impl Lab {
             accounts,
             servers,
             data_dir: observer_data.clone(),
-            panel: SocketAddr::from(([127, 0, 0, 1], 41975)),
+            panel: common::panel(),
             artifacts: observer_data.join("artifacts"),
             console_logs: observer_data.join("logs/console"),
             log: None,

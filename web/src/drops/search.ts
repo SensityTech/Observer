@@ -2,6 +2,7 @@ import type { ChartCategory } from '../api/generated/ChartCategory';
 import type { DropCategory } from '../api/generated/DropCategory';
 import type { DropKind } from '../api/generated/DropKind';
 import type { DropsRange } from '../api/generated/DropsRange';
+import { defined, oneOf, text } from '../lib/search';
 
 // The page keeps its range, its chart and the log's filters in the address, so the profile, the
 // Diagnostics page and the cards of the page itself link to a filtered view: `/drops?run=12`.
@@ -71,27 +72,11 @@ export type DropsSearch = Omit<LogFilters, 'range'> & {
 /** The filters of the log the address may hold, in the order the query string writes them. */
 const FILTERS = ['category', 'kind', 'resource', 'signature', 'run', 'player', 'profile', 'group'] as const;
 
-const oneOf = <T extends string>(choices: readonly T[], value: unknown): T | undefined =>
-    choices.find((choice) => choice === value);
-
 /** A positive whole number, as the address or a form gives it; anything else is left out. */
 const id = (value: unknown) => {
     const number = typeof value === 'string' && /^\d+$/.test(value.trim()) ? Number(value) : value;
     return typeof number === 'number' && Number.isSafeInteger(number) && number > 0 ? number : undefined;
 };
-
-/**
- * A text filter, trimmed; an empty one is left out. What the address parsed as a number or a
- * boolean, a licence's digits or a name such as `true`, comes back as the text it was.
- */
-const text = (value: unknown) => {
-    const written = typeof value === 'number' || typeof value === 'boolean' ? String(value) : value;
-    return typeof written === 'string' && written.trim() !== '' ? written.trim() : undefined;
-};
-
-/** Drops the fields that are not set, so that two equal searches read the same. */
-const defined = <T extends object>(object: T): T =>
-    Object.fromEntries(Object.entries(object).filter(([, value]) => value !== undefined)) as T;
 
 /**
  * The page's address as the page reads it, whatever was typed into it: unknown or malformed fields

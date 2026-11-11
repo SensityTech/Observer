@@ -1,11 +1,13 @@
-//! Bans: the list and its search, a ban, its lifting, the bans of a profile, and the refusal
-//! message. A ban is addressed by its code, which names no player.
+//! Bans: the list and its search, a ban, its edits and its lifting, the bans of a profile, the
+//! refusal message and the templates. A ban is addressed by its code, which names no player.
 
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::{Extension, Json};
 use observer_app::Caller;
-use observer_domain::bans::{Ban, BanFilter, BanPage, BanRequest, BansSettings, LiftRequest};
+use observer_domain::bans::{
+    Ban, BanEditRequest, BanFilter, BanPage, BanRequest, BanTemplate, BansSettings, LiftRequest,
+};
 use serde::Deserialize;
 
 use crate::AppState;
@@ -46,6 +48,15 @@ pub(crate) async fn create(
     Ok((StatusCode::CREATED, Json(state.bans.ban(&caller, request).await?)))
 }
 
+pub(crate) async fn edit(
+    State(state): State<AppState>,
+    Extension(caller): Extension<Caller>,
+    Name(code): Name,
+    JsonBody(request): JsonBody<BanEditRequest>,
+) -> Result<Json<Ban>, Failure> {
+    Ok(Json(state.bans.edit(&caller, &code, request).await?))
+}
+
 pub(crate) async fn lift(
     State(state): State<AppState>,
     Extension(caller): Extension<Caller>,
@@ -54,6 +65,10 @@ pub(crate) async fn lift(
 ) -> Result<StatusCode, Failure> {
     state.bans.lift(&caller, &code, request).await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+pub(crate) async fn templates(State(state): State<AppState>) -> Result<Json<Vec<BanTemplate>>, Failure> {
+    Ok(Json(state.bans.templates().await?))
 }
 
 pub(crate) async fn of_player(State(state): State<AppState>, Id(id): Id) -> Result<Json<Vec<Ban>>, Failure> {

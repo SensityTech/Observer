@@ -7,12 +7,13 @@ use anyhow::Context;
 use axum::Router;
 use jiff::tz::TimeZone;
 use observer_app::{
-    Accounts, Artifacts, ArtifactsSetup, ArtifactsTask, AuditLog, Backups, BackupsHook, BackupsSetup, Bans,
-    BansSetup, BeforeSpawn, Changes, ChangesSetup, Clock, DatabaseFiles, DebugCounts, DebugSetup,
-    Diagnostics, DiagnosticsSetup, Drops, DropsSetup, Features, FeaturesSetup, LiveMap, MapSetup, Metrics,
-    MetricsSetup, OwnPaths, PRE_LAUNCH_LIMIT, PasswordCost, Players, PlayersSetup, Running, Schedule,
-    ScheduleSetup, ScheduleTask, Servers, Setup, Sources, Statistics, Supervision, Switched, Takeover, Tools,
-    ToolsHook, ToolsSetup, Updates, UpdatesSetup,
+    Accounts, Admission, AdmissionSetup, Artifacts, ArtifactsSetup, ArtifactsTask, AuditLog, Backups,
+    BackupsHook, BackupsSetup, Bans, BansSetup, BeforeSpawn, Changes, ChangesSetup, Clock, DatabaseFiles,
+    DebugCounts, DebugSetup, Diagnostics, DiagnosticsSetup, Drops, DropsSetup, Entities, EntitiesSetup,
+    Features, FeaturesSetup, LiveMap, MapSetup, Metrics, MetricsSetup, Moderation, ModerationSetup, OwnPaths,
+    PRE_LAUNCH_LIMIT, PasswordCost, Players, PlayersSetup, Running, Schedule, ScheduleSetup, ScheduleTask,
+    Servers, Setup, Sources, Statistics, Supervision, Switched, Takeover, Tools, ToolsHook, ToolsSetup,
+    Updates, UpdatesSetup,
 };
 use observer_artifacts::Http;
 use observer_artifacts::catalog::Catalog;
@@ -297,6 +298,19 @@ async fn run_until_stopped(
         }
         None => (None, None),
     };
+    // Nothing of it runs before a panel looks: the bridge lists the entities only then.
+    let (entities, listing) = if features.runs(Feature::Entities) {
+        let (entities, task) = Entities::start(EntitiesSetup {
+            db: db.clone(),
+            clock: clock.clone(),
+            supervision: supervision.clone(),
+            players: players.clone(),
+        });
+        let switched = features.switched(Feature::Entities, move || task.close());
+        (Some(entities), Some(switched))
+    } else {
+        (None, None)
+    };
     // After the players, whose start closes what an earlier Observer left open.
     let (drops, dropping) = match (&metrics, &players) {
         (Some(metrics), Some(players)) if features.runs(Feature::Drops) => {
@@ -327,6 +341,21 @@ async fn run_until_stopped(
         clock: clock.clone(),
         supervision: supervision.clone(),
         schedule: schedule.status(),
+    });
+    // Before FXServer boots too: it answers every connecting player, the bans' verdict included.
+    let (admission, admitting) = Admission::start(AdmissionSetup {
+        db: db.clone(),
+        clock: clock.clone(),
+        supervision: supervision.clone(),
+        bans: bans.clone(),
+        schedule: schedule.status(),
+    })
+    .await?;
+    let moderation = Moderation::new(ModerationSetup {
+        db: db.clone(),
+        clock: clock.clone(),
+        supervision: supervision.clone(),
+        bans: bans.clone(),
     });
 
     let listener = TcpListener::bind(config.http.listen)
@@ -399,11 +428,14 @@ async fn run_until_stopped(
         metrics: metrics.clone(),
         players,
         map,
+        entities,
         drops,
         changes,
         updates: updates.clone(),
         backups,
         bans,
+        moderation,
+        admission,
         statistics,
     };
     let state = observer_web::AppState::new(
@@ -512,9 +544,11 @@ async fn run_until_stopped(
     close(diagnosing).await;
     // After the supervision, so that FXServer's stop closes the sessions.
     close(mapping).await;
+    close(listing).await;
     close(playing).await;
     close(dropping).await;
     // After the supervision: the bridge answers no one once FXServer is down.
+    admitting.close().await;
     banning.close().await;
     debugging.close().await;
     // After the supervision: a stop of FXServer ends a snapshot's job, which this joins.

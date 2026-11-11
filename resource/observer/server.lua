@@ -1,6 +1,8 @@
 -- Observer's side of the server: it reports health to Observer through FXServer's structured trace
 -- channel, and turns Observer's commands into server events for other resources to handle.
--- It never shows anything to players but one text: the refusal message the owner wrote for bans.
+-- It never shows anything to players but what the owner wrote: the refusal messages, one for bans,
+-- one for maintenance mode, one for the allowlist, the kick message, and the name the server takes
+-- in the server list during maintenance.
 
 -- Bumped when a field is renamed or removed, when resources must find the bridge another way, and
 -- when the bridge gains an export, so that a resource can tell whether it is there; new fields keep
@@ -35,6 +37,9 @@ local EVENTS = {
     restartRescheduled = true,
     shuttingDown = true,
     startChanges = true,
+    announcement = true,
+    directMessage = true,
+    maintenance = true,
 }
 
 local function report(kind, fields)
@@ -356,6 +361,539 @@ local function followPositions()
     end)
 end
 
+-- The server's vehicles, peds and objects, read from OneSync's entities while someone looks at
+-- them. A sweep hands the frame back as it goes and stops past its budget, and the next ones space
+-- out when one costs too much. Every entity native raises on a handle that names no entity any
+-- more (FiveM's ServerGameState_Scripting.cpp): each is called under pcall, and a sweep that fails
+-- never ends the thread.
+local ENTITIES_EVERY_MIN_MS = 5000
+local ENTITIES_EVERY_MAX_MS = 60000
+local ENTITIES_FOR_MAX_MS = 60000
+-- In microseconds: what a sweep works in one frame before it yields, and in all before it stops.
+local ENTITIES_SLICE_US = 1000
+local ENTITIES_BUDGET_US = 50000
+-- Past either, in all or in the listing natives alone, the next sweeps come twice as far apart.
+local ENTITIES_COSTLY_US = 25000
+local ENTITIES_COSTLY_LIST_US = 10000
+local ENTITIES_ROWS_MAX = 20000
+local ENTITIES_PART_ROWS = 500
+local ENTITIES_PART_BYTES = 65536
+-- GetEntityScript walks every resource: this many lookups a sweep at most, once per entity.
+local ENTITIES_LOOKUPS_MAX = 300
+local ENTITIES_RESOURCES_MAX = 2048
+local ENTITIES_RESOURCE_NAME_MAX = 64
+local ENTITIES_DELETE_MAX = 100
+-- DeleteEntity only queues the removal, on the server's sync thread (ServerGameState.h): what is
+-- still there this much later was not deleted.
+local ENTITIES_DELETE_CHECK_MS = 250
+-- The numbers GetEntityType gives.
+local ENTITY_PED = 1
+local ENTITY_VEHICLE = 2
+local ENTITY_OBJECT = 3
+-- By what GetVehicleType answers; any other vehicle is 9.
+local VEHICLE_CLASSES = {
+    automobile = 1,
+    bike = 2,
+    boat = 3,
+    heli = 4,
+    plane = 5,
+    submarine = 6,
+    trailer = 7,
+    train = 8,
+}
+local VEHICLE_OTHER = 9
+local VEHICLE_TRAIN = 8
+local ENTITY_OCCUPIED = 1
+local ENTITY_RESOURCE_PENDING = 2
+
+-- Which start of the bridge listed an entity: a bridge started again numbers them from 1 again.
+local ENTITIES_EPOCH = GetGameTimer()
+local entitiesEvery = 15000
+local entitiesUntil = 0
+local entitiesFollowing = false
+-- How many times the cadence asked for the sweeps come apart, after costly ones.
+local entitiesSpacing = 1
+local entitiesSeq = 0
+local entitiesSweep = 0
+-- By net id, what never changes of an entity, read when it is first seen, and the serial drawn
+-- for it then: net ids are used again, under another handle (Pool.h numbers each use of a slot).
+local entities = {}
+local entitySerial = 0
+
+-- A clock in microseconds, which the game timer cannot give.
+local entitiesClock = function()
+    return GetGameTimer() * 1000
+end
+if type(os.nanotime) == 'function' then
+    local ok, value = pcall(os.nanotime)
+    if ok and type(value) == 'number' then
+        entitiesClock = function()
+            return os.nanotime() / 1000
+        end
+    end
+end
+
+local function finite(value)
+    return type(value) == 'number' and value == value and value ~= math.huge and value ~= -math.huge
+end
+
+-- A model hash as an unsigned number: the natives give it signed.
+local function unsignedHash(value)
+    if type(value) ~= 'number' then
+        return nil
+    end
+    value = math.floor(value)
+    if value < 0 then
+        value = value + 4294967296
+    end
+    if value < 0 or value > 4294967295 then
+        return nil
+    end
+    return value
+end
+
+-- The players' own peds, never listed nor deleted, and the vehicles a player sits in.
+local function playerEntities()
+    local peds, occupied = {}, {}
+    local ok, players = pcall(GetPlayers)
+    if not ok or type(players) ~= 'table' then
+        return peds, occupied
+    end
+    for index = 1, #players do
+        local okPed, ped = pcall(GetPlayerPed, players[index])
+        if okPed and type(ped) == 'number' and ped ~= 0 then
+            peds[ped] = true
+            local okVehicle, vehicle = pcall(GetVehiclePedIsIn, ped, false)
+            if okVehicle and type(vehicle) == 'number' and vehicle ~= 0 then
+                occupied[vehicle] = true
+            end
+        end
+    end
+    return peds, occupied
+end
+
+local function entityFirstSeen(netId, handle, kind)
+    local model = unsignedHash(GetEntityModel(handle))
+    if not model then
+        return nil
+    end
+    local class = 0
+    if kind == ENTITY_VEHICLE then
+        class = VEHICLE_CLASSES[GetVehicleType(handle)] or VEHICLE_OTHER
+    end
+    local population = GetEntityPopulationType(handle)
+    if type(population) ~= 'number' or population < 0 or population > 10 then
+        population = 0
+    end
+    entitySerial = entitySerial + 1
+    local entity = {
+        handle = handle,
+        serial = entitySerial,
+        kind = kind,
+        class = class,
+        model = model,
+        population = math.floor(population),
+        -- A name, false for none, nil until it is looked up.
+        resource = nil,
+        seen = 0,
+    }
+    entities[netId] = entity
+    return entity
+end
+
+-- One entity as `netId,serial,kind,class,model,x,y,z,owner,bucket,population,resource,flags`, the
+-- resource as its place in the sweep's list of names, 0 for none.
+local function entityRow(handle, kind, sweep)
+    local netId = NetworkGetNetworkIdFromEntity(handle)
+    if type(netId) ~= 'number' or netId <= 0 or netId > 65535 then
+        return nil
+    end
+    local entity = entities[netId]
+    if not entity or entity.handle ~= handle or entity.kind ~= kind then
+        entity = entityFirstSeen(netId, handle, kind)
+        if not entity then
+            return nil
+        end
+    end
+    entity.seen = entitiesSweep
+
+    local coords = GetEntityCoords(handle)
+    local x, y, z = coords.x, coords.y, coords.z
+    if not finite(x) or not finite(y) or not finite(z) then
+        return nil
+    end
+    local owner = NetworkGetEntityOwner(handle)
+    if type(owner) ~= 'number' or owner < 0 then
+        owner = -1
+    end
+    local bucket = GetEntityRoutingBucket(handle)
+    if type(bucket) ~= 'number' then
+        bucket = 0
+    end
+    local flags = 0
+    if kind == ENTITY_VEHICLE and sweep.occupied[handle] then
+        flags = flags + ENTITY_OCCUPIED
+    end
+
+    -- The resource that created it, as the server knew it the first time the entity was seen.
+    if entity.resource == nil and sweep.lookups < ENTITIES_LOOKUPS_MAX then
+        sweep.lookups = sweep.lookups + 1
+        local ok, name = pcall(GetEntityScript, handle)
+        if ok and type(name) == 'string' and #name > 0 and #name <= ENTITIES_RESOURCE_NAME_MAX then
+            entity.resource = name
+        else
+            entity.resource = false
+        end
+    end
+    local resource = 0
+    if entity.resource == nil then
+        flags = flags + ENTITY_RESOURCE_PENDING
+    elseif entity.resource then
+        resource = sweep.places[entity.resource]
+        if not resource then
+            if #sweep.names < ENTITIES_RESOURCES_MAX then
+                sweep.names[#sweep.names + 1] = entity.resource
+                resource = #sweep.names
+                sweep.places[entity.resource] = resource
+            else
+                resource = 0
+            end
+        end
+    end
+
+    return string.format(
+        '%d,%d,%d,%d,%d,%.1f,%.1f,%.1f,%d,%d,%d,%d,%d',
+        netId,
+        entity.serial,
+        kind,
+        entity.class,
+        entity.model,
+        x,
+        y,
+        z,
+        math.floor(owner),
+        math.floor(bucket),
+        entity.population,
+        resource,
+        flags
+    )
+end
+
+-- Why the server has no entity to list: only GTA V's are read, and only OneSync knows them.
+local function entitiesUnavailable()
+    if GetConvar('gamename', 'gta5') ~= 'gta5' then
+        return 'game'
+    end
+    if GetConvar('onesync', 'off') == 'off' or type(GetAllVehicles) ~= 'function' then
+        return 'onesync'
+    end
+end
+
+local function entitiesCadence()
+    return math.min(ENTITIES_EVERY_MAX_MS, entitiesEvery * entitiesSpacing)
+end
+
+local function sweepEntities()
+    entitiesSeq = entitiesSeq % 2147483647 + 1
+    local seq = entitiesSeq
+    local unavailable = entitiesUnavailable()
+    if unavailable then
+        report('entities', {
+            epoch = ENTITIES_EPOCH,
+            seq = seq,
+            -- Never alone on its line: the lines ending in `= true,` are the events of the contract.
+            last = true, part = 1,
+            rows = '',
+            unavailable = unavailable,
+        })
+        return
+    end
+    entitiesSweep = entitiesSweep + 1
+    local worked, frames = 0, 1
+    local slice = entitiesClock()
+    local function yield()
+        worked = worked + (entitiesClock() - slice)
+        frames = frames + 1
+        Wait(0)
+        slice = entitiesClock()
+    end
+    local function spent()
+        return worked + (entitiesClock() - slice)
+    end
+
+    local playerPeds, occupied = playerEntities()
+    local players = 0
+    for _ in pairs(playerPeds) do
+        players = players + 1
+    end
+
+    -- Each of the three takes the lock on the server's entities and makes the handles it lacks:
+    -- one a frame.
+    local lists, counts, listing = {}, {}, 0
+    for _, source in ipairs({
+        { 'vehicles', GetAllVehicles, ENTITY_VEHICLE },
+        { 'objects', GetAllObjects, ENTITY_OBJECT },
+        { 'peds', GetAllPeds, ENTITY_PED },
+    }) do
+        local started = entitiesClock()
+        local ok, list = pcall(source[2])
+        listing = listing + (entitiesClock() - started)
+        if ok and type(list) == 'table' then
+            counts[source[1]] = #list
+            lists[#lists + 1] = { source[3], list }
+        end
+        yield()
+    end
+
+    local sweep = { occupied = occupied, lookups = 0, places = {}, names = {} }
+    local rows, part, bytes, listed, failed = {}, 0, 0, 0, 0
+    local truncated = false
+    for _, each in ipairs(lists) do
+        local kind, list = each[1], each[2]
+        for index = 1, #list do
+            if listed >= ENTITIES_ROWS_MAX or spent() >= ENTITIES_BUDGET_US then
+                truncated = true
+                break
+            end
+            local handle = list[index]
+            if not (kind == ENTITY_PED and playerPeds[handle]) then
+                local ok, row = pcall(entityRow, handle, kind, sweep)
+                if not ok then
+                    failed = failed + 1
+                elseif row then
+                    rows[#rows + 1] = row
+                    listed = listed + 1
+                    bytes = bytes + #row + 1
+                    if #rows >= ENTITIES_PART_ROWS or bytes >= ENTITIES_PART_BYTES then
+                        part = part + 1
+                        report('entities', {
+                            epoch = ENTITIES_EPOCH,
+                            seq = seq,
+                            part = part,
+                            last = false,
+                            rows = table.concat(rows, ';'),
+                        })
+                        rows, bytes = {}, 0
+                    end
+                end
+            end
+            if entitiesClock() - slice >= ENTITIES_SLICE_US then
+                yield()
+            end
+        end
+        if truncated then
+            break
+        end
+    end
+
+    -- A sweep cut short did not see every entity: those it missed keep their serial.
+    if not truncated then
+        for netId, entity in pairs(entities) do
+            if entity.seen ~= entitiesSweep then
+                entities[netId] = nil
+            end
+        end
+    end
+    worked = spent()
+
+    if worked > ENTITIES_COSTLY_US or listing > ENTITIES_COSTLY_LIST_US then
+        entitiesSpacing = math.min(entitiesSpacing * 2, math.ceil(ENTITIES_EVERY_MAX_MS / entitiesEvery))
+    elseif entitiesSpacing > 1 and worked < ENTITIES_COSTLY_US / 2 and listing < ENTITIES_COSTLY_LIST_US / 2 then
+        entitiesSpacing = math.max(1, entitiesSpacing // 2)
+    end
+
+    counts.playerPeds = players
+    report('entities', {
+        epoch = ENTITIES_EPOCH,
+        seq = seq,
+        last = true, part = part + 1,
+        rows = table.concat(rows, ';'),
+        counts = counts,
+        listed = listed,
+        failed = failed,
+        truncated = truncated,
+        workUs = math.floor(worked),
+        listUs = math.floor(listing),
+        frames = frames,
+        everyMs = entitiesCadence(),
+        spaced = entitiesSpacing > 1,
+        resources = sweep.names,
+    })
+end
+
+-- One thread at most, which ends once Observer stopped asking.
+local function followEntities()
+    if entitiesFollowing then
+        return
+    end
+    entitiesFollowing = true
+    CreateThread(function()
+        while GetGameTimer() < entitiesUntil do
+            local started = GetGameTimer()
+            pcall(sweepEntities)
+            -- In steps, so that the thread ends within a second of Observer's last ask running out.
+            local nextAt = started + entitiesCadence()
+            while GetGameTimer() < entitiesUntil and GetGameTimer() < nextAt do
+                Wait(math.max(0, math.min(1000, nextAt - GetGameTimer())))
+            end
+        end
+        entitiesSpacing = 1
+        entitiesFollowing = false
+    end)
+end
+
+local function listEntities(payload)
+    if type(payload.everyMs) ~= 'number' or type(payload.forMs) ~= 'number' then
+        return
+    end
+    entitiesEvery = math.max(ENTITIES_EVERY_MIN_MS, math.min(ENTITIES_EVERY_MAX_MS, math.floor(payload.everyMs)))
+    entitiesUntil = GetGameTimer() + math.max(0, math.min(ENTITIES_FOR_MAX_MS, math.floor(payload.forMs)))
+    followEntities()
+end
+
+-- What becomes of one entity Observer asks to delete, and its handle once the engine was asked.
+-- Never a player's ped, a vehicle a player sits in or a train, and only the entity the last sweep
+-- listed under this net id.
+local function deleteEntity(netId, serial, playerPeds, occupied)
+    local okHandle, handle = pcall(NetworkGetEntityFromNetworkId, netId)
+    if not okHandle or type(handle) ~= 'number' or handle == 0 then
+        return 'gone'
+    end
+    local entity = entities[netId]
+    if not entity or entity.serial ~= serial or entity.handle ~= handle then
+        return 'changed'
+    end
+    local okModel, model = pcall(GetEntityModel, handle)
+    if not okModel then
+        return 'gone'
+    end
+    if unsignedHash(model) ~= entity.model then
+        return 'changed'
+    end
+    if entity.kind == ENTITY_PED then
+        if playerPeds[handle] then
+            return 'player'
+        end
+        local ok, player = pcall(IsPedAPlayer, handle)
+        if not ok then
+            return 'error'
+        end
+        if player then
+            return 'player'
+        end
+    elseif entity.kind == ENTITY_VEHICLE then
+        if occupied[handle] then
+            return 'occupied'
+        end
+        local ok, vehicleType = pcall(GetVehicleType, handle)
+        if not ok then
+            return 'error'
+        end
+        if vehicleType == 'train' or entity.class == VEHICLE_TRAIN then
+            return 'train'
+        end
+    end
+    if not pcall(DeleteEntity, handle) then
+        return 'error'
+    end
+    return 'deleted', handle
+end
+
+local function deleteListed(payload)
+    local request, targets = payload.request, payload.targets
+    if type(request) ~= 'number' or type(payload.deadline) ~= 'number' or type(targets) ~= 'table' then
+        return
+    end
+    -- Net ids and serials, one after the other.
+    local count = #targets // 2
+    if count == 0 or count > ENTITIES_DELETE_MAX or #targets % 2 ~= 0 then
+        return
+    end
+    for index = 1, #targets do
+        if type(targets[index]) ~= 'number' then
+            return
+        end
+    end
+    CreateThread(function()
+        local outcomes, deleted = {}, {}
+        local playerPeds, occupied = playerEntities()
+        local slice = entitiesClock()
+        for index = 1, count do
+            local netId, serial = math.floor(targets[index * 2 - 1]), math.floor(targets[index * 2])
+            local outcome
+            if payload.epoch ~= ENTITIES_EPOCH then
+                outcome = 'changed'
+            elseif os.time() > payload.deadline then
+                -- A server that hitched ran the command late: what is not done yet is not done.
+                outcome = 'late'
+            else
+                local ok, became, handle = pcall(deleteEntity, netId, serial, playerPeds, occupied)
+                outcome = ok and became or 'error'
+                if ok and handle then
+                    deleted[#deleted + 1] = { index, handle, netId }
+                end
+            end
+            outcomes[index] = { netId, outcome }
+            if entitiesClock() - slice >= ENTITIES_SLICE_US then
+                Wait(0)
+                slice = entitiesClock()
+            end
+        end
+        if #deleted > 0 then
+            Wait(ENTITIES_DELETE_CHECK_MS)
+            for _, each in ipairs(deleted) do
+                local ok, exists = pcall(DoesEntityExist, each[2])
+                if ok and exists then
+                    outcomes[each[1]][2] = 'unconfirmed'
+                else
+                    entities[each[3]] = nil
+                end
+            end
+        end
+        report('entitiesDeleted', { request = request, outcomes = outcomes })
+    end)
+end
+
+-- Whether the owner asked for txAdmin's events beside Observer's own.
+local function txadminEvents()
+    return GetConvarInt('observer_txadmin_events', 0) == 1
+end
+
+-- One of txAdmin's events, raised with the payload Observer wrote for it when the owner asked.
+local function txadminEvent(name, payload)
+    if type(payload.event) == 'table' and txadminEvents() then
+        TriggerEvent(name, payload.event)
+    end
+end
+
+-- `observer:playerKicked` for one player of a kick. Handlers may keep the table: each gets its own.
+local function kickedEvent(event, id)
+    local copy = {}
+    for key, value in pairs(event) do
+        copy[key] = value
+    end
+    copy.player = id
+    return copy
+end
+
+-- The convars FiveM's server list reads a server's name from, each with the server convar that
+-- keeps what it held while the server carries its maintenance name: convars, so that a bridge
+-- restarted in the middle of a run still gives the names back.
+local NAME_KEPT = 'observer_name_kept'
+local NAMES = {
+    { convar = 'sv_hostname', kept = 'observer_name_hostname' },
+    { convar = 'sv_projectName', kept = 'observer_name_project', info = true },
+}
+
+-- `sv_projectName` is a server info variable, set as the cfg sets it, with `sets`.
+local function setName(name, value)
+    if name.info then
+        SetConvarServerInfo(name.convar, value)
+    else
+        SetConvar(name.convar, value)
+    end
+end
+
 -- What Observer has the bridge do itself, and nothing else.
 local ACTIONS = {
     verdict = function(payload)
@@ -373,6 +911,54 @@ local ACTIONS = {
         end
         DropPlayer(tostring(id), payload.message)
     end,
+    -- Every event of a kick is raised before its first drop: all its players are still connected.
+    kick = function(payload)
+        local event = payload.event
+        if type(payload.message) ~= 'string' or payload.message == '' or type(event) ~= 'table' then
+            return
+        end
+        local everyone = payload.all == true
+        local players = everyone and GetPlayers() or payload.players
+        if type(players) ~= 'table' then
+            return
+        end
+        local txadmin = txadminEvents()
+        local function txadminKicked(target)
+            TriggerEvent('txAdmin:events:playerKicked', {
+                target = target,
+                author = event.by,
+                reason = event.reason,
+                dropMessage = payload.message,
+            })
+        end
+        local kicked = {}
+        for _, player in ipairs(players) do
+            local id = connected(player)
+            if id then
+                kicked[#kicked + 1] = id
+                TriggerEvent('observer:playerKicked', kickedEvent(event, id))
+                if txadmin and not everyone then
+                    txadminKicked(id)
+                end
+            end
+        end
+        -- txAdmin tells of a kick of everyone once, with -1 for the player.
+        if txadmin and everyone then
+            txadminKicked(-1)
+        end
+        for _, id in ipairs(kicked) do
+            DropPlayer(tostring(id), payload.message)
+        end
+    end,
+    -- A ban just made, for resources written against txAdmin: Observer raises nothing of its own
+    -- for a ban that drops nobody.
+    banned = function(payload)
+        txadminEvent('txAdmin:events:playerBanned', payload)
+    end,
+    -- A ban just lifted, for resources written against txAdmin: Observer raises nothing of its own.
+    lifted = function(payload)
+        txadminEvent('txAdmin:events:actionRevoked', payload)
+    end,
     positions = function(payload)
         if type(payload.everyMs) ~= 'number' or type(payload.forMs) ~= 'number' then
             return
@@ -380,6 +966,42 @@ local ACTIONS = {
         positionsEvery = math.max(POSITIONS_EVERY_MIN_MS, math.min(POSITIONS_EVERY_MAX_MS, math.floor(payload.everyMs)))
         positionsUntil = GetGameTimer() + math.max(0, math.min(POSITIONS_FOR_MAX_MS, math.floor(payload.forMs)))
         followPositions()
+    end,
+    entities = function(payload)
+        listEntities(payload)
+    end,
+    deleteEntities = function(payload)
+        deleteListed(payload)
+    end,
+    serverName = function(payload)
+        local kept = GetConvar(NAME_KEPT, '')
+        if type(payload.name) == 'string' and payload.name ~= '' then
+            if kept == '' then
+                -- A server without a project name is listed by its host name alone: it gets none.
+                local renamed = {}
+                for _, name in ipairs(NAMES) do
+                    local held = GetConvar(name.convar, '')
+                    if held ~= '' or name.convar == 'sv_hostname' then
+                        SetConvar(name.kept, held)
+                        renamed[#renamed + 1] = name.convar
+                    end
+                end
+                kept = table.concat(renamed, ' ')
+                SetConvar(NAME_KEPT, kept)
+            end
+            for _, name in ipairs(NAMES) do
+                if kept:find(name.convar, 1, true) then
+                    setName(name, payload.name)
+                end
+            end
+        elseif kept ~= '' then
+            for _, name in ipairs(NAMES) do
+                if kept:find(name.convar, 1, true) then
+                    setName(name, GetConvar(name.kept, ''))
+                end
+            end
+            SetConvar(NAME_KEPT, '')
+        end
     end,
 }
 
@@ -398,6 +1020,62 @@ AddEventHandler('playerDropped', function(reason, resource, category)
     report('drop', { id = id, t = GetGameTimer(), reason = reason, resource = resource, category = category, ped = ped })
 end)
 
+-- Every resource FXServer knows, for Observer alone: no part of the contract with the server's
+-- resources. In pages, as a server holds hundreds.
+local RESOURCE_LIST_PAGE = 100
+-- A table given to `dependencies` in a manifest is kept under the key less its last letter, which
+-- FXServer reads its dependencies from as well.
+local NEEDS_KEYS = { 'dependency', 'dependencie' }
+local PROVIDES_KEYS = { 'provide' }
+local resourceLists = 0
+
+local function manifestEntries(name, keys)
+    local entries = {}
+    for _, key in ipairs(keys) do
+        for index = 0, GetNumResourceMetadata(name, key) - 1 do
+            entries[#entries + 1] = GetResourceMetadata(name, key, index)
+        end
+    end
+    return #entries > 0 and entries or nil
+end
+
+local function reportResourceList()
+    resourceLists = resourceLists + 1
+    local list = resourceLists
+    local names = {}
+    for index = 0, GetNumResources() - 1 do
+        local name = GetResourceByFindIndex(index)
+        if name then
+            names[#names + 1] = name
+        end
+    end
+    table.sort(names)
+    local pages = math.max(1, math.ceil(#names / RESOURCE_LIST_PAGE))
+    for page = 1, pages do
+        local entries = {}
+        for index = (page - 1) * RESOURCE_LIST_PAGE + 1, math.min(page * RESOURCE_LIST_PAGE, #names) do
+            local name = names[index]
+            entries[#entries + 1] = {
+                name = name,
+                state = GetResourceState(name),
+                path = GetResourcePath(name),
+                version = GetResourceMetadata(name, 'version', 0),
+                needs = manifestEntries(name, NEEDS_KEYS),
+                provides = manifestEntries(name, PROVIDES_KEYS),
+            }
+        end
+        report('resource_list', { list = list, page = page, last = page == pages, resources = entries })
+        if page < pages then
+            Wait(0)
+        end
+    end
+end
+
+-- `refresh` reads every manifest again and may find new resources.
+AddEventHandler('onResourceListRefresh', function()
+    CreateThread(reportResourceList)
+end)
+
 -- The thread first runs once the cfg has run, so `ready` means its resources were started.
 CreateThread(function()
     cfgRan = true
@@ -405,6 +1083,7 @@ CreateThread(function()
     report('resources', { started = startedResources() })
     -- Always, even with none: a bridge started again holds nothing of what the one before held.
     reportHolds()
+    reportResourceList()
     reportPlayers()
     while true do
         report('hb')
@@ -501,6 +1180,19 @@ local TXADMIN = {
             { 'txAdmin:events:serverShuttingDown', { delay = payload.delayMs, author = payload.by, message = '' } },
         }
     end,
+    announcement = function(payload)
+        return {
+            { 'txAdmin:events:announcement', { message = payload.message, author = payload.by } },
+        }
+    end,
+    directMessage = function(payload)
+        return {
+            {
+                'txAdmin:events:playerDirectMessage',
+                { target = payload.player, author = payload.by, message = payload.message },
+            },
+        }
+    end,
 }
 
 -- Observer sends JSON in lowercase hex, which no quote, semicolon or line break can break up.
@@ -540,7 +1232,7 @@ RegisterCommand('observer_cmd', function(source, args)
     end
     TriggerEvent('observer:' .. command.event, command.payload)
     local txadmin = TXADMIN[command.event]
-    if txadmin and GetConvarInt('observer_txadmin_events', 0) == 1 then
+    if txadmin and txadminEvents() then
         for _, event in ipairs(txadmin(command.payload)) do
             TriggerEvent(event[1], event[2])
         end

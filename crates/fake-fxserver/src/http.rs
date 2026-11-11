@@ -105,7 +105,7 @@ fn dynamic(server: &Server) -> String {
             joined => joined as u64,
         },
         "gametype": "",
-        "hostname": server.convar("sv_hostname").unwrap_or_else(|| "FXServer, but unconfigured".to_owned()),
+        "hostname": server.hostname(),
         "iv": "0",
         "mapname": "",
         "sv_maxclients": server.convar("sv_maxclients").unwrap_or_else(|| "48".to_owned()),

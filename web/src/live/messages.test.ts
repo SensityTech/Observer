@@ -186,6 +186,22 @@ describe('parseServerMessage', () => {
             { type: 'resync', topic: 'metrics.live' },
             { type: 'unsubscribed', topic: 'status', reason: 'forbidden' },
             { type: 'unsubscribed', topic: 'metrics.live', reason: 'disabled' },
+            {
+                type: 'snapshot',
+                topic: 'server.admission',
+                data: {
+                    allowlist: { enabled: false, waiting: 0, approved: 0 },
+                    maintenance: { on: false, since: null, by: null, passes: 0 },
+                },
+            },
+            {
+                type: 'event',
+                topic: 'server.admission',
+                data: {
+                    allowlist: { enabled: true, waiting: 3, approved: 41 },
+                    maintenance: { on: true, since: '2026-11-11T20:40:00Z', by: 'maxime', passes: 3 },
+                },
+            },
             { type: 'pong' },
             { type: 'error', code: 'invalid_request' },
         ]) {
@@ -202,6 +218,36 @@ describe('parseServerMessage', () => {
             { type: 'snapshot', topic: 'audit' },
             { type: 'unsubscribed', topic: 'audit', reason: 'bored' },
             { type: 'resync', topic: 'metrics.history' },
+            { type: 'snapshot', topic: 'server.admission', data: {} },
+            {
+                type: 'event',
+                topic: 'server.admission',
+                data: {
+                    allowlist: { enabled: 'yes', waiting: 3, approved: 41 },
+                    maintenance: { on: false, since: null, by: null, passes: 0 },
+                },
+            },
+            {
+                type: 'event',
+                topic: 'server.admission',
+                data: {
+                    allowlist: { enabled: true, waiting: -1, approved: 41 },
+                    maintenance: { on: false, since: null, by: null, passes: 0 },
+                },
+            },
+            {
+                type: 'event',
+                topic: 'server.admission',
+                data: { allowlist: { enabled: true, waiting: 3, approved: 41 } },
+            },
+            {
+                type: 'event',
+                topic: 'server.admission',
+                data: {
+                    allowlist: { enabled: true, waiting: 3, approved: 41 },
+                    maintenance: { on: true, since: 'tonight', by: 'maxime', passes: 3 },
+                },
+            },
             { type: 'snapshot', topic: 'metrics.live', data: {} },
             { type: 'event', topic: 'metrics.live', data: { ...SAMPLE, values: { players: '187' } } },
             { type: 'event', topic: 'metrics.live', data: { ...SAMPLE, values: { fxs_cpu: 3 } } },
@@ -455,6 +501,76 @@ describe('the diagnostics topics', () => {
                 data: { processes: [], destinations: [], listeners: [], crashes: [] },
             },
         ]) {
+            expect(parse(message), JSON.stringify(message)).toBeNull();
+        }
+    });
+});
+
+const RESOURCE = {
+    name: 'ox_lib',
+    folder: '[core]',
+    origin: 'server',
+    version: '3.30.6',
+    state: 'started',
+    failedAt: null,
+    warnings: { count: 2, heavy: 1, oversized: 0, missing: 1 },
+    dependants: ['ox_target'],
+    controllable: true,
+    last: { at: '2026-11-11T14:02:00Z', kind: 'restarted', by: 'ada', with: null },
+    asked: { kind: 'stopped', by: 'ada' },
+};
+
+const RESOURCES = {
+    stage: 'listed',
+    generation: 3,
+    resources: [RESOURCE],
+    truncated: false,
+    rescan: { at: '2026-11-11T14:05:00Z', by: null, added: ['bank'], addedCount: 1, changed: 2 },
+    rescanning: false,
+};
+
+describe('the resources topic', () => {
+    it('should accept its snapshot and its events', () => {
+        const stopped = {
+            stage: 'stopped',
+            generation: 0,
+            resources: [],
+            truncated: false,
+            rescan: null,
+            rescanning: false,
+        };
+        const plain = {
+            ...RESOURCE,
+            version: null,
+            warnings: null,
+            last: null,
+            asked: null,
+            failedAt: RESOURCES.rescan.at,
+        };
+        for (const message of [
+            { type: 'snapshot', topic: 'server.resources', data: stopped },
+            { type: 'snapshot', topic: 'server.resources', data: RESOURCES },
+            { type: 'event', topic: 'server.resources', data: { ...RESOURCES, resources: [plain] } },
+        ]) {
+            expect(parse(message), JSON.stringify(message)).toEqual(message);
+        }
+    });
+
+    it('should refuse a field out of the contract', () => {
+        for (const data of [
+            { ...RESOURCES, stage: 'paused' },
+            { ...RESOURCES, resources: [{ ...RESOURCE, state: 'crashed' }] },
+            { ...RESOURCES, resources: [{ ...RESOURCE, origin: 'cloud' }] },
+            { ...RESOURCES, resources: [{ ...RESOURCE, dependants: [3] }] },
+            { ...RESOURCES, resources: [{ ...RESOURCE, warnings: { count: -1 } }] },
+            { ...RESOURCES, resources: [{ ...RESOURCE, last: { ...RESOURCE.last, kind: 'crashed' } }] },
+            { ...RESOURCES, resources: [{ ...RESOURCE, asked: { kind: 'restarted' } }] },
+            { ...RESOURCES, resources: [{ ...RESOURCE, asked: undefined }] },
+            { ...RESOURCES, rescanning: 'yes' },
+            { ...RESOURCES, rescan: { ...RESOURCES.rescan, added: 'bank' } },
+            { ...RESOURCES, generation: undefined },
+        ]) {
+            const message = { type: 'event', topic: 'server.resources', data };
             expect(parse(message), JSON.stringify(message)).toBeNull();
         }
     });

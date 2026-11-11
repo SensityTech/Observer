@@ -4,6 +4,7 @@
 //! their resources. They know nothing of HTTP; the web layer and the command line both call them.
 
 mod accounts;
+mod admission;
 mod artifacts;
 mod audit;
 mod backups;
@@ -12,13 +13,16 @@ mod changes;
 mod clock;
 mod debug;
 mod diagnostics;
+mod docs;
 mod drops;
+mod entities;
 mod error;
 mod features;
 mod files;
 mod host_file;
 mod map;
 mod metrics;
+mod moderation;
 mod own_paths;
 mod passwords;
 mod players;
@@ -36,8 +40,10 @@ mod tickets;
 mod tools;
 pub mod updates;
 mod users;
+mod watching;
 
 pub use accounts::Accounts;
+pub use admission::{Admission, AdmissionSetup, AdmissionTask};
 pub use artifacts::{ArtifactTimings, Artifacts, ArtifactsSetup, ArtifactsTask};
 pub use audit::AuditLog;
 pub use backups::{
@@ -49,12 +55,15 @@ pub use changes::{Changes, ChangesSetup, ChangesTask, ComparedTo, DiffOptions};
 pub use clock::Clock;
 pub use debug::{DebugCounts, DebugSetup, DebugTask};
 pub use diagnostics::{Diagnostics, DiagnosticsSetup, DiagnosticsTask, MAX_DOWNLOAD};
+pub use docs::integration_docs;
 pub use drops::{DayRates, Drops, DropsSetup, DropsTask, LogQuery};
+pub use entities::{Entities, EntitiesSetup, EntitiesTask};
 pub use error::Error;
 pub use features::{Features, FeaturesSetup, Switched};
 pub use files::{CommitGate, Files, Grant, Group, Login, SERVER as FILES_SERVER, file_group};
-pub use map::{ImageKind, LiveMap, MapSetup, MapTask, Watching};
+pub use map::{ImageKind, LiveMap, MapSetup, MapTask};
 pub use metrics::{DatabaseFiles, Metrics, MetricsSetup, Sampling, Sources};
+pub use moderation::{Moderation, ModerationSetup};
 pub use own_paths::{OwnPaths, paths_inside};
 pub use passwords::PasswordCost;
 pub use players::{Players, PlayersSetup, PlayersTask};
@@ -66,3 +75,4 @@ pub use statistics::Statistics;
 pub use supervision::{ConsoleLines, LinesMissed, Running, Setup, Supervision};
 pub use tools::{ReportError, RunResult, Target, Tools, ToolsHook, ToolsSetup, outcome_text, report};
 pub use updates::{Takeover, Updates, UpdatesSetup, UpdatesTask};
+pub use watching::Watching;

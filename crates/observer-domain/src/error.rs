@@ -172,12 +172,43 @@ pub enum ErrorCode {
     BanNotFound,
     /// The ban already ended or was lifted.
     BanNotActive,
-    /// A ban cannot be made as asked. Params: `field`, `reason`, `minutes` or `identifiers` (none
-    /// left once checked, or too many).
+    /// A ban cannot be made or edited as asked. Params: `field`, `reason`, `minutes` or
+    /// `identifiers` (none left once checked, or too many).
     InvalidBan,
-    /// The refusal message is empty or too long, or the tokens needed are out of range. Params:
-    /// `maxMessage`, `maxTokens`.
+    /// The refusal message is empty or too long, the tokens needed are out of range, a template
+    /// has no reason or a length no ban takes, or there are too many templates. Params:
+    /// `maxMessage`, `maxTokens`, `maxTemplates`.
     InvalidBansSettings,
+    /// No player holds this server id now, or another player than the one named does.
+    PlayerNotConnected,
+    /// A kick needs a reason of 1 to `max` characters. Params: `max`.
+    InvalidKick,
+    /// The kick message is empty or too long. Params: `maxMessage`.
+    InvalidKickSettings,
+    /// An announcement or a direct message needs a text of 1 to `max` characters. Params: `max`.
+    InvalidMessage,
+    /// No request waits under this code: answered already, or never made.
+    AllowlistRequestNotFound,
+    /// No licence is approved under this id.
+    ApprovalNotFound,
+    /// The licence is approved already.
+    AlreadyApproved,
+    /// A licence cannot be approved as asked. Params: `field`, `license` or `note`; `maxNote`.
+    InvalidApproval,
+    /// The allowlist's message is empty or too long. Params: `maxMessage`.
+    InvalidAllowlistSettings,
+    /// No one is on the maintenance list under this id.
+    PassNotFound,
+    /// The licence is on the maintenance list already.
+    PassExists,
+    /// A licence cannot go on the maintenance list as asked. Params: `field`, `license` or
+    /// `note`; `maxNote`.
+    InvalidPass,
+    /// The maintenance list is full. Params: `max`.
+    TooManyPasses,
+    /// The maintenance message is empty or too long, or the server's maintenance name too long.
+    /// Params: `maxMessage`, `maxName`.
+    InvalidMaintenanceSettings,
     /// The live map's image was refused. Params: `problem`, `notLocal`, `missing`, `unreadable`,
     /// `tooLarge` or `notAnImage`.
     InvalidMapImage,
@@ -186,6 +217,20 @@ pub enum ErrorCode {
     /// The thresholds are not ordered, the cadence is not 1, 2 or 5 seconds, or the edges enclose
     /// no area.
     InvalidMapSettings,
+    /// The server's entities are not listed yet: the first sweep comes a moment after someone
+    /// starts looking at them.
+    EntitiesNotListed,
+    /// The server or its bridge started again since the list was read: its net ids name other
+    /// entities now.
+    EntitiesChanged,
+    /// The list is too old to delete from: the server stopped answering.
+    EntitiesOutOfDate,
+    /// Another deletion is still under way.
+    EntitiesDeleting,
+    /// Params: `max`, the most entities one deletion takes.
+    TooManyEntities,
+    /// The cadence is not one the panel offers.
+    InvalidEntitiesSettings,
     /// The file changes' database could not be opened: it was set aside, or Observer is stopping.
     ChangesUnavailable,
     /// No start or check of the server has this id.
@@ -239,6 +284,18 @@ pub enum ErrorCode {
     UpdateRestarting,
     /// Params: `reason`, an `UpdateBlock`.
     UpdateBlocked,
+    /// The server has not listed its resources in this run: it does once its cfg has run.
+    ResourcesNotListed,
+    /// FXServer listed no resource of this name in this run.
+    ResourceNotFound,
+    /// The resource's name holds what a console command cannot carry: Observer names a resource
+    /// in a command only by ASCII letters, digits, `_`, `.` and `-`, 64 at most.
+    ResourceNameRefused,
+    /// FXServer has not answered the last order of the Resources page on this resource yet.
+    ResourceBusy,
+    /// The resource is not in the state the order needs: a start needs it stopped, a stop and a
+    /// restart need it started.
+    ResourceChanged,
 }
 
 /// The body of every error response.

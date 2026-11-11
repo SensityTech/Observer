@@ -44,6 +44,34 @@ describe('auditDetails', () => {
         ).toBe('Test branches: not set → feature/a, feature/b');
     });
 
+    it("should say what an edit changed on a ban, a permanent ban's end as never", () => {
+        const before = '2026-11-12T20:04:00.000Z';
+        expect(
+            auditDetails(en, format, {
+                reason: { before: 'Aimbot', after: 'Aimbot, two clips' },
+                endsAt: { before, after: null },
+            }),
+        ).toBe(`Reason: Aimbot → Aimbot, two clips · Ends: ${formatTimestamp(new Date(before))} → never`);
+    });
+
+    it('should list the ban templates before and after, each with its length', () => {
+        expect(
+            auditDetails(en, format, {
+                refusalMessage: { before: 'Banned.', after: 'Banned: {reason}' },
+                tokenMatches: { before: 1, after: 2 },
+                templates: {
+                    before: [],
+                    after: [
+                        { reason: 'Cheating', minutes: null },
+                        { reason: 'Insults', minutes: 4320 },
+                    ],
+                },
+            }),
+        ).toBe(
+            'Refusal message: Banned. → Banned: {reason} · Hardware tokens to match: 1 → 2 · Ban templates: none → Cheating (Permanent), Insults (3 days)',
+        );
+    });
+
     it('should show times in local time and counts as numbers', () => {
         const first = '2026-10-28T08:01:27.884Z';
         expect(auditDetails(en, format, { network: '203.0.113.7', failures: 1200, firstAt: first })).toBe(
@@ -176,6 +204,17 @@ describe('auditDetails', () => {
         expect(auditDetails(en, format, { from: 'signal' })).toBe('From: a signal');
     });
 
+    it('should name the resources an order stopped along, and whether a restart started them again', () => {
+        expect(auditDetails(en, format, { command: 'start taxi' })).toBe('Command: start taxi');
+        expect(
+            auditDetails(en, format, {
+                command: 'restart ox_lib',
+                dependants: ['ox_target', 'ox_inventory'],
+                startedAgain: true,
+            }),
+        ).toBe('Command: restart ox_lib · Stopped with it: ox_target, ox_inventory · Started again: yes');
+    });
+
     it('should show what it does not know as the log stores it', () => {
         expect(auditDetails(en, format, { trigger: 'manual', refusal: 'unheard_of', extra: { a: 1 } })).toBe(
             'trigger: manual · Reason: unheard_of · extra: {"a":1}',
@@ -238,6 +277,27 @@ describe('auditDetails', () => {
         );
     });
 
+    it('should word what a deletion of entities took and left, and how often they are listed', () => {
+        expect(
+            auditDetails(en, format, {
+                asked: 15,
+                deleted: 12,
+                outcomes: { occupied: 2, gone: 1 },
+                entities: [
+                    { model: '0xB779A091', kind: 'vehicle', resource: 'qb-garages', count: 8 },
+                    { model: '0x705E61F2', kind: 'ped', resource: null, count: 1 },
+                ],
+                more: 3,
+            }),
+        ).toBe(
+            'Asked for: 15 · Deleted: 12 · Not deleted: 2 had a player inside, 1 was already gone · ' +
+                'Entities: 8 × 0xB779A091 vehicle (qb-garages), 1 × 0x705E61F2 ped · In smaller groups: 3',
+        );
+        expect(auditDetails(en, format, { from: { everySeconds: 15 }, to: { everySeconds: 30 } })).toBe(
+            'Before: (Every: 15 s) · After: (Every: 30 s)',
+        );
+    });
+
     it('should name the two snapshots a read of changed contents compared, either one a check of the disk, and how it showed them', () => {
         expect(
             auditDetails(
@@ -279,6 +339,20 @@ describe('auditDetails', () => {
                 'Contents kept at most: 2 GB → 4 GB · Hashing rate: 64 MB/s → 32 MB/s · ' +
                 'Full verification every: 7 days → 1 day',
         );
+    });
+
+    it('should read a kick and a message with the server ID as it is written and the licence named', () => {
+        const license = 'license:00000000000000000000000000000000000000aa';
+
+        expect(auditDetails(en, format, { serverId: 1204, license, reason: 'RDM' }, 'player_kicked')).toBe(
+            `Server ID: 1204 · Licence: ${license} · Reason: RDM`,
+        );
+        expect(auditDetails(en, format, { reason: 'Maintenance', players: 1204 }, 'everyone_kicked')).toBe(
+            'Reason: Maintenance · Players connected: 1,204',
+        );
+        expect(
+            auditDetails(en, format, { serverId: 3, license: null, message: 'Hello' }, 'direct_message_sent'),
+        ).toBe('Server ID: 3 · Licence: not set · Message: Hello');
     });
 
     it('should leave a file group changed as the log stores it, not as changed settings', () => {
