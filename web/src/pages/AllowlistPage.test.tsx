@@ -38,7 +38,7 @@ const me = (permissions: string): Me => ({
 });
 /** Each with what it implies, as the API sends a set. */
 const VIEWER = me('4000');
-const MANAGER = me('4004000');
+const MANAGER = me('8004000');
 const SETTINGS_READER = me('4200');
 
 const KAITO: AllowlistRequest = {

@@ -115,13 +115,17 @@ export default async function setup() {
     const dir = mkdtempSync(join(tmpdir(), 'observer-e2e-'));
     const serverData = join(dir, 'server-data');
     installFake(join(dir, 'data', 'artifacts'), fake);
-    // The server setup takes a folder only once its resources folder holds a resource.
-    const resource = join(serverData, 'resources', '[local]', 'hello');
-    mkdirSync(resource, { recursive: true });
-    writeFileSync(join(resource, 'fxmanifest.lua'), "fx_version 'cerulean'\ngame 'gta5'\n");
+    // The server setup takes a folder only once its resources folder holds a resource. A second
+    // one depends on the first, which FXServer therefore stops and starts it with.
+    const resources = join(serverData, 'resources', '[local]');
+    const manifest = "fx_version 'cerulean'\ngame 'gta5'\n";
+    mkdirSync(join(resources, 'hello'), { recursive: true });
+    writeFileSync(join(resources, 'hello', 'fxmanifest.lua'), manifest);
+    mkdirSync(join(resources, 'greeter'));
+    writeFileSync(join(resources, 'greeter', 'fxmanifest.lua'), `${manifest}dependency 'hello'\n`);
     writeFileSync(
         join(serverData, 'server.cfg'),
-        `endpoint_add_tcp "127.0.0.1:${fxserverPort}"\nendpoint_add_udp "127.0.0.1:${fxserverPort}"\nsv_maxclients 32\nensure hello\n`,
+        `endpoint_add_tcp "127.0.0.1:${fxserverPort}"\nendpoint_add_udp "127.0.0.1:${fxserverPort}"\nsv_maxclients 32\nensure hello\nensure greeter\n`,
     );
     const config = join(dir, 'observer.toml');
     writeFileSync(config, `data_dir = "data"\n\n[http]\nlisten = "127.0.0.1:${port}"\n`);

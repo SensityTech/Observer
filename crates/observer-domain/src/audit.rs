@@ -238,6 +238,17 @@ pub enum AuditAction {
     /// `to`); a failure when the release could not be downloaded or verified (`reason`), or when
     /// the new version did not finish starting and the previous one came back (`rolledBack`).
     ObserverUpdateFinished,
+    /// Someone started a resource from the panel. The target is the resource; `details` hold the
+    /// `command` written to FXServer's console.
+    ResourceStarted,
+    /// Someone stopped a resource. `details` hold the `command` and the `dependants`: the started
+    /// resources that depend on it, which FXServer stops with it.
+    ResourceStopped,
+    /// Someone restarted a resource. `details` hold the `command`, the `dependants` and whether
+    /// Observer started those again (`startedAgain`).
+    ResourceRestarted,
+    /// Someone had FXServer read its resource folders again.
+    ResourcesRescanned,
     /// A refused player's request was approved. The target is the request's code; `details` hold
     /// the licence and the player's name.
     AllowlistRequestApproved,
@@ -266,7 +277,7 @@ pub enum AuditAction {
 }
 
 impl AuditAction {
-    pub const ALL: [Self; 122] = [
+    pub const ALL: [Self; 126] = [
         Self::SetupCompleted,
         Self::SetupLinkCreated,
         Self::LoginSucceeded,
@@ -378,6 +389,10 @@ impl AuditAction {
         Self::ObserverUpdateStarted,
         Self::ObserverUpdateCancelled,
         Self::ObserverUpdateFinished,
+        Self::ResourceStarted,
+        Self::ResourceStopped,
+        Self::ResourceRestarted,
+        Self::ResourcesRescanned,
         Self::AllowlistRequestApproved,
         Self::AllowlistRequestDenied,
         Self::AllowlistRequestsDenied,
@@ -505,6 +520,10 @@ impl AuditAction {
             Self::ObserverUpdateStarted => "observer_update_started",
             Self::ObserverUpdateCancelled => "observer_update_cancelled",
             Self::ObserverUpdateFinished => "observer_update_finished",
+            Self::ResourceStarted => "resource_started",
+            Self::ResourceStopped => "resource_stopped",
+            Self::ResourceRestarted => "resource_restarted",
+            Self::ResourcesRescanned => "resources_rescanned",
             Self::AllowlistRequestApproved => "allowlist_request_approved",
             Self::AllowlistRequestDenied => "allowlist_request_denied",
             Self::AllowlistRequestsDenied => "allowlist_requests_denied",

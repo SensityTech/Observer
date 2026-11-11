@@ -71,6 +71,7 @@ fn status(code: ErrorCode) -> StatusCode {
         | ErrorCode::StartNotFound
         | ErrorCode::PlayerNotFound
         | ErrorCode::BanNotFound
+        | ErrorCode::ResourceNotFound
         | ErrorCode::AllowlistRequestNotFound
         | ErrorCode::ApprovalNotFound
         | ErrorCode::PassNotFound
@@ -118,7 +119,11 @@ fn status(code: ErrorCode) -> StatusCode {
         | ErrorCode::UpdateRunning
         | ErrorCode::NoUpdate
         | ErrorCode::UpdateRestarting
-        | ErrorCode::UpdateBlocked => StatusCode::CONFLICT,
+        | ErrorCode::UpdateBlocked
+        | ErrorCode::ResourcesNotListed
+        | ErrorCode::ResourceNameRefused
+        | ErrorCode::ResourceBusy
+        | ErrorCode::ResourceChanged => StatusCode::CONFLICT,
         ErrorCode::LaunchFailed
         | ErrorCode::DelayTooLong
         | ErrorCode::NotDownloadable

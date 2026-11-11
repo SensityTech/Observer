@@ -114,6 +114,7 @@ describe('AppShell', () => {
         ).toEqual([
             en.nav.overview,
             en.nav.console,
+            en.nav.resources,
             en.nav.players,
             en.nav.map,
             en.nav.bans,

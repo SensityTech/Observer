@@ -3,8 +3,9 @@
 //! its main loop, writes structured traces on fd 3 and serves `/dynamic.json`, `/perf/`,
 //! `/players.json` and `/info.json` on the cfg's `endpoint_add_tcp`. Started, a folder of the
 //! build's `citizen/system_resources` that holds Observer's bridge plays it, under the folder's name
-//! as FXServer knows the bridge: `ready` and the started resources once, then a heartbeat and the
-//! heap. The build's `citizen/` is the `citizen_dir` convar, as on Linux, or else the one next to the
+//! as FXServer knows the bridge: `ready`, the started resources and the list of every resource once,
+//! then a heartbeat and the heap, the started resources again half a second after one starts or
+//! stops, and the list again after a `refresh`. The build's `citizen/` is the `citizen_dir` convar, as on Linux, or else the one next to the
 //! executable.
 //!
 //! Failures on demand, through convars (`+set fake_x y`, in the cfg, or in a `fake-build.cfg` next
@@ -17,6 +18,14 @@
 //!   for one of them. FXServer 38435 prints `Started resource` once a resource is up and nothing
 //!   while it reads its stream files, which took a clothing pack minutes on a first start;
 //! - `fake_fail_start <name>`: that resource does not start, as one whose asset is disabled;
+//! - `start`, `stop`, `restart`, `ensure` and `refresh` do what `ServerResources.cpp`,
+//!   `ServerResourceList.cpp` and `ResourceDependencyLoader.cpp` say they do, read at the commit of
+//!   build 38435 and measured on no server: a resource starts after those its manifest depends
+//!   on; one that stops takes with it, first, every started one that depends on it, and nothing
+//!   starts those again; `restart` leaves a stopped resource stopped, with `Can't restart a
+//!   stopped resource.`; `refresh` scans the folders again and says what it found. The line
+//!   FXServer prints of a dependency it cannot find is not printed;
+//! - `fake_resource_page <n>` (100): how many resources one page of the bridge's list holds;
 //! - `fake_heavy <names>`, `fake_missing <names>`, each a list separated by commas: as it starts
 //!   one of them, FXServer warns of two heavy streamed files, one of them oversized, or of a script
 //!   its manifest names and it does not hold, on the channel `resources:<name>:stream` cut at
@@ -81,6 +90,7 @@ mod console;
 mod dump;
 mod http;
 mod players;
+mod resources;
 #[allow(unsafe_code)]
 mod traces;
 
@@ -98,6 +108,7 @@ use serde_json::json;
 
 use crate::console::{CMD, LICENSE, MAIN, NET, RESOURCES, SCRIPTING, SERVER};
 use crate::players::{Player, Players};
+use crate::resources::Registry;
 use crate::traces::Traces;
 
 const TICK: Duration = Duration::from_millis(50);
@@ -108,6 +119,10 @@ const HOLD_PIPES: &str = "--fake-hold-pipes";
 const DUMP_SERVER: &str = "-dumpserver:";
 /// FXServer's main thread, as FXServer 35245 names it.
 const SV_MAIN: &str = "UV loop: svMain";
+/// Starts and stops the bridge tells in one report, past which it only counts them.
+const RESOURCE_EVENTS_MAX: usize = 64;
+/// How long the bridge waits after a start or a stop before it reports, unless its script says.
+const RESOURCES_SETTLE_MS: u64 = 500;
 
 /// What the HTTP threads share with the main loop.
 pub struct Server {
@@ -208,6 +223,16 @@ struct Bridge {
     ready: bool,
     /// The `CONTRACT_VERSION` of the script, which the real bridge reports when it is ready.
     contract: u64,
+    /// The script's `RESOURCES_SETTLE_MS`: one report covers the starts and stops of that long.
+    settle: Duration,
+}
+
+/// The starts and stops the bridge has not reported yet.
+#[derive(Default)]
+struct Unreported {
+    events: Vec<[String; 2]>,
+    dropped: u64,
+    report_at: Option<Instant>,
 }
 
 /// While the build's scheduler loads Observer's hook: every resource counts and reports.
@@ -243,6 +268,12 @@ struct Fake {
     endpoint: Option<String>,
     bridge: Option<Bridge>,
     counting: Option<Counting>,
+    registry: Registry,
+    /// The cfg has run: from then on `ensure` stops a started resource before it starts it.
+    configured: bool,
+    unreported: Unreported,
+    /// The lists of resources the bridge sent, which number their pages.
+    lists: u64,
     /// Every resource started, in order.
     started: Vec<String>,
     quit_at: Option<Instant>,
@@ -357,6 +388,10 @@ fn main() {
             endpoint: None,
             bridge: None,
             counting: None,
+            registry: Registry::default(),
+            configured: false,
+            unreported: Unreported::default(),
+            lists: 0,
             started: Vec::new(),
             quit_at: None,
             children: Vec::new(),
@@ -407,6 +442,7 @@ impl Fake {
         for command in commands.iter().filter(|command| is_set(command)) {
             self.execute(command);
         }
+        self.registry = Registry::scan(&server_folder(), self.system_resources().as_deref());
         console::line(RESOURCES, "\x1b[32mScanning resources.\x1b[0m");
         console::line(RESOURCES, "\x1b[32mFound 4 resources.\x1b[0m");
         console::line(LICENSE, "Authenticating server license key...");
@@ -427,6 +463,7 @@ impl Fake {
         for command in commands.iter().filter(|command| !is_set(command)) {
             self.execute(command);
         }
+        self.configured = true;
 
         if let Some(address) = self.endpoint.clone() {
             if self.server.flag("fake_bind_error") {
@@ -468,6 +505,7 @@ impl Fake {
                 .retain_mut(|child| matches!(child.try_wait(), Ok(None)));
             self.admit_unanswered(now);
             self.report_positions(now);
+            self.report_resources(now);
             self.beat(now);
             self.count(now);
             self.server.tick();
@@ -490,20 +528,11 @@ impl Fake {
             ("ensure" | "start", Some(category)) if category.starts_with('[') && category.ends_with(']') => {
                 self.ensure_category(category);
             }
-            ("ensure" | "start", Some(resource)) => self.ensure(resource),
-            ("restart", Some(resource)) => {
-                stop(resource);
-                self.start(resource);
-                self.resources_changed(resource, &["stop", "start"]);
-            }
-            ("stop", Some(resource)) => {
-                stop(resource);
-                self.started.retain(|started| started != resource);
-                if self.bridge.as_ref().is_some_and(|bridge| bridge.name == resource) {
-                    self.bridge = None;
-                }
-                self.resources_changed(resource, &["stop"]);
-            }
+            ("ensure", Some(resource)) => self.ensure(resource),
+            ("start", Some(resource)) => self.start_command(resource),
+            ("restart", Some(resource)) => self.restart(resource),
+            ("stop", Some(resource)) => self.stop(resource),
+            ("refresh", None) => self.refresh(),
             ("quit", reason) => self.quit(reason),
             ("fake_crash", code) => self.crash(code.and_then(|code| code.parse().ok())),
             ("fake_hang", _) => hang(),
@@ -599,18 +628,91 @@ impl Fake {
         }
     }
 
+    fn is_started(&self, resource: &str) -> bool {
+        self.started.iter().any(|started| started == resource)
+    }
+
+    /// FXServer's `ensure`: a start, after a stop of a started resource once the cfg has run.
     fn ensure(&mut self, resource: &str) {
-        if self.server.convar("fake_fail_start").as_deref() == Some(resource) {
-            console::line(SERVER, &format!("Couldn't start resource {resource}."));
-            return;
+        if self.configured && self.is_started(resource) {
+            self.stop(resource);
         }
-        let restarted = self.started.iter().any(|started| started == resource);
-        if self.bridge.as_ref().is_some_and(|bridge| bridge.name == resource) {
-            stop(resource);
+        self.start_command(resource);
+    }
+
+    /// FXServer's `start`: nothing for a resource that is up.
+    fn start_command(&mut self, resource: &str) {
+        if !self.is_started(resource) && !self.start_after_needs(resource, &mut Vec::new()) {
+            console::line(SERVER, &format!("Couldn't start resource {resource}."));
+        }
+    }
+
+    /// Starts `resource` once every resource its manifest depends on is up, each started in turn.
+    /// `starting` holds those on the way, so that two that depend on each other end.
+    fn start_after_needs(&mut self, resource: &str, starting: &mut Vec<String>) -> bool {
+        if self.server.convar("fake_fail_start").as_deref() == Some(resource) {
+            return false;
+        }
+        starting.push(resource.to_owned());
+        for need in self.registry.needs(resource) {
+            let on = self.registry.resolve(&need, &self.started);
+            let up = self.is_started(&on) || starting.contains(&on);
+            if !up && !self.start_after_needs(&on, starting) {
+                return false;
+            }
         }
         self.start(resource);
-        let events: &[&str] = if restarted { &["stop", "start"] } else { &["start"] };
-        self.resources_changed(resource, events);
+        self.resource_event(resource, "start");
+        true
+    }
+
+    /// FXServer's `stop`: every started resource that depends on this one stops first, and
+    /// nothing starts it again.
+    fn stop(&mut self, resource: &str) {
+        if !self.is_started(resource) {
+            return;
+        }
+        // Out of the started ones first, so that two that depend on each other end.
+        self.started.retain(|started| started != resource);
+        for dependant in self.registry.dependants(resource, &self.started) {
+            self.stop(&dependant);
+        }
+        console::line(RESOURCES, &format!("Stopping resource {resource}"));
+        self.resource_event(resource, "stop");
+        if self.bridge.as_ref().is_some_and(|bridge| bridge.name == resource) {
+            self.bridge = None;
+            self.unreported = Unreported::default();
+        }
+    }
+
+    /// FXServer's `restart`: a stop then a start, of a started resource only.
+    fn restart(&mut self, resource: &str) {
+        if !self.is_started(resource) {
+            console::line(SERVER, "Can't restart a stopped resource.");
+            return;
+        }
+        self.stop(resource);
+        self.start_command(resource);
+    }
+
+    /// FXServer's `refresh`: the folders are scanned again, and the bridge hears of it.
+    fn refresh(&mut self) {
+        console::line(RESOURCES, "\x1b[32mScanning resources.\x1b[0m");
+        let refreshed = self
+            .registry
+            .refresh(&server_folder(), self.system_resources().as_deref());
+        let found = if refreshed.read > 0 {
+            format!(
+                "Found {} new resources, and refreshed {}/{} resources.",
+                refreshed.added, refreshed.changed, refreshed.read
+            )
+        } else {
+            format!("Found {} resources.", refreshed.added)
+        };
+        console::line(RESOURCES, &format!("\x1b[32m{found}\x1b[0m"));
+        if self.bridge.as_ref().is_some_and(|bridge| bridge.ready) {
+            self.report_resource_list();
+        }
     }
 
     fn start(&mut self, resource: &str) {
@@ -654,7 +756,12 @@ impl Fake {
         if !self.started.iter().any(|started| started == resource) {
             self.started.push(resource.to_owned());
         }
-        if let Some(contract) = self.bridge_script(resource).as_deref().and_then(contract_version) {
+        let script = self.bridge_script(resource);
+        if let Some(contract) = script.as_deref().and_then(contract_version) {
+            let settle = script
+                .as_deref()
+                .and_then(|script| constant(script, "RESOURCES_SETTLE_MS"))
+                .unwrap_or(RESOURCES_SETTLE_MS);
             let heap_period = Duration::from_millis(self.server.number("fake_heap_ms").unwrap_or(10_000));
             self.counting = self.hooked(resource).then(|| Counting {
                 next: Instant::now(),
@@ -667,20 +774,61 @@ impl Fake {
                 next_heap: Instant::now() + heap_period,
                 ready: false,
                 contract,
+                settle: Duration::from_millis(settle),
             });
         }
     }
 
-    /// The bridge's report of a resource started or stopped once the cfg has run.
-    fn resources_changed(&mut self, resource: &str, changes: &[&str]) {
+    /// A start or a stop the bridge hears of once the cfg has run: it reports them together a
+    /// moment later, 64 of them at most.
+    fn resource_event(&mut self, resource: &str, change: &str) {
         let Some(bridge) = self.bridge.as_ref().filter(|bridge| bridge.ready) else {
             return;
         };
-        let events: Vec<[&str; 2]> = changes.iter().map(|change| [resource, *change]).collect();
-        self.traces.script(
-            &bridge.name,
-            &json!({ "type": "observer", "kind": "resources", "started": self.started, "events": events }),
-        );
+        if self.unreported.events.len() < RESOURCE_EVENTS_MAX {
+            self.unreported
+                .events
+                .push([resource.to_owned(), change.to_owned()]);
+        } else {
+            self.unreported.dropped += 1;
+        }
+        self.unreported
+            .report_at
+            .get_or_insert_with(|| Instant::now() + bridge.settle);
+    }
+
+    /// The bridge's report of the resources started, with the starts and stops since the last.
+    fn report_resources(&mut self, now: Instant) {
+        if self.unreported.report_at.is_none_or(|at| now < at) {
+            return;
+        }
+        let unreported = std::mem::take(&mut self.unreported);
+        let mut report = json!({ "type": "observer", "kind": "resources", "started": self.started });
+        if !unreported.events.is_empty() {
+            report["events"] = json!(unreported.events);
+        }
+        if unreported.dropped > 0 {
+            report["dropped"] = json!(unreported.dropped);
+        }
+        self.bridge_report(&report);
+    }
+
+    /// The bridge's list of every resource FXServer knows, in pages.
+    fn report_resource_list(&mut self) {
+        self.lists += 1;
+        let per_page = usize::try_from(self.server.number("fake_resource_page").unwrap_or(100))
+            .unwrap_or(100)
+            .max(1);
+        let listed = self.registry.listed(&self.started);
+        let pages = listed.len().div_ceil(per_page).max(1);
+        for page in 0..pages {
+            let resources: Vec<&serde_json::Value> =
+                listed.iter().skip(page * per_page).take(per_page).collect();
+            self.bridge_report(&json!({
+                "type": "observer", "kind": "resource_list", "list": self.lists,
+                "page": page + 1, "last": page + 1 == pages, "resources": resources,
+            }));
+        }
     }
 
     /// The bridge's traces. They come from the main loop, so they stop while it is hung.
@@ -699,11 +847,16 @@ impl Fake {
                 &bridge.name,
                 &json!({ "type": "observer", "kind": "resources", "started": self.started }),
             );
+            let name = bridge.name.clone();
+            self.report_resource_list();
             let roster = self.server.players().roster(self.server.uptime_ms());
             for page in roster {
-                self.traces.script(&bridge.name, &page);
+                self.traces.script(&name, &page);
             }
         }
+        let Some(bridge) = &mut self.bridge else {
+            return;
+        };
         if now >= bridge.next_heartbeat {
             bridge.next_heartbeat = now + period;
             self.traces
@@ -981,9 +1134,13 @@ impl Fake {
         self.traces.script(resource, &report);
     }
 
+    /// The build's own resources, where the bridge is written too.
+    fn system_resources(&self) -> Option<PathBuf> {
+        Some(self.citizen()?.join("system_resources"))
+    }
+
     fn bridge_script(&self, resource: &str) -> Option<String> {
-        let citizen = self.citizen()?;
-        let script = citizen.join("system_resources").join(resource).join("server.lua");
+        let script = self.system_resources()?.join(resource).join("server.lua");
         std::fs::read_to_string(script)
             .ok()
             .filter(|script| script.contains("RegisterCommand('observer_cmd'"))
@@ -1275,8 +1432,9 @@ fn dump_id() -> String {
     )
 }
 
-fn stop(resource: &str) {
-    console::line(RESOURCES, &format!("Stopping resource {resource}"));
+/// The server folder, which FXServer runs in.
+fn server_folder() -> PathBuf {
+    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
 }
 
 /// FXServer 35245 exits with code 1 after `quit` on Windows, and dies of SIGSEGV on Linux.
@@ -1357,9 +1515,15 @@ fn build_cfg() -> Vec<Vec<String>> {
 
 /// The `local CONTRACT_VERSION = <n>` a bridge script reports when it is ready.
 fn contract_version(script: &str) -> Option<u64> {
+    constant(script, "CONTRACT_VERSION")
+}
+
+/// The number a bridge script gives one of its constants, as `local NAME = <n>`.
+fn constant(script: &str, name: &str) -> Option<u64> {
+    let declared = format!("local {name} = ");
     script
         .lines()
-        .find_map(|line| line.strip_prefix("local CONTRACT_VERSION = "))?
+        .find_map(|line| line.strip_prefix(declared.as_str()))?
         .trim()
         .parse()
         .ok()

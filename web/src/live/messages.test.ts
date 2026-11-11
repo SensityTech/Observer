@@ -477,3 +477,73 @@ describe('the diagnostics topics', () => {
         }
     });
 });
+
+const RESOURCE = {
+    name: 'ox_lib',
+    folder: '[core]',
+    origin: 'server',
+    version: '3.30.6',
+    state: 'started',
+    failedAt: null,
+    warnings: { count: 2, heavy: 1, oversized: 0, missing: 1 },
+    dependants: ['ox_target'],
+    controllable: true,
+    last: { at: '2026-11-11T14:02:00Z', kind: 'restarted', by: 'ada', with: null },
+    asked: { kind: 'stopped', by: 'ada' },
+};
+
+const RESOURCES = {
+    stage: 'listed',
+    generation: 3,
+    resources: [RESOURCE],
+    truncated: false,
+    rescan: { at: '2026-11-11T14:05:00Z', by: null, added: ['bank'], addedCount: 1, changed: 2 },
+    rescanning: false,
+};
+
+describe('the resources topic', () => {
+    it('should accept its snapshot and its events', () => {
+        const stopped = {
+            stage: 'stopped',
+            generation: 0,
+            resources: [],
+            truncated: false,
+            rescan: null,
+            rescanning: false,
+        };
+        const plain = {
+            ...RESOURCE,
+            version: null,
+            warnings: null,
+            last: null,
+            asked: null,
+            failedAt: RESOURCES.rescan.at,
+        };
+        for (const message of [
+            { type: 'snapshot', topic: 'server.resources', data: stopped },
+            { type: 'snapshot', topic: 'server.resources', data: RESOURCES },
+            { type: 'event', topic: 'server.resources', data: { ...RESOURCES, resources: [plain] } },
+        ]) {
+            expect(parse(message), JSON.stringify(message)).toEqual(message);
+        }
+    });
+
+    it('should refuse a field out of the contract', () => {
+        for (const data of [
+            { ...RESOURCES, stage: 'paused' },
+            { ...RESOURCES, resources: [{ ...RESOURCE, state: 'crashed' }] },
+            { ...RESOURCES, resources: [{ ...RESOURCE, origin: 'cloud' }] },
+            { ...RESOURCES, resources: [{ ...RESOURCE, dependants: [3] }] },
+            { ...RESOURCES, resources: [{ ...RESOURCE, warnings: { count: -1 } }] },
+            { ...RESOURCES, resources: [{ ...RESOURCE, last: { ...RESOURCE.last, kind: 'crashed' } }] },
+            { ...RESOURCES, resources: [{ ...RESOURCE, asked: { kind: 'restarted' } }] },
+            { ...RESOURCES, resources: [{ ...RESOURCE, asked: undefined }] },
+            { ...RESOURCES, rescanning: 'yes' },
+            { ...RESOURCES, rescan: { ...RESOURCES.rescan, added: 'bank' } },
+            { ...RESOURCES, generation: undefined },
+        ]) {
+            const message = { type: 'event', topic: 'server.resources', data };
+            expect(parse(message), JSON.stringify(message)).toBeNull();
+        }
+    });
+});

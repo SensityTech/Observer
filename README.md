@@ -16,6 +16,8 @@ own resources decide what to do with them.
   that never got ready), and FXServer's whole process tree stops with it. A server stuck for 6 minutes
   is restarted; the delay can be raised, or hang detection turned off.
 - **Live console.** Search and filters, commands gated by permission, secrets masked, daily log files.
+- **Resources.** Every resource of the running server with its state, live, and a start, a stop or a
+  restart of each, the resources that stop with it named before you confirm.
 - **Scheduled restarts.** Fixed times or an interval in the time zone you choose, with warnings to your
   resources, skip, delay and one-off restarts.
 - **FXServer builds.** The Cfx.re catalog, verified downloads, a switch at the next start or restart,
@@ -517,6 +519,55 @@ The page edits a plain UTF-8 file of at most 512 KiB. It refuses a link, a read-
 another encoding, which a save would damage, and the files the cfg runs with `exec`: those are edited on the host or
 over SFTP, and the checks still read them.
 
+## Resources
+
+The **Resources** page lists every resource FXServer knows while the server runs: the server's own
+under their category folder (`[core]/[ox]`), then those of the build (`system_resources`). Each has
+its state, its manifest's version and what last happened to it since the start: started, stopped or
+restarted, how long ago, by whom when it was asked on this page, and with which resource when
+FXServer stopped it along with another. A resource FXServer said it could not start is marked **Did
+not start**. One it warned about as it started it carries the count of its warnings, and says what
+they were: streamed files that are heavy or oversized, files its manifest names and does not hold.
+The filters count each kind, the search narrows the list by name, a folder folds under the line that
+counts what it has started, which the browser remembers, and the page follows the server as it goes:
+nothing to reload.
+
+The list is FXServer's own. The bridge reports it once the cfg has run, and again after each rescan:
+while the server starts, the page says how many resources are up so far, and a stopped server lists
+nothing.
+
+With **Start and stop resources**, each row gets **Start**, or **Restart** and **Stop**, and the page
+gets **Rescan**. Each is FXServer's own console command, `start`, `stop`, `restart` or `refresh`,
+which Observer writes with the name FXServer listed. The line shows in the live console under the
+account's name, and every order is in the audit log. Until FXServer has answered an order, its row
+says who asked for it, to everyone who has the page open, and takes no other.
+
+- **What stops with a resource.** Before it stops a resource, FXServer stops every started resource
+  that depends on it, by the `dependency` and `dependencies` of their manifests, and it starts none
+  of them again. A restart is a stop and a start, so it does the same. The page names them before a
+  stop or a restart that takes others along, and a restart offers to start them again once the
+  resource is back, which Observer does with one `start` each.
+- **Start** starts what the resource depends on first, as FXServer does.
+- **Rescan** has FXServer read its resource folders again: a folder added since the start becomes a
+  resource, a manifest that changed is read again. Nothing starts or stops, and the page says what
+  FXServer found.
+- **Until the next restart.** What is started or stopped here lasts as long as the run: the cfg
+  decides what starts with the server (see [Editing server.cfg](#editing-servercfg)).
+
+Whoever has **View the dashboard** or **Start and stop resources** reads the page. Its buttons take
+the second, a permission of its own, and sensitive: a stopped resource is gone for every player.
+
+**Limits.**
+
+- **Names the console cannot take.** An order is a console line, so Observer only writes a name made
+  of letters, digits, `_`, `-` and `.`, 64 characters at most. A resource named otherwise is listed
+  with **Console only** in place of its buttons.
+- **Observer's bridge is not listed,** and no order reaches it: it is how Observer hears the server.
+- **A folder deleted while the server runs** stays listed until the server restarts, since FXServer
+  keeps the resource it read. A folder whose manifest is missing or broken is no resource to
+  FXServer, and is not listed.
+- **The first 5,000 resources** are listed; the page says so when FXServer knows more.
+
 ## File access over SFTP
 
 Observer can let people and CI pipelines read and change chosen parts of the server folder over SFTP,
@@ -567,7 +618,7 @@ Whatever the groups say, no one reaches the cfg files (`*.cfg`, which hold the l
 database string), `cache/`, Observer's own folders and `observer.toml`, `.git`, `.env` files and key
 files. Every change is in the audit log; uploads are written to a temporary file and swapped in only
 when complete, so FXServer never reads half a file. Observer never restarts a resource after an
-upload: restart it from the console, or let your own resource react.
+upload: restart it on the [Resources](#resources) page, or let your own resource react.
 
 ## What changed since the last start
 
