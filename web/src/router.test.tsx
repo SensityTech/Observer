@@ -46,6 +46,7 @@ vi.mock('./shell/FocusShell', async () => {
 });
 vi.mock('./pages/OverviewPage', () => ({ OverviewPage: () => <h1>Overview</h1> }));
 vi.mock('./pages/ServerSetupPage', () => ({ ServerSetupPage: () => <h1>Server setup</h1> }));
+vi.mock('./pages/DocsPage', () => ({ DocsPage: () => <h1>Documentation</h1> }));
 vi.mock('./pages/SettingsPage', async () => {
     const { Outlet } = await import('@tanstack/react-router');
     return { SettingsPage: () => <Outlet /> };
@@ -165,6 +166,14 @@ describe('the panel router', () => {
 
         await findByRole('heading', { name: `Settings ${category}` });
         expect(router.state.location.pathname).toBe(`/settings/${category}`);
+    });
+
+    it('should open the documentation for an account that holds no permission', async () => {
+        const { findByRole, router } = panel('/docs#bans', [[meQuery.queryKey, NOBODY]]);
+
+        await findByRole('heading', { name: 'Documentation' });
+        expect(router.state.location.pathname).toBe('/docs');
+        expect(router.state.location.hash).toBe('bans');
     });
 
     it('should say a category of the settings that does not exist is not found', async () => {

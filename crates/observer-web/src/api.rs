@@ -13,6 +13,7 @@ mod cfg;
 mod changes;
 mod debug;
 mod diagnostics;
+mod docs;
 mod drops;
 mod features;
 mod files;
@@ -235,6 +236,7 @@ pub(crate) fn routes() -> Vec<Route> {
         route(M::GET,    "/metrics/runs",               dashboard,    metrics::runs),
         route(M::GET,    "/about",                      Session,      about::about),
         route(M::GET,    "/about/licences",             Session,      about::licences),
+        route(M::GET,    "/docs/integration",           Session,      docs::integration),
         route(M::GET,    "/servers/default/crashes/{id}/files/{name}", dumps, diagnostics::download_file),
         route(M::DELETE, "/servers/default/crashes/{id}/files",        dumps, diagnostics::delete_files),
         route(M::GET,    "/servers/default/players",           players, players::page),
