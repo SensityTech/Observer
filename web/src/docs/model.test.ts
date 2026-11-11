@@ -109,16 +109,24 @@ describe('handlerOf', () => {
         }
     });
 
-    it('stands without the example', () => {
-        const entry = entries.find((candidate) => candidate.title === 'observer:shuttingDown');
+    it('stands without the example: its fields alone', () => {
+        for (const entry of entries.filter((candidate) => candidate.event)) {
+            const lines = handlerOf(entry, '').split('\n');
 
-        expect(entry && handlerOf(entry, '')).toBe(
-            [
-                "AddEventHandler('observer:shuttingDown', function(payload)",
-                '    -- payload.delayMs, payload.reason, payload.by',
-                'end)',
-            ].join('\n'),
-        );
+            expect(lines[0], entry.title).toBe(`AddEventHandler('${entry.title}', function(payload)`);
+            expect(lines.at(-1), entry.title).toBe('end)');
+            expect(
+                lines
+                    .slice(1, -1)
+                    .map((line) => line.replace(/^ {4}-- /, ''))
+                    .join(' '),
+                entry.title,
+            ).toBe(
+                fieldsOf(entry)
+                    .map((field) => `payload.${field}`)
+                    .join(', '),
+            );
+        }
     });
 });
 
@@ -128,7 +136,8 @@ describe('docIndex', () => {
         const of = (kind: string) => index.filter((match) => match.kind === kind).map((match) => match.label);
 
         expect(of('section')).toContain('Player labels');
-        expect(of('event')).toEqual(docs.events);
+        // In the contract's order, which need not be the order the bridge raises them in.
+        expect(of('event').toSorted()).toEqual(docs.events.toSorted());
         expect(of('export').toSorted()).toEqual(docs.exports.map((item) => item.name).toSorted());
         expect(of('txadmin')).toContain('txAdmin:events:serverShuttingDown');
         expect(index.find((match) => match.label === 'setPlayerLabel')?.id).toBe('player-labels');

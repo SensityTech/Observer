@@ -153,10 +153,12 @@ describe('DocsPage', () => {
             }
         }
         expect(listed).toContainEqual(['shuttingDown', '#observershuttingdown']);
-        // Each export shows where it is documented, with the parameters its script declares.
-        for (const section of model.sections) {
+        // Each export shows where it is documented, with the parameters its script declares, on the
+        // line that heads the section: the contract's own text may name it too.
+        for (const section of model.sections.filter((documented) => documented.exports.length > 0)) {
+            const heading = within(within(card(section.id)).getByText(words.exports));
             for (const { name, parameters } of section.exports) {
-                expect(within(card(section.id)).getByText(`${name}(${parameters.join(', ')})`)).toBeTruthy();
+                expect(heading.getByText(`${name}(${parameters.join(', ')})`)).toBeTruthy();
             }
         }
         expect(listed).toHaveLength(
