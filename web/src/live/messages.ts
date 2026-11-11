@@ -1,4 +1,5 @@
 import type { ActorKind } from '../api/generated/ActorKind';
+import type { AdmissionStatus } from '../api/generated/AdmissionStatus';
 import type { AlertKind } from '../api/generated/AlertKind';
 import type { AlertList } from '../api/generated/AlertList';
 import type { AnalysisState } from '../api/generated/AnalysisState';
@@ -84,6 +85,7 @@ const TOPICS = {
     'server.resources': true,
 
     'server.entities': true,
+    'server.admission': true,
 } satisfies Record<Topic, true>;
 
 const UNSUBSCRIBE_REASONS = { forbidden: true, disabled: true } satisfies Record<UnsubscribeReason, true>;
@@ -292,6 +294,17 @@ const AUDIT_ACTIONS = {
     kick_settings_changed: true,
     announcement_sent: true,
     direct_message_sent: true,
+    allowlist_request_approved: true,
+    allowlist_request_denied: true,
+    allowlist_requests_denied: true,
+    allowlist_licence_approved: true,
+    allowlist_approval_removed: true,
+    allowlist_settings_changed: true,
+    maintenance_started: true,
+    maintenance_ended: true,
+    maintenance_pass_added: true,
+    maintenance_pass_removed: true,
+    maintenance_settings_changed: true,
 } satisfies Record<AuditAction, true>;
 
 const OUTCOMES = { success: true, failure: true, denied: true } satisfies Record<Outcome, true>;
@@ -1078,6 +1091,18 @@ export const isEntitiesLive = (value: unknown): value is EntitiesLive =>
     orNull(isCount)(value.listUs) &&
     orNull(isCount)(value.frames);
 
+export const isAdmissionStatus = (value: unknown): value is AdmissionStatus =>
+    isRecord(value) &&
+    isRecord(value.allowlist) &&
+    isFlag(value.allowlist.enabled) &&
+    isCount(value.allowlist.waiting) &&
+    isCount(value.allowlist.approved) &&
+    isRecord(value.maintenance) &&
+    isFlag(value.maintenance.on) &&
+    orNull(isTimestamp)(value.maintenance.since) &&
+    orNull(isText)(value.maintenance.by) &&
+    isCount(value.maintenance.passes);
+
 const isSnapshotData = (topic: Topic, data: unknown) => {
     if (!isRecord(data)) {
         return false;
@@ -1115,6 +1140,8 @@ const isSnapshotData = (topic: Topic, data: unknown) => {
 
         case 'server.entities':
             return isEntitiesLive(data);
+        case 'server.admission':
+            return isAdmissionStatus(data);
     }
 };
 
@@ -1147,6 +1174,8 @@ const isEventData = (topic: Topic, data: unknown) => {
 
         case 'server.entities':
             return isEntitiesLive(data);
+        case 'server.admission':
+            return isAdmissionStatus(data);
     }
 };
 

@@ -28,6 +28,8 @@ const MIGRATIONS: &[M<'static>] = &[
     M::up(include_str!("../migrations/0017_tool_staged.sql")),
     M::up(include_str!("../migrations/0018_debug_hosts.sql")),
     M::up(include_str!("../migrations/0019_ban_edits_templates.sql")),
+    M::up(include_str!("../migrations/0020_allowlist.sql")),
+    M::up(include_str!("../migrations/0021_maintenance.sql")),
 ];
 
 /// The schema version this build migrates to.

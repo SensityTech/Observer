@@ -61,6 +61,12 @@ pub(super) fn allows(topic: Topic, held: Permissions) -> bool {
         // Names, versions and states: what the dashboard's start already shows one by one.
         Topic::ServerResources => any(&[Permissions::DASHBOARD_VIEW, Permissions::RESOURCES_CONTROL]),
         Topic::ServerEntities => any(&[Permissions::ENTITIES_VIEW]),
+        // Counts and a switch, no player: the rail and the status card show them everywhere.
+        Topic::ServerAdmission => any(&[
+            Permissions::DASHBOARD_VIEW,
+            Permissions::PLAYERS_VIEW,
+            Permissions::SERVER_CONTROL,
+        ]),
     }
 }
 
@@ -136,6 +142,11 @@ pub(super) async fn open(topic: Topic, since: Option<u64>, state: &AppState) -> 
                 events: Some(watched_events(live, watching, TopicEvent::ServerMap)),
             })
         }
+        Topic::ServerAdmission => Ok(followed(
+            state.admission.status(),
+            TopicSnapshot::ServerAdmission,
+            TopicEvent::ServerAdmission,
+        )),
         Topic::ServerEntities => {
             let (snapshot, live, watching) = state.entities()?.watch();
             Ok(Feed {

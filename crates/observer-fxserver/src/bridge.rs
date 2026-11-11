@@ -32,7 +32,7 @@ pub(crate) const REPORT_TYPE: &str = "observer";
 
 /// The version of the server events the bridge raises; it must match `CONTRACT_VERSION` in
 /// `server.lua`.
-pub const CONTRACT_VERSION: u32 = 5;
+pub const CONTRACT_VERSION: u32 = 6;
 
 const FILES: [(&str, &str); 3] = [
     (
@@ -182,6 +182,9 @@ pub enum BridgeEvent {
         message: String,
         by: String,
     },
+    /// Maintenance mode was turned on or off, and again at each start while it is on. `at` is
+    /// when it was turned on, or off.
+    Maintenance { on: bool, at: i64, by: String },
 }
 
 /// A number before and after.
@@ -314,6 +317,7 @@ impl BridgeEvent {
             Self::StartChanges { .. } => "startChanges",
             Self::Announcement { .. } => "announcement",
             Self::DirectMessage { .. } => "directMessage",
+            Self::Maintenance { .. } => "maintenance",
         }
     }
 
@@ -388,16 +392,67 @@ pub enum BridgeAction {
     /// Has the bridge raise txAdmin's `actionRevoked` for a ban just lifted, when the owner asked
     /// for txAdmin's events. Observer has no event of its own for a lifted ban.
     Lifted { event: TxAdminRevocation },
+    /// Gives the server the name the owner chose for FiveM's server list during maintenance, or
+    /// its own back without one.
+    ServerName {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+    },
 }
 
-/// What a banned player reads, and the `observer:playerRefused` the bridge raises for it.
+/// What a refused player reads, and the `observer:playerRefused` the bridge raises for it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Refusal {
     pub message: String,
-    pub event: BanEvent,
+    pub event: Refused,
 }
 
-/// The payload of `observer:playerRefused` and `observer:playerBanned`.
+/// The payload of `observer:playerRefused`: what refused the player, as `cause`, and what goes
+/// with it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "cause", rename_all = "camelCase")]
+pub enum Refused {
+    Ban(BanEvent),
+    Maintenance(MaintenanceEvent),
+    Allowlist(AllowlistEvent),
+}
+
+impl Refused {
+    /// What a player or the staff typed, which a long event is cut by.
+    fn texts(&mut self) -> Vec<&mut String> {
+        match self {
+            Self::Ban(event) => event.texts(),
+            Self::Maintenance(MaintenanceEvent { name, .. })
+            | Self::Allowlist(AllowlistEvent { name, .. }) => name.as_mut().into_iter().collect(),
+        }
+    }
+}
+
+/// What `observer:playerRefused` carries for a player refused during maintenance.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MaintenanceEvent {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub license: Option<String>,
+}
+
+/// What `observer:playerRefused` carries for a player the allowlist refused.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AllowlistEvent {
+    /// The code of the player's request; absent for a player who shows no licence, and asks
+    /// nothing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub license: Option<String>,
+}
+
+/// What a ban carries in `observer:playerRefused` and `observer:playerBanned`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BanEvent {
@@ -415,6 +470,14 @@ pub struct BanEvent {
     /// The net id of the player dropped; absent for a refused connection, which has none yet.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub player: Option<u32>,
+}
+
+impl BanEvent {
+    fn texts(&mut self) -> Vec<&mut String> {
+        std::iter::once(&mut self.reason)
+            .chain(self.name.as_mut())
+            .collect()
+    }
 }
 
 /// Why players are kicked, from a closed list.
@@ -534,6 +597,7 @@ impl BridgeAction {
             Self::Kick { .. } => "kick",
             Self::Banned { .. } => "banned",
             Self::Lifted { .. } => "lifted",
+            Self::ServerName { .. } => "serverName",
         }
     }
 
@@ -594,10 +658,11 @@ impl BridgeAction {
         hex_json(self)
     }
 
-    /// The action shortened until it fits the console's line: the longest of its message and its
-    /// event's name and reason first, each cut on a character boundary. A list of players is
-    /// never cut: [`BridgeAction::kicks`] splits it. A ban made or lifted, told to txAdmin's
-    /// listeners, first loses its tokens, then its identifiers past the first, from the last.
+    /// The action shortened until it fits the console's line: the longest of its message and of
+    /// what its event holds of typed text first, each cut on a character boundary. A list of
+    /// players is never cut: [`BridgeAction::kicks`] splits it. A ban made or lifted, told to
+    /// txAdmin's listeners, first loses its tokens, then its identifiers past the first, from the
+    /// last.
     #[must_use]
     pub fn fitted(mut self) -> Self {
         while self.encode().len() > 2 * MAX_BRIDGE_JSON {
@@ -614,16 +679,14 @@ impl BridgeAction {
             let texts: Vec<&mut String> = match &mut self {
                 Self::Verdict { refusal: None, .. }
                 | Self::Positions { .. }
+                | Self::ServerName { .. }
                 | Self::Entities { .. }
                 | Self::DeleteEntities { .. } => return self,
                 Self::Verdict {
                     refusal: Some(Refusal { message, event }),
                     ..
-                }
-                | Self::Drop { message, event, .. } => [message, &mut event.reason]
-                    .into_iter()
-                    .chain(event.name.as_mut())
-                    .collect(),
+                } => std::iter::once(message).chain(event.texts()).collect(),
+                Self::Drop { message, event, .. } => std::iter::once(message).chain(event.texts()).collect(),
                 Self::Kick { message, event, .. } => vec![message, &mut event.reason],
                 Self::Banned { event } => {
                     vec![&mut event.kick_message, &mut event.reason, &mut event.target_name]
@@ -719,7 +782,7 @@ mod tests {
     const CONTRACT: &str = include_str!("../../../resource/CONTRACT.md");
     const EXAMPLE: &str = include_str!("../../../resource/observer_example/server.lua");
 
-    fn every_event() -> [BridgeEvent; 7] {
+    fn every_event() -> [BridgeEvent; 8] {
         [
             BridgeEvent::RestartScheduled {
                 at: 0,
@@ -766,6 +829,11 @@ mod tests {
             BridgeEvent::DirectMessage {
                 player: 0,
                 message: String::new(),
+                by: String::new(),
+            },
+            BridgeEvent::Maintenance {
+                on: true,
+                at: 0,
                 by: String::new(),
             },
         ]
@@ -1129,13 +1197,13 @@ mod tests {
         }
     }
 
-    fn every_action() -> [BridgeAction; 8] {
+    fn every_action() -> [BridgeAction; 9] {
         [
             BridgeAction::Verdict {
                 request: 7,
                 refusal: Some(Refusal {
                     message: "Banned".to_owned(),
-                    event: ban_event(None),
+                    event: Refused::Ban(ban_event(None)),
                 }),
             },
             BridgeAction::Drop {
@@ -1166,6 +1234,9 @@ mod tests {
             BridgeAction::Banned { event: txadmin_ban() },
             BridgeAction::Lifted {
                 event: txadmin_revocation(),
+            },
+            BridgeAction::ServerName {
+                name: Some("Aperture RP | maintenance".to_owned()),
             },
         ]
     }
@@ -1242,12 +1313,82 @@ mod tests {
             ),
             json!({ "action": "verdict", "payload": { "request": 9 } })
         );
+        assert_eq!(
+            decode(&BridgeAction::ServerName { name: None }.encode()),
+            json!({ "action": "serverName", "payload": {} })
+        );
+    }
+
+    fn maintenance_event() -> MaintenanceEvent {
+        MaintenanceEvent {
+            name: Some("kaito".to_owned()),
+            license: Some(format!("license:{}", "a".repeat(40))),
+        }
+    }
+
+    fn allowlist_event() -> AllowlistEvent {
+        AllowlistEvent {
+            request: Some("7KQ-2XP".to_owned()),
+            name: Some("kaito".to_owned()),
+            license: Some(format!("license:{}", "a".repeat(40))),
+        }
     }
 
     #[test]
-    fn the_contract_and_the_example_cover_the_ban_events_with_every_field() {
-        for (name, player) in [("playerRefused", None), ("playerBanned", Some(3))] {
-            let wire = serde_json::to_value(ban_event(player)).unwrap();
+    fn a_refusal_says_what_refused_the_player_beside_what_it_carries() {
+        assert_eq!(
+            serde_json::to_value(Refused::Ban(ban_event(None))).unwrap(),
+            json!({
+                "cause": "ban", "ban": "K7QM-2XPA", "reason": "Aimbot", "endsAt": 1_794_000_000_000_i64,
+                "by": "maxime", "name": "kaito", "license": format!("license:{}", "a".repeat(40)),
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(Refused::Allowlist(allowlist_event())).unwrap(),
+            json!({
+                "cause": "allowlist", "request": "7KQ-2XP", "name": "kaito",
+                "license": format!("license:{}", "a".repeat(40)),
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(Refused::Allowlist(AllowlistEvent {
+                request: None,
+                name: None,
+                license: None
+            }))
+            .unwrap(),
+            json!({ "cause": "allowlist" })
+        );
+        assert_eq!(
+            serde_json::to_value(Refused::Maintenance(maintenance_event())).unwrap(),
+            json!({
+                "cause": "maintenance", "name": "kaito",
+                "license": format!("license:{}", "a".repeat(40)),
+            })
+        );
+    }
+
+    #[test]
+    fn the_contract_and_the_example_cover_the_refusals_and_the_ban_with_every_field() {
+        let events = [
+            (
+                "playerRefused",
+                serde_json::to_value(Refused::Ban(ban_event(None))).unwrap(),
+            ),
+            (
+                "playerRefused",
+                serde_json::to_value(Refused::Allowlist(allowlist_event())).unwrap(),
+            ),
+            (
+                "playerRefused",
+                serde_json::to_value(Refused::Maintenance(maintenance_event())).unwrap(),
+            ),
+            ("playerBanned", serde_json::to_value(ban_event(Some(3))).unwrap()),
+        ];
+        for (name, wire) in events {
+            if let Some(cause) = wire["cause"].as_str() {
+                assert!(CONTRACT.contains(&format!("`{cause}`")), "{cause}");
+            }
             let heading = format!("### `observer:{name}`");
             let start = CONTRACT
                 .find(&heading)
@@ -1599,6 +1740,17 @@ mod tests {
         };
 
         let fitted = long.fitted();
+        let named = BridgeAction::Verdict {
+            request: 7,
+            refusal: Some(Refusal {
+                message: "Ask the staff: 7KQ-2XP".to_owned(),
+                event: Refused::Allowlist(AllowlistEvent {
+                    name: Some("é".repeat(3000)),
+                    ..allowlist_event()
+                }),
+            }),
+        }
+        .fitted();
 
         assert!(crate::stdin::allowed(&format!(
             "observer_cmd {}",
@@ -1611,6 +1763,15 @@ mod tests {
         assert!(message.chars().all(|c| c == 'é'));
         assert_ne!(event.reason, "");
         assert_eq!(every_action()[0].clone().fitted(), every_action()[0]);
+        assert!(crate::stdin::allowed(&format!("observer_cmd {}", named.encode())));
+        let BridgeAction::Verdict {
+            refusal: Some(refusal),
+            ..
+        } = named
+        else {
+            panic!("not a refusal");
+        };
+        assert_eq!(refusal.message, "Ask the staff: 7KQ-2XP");
     }
 
     #[test]

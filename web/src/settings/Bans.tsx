@@ -7,7 +7,6 @@ import {
     banTemplatesQuery,
     bansSettingsQuery,
     characters,
-    fillMessage,
     MAX_MESSAGE,
     MAX_TEMPLATES,
     MAX_TOKENS,
@@ -35,6 +34,7 @@ import { Notice } from '../components/Notice';
 import { errorMessage } from '../i18n/errors';
 import { useI18n } from '../i18n/I18nProvider';
 import { cn } from '../lib/cn';
+import { fill } from '../lib/fill';
 import { SettingsForm, useSection } from './Form';
 import { KickSettings } from './Kicks';
 import { MessageEditor } from './MessageEditor';
@@ -261,7 +261,7 @@ function BansForm({ stored, onAsk }: { stored: Settings; onAsk: (asking: Asking)
                             insertLabel={words.insert}
                             problem={tried ? messageProblem : null}
                             previewLabel={words.preview}
-                            preview={fillMessage(draft.message.trim(), {
+                            preview={fill(draft.message.trim(), {
                                 reason: words.example.reason,
                                 ends: words.example.ends,
                                 id: words.example.code,

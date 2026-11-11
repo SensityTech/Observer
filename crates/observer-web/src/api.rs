@@ -4,6 +4,7 @@
 
 mod about;
 mod account;
+mod allowlist;
 mod artifacts;
 mod audit;
 mod auth;
@@ -18,6 +19,7 @@ mod drops;
 mod entities;
 mod features;
 mod files;
+mod maintenance;
 mod map;
 mod metrics;
 mod moderation;
@@ -113,11 +115,20 @@ pub(crate) fn routes() -> Vec<Route> {
     let read_ban_settings = Permission(P::SETTINGS_VIEW);
     let change_ban_settings = Reauthenticated(P::SETTINGS_MANAGE);
     // A kick, an announcement and a message to a player are three permissions. Kicking everyone
-    // empties the server as a restart does, so it is the server control's. The kick message is the
-    // other text Observer shows players: the settings' permission and the password again.
+    // empties the server as a restart does, so it is the server control's. The kick message is
+    // shown to players as the bans' message is: the settings' permission and the password again.
     let kick = Permission(P::PLAYERS_KICK);
     let announce = Permission(P::PLAYERS_ANNOUNCE);
     let message = Permission(P::PLAYERS_MESSAGE);
+    // The allowlist's lists hold names and licences, the players' own; answering a request,
+    // approving a licence or taking an approval back is its own permission. Its switch and its
+    // message go by the rule of the bans' message.
+    let allowlist = Permission(P::PLAYERS_VIEW);
+    let admit = Permission(P::ALLOWLIST_MANAGE);
+    // Maintenance closes the server to players as a stop does: turning it on or off is the server
+    // control's, and so is reading the message players will get before doing it. That message and
+    // the list of those who still get in go by the rule of the bans' message.
+    let maintain = Permission(P::SERVER_CONTROL);
     // Where players stand is its own permission. The image comes from a host path, which is the
     // owner's to read, with the password again; the calibration and colours are settings.
     let map = Permission(P::PLAYERS_MAP);
@@ -288,6 +299,22 @@ pub(crate) fn routes() -> Vec<Route> {
         route(M::PUT,    "/servers/default/kicks/settings",    change_ban_settings, moderation::change_settings),
         route(M::POST,   "/servers/default/announcements",     announce, moderation::announce),
         route(M::POST,   "/servers/default/messages",          message,  moderation::message),
+        route(M::GET,    "/servers/default/allowlist/requests",                allowlist, allowlist::requests),
+        route(M::POST,   "/servers/default/allowlist/requests/deny",           admit,     allowlist::deny_requests),
+        route(M::POST,   "/servers/default/allowlist/requests/{code}/approve", admit,     allowlist::approve_request),
+        route(M::DELETE, "/servers/default/allowlist/requests/{code}",         admit,     allowlist::deny_request),
+        route(M::GET,    "/servers/default/allowlist/approved",                allowlist, allowlist::approved),
+        route(M::POST,   "/servers/default/allowlist/approved",                admit,     allowlist::approve),
+        route(M::DELETE, "/servers/default/allowlist/approved/{id}",           admit,     allowlist::remove_approval),
+        route(M::GET,    "/servers/default/allowlist/settings",     read_ban_settings,   allowlist::settings),
+        route(M::PUT,    "/servers/default/allowlist/settings",     change_ban_settings, allowlist::change_settings),
+        route(M::GET,    "/servers/default/maintenance",                maintain,            maintenance::preview),
+        route(M::PUT,    "/servers/default/maintenance",                maintain,            maintenance::set),
+        route(M::GET,    "/servers/default/maintenance/settings",       read_ban_settings,   maintenance::settings),
+        route(M::PUT,    "/servers/default/maintenance/settings",       change_ban_settings, maintenance::change_settings),
+        route(M::GET,    "/servers/default/maintenance/passes",         read_ban_settings,   maintenance::passes),
+        route(M::POST,   "/servers/default/maintenance/passes",         change_ban_settings, maintenance::add_pass),
+        route(M::DELETE, "/servers/default/maintenance/passes/{id}",    change_ban_settings, maintenance::remove_pass),
         route(M::GET,    "/servers/default/drops/summary",     drops,   drops::summary),
         route(M::GET,    "/servers/default/drops/series",      drops,   drops::series),
         route(M::GET,    "/servers/default/drops/signatures",  drops,   drops::signatures),

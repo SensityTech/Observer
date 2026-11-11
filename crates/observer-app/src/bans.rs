@@ -1,6 +1,7 @@
-//! Bans: what the staff decides, kept in the state database, and what the bridge enforces. One
-//! task answers each player the bridge holds at `playerConnecting`, checks every player once they
-//! joined, and keeps who is connected, so that a ban made while its player plays drops them.
+//! Bans: what the staff decides, kept in the state database, and what the bridge enforces. The
+//! admission asks them about each player the bridge holds at `playerConnecting`; their own task
+//! checks every player once they joined, and keeps who is connected, so that a ban made while its
+//! player plays drops them.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -17,9 +18,7 @@ use observer_domain::error::{ApiError, ErrorCode};
 use observer_domain::permissions::Permissions;
 use observer_domain::players::{Identifiers, Search, SearchRefusal, clean_name};
 use observer_domain::schedule::ScheduleStatus;
-use observer_fxserver::bridge::{
-    BanEvent, BridgeAction, Refusal, TxAdminAction, TxAdminBan, TxAdminRevocation,
-};
+use observer_fxserver::bridge::{BanEvent, BridgeAction, TxAdminAction, TxAdminBan, TxAdminRevocation};
 use observer_fxserver::players::{PlayerReport, PlayerReportKind, Shown};
 use observer_fxserver::supervisor::Supervisor;
 use observer_store::bans::{self as stored, BanMatch, BanQuery, Candidate, Lifted, NewBan, NewEdit};
@@ -68,14 +67,14 @@ struct Connected {
 
 /// What a player showed, in the form bans hold it.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-struct Seen {
+pub(crate) struct Seen {
     held: Vec<(String, String)>,
-    name: Option<String>,
-    license: Option<String>,
+    pub(crate) name: Option<String>,
+    pub(crate) license: Option<String>,
 }
 
 impl Seen {
-    fn of(shown: &Shown) -> Self {
+    pub(crate) fn of(shown: &Shown) -> Self {
         let identifiers = Identifiers::parse(
             shown.identifiers.iter().map(String::as_str),
             shown.tokens.iter().map(String::as_str),
@@ -174,14 +173,6 @@ impl Bans {
             }
         }
         match report.kind {
-            PlayerReportKind::Connecting(connecting) => {
-                let refusal = self.refusal(&Seen::of(&connecting.shown), None).await;
-                self.act(BridgeAction::Verdict {
-                    request: connecting.request,
-                    refusal: refusal.map(|(message, event)| Refusal { message, event }),
-                })
-                .await;
-            }
             PlayerReportKind::Join(joined) => self.joined(joined.net_id, &joined.shown).await,
             PlayerReportKind::Roster(page) => {
                 for (net_id, shown) in &page.players {
@@ -191,7 +182,10 @@ impl Bans {
             PlayerReportKind::Drop(dropped) => {
                 self.connected().players.remove(&dropped.net_id);
             }
-            PlayerReportKind::Labels(_) | PlayerReportKind::Positions(_) => {}
+            // The admission answers a connecting player, after asking the bans.
+            PlayerReportKind::Connecting(_)
+            | PlayerReportKind::Labels(_)
+            | PlayerReportKind::Positions(_) => {}
         }
     }
 
@@ -212,7 +206,7 @@ impl Bans {
 
     /// The message and the event for a player a ban refuses, counted on the ban; `None` when no
     /// ban does, or when the database cannot tell, so that a failing disk never locks everyone out.
-    async fn refusal(&self, seen: &Seen, player: Option<u32>) -> Option<(String, BanEvent)> {
+    pub(crate) async fn refusal(&self, seen: &Seen, player: Option<u32>) -> Option<(String, BanEvent)> {
         let shown = seen.held.clone();
         let now = self.inner.clock.now();
         let found = self

@@ -4,7 +4,7 @@
 -- saves, labels and the staff's announcements and messages would go.
 
 -- The contract this resource was written for.
-local CONTRACT_VERSION = 5
+local CONTRACT_VERSION = 6
 
 local function log(text)
     print(('[observer_example] %s'):format(text))
@@ -74,7 +74,16 @@ AddEventHandler('observer:startChanges', function(payload)
 end)
 
 AddEventHandler('observer:playerRefused', function(payload)
-    log('playerRefused ' .. fields(payload, { 'ban', 'reason', 'endsAt', 'by', 'name', 'license' }))
+    if payload.cause == 'allowlist' then
+        log('playerRefused ' .. fields(payload, { 'cause', 'request', 'name', 'license' }))
+        -- Your staff's channel goes here: payload.name asks to get in, under the ID payload.request.
+        return
+    end
+    if payload.cause == 'maintenance' then
+        log('playerRefused ' .. fields(payload, { 'cause', 'name', 'license' }))
+        return
+    end
+    log('playerRefused ' .. fields(payload, { 'cause', 'ban', 'reason', 'endsAt', 'by', 'name', 'license' }))
     -- Your staff's log goes here: a banned player tried to connect and was refused.
 end)
 
@@ -99,6 +108,11 @@ AddEventHandler('observer:directMessage', function(payload)
     log('directMessage ' .. fields(payload, { 'player', 'by', 'message' }))
     -- What shows it to payload.player alone goes here, the same way, while
     -- GetPlayerName(payload.player) still answers: they may have left since the staff wrote.
+end)
+
+AddEventHandler('observer:maintenance', function(payload)
+    log('maintenance ' .. fields(payload, { 'on', 'at', 'by' }))
+    -- Your own switches go here: while payload.on, the server takes no player but the staff's list.
 end)
 
 -- Your framework gives the label where it knows the player's character, once they picked it for

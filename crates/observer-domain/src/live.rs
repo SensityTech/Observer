@@ -6,6 +6,7 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
+use crate::admission::AdmissionStatus;
 use crate::artifacts::ArtifactsStatus;
 use crate::audit::AuditEntry;
 use crate::changes::ChangesLive;
@@ -83,10 +84,14 @@ pub enum Topic {
     /// lists them only then. Needs the entities permission.
     #[serde(rename = "server.entities")]
     ServerEntities,
+    /// Who the server lets in: whether the allowlist is on, how many requests wait and how many
+    /// licences are approved. Needs the dashboard, players or server control permission.
+    #[serde(rename = "server.admission")]
+    ServerAdmission,
 }
 
 impl Topic {
-    pub const ALL: [Self; 13] = [
+    pub const ALL: [Self; 14] = [
         Self::Status,
         Self::Audit,
         Self::ServerStatus,
@@ -100,6 +105,7 @@ impl Topic {
         Self::ServerMap,
         Self::ServerResources,
         Self::ServerEntities,
+        Self::ServerAdmission,
     ];
 }
 
@@ -181,6 +187,8 @@ pub enum TopicSnapshot {
     ServerResources(ResourcesView),
     #[serde(rename = "server.entities")]
     ServerEntities(EntitiesLive),
+    #[serde(rename = "server.admission")]
+    ServerAdmission(AdmissionStatus),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, TS)]
@@ -218,6 +226,9 @@ pub enum TopicEvent {
     /// The state of the list again, at each sweep of the bridge and after each deletion.
     #[serde(rename = "server.entities")]
     ServerEntities(EntitiesLive),
+    /// The whole status again, whenever any of it changes.
+    #[serde(rename = "server.admission")]
+    ServerAdmission(AdmissionStatus),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]

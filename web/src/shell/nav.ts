@@ -12,6 +12,7 @@ import {
     GitCompare,
     Globe,
     LayoutDashboard,
+    ListChecks,
     Map as MapIcon,
     Package,
     Radar,
@@ -44,6 +45,7 @@ export type NavEntry = {
         | '/players'
         | '/map'
         | '/bans'
+        | '/allowlist'
         | '/changes'
         | '/drops'
         | '/docs'
@@ -62,6 +64,8 @@ export type NavEntry = {
     access: bigint | bigint[] | 'owner' | 'everyone';
     /** Shows how many alerts are live. */
     alerts?: boolean;
+    /** Shows how many requests wait while the allowlist is on. */
+    waiting?: boolean;
     /**
      * Stays current on the pages under it, as a player's profile is under the players and a resource
      * under the changes, and whatever its address holds, as the drops' filters.
@@ -96,6 +100,13 @@ export const navSections = (t: Messages) => ({
         { to: '/players', label: t.nav.players, icon: Contact, access: Permission.PlayersView, nested: true },
         { to: '/map', label: t.nav.map, icon: MapIcon, access: Permission.PlayersMap },
         { to: '/bans', label: t.nav.bans, icon: Ban, access: Permission.BansView },
+        {
+            to: '/allowlist',
+            label: t.nav.allowlist,
+            icon: ListChecks,
+            access: Permission.PlayersView,
+            waiting: true,
+        },
     ] satisfies NavEntry[],
     server: [
         {

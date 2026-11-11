@@ -6,19 +6,21 @@
 mod common;
 
 use std::fs;
-use std::net::{IpAddr, Ipv4Addr};
+use std::io::{Read as _, Write as _};
+use std::net::{IpAddr, Ipv4Addr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use common::{Port, Ports};
 use jiff::{SignedDuration, Timestamp, Unit};
 use observer_app::{
-    Accounts, AuditLog, Bans, BansSetup, BansTask, Caller, Client, Clock, DatabaseFiles, Diagnostics,
-    DiagnosticsSetup, DiagnosticsTask, Drops, DropsSetup, Entities, EntitiesSetup, Error, LiveMap, LogQuery,
-    MapSetup, Metrics, MetricsSetup, Moderation, ModerationSetup, PasswordCost, Players, PlayersSetup,
-    PlayersTask, Running, Sampling, Schedule, ScheduleSetup, ScheduleTask, Servers, Setup, Sources,
-    Supervision,
+    Accounts, Admission, AdmissionSetup, AdmissionTask, AuditLog, Bans, BansSetup, BansTask, Caller, Client,
+    Clock, DatabaseFiles, Diagnostics, DiagnosticsSetup, DiagnosticsTask, Drops, DropsSetup, Entities,
+    EntitiesSetup, Error, LiveMap, LogQuery, MapSetup, Metrics, MetricsSetup, Moderation, ModerationSetup,
+    PasswordCost, Players, PlayersSetup, PlayersTask, Running, Sampling, Schedule, ScheduleSetup,
+    ScheduleTask, Servers, Setup, Sources, Supervision,
 };
+use observer_domain::allowlist::AllowlistSettings;
 use observer_domain::audit::{ActorKind, AuditAction, AuditEntry, AuditFilter, Outcome};
 use observer_domain::bans::{BanFilter, BanRequest, LiftRequest};
 use observer_domain::changes::LiveChangeKind;
@@ -33,6 +35,7 @@ use observer_domain::entities::{
 };
 use observer_domain::error::ErrorCode;
 use observer_domain::launch::{ExtraArgument, LaunchSettings, OneSync};
+use observer_domain::maintenance::{AddPass, MaintenanceSettings, SetMaintenance};
 use observer_domain::metrics::{LiveSample, MarkerKind, Range, Series, ThreadGroup, ThreadShares};
 use observer_domain::moderation::{
     AnnouncementRequest, DirectMessageRequest, KickAllRequest, KickRequest, KickSettings,
@@ -1565,6 +1568,7 @@ fn ban_of(license: &str, minutes: Option<u32>) -> BanRequest {
 async fn a_banned_player_is_refused_at_connection_and_dropped_when_banned_while_playing() {
     let mut observer = Observer::new(false).await;
     let (bans, banning) = bans_over(&observer);
+    let (_admission, admitting) = admission_over(&observer, &bans).await;
     let cheater = format!("license:{}", "a".repeat(40));
     let ada = format!("license:{}", "b".repeat(40));
     let first = bans.ban(&observer.owner, ban_of(&cheater, None)).await.unwrap();
@@ -1594,6 +1598,7 @@ async fn a_banned_player_is_refused_at_connection_and_dropped_when_banned_while_
         .unwrap();
     observer.supervision.stop_server(&observer.owner).await.unwrap();
     observer.state(ServerState::Stopped).await;
+    admitting.close().await;
     banning.close().await;
     observer.stop_observer().await;
 
@@ -1611,6 +1616,11 @@ Ban ID: {}",
     );
     assert!(
         plain(&refused_event.5).contains(&first.code),
+        "{}",
+        refused_event.5
+    );
+    assert!(
+        plain(&refused_event.5).contains("\"cause\":\"ban\""),
         "{}",
         refused_event.5
     );
@@ -1668,6 +1678,7 @@ async fn a_ban_is_told_to_txadmin_s_listeners_once_before_it_drops_anyone() {
     let mut observer = Observer::new(false).await;
     ask_for_txadmin_events(&observer).await;
     let (bans, banning) = bans_over(&observer);
+    let (_admission, admitting) = admission_over(&observer, &bans).await;
     let owner = observer.owner.clone();
     let absent = format!("license:{}", "a".repeat(40));
     let ada = format!("license:{}", "b".repeat(40));
@@ -1683,6 +1694,7 @@ async fn a_ban_is_told_to_txadmin_s_listeners_once_before_it_drops_anyone() {
     let lines: Vec<String> = observer.console().iter().map(|line| plain(&line.5)).collect();
     observer.supervision.stop_server(&owner).await.unwrap();
     observer.state(ServerState::Stopped).await;
+    admitting.close().await;
     banning.close().await;
     observer.stop_observer().await;
 
@@ -1793,6 +1805,306 @@ async fn a_ban_and_its_lift_write_nothing_for_txadmin_s_listeners_unless_the_own
         }),
         "{lines:#?}"
     );
+}
+
+#[tokio::test]
+async fn the_allowlist_refuses_a_player_until_their_request_is_approved() {
+    let mut observer = Observer::new(false).await;
+    let (admission, admitting, banning) = admit(&observer).await;
+    admission
+        .change_allowlist_settings(
+            &observer.owner,
+            AllowlistSettings {
+                enabled: true,
+                message: "Approved players only. Ask the staff: {id}".to_owned(),
+            },
+        )
+        .await
+        .unwrap();
+    let ada = format!("license:{}", "c".repeat(40));
+    let send = |line: String| {
+        let observer = &observer;
+        async move {
+            observer
+                .supervision
+                .command(&observer.owner, &line, CONSOLE_ROUTE.0, CONSOLE_ROUTE.1)
+                .await
+                .unwrap();
+        }
+    };
+
+    observer.supervision.start_server(&observer.owner).await.unwrap();
+    observer.state(ServerState::Online).await;
+    send(format!("fake_connecting Ada {ada}")).await;
+    let refused = observer.console_until("refused ").await;
+    let refused_event = observer.console_until("observer:playerRefused").await;
+    let waiting = admission.requests(None, None).await.unwrap().requests;
+    let got_in_before = observer
+        .console()
+        .iter()
+        .any(|line| plain(&line.5).contains("Player Ada connected"));
+    admission
+        .approve_request(&observer.owner, &waiting[0].code)
+        .await
+        .unwrap();
+    send(format!("fake_connecting Ada {ada}")).await;
+    observer.console_until("Player Ada connected").await;
+    observer.supervision.stop_server(&observer.owner).await.unwrap();
+    observer.state(ServerState::Stopped).await;
+    admitting.close().await;
+    banning.close().await;
+    observer.stop_observer().await;
+
+    let code = &waiting[0].code;
+    assert_eq!((waiting.len(), waiting[0].license.as_str()), (1, ada.as_str()));
+    assert_eq!(waiting[0].name.as_deref(), Some("Ada"));
+    let message = json!(format!("Approved players only. Ask the staff: {code}")).to_string();
+    assert!(plain(&refused.5).contains(&message), "{}", refused.5);
+    for part in [
+        "\"cause\":\"allowlist\"".to_owned(),
+        format!("\"request\":\"{code}\""),
+        format!("\"license\":\"{ada}\""),
+    ] {
+        assert!(plain(&refused_event.5).contains(&part), "{}", refused_event.5);
+    }
+    assert!(!got_in_before, "Ada got in before her request was approved");
+}
+
+/// What the server's game port answers at `path`, as FiveM's server list reads it. The fake
+/// closes the connection after each answer.
+fn served(port: u16, path: &str) -> serde_json::Value {
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+    stream.set_read_timeout(Some(WAIT)).unwrap();
+    write!(stream, "GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n").unwrap();
+    let mut response = String::new();
+    stream.read_to_string(&mut response).unwrap();
+    let body = response.split_once("\r\n\r\n").map_or("", |(_, body)| body);
+    serde_json::from_str(body).unwrap()
+}
+
+/// The names FiveM's server list reads from the server: its project name and its host name.
+fn listed_names(port: u16) -> (String, String) {
+    let name = |value: &serde_json::Value| value.as_str().unwrap_or_default().to_owned();
+    (
+        name(&served(port, "/info.json")["vars"]["sv_projectName"]),
+        name(&served(port, "/dynamic.json")["hostname"]),
+    )
+}
+
+/// The admission over `observer`'s data, which answers each connecting player, the verdict of
+/// `bans` included.
+async fn admission_over(observer: &Observer, bans: &Bans) -> (Admission, AdmissionTask) {
+    Admission::start(AdmissionSetup {
+        db: observer.db.clone(),
+        clock: Clock::system(),
+        supervision: observer.supervision.clone(),
+        bans: bans.clone(),
+        schedule: observer.schedule.status(),
+    })
+    .await
+    .unwrap()
+}
+
+/// The bans and the admission over `observer`'s data, as `observer run` starts them.
+async fn admit(observer: &Observer) -> (Admission, AdmissionTask, BansTask) {
+    let (bans, banning) = bans_over(observer);
+    let (admission, admitting) = admission_over(observer, &bans).await;
+    (admission, admitting, banning)
+}
+
+/// What the resources heard of maintenance in the run `generation`, the latest last.
+fn heard_of_maintenance(observer: &Observer, generation: u32) -> Vec<String> {
+    observer
+        .console()
+        .into_iter()
+        .filter(|line| line.2 == generation)
+        .map(|line| plain(&line.5))
+        .filter(|line| line.contains("observer:maintenance "))
+        .collect()
+}
+
+/// Waits until `met`, or fails saying `what` never came.
+async fn eventually(what: &str, met: impl Fn() -> bool) {
+    let deadline = Instant::now() + WAIT;
+    while !met() {
+        assert!(Instant::now() < deadline, "{what}");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+#[tokio::test]
+async fn maintenance_refuses_at_connection_and_tells_the_resources_at_each_start() {
+    let mut observer = Observer::new(false).await;
+    let (admission, admitting, banning) = admit(&observer).await;
+    let (ada, grace) = (
+        format!("license:{}", "c".repeat(40)),
+        format!("license:{}", "d".repeat(40)),
+    );
+    admission
+        .add_pass(
+            &observer.owner,
+            AddPass {
+                license: grace.clone(),
+                note: None,
+            },
+        )
+        .await
+        .unwrap();
+    let send = |line: String| {
+        let observer = &observer;
+        async move {
+            observer
+                .supervision
+                .command(&observer.owner, &line, CONSOLE_ROUTE.0, CONSOLE_ROUTE.1)
+                .await
+                .unwrap();
+        }
+    };
+    let switch = |on: bool| admission.set_maintenance(&observer.owner, SetMaintenance { on });
+
+    observer.supervision.start_server(&observer.owner).await.unwrap();
+    observer.state(ServerState::Online).await;
+    let before = heard_of_maintenance(&observer, 1);
+    switch(true).await.unwrap();
+    observer.console_until("observer:maintenance ").await;
+    let since = admission.status().borrow().maintenance.since.unwrap();
+    send(format!("fake_connecting Ada {ada}")).await;
+    let refused = observer.console_until("refused ").await;
+    let refused_event = observer.console_until("observer:playerRefused").await;
+    send(format!("fake_connecting Grace {grace}")).await;
+    observer.console_until("Player Grace connected").await;
+    observer
+        .supervision
+        .restart_server(&observer.owner)
+        .await
+        .unwrap();
+    observer
+        .until(|status| status.generation == 2 && status.state == ServerState::Online)
+        .await;
+    eventually("the second start heard nothing of maintenance", || {
+        !heard_of_maintenance(&observer, 2).is_empty()
+    })
+    .await;
+    switch(false).await.unwrap();
+    eventually("the end of maintenance was not raised", || {
+        heard_of_maintenance(&observer, 2).len() == 2
+    })
+    .await;
+    send(format!("fake_connecting Ada {ada}")).await;
+    observer.console_until("Player Ada connected").await;
+    let (first, second) = (
+        heard_of_maintenance(&observer, 1),
+        heard_of_maintenance(&observer, 2),
+    );
+    let renames = observer
+        .console()
+        .iter()
+        .filter(|line| plain(&line.5).contains("observer_cmd serverName"))
+        .count();
+    observer.supervision.stop_server(&observer.owner).await.unwrap();
+    observer.state(ServerState::Stopped).await;
+    admitting.close().await;
+    banning.close().await;
+    observer.stop_observer().await;
+
+    assert_eq!(before, [] as [String; 0]);
+    let turned_on = format!("\"at\":{},\"by\":\"ada\",\"on\":true", since.as_millisecond());
+    assert_eq!(first.len(), 1, "{first:?}");
+    assert!(first[0].contains(&turned_on), "{first:?}");
+    assert_eq!(second.len(), 2, "{second:?}");
+    assert!(second[0].contains(&turned_on), "{second:?}");
+    assert!(second[1].contains("\"on\":false"), "{second:?}");
+    let message = json!(MaintenanceSettings::default().message).to_string();
+    assert!(plain(&refused.5).contains(&message), "{}", refused.5);
+    for part in [
+        "\"cause\":\"maintenance\"".to_owned(),
+        format!("\"license\":\"{ada}\""),
+    ] {
+        assert!(plain(&refused_event.5).contains(&part), "{}", refused_event.5);
+    }
+    assert_eq!(
+        renames, 1,
+        "without a maintenance name, only its end gives a name back"
+    );
+}
+
+#[tokio::test]
+async fn the_server_carries_its_maintenance_name_in_the_list_and_gets_its_own_back() {
+    let mut observer = Observer::new(false).await;
+    let (admission, admitting, banning) = admit(&observer).await;
+    admission
+        .change_maintenance_settings(
+            &observer.owner,
+            MaintenanceSettings {
+                server_name: Some("Observer lab | maintenance".to_owned()),
+                ..MaintenanceSettings::default()
+            },
+        )
+        .await
+        .unwrap();
+    let switch = |on: bool| admission.set_maintenance(&observer.owner, SetMaintenance { on });
+    let maintenance = (
+        "Observer lab | maintenance".to_owned(),
+        "Observer lab | maintenance".to_owned(),
+    );
+
+    observer.supervision.start_server(&observer.owner).await.unwrap();
+    let port = observer.state(ServerState::Online).await.port.unwrap();
+    let own = listed_names(port);
+    switch(true).await.unwrap();
+    eventually("the server kept its own name", || {
+        listed_names(port) == maintenance
+    })
+    .await;
+    observer
+        .supervision
+        .restart_server(&observer.owner)
+        .await
+        .unwrap();
+    observer
+        .until(|status| status.generation == 2 && status.state == ServerState::Online)
+        .await;
+    eventually("the second start kept its own name", || {
+        listed_names(port) == maintenance
+    })
+    .await;
+    // `/info.json` is read once a run, after the rename as likely as before it.
+    tokio::time::sleep(Duration::from_secs(6)).await;
+    let shown = observer.supervision.status().borrow().name.clone();
+    admission
+        .change_maintenance_settings(
+            &observer.owner,
+            MaintenanceSettings {
+                server_name: Some("Back at 8".to_owned()),
+                ..MaintenanceSettings::default()
+            },
+        )
+        .await
+        .unwrap();
+    eventually(
+        "a name changed during maintenance did not reach the server",
+        || listed_names(port).0 == "Back at 8",
+    )
+    .await;
+    switch(false).await.unwrap();
+    eventually("the server kept its maintenance name", || {
+        listed_names(port) == own
+    })
+    .await;
+    observer.supervision.stop_server(&observer.owner).await.unwrap();
+    observer.state(ServerState::Stopped).await;
+    admitting.close().await;
+    banning.close().await;
+    observer.stop_observer().await;
+
+    assert_eq!(
+        own,
+        (
+            "^2Observer ^7lab".to_owned(),
+            "FXServer, but unconfigured".to_owned()
+        )
+    );
+    assert_eq!(shown.as_deref(), Some("Observer lab"));
 }
 
 #[tokio::test]

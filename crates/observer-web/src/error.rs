@@ -72,6 +72,9 @@ fn status(code: ErrorCode) -> StatusCode {
         | ErrorCode::PlayerNotFound
         | ErrorCode::BanNotFound
         | ErrorCode::ResourceNotFound
+        | ErrorCode::AllowlistRequestNotFound
+        | ErrorCode::ApprovalNotFound
+        | ErrorCode::PassNotFound
         | ErrorCode::NoMapImage
         | ErrorCode::FeatureDisabled => StatusCode::NOT_FOUND,
         ErrorCode::ContentNotKept => StatusCode::GONE,
@@ -115,6 +118,8 @@ fn status(code: ErrorCode) -> StatusCode {
         | ErrorCode::BackupCopyUnavailable
         | ErrorCode::BanNotActive
         | ErrorCode::PlayerNotConnected
+        | ErrorCode::AlreadyApproved
+        | ErrorCode::PassExists
         | ErrorCode::UpdateNotAvailable
         | ErrorCode::UpdateRunning
         | ErrorCode::NoUpdate
@@ -135,6 +140,7 @@ fn status(code: ErrorCode) -> StatusCode {
         | ErrorCode::InvalidRule
         | ErrorCode::InvalidPublicKey
         | ErrorCode::TooManyKeys
+        | ErrorCode::TooManyPasses
         | ErrorCode::InvalidAccess
         | ErrorCode::DiffTooLarge
         | ErrorCode::InvalidPlayersFile
@@ -164,6 +170,10 @@ fn status(code: ErrorCode) -> StatusCode {
         | ErrorCode::InvalidKick
         | ErrorCode::InvalidKickSettings
         | ErrorCode::InvalidMessage
+        | ErrorCode::InvalidApproval
+        | ErrorCode::InvalidAllowlistSettings
+        | ErrorCode::InvalidPass
+        | ErrorCode::InvalidMaintenanceSettings
         | ErrorCode::InvalidMapSettings
         | ErrorCode::TooManyEntities
         | ErrorCode::InvalidEntitiesSettings

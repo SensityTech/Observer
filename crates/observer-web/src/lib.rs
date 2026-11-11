@@ -20,9 +20,9 @@ use std::sync::Arc;
 use axum::extract::Request;
 use axum::{Router, middleware};
 use observer_app::{
-    Accounts, Artifacts, AuditLog, Backups, Bans, Changes, DebugCounts, Diagnostics, Drops, Entities, Error,
-    Features, Files, LiveMap, Metrics, Moderation, Players, Schedule, Servers, Statistics, Supervision,
-    Tools, Updates,
+    Accounts, Admission, Artifacts, AuditLog, Backups, Bans, Changes, DebugCounts, Diagnostics, Drops,
+    Entities, Error, Features, Files, LiveMap, Metrics, Moderation, Players, Schedule, Servers, Statistics,
+    Supervision, Tools, Updates,
 };
 use observer_domain::about::Build;
 use observer_domain::features::Feature;
@@ -66,6 +66,7 @@ pub struct AppState {
     pub backups: Backups,
     pub bans: Bans,
     pub moderation: Moderation,
+    pub admission: Admission,
     pub live: Live,
     /// Cookies ignore ports, so the name carries the instance id: two Observers on one host never
     /// read each other's sessions.
@@ -108,6 +109,7 @@ pub struct Services {
     pub backups: Backups,
     pub bans: Bans,
     pub moderation: Moderation,
+    pub admission: Admission,
 }
 
 impl AppState {
@@ -141,6 +143,7 @@ impl AppState {
             backups,
             bans,
             moderation,
+            admission,
             statistics,
         } = services;
         Self {
@@ -166,6 +169,7 @@ impl AppState {
             backups,
             bans,
             moderation,
+            admission,
             statistics,
             live: Live::new(),
             cookie: format!("observer_session_{instance_id}"),

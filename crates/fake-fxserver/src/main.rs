@@ -173,6 +173,12 @@ impl Server {
             .insert(name.to_ascii_lowercase(), value.to_owned());
     }
 
+    /// `sv_hostname`, which FXServer declares with a value of its own.
+    pub fn hostname(&self) -> String {
+        self.convar("sv_hostname")
+            .unwrap_or_else(|| "FXServer, but unconfigured".to_owned())
+    }
+
     fn number(&self, name: &str) -> Option<u64> {
         self.convar(name)?.parse().ok()
     }
@@ -1288,6 +1294,7 @@ impl Fake {
                 };
                 console::script(&bridge, &format!("txAdmin:events:{event} {}", payload["event"]));
             }
+            Some("serverName") => self.server_name(payload["name"].as_str()),
             Some(_) => {}
             None => console::script(
                 &bridge,
@@ -1333,6 +1340,47 @@ impl Fake {
         for id in kicked {
             console::script(bridge, &format!("kicked {id} {}", json!(message)));
             self.drop_player(id, 1, bridge, message);
+        }
+    }
+
+    /// What the real bridge does with the server's maintenance name: the convars the server list
+    /// reads take it, what they held kept aside, and get it back when no name comes.
+    fn server_name(&self, name: Option<&str>) {
+        const KEPT: &str = "observer_name_kept";
+        const NAMES: [(&str, &str); 2] = [
+            ("sv_hostname", "observer_name_hostname"),
+            ("sv_projectName", "observer_name_project"),
+        ];
+        let held = |convar: &str| match convar {
+            "sv_hostname" => self.server.hostname(),
+            other => self.server.convar(other).unwrap_or_default(),
+        };
+        let mut kept = self.server.convar(KEPT).unwrap_or_default();
+        if let Some(name) = name.filter(|name| !name.is_empty()) {
+            if kept.is_empty() {
+                let mut renamed = Vec::new();
+                for (convar, aside) in NAMES {
+                    let held = held(convar);
+                    if !held.is_empty() {
+                        self.server.set(aside, &held);
+                        renamed.push(convar);
+                    }
+                }
+                kept = renamed.join(" ");
+                self.server.set(KEPT, &kept);
+            }
+            for (convar, _) in NAMES {
+                if kept.contains(convar) {
+                    self.server.set(convar, name);
+                }
+            }
+        } else {
+            for (convar, aside) in NAMES {
+                if kept.contains(convar) {
+                    self.server.set(convar, &held(aside));
+                }
+            }
+            self.server.set(KEPT, "");
         }
     }
 

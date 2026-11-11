@@ -23,6 +23,8 @@ const TIMES = new Set<string>([
     'previousAt',
     'startedAt',
     'endsAt',
+    'until',
+    'since',
 ]);
 const ACTIONS = new Set<string>(['attempted', 'action']);
 /** The schedule's lists, the resources an order stopped, and the nested entries of the details. */

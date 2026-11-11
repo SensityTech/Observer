@@ -3,6 +3,7 @@ import { Link, Outlet, useRouter, useRouterState } from '@tanstack/react-router'
 import { ChevronRight, Menu as MenuIcon, Search, Server, TriangleAlert, X } from 'lucide-react';
 import { Suspense, useCallback, useEffect, useRef, useState } from 'react';
 
+import { useAdmission } from '../admission/context';
 import { meQuery } from '../api/auth';
 import { Permission } from '../api/generated/Permission';
 import type { Me } from '../api/generated/Me';
@@ -16,6 +17,7 @@ import { cn } from '../lib/cn';
 import { PHONE, useMedia } from '../lib/useMedia';
 import { useServerStatus } from '../server/context';
 import { Logo } from './Logo';
+import { MaintenanceBanner } from './Maintenance';
 import { OnlineButton, OnlineColumn } from './OnlineColumn';
 import { ServerControls } from './ServerControls';
 import { SignedIn } from './SignedIn';
@@ -172,6 +174,7 @@ export function AppShell() {
                             <StatusBar />
                             <ServerControls />
                         </div>
+                        <MaintenanceBanner />
                     </header>
                     <main className="content" id="content" tabIndex={-1}>
                         <PlainHttpNotice />
@@ -278,7 +281,7 @@ function NavEntries({
     return (
         <>
             {group && <p className="nav-group">{group}</p>}
-            {allowed.map(({ to, label, icon: Icon, alerts, nested }) => (
+            {allowed.map(({ to, label, icon: Icon, alerts, waiting, nested }) => (
                 <Link
                     key={to}
                     to={to}
@@ -289,6 +292,7 @@ function NavEntries({
                     <Icon size={16} strokeWidth={1.5} aria-hidden="true" />
                     {label}
                     {alerts === true && <AlertCount />}
+                    {waiting === true && <WaitingCount />}
                 </Link>
             ))}
         </>
@@ -364,6 +368,21 @@ function AlertCount() {
         <Chip tone="warning" icon={TriangleAlert} className="ml-auto">
             <span aria-hidden="true">{format.number(count)}</span>
             <span className="sr-only">{t.nav.alertCount(count)}</span>
+        </Chip>
+    );
+}
+
+/** The requests waiting on the Allowlist entry, while the allowlist refuses and there is any. */
+function WaitingCount() {
+    const { t, format } = useI18n();
+    const allowlist = useAdmission()?.allowlist;
+    if (allowlist === undefined || !allowlist.enabled || allowlist.waiting === 0) {
+        return null;
+    }
+    return (
+        <Chip tone="accent" className="ml-auto">
+            <span aria-hidden="true">{format.number(allowlist.waiting)}</span>
+            <span className="sr-only">{t.nav.waitingCount(allowlist.waiting)}</span>
         </Chip>
     );
 }

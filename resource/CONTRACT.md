@@ -1,18 +1,22 @@
 # Integration contract
 
-Observer never shows anything to players, but for two texts the owner writes: the refusal message
-for bans and the kick message. It tells your resources what is about to happen to the server, with
-data and no text of its own, and your resources decide what players see, what gets saved and when.
-This page is that contract: the server events Observer raises, what they carry, what your resources
-can tell Observer about players, how bans keep players out, how the staff's kicks, announcements and
-messages reach your resources, and what you can rely on.
+Observer never shows anything to players, but for what the owner writes: the refusal messages, one
+for bans, one for maintenance mode, one for the allowlist, the kick message, and the name the server
+takes in FiveM's server list during maintenance. It tells your resources what is about to happen to
+the server, with data and no text of its own, and your resources decide what players see, what gets
+saved and when. This page is that contract: the server events Observer raises, what they carry, what
+your resources can tell Observer about players, how bans, maintenance mode and the allowlist keep
+players out, how the staff's kicks, announcements and messages reach your resources, and what you
+can rely on.
 
 ## The bridge
 
 The bridge is a server-side resource that Observer writes into the build's `system_resources` folder
 before every start of FXServer, and ensures before your cfg runs. Observer overwrites any change made
-to it. It reports the server's health to Observer, turns Observer's commands into server events, refuses
-banned players and drops the players the staff kicks. While someone has the panel's live map open, it also reads where each player stands,
+to it. It reports the server's health to Observer, turns Observer's commands into server events, drops
+the players the staff kicks, and refuses the players Observer keeps out: banned ones, everyone but a
+short list during maintenance, and those the staff has not approved while the allowlist is on. While
+someone has the panel's live map open, it also reads where each player stands,
 from OneSync, every 1 to 5 seconds, and reports it to Observer; it raises no event for it and stops
 within 30 seconds after the last one closes the map. In the same way, while someone looks at the
 server's entities in the panel, it lists the vehicles, peds and objects OneSync knows, every 5 to 60
@@ -32,17 +36,21 @@ local bridge = GetConvar('observer_bridge', '') -- empty when Observer did not s
 
 ## Version
 
-This is contract version **5**.
+This is contract version **6**.
 
 ```lua
-local version = exports[GetConvar('observer_bridge', '')]:getContractVersion() -- 5
+local version = exports[GetConvar('observer_bridge', '')]:getContractVersion() -- 6
 ```
 
 Within a version, fields and `reason` values are only ever added. Ignore fields you do not know, and
-treat a `reason` you do not know as the closest one you do (`stop` for `observer:shuttingDown`). A
-field renamed or removed, or a change of meaning, is a new version. So is a new export of the
+treat a `reason` you do not know as the closest one you do (`stop` for `observer:shuttingDown`), and
+a `cause` you do not know as a refusal you have no details for. A field renamed or removed, or a
+change of meaning, is a new version. So is a new export of the
 bridge, so that a resource can check for it before calling it.
 
+Version 6 added the allowlist and maintenance mode, with `observer:maintenance`, and changed what
+`observer:playerRefused` means: it is raised for every player refused at connection, says what
+refused them in `cause`, and carries `ban`, `reason`, `endsAt` and `by` for a ban only.
 Version 5 added what the staff does to connected players: the bridge drops the players the staff
 kicks, with the kick message the owner wrote, and raises `observer:playerKicked`,
 `observer:announcement` and `observer:directMessage`; with txAdmin's events, it also tells of each
@@ -67,11 +75,12 @@ who signs in to nothing. No account can take either name.
 | `observer:restartRescheduled` | A restart announced since this start of FXServer moved to another time. |
 | `observer:shuttingDown` | FXServer quits in `delayMs`: save now. |
 | `observer:startChanges` | Once per start of FXServer, when its files are hashed: what changed since the start before. |
-| `observer:playerRefused` | A ban refused a connecting player. See [Bans](#bans). |
+| `observer:playerRefused` | A connecting player was refused, by a ban, by maintenance mode or by the allowlist. See [Bans](#bans), [Maintenance mode](#maintenance-mode) and [Allowlist](#allowlist). |
 | `observer:playerBanned` | A ban is about to drop a connected player. See [Bans](#bans). |
 | `observer:playerKicked` | The staff kicked a connected player, who is dropped next. See [Kicks](#kicks). |
 | `observer:announcement` | The staff wrote an announcement for the whole server. See [Announcements and messages](#announcements-and-messages). |
 | `observer:directMessage` | The staff wrote a message for one connected player. See [Announcements and messages](#announcements-and-messages). |
+| `observer:maintenance` | Maintenance mode was turned on or off, and once more at each start of FXServer while it is on. See [Maintenance mode](#maintenance-mode). |
 
 ### `observer:restartScheduled`
 
@@ -155,6 +164,8 @@ by third parties. Nothing else of a file's name or contents is ever sent.
 - `observer:startChanges` comes once a run, never for a run that ended before its files were read.
 - An announced restart can also vanish without `observer:restartSkipped` when the server stops or
   crashes first: the run ends anyway.
+- `observer:maintenance` says how things stand: the latest one of a run tells whether maintenance is
+  on. A run that hears none started with maintenance off.
 
 ## Player labels
 
@@ -203,8 +214,7 @@ identifiers and their hardware tokens, for a time or for good. The bridge enforc
   milliseconds. Your own `playerConnecting` handlers run as they do without Observer: the player
   gets in once every handler is done.
 - A banned player is refused with the refusal message the owner wrote in the panel, which can name
-  the reason, when the ban ends and its code. With the kick message, it is all the text Observer
-  shows players.
+  the reason, when the ban ends and its code.
 - Without an answer within 5 seconds, the player gets in. Observer checks every player again once
   they joined, and drops a banned one with the same message.
 - When the staff bans a connected player, the bridge drops them at once with that message.
@@ -214,14 +224,19 @@ been refused, or are about to be dropped: nothing a resource does changes it.
 
 ### `observer:playerRefused`
 
+Raised for every player refused at connection, whatever refused them: `cause` says what, and which
+of the other fields come with it.
+
 | Field | Type | Meaning |
 |---|---|---|
-| `ban` | string | The ban's code, `K7QM-2XPA`, which the player can quote to appeal. |
-| `reason` | string | The reason the staff gave. |
-| `endsAt` | integer, or nil | When the ban ends; nil for a permanent ban. |
-| `by` | string | Who banned the player. |
+| `cause` | string | What refused the player: `ban`, `maintenance` or `allowlist`. |
 | `name` | string, or nil | The player's name, as FiveM gives it. |
 | `license` | string, or nil | The player's licence, `license:` and 40 hex digits. |
+| `ban` | string | For a ban: its code, `K7QM-2XPA`, which the player can quote to appeal. |
+| `reason` | string | For a ban: the reason the staff gave. |
+| `endsAt` | integer, or nil | For a ban: when it ends; nil for a permanent ban. |
+| `by` | string | For a ban: who banned the player. |
+| `request` | string, or nil | For the allowlist: the ID of the player's request, `7KQ-2XP`, which they quote to the staff; nil for a player who shows no licence. |
 
 ### `observer:playerBanned`
 
@@ -278,6 +293,54 @@ its players. Without a resource that handles the event, nobody reads the text.
 | `message` | string | The text, up to 400 characters, on one line or several. |
 | `by` | string | Who wrote it. |
 
+## Maintenance mode
+
+The staff closes the server to players from the panel while they work on it, and opens it again. It
+stays closed through restarts of FXServer and of Observer, until someone ends it:
+
+- On `playerConnecting`, once no ban refuses them, every player is refused with the maintenance
+  message, which the owner writes in the panel. The bridge raises `observer:playerRefused` with
+  `cause = 'maintenance'`.
+- The owner keeps a list of players who still get in, by licence. They get in whether the allowlist
+  has them or not; a ban still refuses them.
+- Without an answer within 5 seconds, the player gets in, as with bans. Observer drops no one for
+  maintenance: turning it on leaves the connected players in until they leave.
+- The owner can give the server another name for FiveM's server list while maintenance is on. The
+  bridge then sets `sv_hostname`, and `sv_projectName` when the server has one, to that name, and
+  gives both their own value back when maintenance ends. A resource that reads either convar in
+  the meantime reads the maintenance name. The bridge keeps what they held in server convars of its
+  own, `observer_name_kept`, `observer_name_hostname` and `observer_name_project`: leave them
+  alone.
+
+### `observer:maintenance`
+
+Raised when someone turns maintenance on or off, and once more at each start of FXServer while it is
+on, when the server is online: a resource started with the server hears how things stand.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `on` | boolean | Whether the server is closed for maintenance now. |
+| `at` | integer | When it was turned on, or off. The same for every event of one maintenance. |
+| `by` | string | Who turned it on, or off. |
+
+## Allowlist
+
+While the owner has the allowlist on, only the players the staff approved get in. Observer goes by
+the licence alone:
+
+- On `playerConnecting`, once no ban and no maintenance refuses them, a player whose licence is not
+  approved is refused with the allowlist's message, which the owner writes in the panel. The bridge
+  raises `observer:playerRefused` with `cause = 'allowlist'`.
+- The refusal makes a request, which the message names by its ID. The staff approves or denies it
+  in the panel. A player who tries again keeps their request and its ID; one who was denied makes a
+  new request, under a new ID.
+- The staff can approve a licence before its player ever connects.
+- A player who shows no licence, as on a server with `sv_lan`, cannot be approved: they are refused
+  and make no request.
+- Without an answer within 5 seconds, the player gets in, as with bans. Observer drops no one for
+  the allowlist: turning it on, or taking an approval back, leaves the connected players in until
+  they leave.
+
 ## Security
 
 The bridge raises these events, refuses players and drops them only for commands typed on the server
@@ -320,9 +383,9 @@ restart warning and the `message` of a shutdown are always empty: Observer write
 txAdmin showed announcements and direct messages to players itself. Observer does not: a resource
 written for txAdmin's events shows them, the events alone show nothing.
 
-## Not in version 5
+## Not in version 6
 
-Exports to read the next restart or the server's state come later.
+Exports to read the next restart, the server's state or whether maintenance is on come later.
 
 ## Example
 

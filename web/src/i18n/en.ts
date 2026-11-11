@@ -122,6 +122,14 @@ const count = (value: number, forms: { one: string; other: string }) =>
 
 const list = (items: string[]) => new Intl.ListFormat('en', { type: 'conjunction' }).format(items);
 
+/** What the API refuses of a licence typed with a note: the allowlist's, the maintenance list's. */
+const licenceOrNote = (params: Params) =>
+    stringParam(params, 'field') === 'note'
+        ? typeof params.maxNote === 'number'
+            ? `Write a note of ${formatNumber('en', params.maxNote)} characters at most.`
+            : 'This note is too long.'
+        : 'This is not a licence: give license: and its 40 hex digits, or the 40 digits alone.';
+
 const ORDINAL_SUFFIXES: Partial<Record<Intl.LDMLPluralRule, string>> = { one: 'st', two: 'nd', few: 'rd' };
 
 /** `1st`, `2nd`, `3rd`, `11th`. */
@@ -257,6 +265,11 @@ const permissions = {
         name: 'Edit bans',
         description:
             'Change the reason or the end of an active ban, whoever made it. A ban made to end sooner lets its player back in sooner.',
+    },
+    allowlistManage: {
+        name: 'Manage the allowlist',
+        description:
+            'Approve or deny the players who ask to get in, approve a licence ahead of a first visit, and take an approval back.',
     },
 } satisfies Record<PermissionKey, { name: string; description: string }>;
 
@@ -523,6 +536,8 @@ export const en = {
         map: 'Live map',
         bans: 'Bans',
         entities: 'Entities',
+        allowlist: 'Allowlist',
+        waitingCount: (value: number) => count(value, { one: 'request waiting', other: 'requests waiting' }),
         drops: 'Drops',
         changes: 'File changes',
         tools: 'Tools',
@@ -2746,6 +2761,125 @@ export const en = {
             late: (value: number) => `the server read the request too late for ${formatNumber('en', value)}`,
             error: (value: number) => `${formatNumber('en', value)} failed`,
         } satisfies Record<Exclude<EntityOutcome, 'deleted'>, (value: number) => string>,
+    },
+    allowlist: {
+        title: 'Allowlist',
+        gloss: 'Who gets in.',
+        on: 'On · approved players only',
+        off: 'Off · everyone gets in',
+        offNotice:
+            'The allowlist is off: every player gets in, bans aside. Approve players here first, then turn it on in its settings.',
+        openSettings: 'Open the settings',
+        approveLicence: 'Approve a licence',
+        search: 'Search',
+        searchHint: 'A request ID, a name, a note or a licence: both lists follow.',
+        submit: 'Search',
+        clear: 'Clear',
+        today: 'today',
+        ago: (span: string) => `${span} ago`,
+        requests: {
+            title: 'Requests',
+            waiting: (value: number) => `${formatNumber('en', value)} waiting`,
+            caption: 'Requests waiting for an answer, latest try first',
+            player: 'Player',
+            code: 'Request ID',
+            firstAsked: 'First asked',
+            lastTry: 'Last try',
+            answer: 'Answer',
+            tries: (value: number) => count(value, { one: 'try', other: 'tries' }),
+            noName: 'No name',
+            copyCode: 'Copy request ID',
+            approve: 'Approve',
+            deny: 'Deny',
+            approveOf: (who: string) => `Approve ${who}`,
+            denyOf: (who: string) => `Deny ${who}`,
+            denyAll: 'Deny all',
+            emptyOff:
+                'No request. With the allowlist on, a player who is not approved is refused, and what they asked shows here.',
+            emptyOn:
+                'No request waits. A player who is not approved is refused, and what they asked shows here.',
+            noMatch: 'No request matches this search.',
+            loading: 'Loading the requests',
+            failed: 'The requests could not be read.',
+            kept: 'A request waits until someone answers it. A denied player can ask again, and gets a new ID.',
+            shown: (value: number) => `${formatNumber('en', value)} shown`,
+            allShown: (value: number) => `All ${formatNumber('en', value)} shown`,
+            loadMore: 'Load more',
+        },
+        approved: {
+            title: 'Approved',
+            players: (value: number) => count(value, { one: 'player', other: 'players' }),
+            caption: 'Approved players, latest first',
+            player: 'Player',
+            by: 'Approved by',
+            when: 'When',
+            fromRequest: (code: string) => `request ${code}`,
+            ahead: 'ahead of a first visit',
+            noName: 'No name yet',
+            remove: 'Remove',
+            removeOf: (who: string) => `Remove ${who}`,
+            empty: 'No one is approved. Approve a request, or a licence with the button above.',
+            noMatch: 'No approved player matches this search.',
+            loading: 'Loading the approved players',
+            failed: 'The approved players could not be read.',
+            kept: 'An approved player gets in until they are removed. Bans come first.',
+            shownOf: (value: number, total: number) =>
+                `${formatNumber('en', value)} of ${formatNumber('en', total)} shown`,
+            allShown: (value: number) => `All ${formatNumber('en', value)} shown`,
+            loadMore: 'Load more',
+        },
+        approvedNotice: (who: string) => `${who} is approved: they get in from their next connection.`,
+        deniedNotice: (who: string) => `The request of ${who} is denied. They can ask again, under a new ID.`,
+        deniedAllNotice: (value: number) => `${count(value, { one: 'request', other: 'requests' })} denied.`,
+        licenceNotice: 'Licence approved: its player gets in from their next connection.',
+        removedNotice: (who: string) =>
+            `${who} is removed: the server refuses them from their next connection.`,
+        dialog: {
+            title: 'Approve a licence',
+            lead: 'The player gets in from their next connection, without asking first.',
+            licence: 'Licence',
+            licenceHint:
+                "license: and 40 hex digits, as a player's profile shows it. The 40 digits alone work too.",
+            licenceWrong: 'Give license: and its 40 hex digits, or the 40 digits alone.',
+            note: 'Name or note',
+            noteHint: 'Who it is, for the staff. Their FiveM name shows with it once they have joined.',
+            noteTooLong: (max: number) => `${formatNumber('en', max)} characters at most.`,
+            submit: 'Approve',
+        },
+        denyAllDialog: {
+            title: (value: number) => `Deny ${count(value, { one: 'request', other: 'requests' })}?`,
+            lead: 'Each of these players can ask again, and gets a new ID. A request made since this list was read stays.',
+            submit: 'Deny all',
+        },
+        removeDialog: {
+            title: (who: string) => `Remove ${who} from the allowlist?`,
+            lead: 'The server refuses them from their next connection. If they are connected, they stay until they leave.',
+            submit: 'Remove',
+        },
+    },
+    maintenance: {
+        button: 'Maintenance',
+        on: 'Maintenance mode is on',
+        since: (when: string, by: string) => `since ${when}, by ${by}.`,
+        refused: (passes: number) =>
+            passes === 0
+                ? 'Players are refused, and no one is on the list of those who still get in.'
+                : `Players are refused; ${count(passes, { one: 'person still gets', other: 'people still get' })} in.`,
+        end: 'End maintenance',
+        endFailed: 'Maintenance could not be ended.',
+        dialog: {
+            title: 'Turn maintenance on?',
+            lead: (passes: number) =>
+                passes === 0
+                    ? 'The server refuses every player who connects: no one is on the maintenance list. It stays so through restarts of FXServer and of Observer, until someone ends it.'
+                    : `The server refuses every player who connects, but the ${count(passes, { one: 'person', other: 'people' })} on the maintenance list. It stays so through restarts of FXServer and of Observer, until someone ends it.`,
+            preview: 'What a refused player reads',
+            previewFailed: 'The maintenance message could not be read.',
+            listed: (name: string) => `In FiveM's server list, the server takes the name “${name}”.`,
+            connected: 'The players connected now stay until they leave.',
+            change: 'Change the message or the list',
+            submit: 'Turn maintenance on',
+        },
     },
     bans: {
         title: 'Bans',
@@ -5376,6 +5510,14 @@ export const en = {
                 name: 'Bans and kicks',
                 about: 'What a banned player and a kicked player read, how much of a ban a player must show to be refused, and the reasons the ban dialog offers. Banning and lifting is on the Bans page.',
             },
+            allowlist: {
+                name: 'Allowlist',
+                about: 'Open the server to approved players only, and write what the others read. Answering their requests is on the Allowlist page.',
+            },
+            maintenance: {
+                name: 'Maintenance mode',
+                about: 'Close the server to players while you work on it. It is turned on and off from the status card, above every page.',
+            },
             map: {
                 name: 'Live map',
                 about: 'What the Live map draws under the players, your own image and where it sits in the game, and the colours of the players on it.',
@@ -5688,7 +5830,7 @@ export const en = {
             },
             refusalMessage: {
                 label: 'Refusal message',
-                about: 'What a banned player reads when the server refuses them, or drops them. With the kick message, it is all the text Observer ever shows players. {reason}, {ends}, {id}, {name} and {by} are filled in.',
+                about: 'What a banned player reads when the server refuses them, or drops them. {reason}, {ends}, {id}, {name} and {by} are filled in.',
             },
             kickMessage: {
                 label: 'Kick message',
@@ -5725,6 +5867,26 @@ export const en = {
             banTemplates: {
                 label: 'Ban templates',
                 about: 'The reasons you ban for most, each with its usual length. The ban dialog offers them in this order: picking one fills in the reason and the length, which the staff can still change.',
+            },
+            allowlistEnabled: {
+                label: 'Approved players only',
+                about: 'A player who is not approved is refused with the message below, and what they asked shows on the Allowlist page. Bans come first. Players already connected stay.',
+            },
+            allowlistMessage: {
+                label: 'Refusal message',
+                about: 'What a player who is not approved reads when the server refuses them. {id} is the ID of their request and {name} their FiveM name. Keep {id}: the staff finds the request by it.',
+            },
+            maintenanceMessage: {
+                label: 'Maintenance message',
+                about: 'What a player reads when the server refuses them during maintenance. {name} is their FiveM name.',
+            },
+            maintenancePasses: {
+                label: 'Who still gets in',
+                about: 'These players get in during maintenance, approved on the allowlist or not. Bans still apply. A panel account has no licence: add the player each person plays as.',
+            },
+            maintenanceServerName: {
+                label: 'Name in the server list',
+                about: "The name the server takes in FiveM's server list while maintenance is on; it gets its own back after. Leave it empty to keep its name. FXServer tells the list within three minutes; when the list shows it is up to Cfx.re.",
             },
         } satisfies Record<SettingId, { label: string; about: string }>,
         applies: {
@@ -5887,6 +6049,66 @@ export const en = {
             discarded: 'Changes discarded.',
             readOnly: 'Your account can read these; changing them takes the permission to change settings.',
             loadFailed: 'These settings could not be read.',
+        },
+        allowlist: {
+            openAllowlist: 'Open the allowlist',
+            on: 'On',
+            off: 'Off',
+            approved: (value: number) =>
+                `${count(value, { one: 'player is', other: 'players are' })} approved.`,
+            insert: 'Insert',
+            preview: 'What the player reads',
+            example: { id: '7KQ-2XP', name: 'kaito' },
+            messageMissing: 'Write a message: a refused player always reads one.',
+            messageTooLong: (max: number) => `${formatNumber('en', max)} characters at most.`,
+            idMissing:
+                'This message gives no {id}: a refused player cannot tell the staff which request is theirs.',
+            saved: 'Saved. The next connection goes by it.',
+            discarded: 'Changes discarded.',
+            readOnly: 'Your account can read these; changing them takes the permission to change settings.',
+            loadFailed: 'These settings could not be read.',
+        },
+        maintenance: {
+            on: 'On',
+            off: 'Off',
+            insert: 'Insert',
+            preview: 'What the player reads',
+            example: { name: 'kaito' },
+            messageMissing: 'Write a message: a refused player always reads one.',
+            messageTooLong: (max: number) => `${formatNumber('en', max)} characters at most.`,
+            nameTooLong: (max: number) =>
+                `${formatNumber('en', max)} characters at most: the server list keeps no more of a name.`,
+            saved: 'Saved. The next refusal reads it.',
+            discarded: 'Changes discarded.',
+            readOnly: 'Your account can read these; changing them takes the permission to change settings.',
+            loadFailed: 'These settings could not be read.',
+            passes: {
+                loading: 'Loading the list',
+                loadFailed: 'The list could not be read.',
+                empty: 'No one is on the list: during maintenance, the server refuses every player.',
+                noName: 'No name yet',
+                added: (by: string, day: string) => `${by} · ${day}`,
+                remove: 'Remove',
+                removeOf: (who: string) => `Remove ${who}`,
+                removedNotice: (who: string) => `${who} is off the list.`,
+                field: "A player's name, or a licence",
+                fieldLicence: 'A licence',
+                hint: 'Typing a name lists the players Observer knows, those online first.',
+                hintLicence:
+                    "license: and 40 hex digits, as a player's profile shows it. The 40 digits alone work too.",
+                suggestions: 'Players Observer knows',
+                online: 'online',
+                noMatch:
+                    'No player Observer knows starts with this. Paste the licence of someone it has not seen.',
+                picked: (name: string, licence: string) => `${name} · ${licence}`,
+                note: 'Name or note',
+                noteHint:
+                    'Who it is, for whoever reads the list. Their FiveM name shows once they have joined.',
+                noteTooLong: (max: number) => `${formatNumber('en', max)} characters at most.`,
+                pickFirst: 'Pick a player in the list, or paste a licence.',
+                add: 'Add',
+                addedNotice: (who: string) => `${who} gets in during maintenance.`,
+            },
         },
         bans: {
             openBans: 'Open the Bans page',
@@ -6222,6 +6444,17 @@ export const en = {
             kick_settings_changed: 'Kick message changed',
             announcement_sent: 'Announcement sent',
             direct_message_sent: 'Message sent to a player',
+            allowlist_request_approved: 'Allowlist request approved',
+            allowlist_request_denied: 'Allowlist request denied',
+            allowlist_requests_denied: 'Allowlist requests denied',
+            allowlist_licence_approved: 'Licence approved on the allowlist',
+            allowlist_approval_removed: 'Allowlist approval removed',
+            allowlist_settings_changed: 'Allowlist settings changed',
+            maintenance_started: 'Maintenance mode turned on',
+            maintenance_ended: 'Maintenance mode turned off',
+            maintenance_pass_added: 'Player added to the maintenance list',
+            maintenance_pass_removed: 'Player removed from the maintenance list',
+            maintenance_settings_changed: 'Maintenance settings changed',
         } satisfies Record<AuditAction, string>,
         outcomes: {
             success: 'Success',
@@ -6429,6 +6662,12 @@ export const en = {
             license: 'Licence',
             message: 'Message',
             players: 'Players connected',
+            playerName: 'Player',
+            note: 'Note',
+            denied: 'Denied',
+            until: 'Tried up to',
+            passes: 'On the maintenance list',
+            since: 'On since',
         },
         days: (value: number) => count(value, { one: 'day', other: 'days' }),
         // A profile whose retention is unset is never deleted.
@@ -6939,6 +7178,25 @@ export const en = {
             typeof params.max === 'number'
                 ? `Write a text of ${formatNumber('en', params.max)} characters at most.`
                 : 'Write a text.',
+        allowlist_request_not_found: 'No request waits under this ID: someone answered it already.',
+        approval_not_found: 'This approval is gone: someone took it back already.',
+        already_approved: 'This licence is approved already.',
+        invalid_approval: licenceOrNote,
+        invalid_allowlist_settings: (params) =>
+            typeof params.maxMessage === 'number'
+                ? `Write a refusal message of ${formatNumber('en', params.maxMessage)} characters at most.`
+                : 'Write a refusal message.',
+        pass_not_found: 'This player is off the maintenance list already.',
+        pass_exists: 'This licence is on the maintenance list already.',
+        invalid_pass: licenceOrNote,
+        too_many_passes: (params) =>
+            typeof params.max === 'number'
+                ? `The maintenance list holds ${formatNumber('en', params.max)} players at most: remove one first.`
+                : 'The maintenance list is full: remove a player first.',
+        invalid_maintenance_settings: (params) =>
+            typeof params.maxMessage === 'number' && typeof params.maxName === 'number'
+                ? `Write a maintenance message of ${formatNumber('en', params.maxMessage)} characters at most, and a name for the server list of ${formatNumber('en', params.maxName)} at most.`
+                : 'Write a maintenance message, and a shorter name for the server list.',
         invalid_players_settings:
             'Some retentions are out of range. Each one says its range below its field.',
         invalid_players_file: (params) => {

@@ -7,6 +7,7 @@ import { CardHeading } from '../components/Card';
 import { Notice } from '../components/Notice';
 import { useI18n } from '../i18n/I18nProvider';
 import { AccountSettings } from './Account';
+import { AllowlistSettings } from './Allowlist';
 import { BackupsSettings } from './Backups';
 import { BansSettings } from './Bans';
 import { BuildSettings } from './Builds';
@@ -14,6 +15,7 @@ import { CATEGORIES, opens, type Category, type CategoryId } from './catalog';
 import { DataSettings } from './Data';
 import { EntitiesSettings } from './Entities';
 import { LiveMapSettings } from './LiveMap';
+import { MaintenanceSettings } from './Maintenance';
 import { FeatureSettings } from './Features';
 import { FilesSettings } from './Files';
 import { LaunchSettings } from './Launch';
@@ -29,6 +31,8 @@ const CONTENT = {
     builds: BuildSettings,
     backups: BackupsSettings,
     bans: BansSettings,
+    allowlist: AllowlistSettings,
+    maintenance: MaintenanceSettings,
     map: LiveMapSettings,
     entities: EntitiesSettings,
     features: FeatureSettings,

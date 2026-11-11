@@ -41,10 +41,6 @@ export const kickSettingsQuery = queryOptions({
 export const saveKickSettings = (settings: KickSettings) =>
     send<KickSettings>('PUT', `${PATH}/kicks/settings`, settings);
 
-/** The kick message as a player reads it, with the API's placeholders filled in once each. */
-export const fillKickMessage = (message: string, values: Record<'reason' | 'by', string>) =>
-    message.replace(/\{(reason|by)\}/g, (_, key: keyof typeof values) => values[key]);
-
 export const MAX_KICK_REASON = 200;
 export const MAX_KICK_MESSAGE = 600;
 /** The longest announcement or direct message, in characters. */

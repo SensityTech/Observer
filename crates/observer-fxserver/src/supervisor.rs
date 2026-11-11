@@ -1056,6 +1056,9 @@ struct Run {
     /// The start as published last, and the instant its `stuck_at_ms` was worked out from.
     start: Option<(StartStatus, Option<Instant>)>,
     bridge_ready: bool,
+    /// The name the bridge gave the server for maintenance, as `/info.json` shows it: not the
+    /// server's own.
+    maintenance_name: Option<String>,
     ready_at: Option<Instant>,
     after: Option<After>,
     ending: Option<Ending>,
@@ -1271,7 +1274,15 @@ impl Actor {
                 let _ = reply.send(self.announce(event));
             }
             Request::Act { action, reply } => {
-                let _ = reply.send(self.to_bridge(SystemLine::Action(action)));
+                let renamed = match &action {
+                    BridgeAction::ServerName { name } => Some(name.as_deref().and_then(health::project_name)),
+                    _ => None,
+                };
+                let written = self.to_bridge(SystemLine::Action(action));
+                if let (Ok(()), Some(name), Some(run)) = (&written, renamed, self.run.as_mut()) {
+                    run.maintenance_name = name;
+                }
+                let _ = reply.send(written);
             }
             Request::Command {
                 command,
@@ -1321,15 +1332,18 @@ impl Actor {
                 run.players = Some(*players);
                 true
             }
-            Probe::Info(Ok(info))
-                if run.build != Some(info.build)
+            Probe::Info(Ok(info)) => {
+                // Read after the bridge renamed the server for maintenance, the name is not its own.
+                let own = info.name.is_none() || info.name != run.maintenance_name;
+                let changed = run.build != Some(info.build)
                     || run.game_build != info.game_build
-                    || self.name != info.name =>
-            {
+                    || (own && self.name != info.name);
                 run.build = Some(info.build);
                 run.game_build = info.game_build;
-                self.name.clone_from(&info.name);
-                true
+                if own {
+                    self.name.clone_from(&info.name);
+                }
+                changed
             }
             _ => false,
         };
@@ -2372,6 +2386,7 @@ impl Actor {
             progress,
             start: None,
             bridge_ready: false,
+            maintenance_name: None,
             ready_at: None,
             after: None,
             ending: None,

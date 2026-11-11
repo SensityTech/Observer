@@ -1,6 +1,7 @@
 //! The API over HTTP: requests go through the router, its gates and the services, down to a real
 //! database in a temporary directory.
 
+mod allowlist;
 mod artifacts;
 mod backups;
 mod bans;
@@ -14,6 +15,7 @@ mod entities;
 mod features;
 mod files;
 mod live;
+mod maintenance;
 mod map;
 mod metrics;
 mod moderation;
@@ -85,6 +87,7 @@ struct Server {
     _playing: PlayersTask,
     _dropping: DropsTask,
     _banning: BansTask,
+    _admitting: observer_app::AdmissionTask,
     _debugging: observer_app::DebugTask,
     _mapping: MapTask,
     _listing: EntitiesTask,
@@ -279,6 +282,15 @@ impl Server {
             supervision: supervision.clone(),
             schedule: schedule.status(),
         });
+        let (admission, admitting) = observer_app::Admission::start(observer_app::AdmissionSetup {
+            db: db.clone(),
+            clock: clock.clone(),
+            supervision: supervision.clone(),
+            bans: bans.clone(),
+            schedule: schedule.status(),
+        })
+        .await
+        .unwrap();
         let moderation = Moderation::new(ModerationSetup {
             db: db.clone(),
             clock: clock.clone(),
@@ -365,6 +377,7 @@ impl Server {
             backups,
             bans,
             moderation,
+            admission,
             statistics,
         };
         let state = AppState::new(
@@ -398,6 +411,7 @@ impl Server {
             _playing: playing,
             _dropping: dropping,
             _banning: banning,
+            _admitting: admitting,
             _debugging: debugging,
             _mapping: mapping,
             _listing: listing,
@@ -728,7 +742,7 @@ async fn setup_signs_the_owner_in_with_a_strict_http_only_cookie() {
     assert_eq!(session["sessionKey"].as_str().unwrap().len(), 64);
     assert_eq!(session["me"]["username"], "ada");
     assert_eq!(session["me"]["isOwner"], true);
-    assert_eq!(session["me"]["permissions"], "1ffffffff");
+    assert_eq!(session["me"]["permissions"], "3ffffffff");
 
     let again = server.call(Method::POST, "/api/setup", None, Some(body)).await;
     assert_eq!(again.status, StatusCode::CONFLICT);

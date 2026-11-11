@@ -274,10 +274,35 @@ pub enum AuditAction {
     /// target is the player's name, when the server gave one; `details` hold their `serverId`,
     /// their `license` and the `message`.
     DirectMessageSent,
+    /// A refused player's request was approved. The target is the request's code; `details` hold
+    /// the licence and the player's name.
+    AllowlistRequestApproved,
+    /// The target is the request's code; `details` hold the licence and the player's name.
+    AllowlistRequestDenied,
+    /// Every request last tried at `until` or before was denied; `details` hold how many.
+    AllowlistRequestsDenied,
+    /// A licence was approved ahead of a first visit. `details` hold the licence and the note.
+    AllowlistLicenceApproved,
+    /// An approval was taken back. `details` hold the licence, the player's name and the note.
+    AllowlistApprovalRemoved,
+    /// `details` hold each changed setting with its value before and after.
+    AllowlistSettingsChanged,
+    /// Maintenance mode was turned on: the server refuses every player but those on its list.
+    /// `details` hold how many are on it.
+    MaintenanceStarted,
+    /// Maintenance mode was turned off. `details` hold since when it was on.
+    MaintenanceEnded,
+    /// A licence was put on the list of those who get in during maintenance. `details` hold the
+    /// licence, the player's name and the note.
+    MaintenancePassAdded,
+    /// The same `details`, for a licence taken off the list.
+    MaintenancePassRemoved,
+    /// `details` hold each changed setting with its value before and after.
+    MaintenanceSettingsChanged,
 }
 
 impl AuditAction {
-    pub const ALL: [Self; 123] = [
+    pub const ALL: [Self; 134] = [
         Self::SetupCompleted,
         Self::SetupLinkCreated,
         Self::LoginSucceeded,
@@ -401,6 +426,17 @@ impl AuditAction {
         Self::KickSettingsChanged,
         Self::AnnouncementSent,
         Self::DirectMessageSent,
+        Self::AllowlistRequestApproved,
+        Self::AllowlistRequestDenied,
+        Self::AllowlistRequestsDenied,
+        Self::AllowlistLicenceApproved,
+        Self::AllowlistApprovalRemoved,
+        Self::AllowlistSettingsChanged,
+        Self::MaintenanceStarted,
+        Self::MaintenanceEnded,
+        Self::MaintenancePassAdded,
+        Self::MaintenancePassRemoved,
+        Self::MaintenanceSettingsChanged,
     ];
 
     #[expect(clippy::too_many_lines, reason = "one arm per action, read best as one list")]
@@ -529,6 +565,17 @@ impl AuditAction {
             Self::KickSettingsChanged => "kick_settings_changed",
             Self::AnnouncementSent => "announcement_sent",
             Self::DirectMessageSent => "direct_message_sent",
+            Self::AllowlistRequestApproved => "allowlist_request_approved",
+            Self::AllowlistRequestDenied => "allowlist_request_denied",
+            Self::AllowlistRequestsDenied => "allowlist_requests_denied",
+            Self::AllowlistLicenceApproved => "allowlist_licence_approved",
+            Self::AllowlistApprovalRemoved => "allowlist_approval_removed",
+            Self::AllowlistSettingsChanged => "allowlist_settings_changed",
+            Self::MaintenanceStarted => "maintenance_started",
+            Self::MaintenanceEnded => "maintenance_ended",
+            Self::MaintenancePassAdded => "maintenance_pass_added",
+            Self::MaintenancePassRemoved => "maintenance_pass_removed",
+            Self::MaintenanceSettingsChanged => "maintenance_settings_changed",
         }
     }
 

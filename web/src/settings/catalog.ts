@@ -36,6 +36,11 @@ export type SettingId =
     | 'tokenMatches'
     | 'banTemplates'
     | 'kickMessage'
+    | 'allowlistEnabled'
+    | 'allowlistMessage'
+    | 'maintenanceMessage'
+    | 'maintenancePasses'
+    | 'maintenanceServerName'
     | 'mapImagery'
     | 'mapImage'
     | 'mapBounds'
@@ -91,6 +96,8 @@ export type CategoryId =
     | 'builds'
     | 'backups'
     | 'bans'
+    | 'allowlist'
+    | 'maintenance'
     | 'map'
     | 'entities'
     | 'features'
@@ -175,6 +182,25 @@ export const CATEGORIES: readonly Category[] = [
             { id: 'tokenMatches', applies: 'now' },
             { id: 'banTemplates', applies: 'now' },
             { id: 'kickMessage', applies: 'now' },
+        ],
+    },
+    {
+        id: 'allowlist',
+        group: 'server',
+        access: ['SettingsView'],
+        settings: [
+            { id: 'allowlistEnabled', applies: 'now' },
+            { id: 'allowlistMessage', applies: 'now' },
+        ],
+    },
+    {
+        id: 'maintenance',
+        group: 'server',
+        access: ['SettingsView'],
+        settings: [
+            { id: 'maintenanceMessage', applies: 'now' },
+            { id: 'maintenancePasses', applies: 'now' },
+            { id: 'maintenanceServerName', applies: 'now' },
         ],
     },
     {

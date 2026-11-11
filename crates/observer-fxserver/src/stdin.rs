@@ -457,6 +457,11 @@ mod tests {
                 message: text.to_owned(),
                 by: text.to_owned(),
             },
+            BridgeEvent::Maintenance {
+                on: true,
+                at: 1,
+                by: text.to_owned(),
+            },
         ]
     }
 

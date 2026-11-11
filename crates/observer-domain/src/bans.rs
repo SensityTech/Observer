@@ -1,5 +1,5 @@
 //! Bans: who the server refuses, for how long and why, and the refusal message the owner writes,
-//! one of the two texts Observer ever shows players.
+//! one of the few texts Observer ever shows players.
 
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
@@ -20,7 +20,7 @@ pub const MAX_BAN_TEMPLATES: usize = 50;
 /// to the console with the event that comes with it, within what the console takes.
 pub const MAX_REFUSAL_BYTES: usize = 700;
 /// Unambiguous when read aloud or typed from a screenshot: no I, O, 0 or 1.
-const CODE_ALPHABET: &[u8; 32] = b"ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+pub(crate) const CODE_ALPHABET: &[u8; 32] = b"ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const DEFAULT_MESSAGE: &str =
     "You are banned from this server.\nReason: {reason}\nEnds: {ends}\nBan ID: {id}";
 
@@ -297,8 +297,7 @@ pub struct RefusalValues<'a> {
     pub by: &'a str,
 }
 
-/// The message with its placeholders filled in, in one pass: a value that holds `{name}` stays as
-/// written. Cut to [`MAX_REFUSAL_BYTES`] on a character boundary.
+/// The ban's refusal message, its placeholders filled in.
 pub fn refusal(message: &str, values: &RefusalValues<'_>) -> String {
     let placeholders = [
         ("{reason}", values.reason),
