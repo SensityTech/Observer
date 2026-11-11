@@ -35,6 +35,8 @@ import type { DropCategory } from '../api/generated/DropCategory';
 import type { DropKind } from '../api/generated/DropKind';
 import type { DropsRange } from '../api/generated/DropsRange';
 import type { EndpointProtocol } from '../api/generated/EndpointProtocol';
+import type { EntityKind } from '../api/generated/EntityKind';
+import type { EntityOutcome } from '../api/generated/EntityOutcome';
 import type { EnvironmentFact } from '../api/generated/EnvironmentFact';
 import type { ErrorCode } from '../api/generated/ErrorCode';
 import type { EscrowPolicy } from '../api/generated/EscrowPolicy';
@@ -99,6 +101,7 @@ import type { RollbackReason } from '../api/generated/RollbackReason';
 import type { UpdateBlock } from '../api/generated/UpdateBlock';
 import type { UpdateStep } from '../api/generated/UpdateStep';
 import type { UpdateWhen } from '../api/generated/UpdateWhen';
+import type { VehicleClass } from '../api/generated/VehicleClass';
 import type { DestinationKind } from '../api/backups';
 import type { ResourceVerb } from '../api/resources';
 import { parsePermissions, permissionKeys, type PermissionKey } from '../auth/permissions';
@@ -227,6 +230,16 @@ const permissions = {
         description:
             'Start, stop and restart a resource of the running server, and have FXServer read its resource folders again.',
     },
+    entitiesView: {
+        name: 'See the entities',
+        description:
+            "The server's vehicles, peds and objects: their model, the resource that created them and where they stand. Who owns one also takes See the live map.",
+    },
+    entitiesDelete: {
+        name: 'Delete entities',
+        description:
+            'Delete vehicles, peds and objects from the game, up to a hundred at a time. Players near them see them vanish.',
+    },
 } satisfies Record<PermissionKey, { name: string; description: string }>;
 
 const permissionNames = (hex: string) =>
@@ -244,6 +257,7 @@ const features = {
     drops: 'Player drops',
     updates: 'Updates',
     debug: 'Debug',
+    entities: 'Entities',
 } satisfies Record<Feature, string>;
 
 const isFeature = (key: string): key is Feature => Object.hasOwn(features, key);
@@ -490,6 +504,7 @@ export const en = {
         players: 'Players',
         map: 'Live map',
         bans: 'Bans',
+        entities: 'Entities',
         drops: 'Drops',
         changes: 'File changes',
         tools: 'Tools',
@@ -2539,6 +2554,180 @@ export const en = {
         stopped: 'The server is not running: no one is on the map.',
         scale: (metres: string) => `${metres} m`,
         unknownPing: 'unknown',
+        entities: {
+            layer: 'Entities',
+            shown: 'Entities shown',
+            list: 'List',
+            every: (seconds: number) =>
+                `Entities every ${count(seconds, { one: 'second', other: 'seconds' })}`,
+            waiting: 'Waiting for the server to list its entities…',
+            cells: 'Too many entities here to draw each one: the map counts them by square. Zoom in to see them.',
+            noOneSync: 'Entities need OneSync, which this server does not run.',
+            otherGame: 'Only GTA V servers list their entities.',
+            failed: 'The entities could not be read.',
+            selected: 'Selected entity',
+            script: 'Script',
+            bucket: (value: number) => `Bucket ${formatNumber('en', value)}`,
+            inList: 'In the list',
+            copyPosition: 'Copy the position',
+            gone: 'This entity is no longer on the server.',
+            delete: 'Delete',
+        },
+    },
+    entities: {
+        title: 'Entities',
+        gloss: 'The vehicles, peds and objects the server holds.',
+        list: 'Entities',
+        count: (value: number) => count(value, { one: 'entity', other: 'entities' }),
+        playerPeds: (value: number) =>
+            `and ${count(value, { one: "player's own ped", other: "players' own peds" })}, never listed`,
+        filter: 'Type',
+        filters: { all: 'All', vehicle: 'Vehicles', ped: 'Peds', object: 'Objects' } satisfies Record<
+            EntityKind | 'all',
+            string
+        >,
+        search: 'Search',
+        searchHint: 'Net id, model, resource or owner',
+        searchHintNoOwner: 'Net id, model or resource',
+        submit: 'Search',
+        class: 'Class',
+        createdBy: 'Created by',
+        owner: 'Owner',
+        bucket: 'Bucket',
+        any: 'Any',
+        anyResource: 'Any resource',
+        noResource: 'No resource',
+        anyone: 'Anyone',
+        noOwner: 'No owner',
+        someOwner: 'A player',
+        player: (netId: number, name: string | null) => (name === null ? `#${netId}` : `#${netId} ${name}`),
+        mostCommon: 'Most common',
+        modelCount: (model: string, value: number) => `${model} ×${formatNumber('en', value)}`,
+        showModel: (model: string) => `Show the entities of model ${model}`,
+        clear: 'Clear the filters',
+        caption: 'The entities the filters keep',
+        columns: {
+            kind: 'Type',
+            model: 'Model',
+            resource: 'Created by',
+            owner: 'Owner',
+            position: 'Position',
+        },
+        actions: 'Actions',
+        // A vehicle reads as its class, as `GetVehicleType` tells them apart.
+        classes: {
+            car: 'Car',
+            bike: 'Bike',
+            boat: 'Boat',
+            helicopter: 'Helicopter',
+            plane: 'Plane',
+            submarine: 'Submarine',
+            trailer: 'Trailer',
+            train: 'Train',
+            other: 'Vehicle',
+        } satisfies Record<VehicleClass, string>,
+        kindNames: { vehicle: 'Vehicle', ped: 'Ped', object: 'Object' } satisfies Record<EntityKind, string>,
+        netId: (value: number) => `#${value}`,
+        lookingUp: 'Looking it up',
+        playerInside: 'Player inside',
+        bucketOf: (value: number) => `bucket ${formatNumber('en', value)}`,
+        /** An entity said whole, for what acts on it: `Car 0x3C4E2113, #1042`. */
+        named: (kind: string, model: string, netId: number) => `${kind} ${model}, #${netId}`,
+        select: (entity: string) => `Select ${entity}`,
+        selectPage: 'Select the entities of this page',
+        never: {
+            occupied: 'A player sits inside: it is never deleted',
+            train: 'A train is never deleted',
+        },
+        showOnMap: (entity: string) => `Show ${entity} on the map`,
+        deleteOne: (entity: string) => `Delete ${entity}`,
+        selected: (value: number) => `${formatNumber('en', value)} selected`,
+        atMost: (value: number) => `${formatNumber('en', value)} at most`,
+        clearSelection: 'Clear',
+        deleteSelected: (value: number) => `Delete ${formatNumber('en', value)}`,
+        listed: (ago: string, seconds: number) =>
+            `Listed ${ago} ago, every ${count(seconds, { one: 'second', other: 'seconds' })} while this page is open`,
+        waiting: 'Waiting for the server to list its entities…',
+        cost: 'What the last sweep cost',
+        costOf: (work: string, frames: number) =>
+            `The last sweep took ${work} of the server's main thread, over ${count(frames, { one: 'frame', other: 'frames' })}.`,
+        range: (from: number, to: number, of: number) =>
+            `${formatNumber('en', from)}–${formatNumber('en', to)} of ${formatNumber('en', of)}`,
+        previous: 'Previous',
+        next: 'Next',
+        loading: 'Loading the entities…',
+        failed: 'The entities could not be read.',
+        noMatch: 'No entity matches these filters.',
+        none: 'The server holds no entity right now.',
+        stale: (age: string) =>
+            `This list is ${age} old: the server stopped answering. Nothing can be deleted from it until a new one comes.`,
+        spaced: (seconds: number) =>
+            `Listing its entities costs this server more than it should: it now lists them every ${count(seconds, { one: 'second', other: 'seconds' })}.`,
+        truncated: (value: number) =>
+            `The last sweep stopped after ${count(value, { one: 'entity', other: 'entities' })} to spare the server. The list is partial; the counts are whole.`,
+        unavailable: {
+            onesync: {
+                title: 'Entities need OneSync',
+                body: "Without OneSync the server does not know its entities, so there is nothing to list. It is one of the server's",
+                link: 'launch settings',
+            },
+            game: {
+                title: 'Only GTA V servers are read',
+                body: 'This server runs another game, whose entities Observer does not list.',
+            },
+        },
+        stopped: {
+            title: 'The server is not running',
+            body: 'Its entities are listed while FXServer runs and this page is open.',
+        },
+        deleted: (deleted: number, asked: number) =>
+            deleted === asked
+                ? `Deleted ${count(asked, { one: 'entity', other: 'entities' })}.`
+                : `Deleted ${formatNumber('en', deleted)} of ${count(asked, { one: 'entity', other: 'entities' })}.`,
+        dialog: {
+            title: (value: number) => `Delete ${count(value, { one: 'entity', other: 'entities' })}?`,
+            titleOne: (kind: string) => `Delete this ${kind.toLowerCase()}?`,
+            body: 'This cannot be undone. Players near them see them vanish, and a script that still uses one may fail.',
+            bodyOne:
+                'This cannot be undone. Players near it see it vanish, and a script that still uses it may fail.',
+            times: (value: number) => `×${formatNumber('en', value)}`,
+            more: (value: number) =>
+                `and ${count(value, { one: 'other', other: 'others' })}, in smaller groups`,
+            scripted: (value: number) =>
+                `${formatNumber('en', value)} ${plural('en', value, { one: 'was', other: 'were' })} created by a script.`,
+            scriptedWhy: 'A garage, a job or a persistence resource may still expect them.',
+            owned: (value: number) =>
+                `${formatNumber('en', value)} ${plural('en', value, { one: 'is', other: 'are' })} simulated by a connected player's game.`,
+            createdBy: (resource: string) => `It was created by ${resource}`,
+            createdByWhy: ', which may still expect it.',
+            ownedOne: "A connected player's game simulates it.",
+            word: 'DELETE',
+            type: (word: string, value: number) =>
+                `Type ${word} to delete ${count(value, { one: 'entity', other: 'entities' })}`,
+            confirm: (value: number) => `Delete ${formatNumber('en', value)}`,
+            confirmOne: 'Delete',
+        },
+        kinds: { vehicle: 'vehicle', ped: 'ped', object: 'object' } satisfies Record<EntityKind, string>,
+        /** A group of entities of one model: `8 × 0xB779A091 vehicle (qb-garages)`. */
+        group: (value: number, model: string, kind: string, resource: string | null) =>
+            `${formatNumber('en', value)} × ${model} ${kind}${resource === null ? '' : ` (${resource})`}`,
+        // What became of the entities a deletion did not delete, each said of how many.
+        notDeleted: {
+            unconfirmed: (value: number) =>
+                `${formatNumber('en', value)} ${plural('en', value, { one: 'is still there', other: 'are still there' })}`,
+            unanswered: (value: number) => `the server did not answer for ${formatNumber('en', value)}`,
+            gone: (value: number) =>
+                `${formatNumber('en', value)} ${plural('en', value, { one: 'was already gone', other: 'were already gone' })}`,
+            changed: (value: number) =>
+                `${formatNumber('en', value)} ${plural('en', value, { one: 'was no longer the entity listed', other: 'were no longer the entities listed' })}`,
+            player: (value: number) =>
+                `${formatNumber('en', value)} ${plural('en', value, { one: "is a player's own ped", other: "are players' own peds" })}`,
+            occupied: (value: number) => `${formatNumber('en', value)} had a player inside`,
+            train: (value: number) =>
+                `${formatNumber('en', value)} ${plural('en', value, { one: 'is a train', other: 'are trains' })}`,
+            late: (value: number) => `the server read the request too late for ${formatNumber('en', value)}`,
+            error: (value: number) => `${formatNumber('en', value)} failed`,
+        } satisfies Record<Exclude<EntityOutcome, 'deleted'>, (value: number) => string>,
     },
     bans: {
         title: 'Bans',
@@ -5088,6 +5277,10 @@ export const en = {
                 name: 'Live map',
                 about: 'What the Live map draws under the players, your own image and where it sits in the game, and the colours of the players on it.',
             },
+            entities: {
+                name: 'Entities',
+                about: 'How often the server lists its vehicles, peds and objects while someone looks at them. Finding and deleting them is on the Entities page and the Live map.',
+            },
             restarts: {
                 name: 'Restarts',
                 about: 'When FXServer restarts by itself, and how long before your resources hear of it. Skipping or delaying one restart is on the Schedule page.',
@@ -5254,6 +5447,10 @@ export const en = {
                 label: 'Debug',
                 about: "Counts the events, state bag writes and HTTP requests of every Lua resource, for the Debug pages. It adds two lines to the build's Lua scheduler at each start while it is on, and takes them out when it is off.",
             },
+            switchEntities: {
+                label: 'Entities',
+                about: "The server's vehicles, peds and objects, listed while someone looks at them, found on the Live map and deleted on request. Nothing of them is kept. Off, the server is never asked for them.",
+            },
             switchUpdates: {
                 label: 'Updates',
                 about: 'Every 6 hours, Observer asks GitHub for a newer release, which the owner installs from the About page. Off, Observer never contacts GitHub.',
@@ -5409,6 +5606,10 @@ export const en = {
             mapCadence: {
                 label: 'Positions sent every',
                 about: 'The server reads positions only while someone has the map open, and stops within 30 seconds after the last one leaves. They need OneSync.',
+            },
+            entitiesCadence: {
+                label: 'Entities listed every',
+                about: 'Only while someone has the Entities page or the map layer open. Shorter is fresher and costs the server more; it spaces its sweeps out by itself when one costs it too much. They need OneSync.',
             },
             tokenMatches: {
                 label: 'Hardware tokens to match',
@@ -5568,6 +5769,14 @@ export const en = {
                 'Your account can read these; changing them takes the permission to change settings, and the image the owner.',
             loadFailed: 'These settings could not be read.',
         },
+        entities: {
+            openEntities: 'Open the Entities page',
+            seconds: (value: number) => `${formatNumber('en', value)} s`,
+            saved: 'Saved. The server follows from its next sweep.',
+            discarded: 'Changes discarded.',
+            readOnly: 'Your account can read these; changing them takes the permission to change settings.',
+            loadFailed: 'These settings could not be read.',
+        },
         bans: {
             openBans: 'Open the Bans page',
             insert: 'Insert',
@@ -5676,6 +5885,7 @@ export const en = {
                 updateProbation: 'settling an update once Observer restarted',
                 hookLines: "the two lines in the build's Lua scheduler",
                 hookCounts: 'reading what the resources count',
+                entityList: 'listing the entities while someone looks at them',
             } satisfies Record<FeatureTask, string>,
             turnedOn: (name: string) => `${name} is on.`,
             turnedOnLater: (name: string, state: string) => `${name}: ${state}.`,
@@ -5838,6 +6048,8 @@ export const en = {
             bans_settings_changed: 'Ban settings changed',
             map_image_changed: 'Map image changed',
             map_settings_changed: 'Live map settings changed',
+            entities_deleted: 'Entities deleted',
+            entities_settings_changed: 'Entities settings changed',
             drop_rates_exported: 'Drop rates exported',
             drops_retention_changed: 'Drop retention changed',
             change_contents_viewed: 'Changed file read',
@@ -6062,6 +6274,12 @@ export const en = {
             // The started resources that depended on the one stopped or restarted.
             dependants: 'Stopped with it',
             startedAgain: 'Started again',
+            asked: 'Asked for',
+            deleted: 'Deleted',
+            outcomes: 'Not deleted',
+            entities: 'Entities',
+            more: 'In smaller groups',
+            everySeconds: 'Every',
         },
         days: (value: number) => count(value, { one: 'day', other: 'days' }),
         // A profile whose retention is unset is never deleted.
@@ -6343,6 +6561,7 @@ export const en = {
         drops: 'Player drops',
         changes: 'Changes',
         backups: 'Backups',
+        entities: 'Entities',
     } satisfies Record<PermissionArea, string>,
     danger: {
         sensitive: 'Sensitive',
@@ -6537,6 +6756,17 @@ export const en = {
         no_map_image: 'No map image is set.',
         invalid_map_settings:
             'Some settings are out of range: the thresholds must be ordered, the cadence 1, 2 or 5 seconds, and the edges must enclose an area.',
+        entities_not_listed:
+            'The server has not listed its entities yet: wait for the list, then try again. Nothing was deleted.',
+        entities_changed:
+            'The server restarted since this list was read: its net IDs name other entities now. Nothing was deleted.',
+        entities_out_of_date: 'This list is out of date: the server stopped answering. Nothing was deleted.',
+        entities_deleting: 'Another deletion is still under way: try again in a few seconds.',
+        too_many_entities: (params) =>
+            typeof params.max === 'number'
+                ? `One deletion takes ${formatNumber('en', params.max)} entities at most.`
+                : 'One deletion cannot take that many entities.',
+        invalid_entities_settings: 'The server lists its entities every 5, 10, 15, 30 or 60 seconds.',
         invalid_bans_settings: (params) =>
             typeof params.maxMessage === 'number' && typeof params.maxTokens === 'number'
                 ? `Write a refusal message of ${formatNumber('en', params.maxMessage)} characters at most, and ask for 0 to ${formatNumber('en', params.maxTokens)} tokens.`

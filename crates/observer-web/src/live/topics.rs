@@ -60,6 +60,7 @@ pub(super) fn allows(topic: Topic, held: Permissions) -> bool {
         Topic::ServerMap => any(&[Permissions::PLAYERS_MAP]),
         // Names, versions and states: what the dashboard's start already shows one by one.
         Topic::ServerResources => any(&[Permissions::DASHBOARD_VIEW, Permissions::RESOURCES_CONTROL]),
+        Topic::ServerEntities => any(&[Permissions::ENTITIES_VIEW]),
     }
 }
 
@@ -87,32 +88,21 @@ pub(super) async fn open(topic: Topic, since: Option<u64>, state: &AppState) -> 
                 events: Some(audit_events(entries, latest_id)),
             })
         }
-        Topic::ServerStatus => {
-            let mut status = state.supervision.status();
-            let snapshot = status.borrow_and_update().clone();
-            Ok(Feed {
-                snapshot: TopicSnapshot::ServerStatus(snapshot),
-                events: Some(status_events(status, TopicEvent::ServerStatus)),
-            })
-        }
-        Topic::ServerSchedule => {
-            let mut status = state.schedule.status();
-            let snapshot = status.borrow_and_update().clone();
-            Ok(Feed {
-                snapshot: TopicSnapshot::ServerSchedule(snapshot),
-                events: Some(status_events(status, TopicEvent::ServerSchedule)),
-            })
-        }
-        Topic::ServerArtifacts => {
-            let mut status = state.artifacts.status();
-            let snapshot = status.borrow_and_update().clone();
-            Ok(Feed {
-                snapshot: TopicSnapshot::ServerArtifacts(Box::new(snapshot)),
-                events: Some(status_events(status, |status| {
-                    TopicEvent::ServerArtifacts(Box::new(status))
-                })),
-            })
-        }
+        Topic::ServerStatus => Ok(followed(
+            state.supervision.status(),
+            TopicSnapshot::ServerStatus,
+            TopicEvent::ServerStatus,
+        )),
+        Topic::ServerSchedule => Ok(followed(
+            state.schedule.status(),
+            TopicSnapshot::ServerSchedule,
+            TopicEvent::ServerSchedule,
+        )),
+        Topic::ServerArtifacts => Ok(followed(
+            state.artifacts.status(),
+            |status| TopicSnapshot::ServerArtifacts(Box::new(status)),
+            |status| TopicEvent::ServerArtifacts(Box::new(status)),
+        )),
         Topic::Console => {
             let (snapshot, lines) = state.supervision.console(since);
             Ok(Feed {
@@ -127,14 +117,11 @@ pub(super) async fn open(topic: Topic, since: Option<u64>, state: &AppState) -> 
                 events: Some(metrics_events(samples)),
             })
         }
-        Topic::ServerAlerts => {
-            let mut alerts = state.diagnostics()?.alerts();
-            let snapshot = alerts.borrow_and_update().clone();
-            Ok(Feed {
-                snapshot: TopicSnapshot::ServerAlerts(snapshot),
-                events: Some(status_events(alerts, TopicEvent::ServerAlerts)),
-            })
-        }
+        Topic::ServerAlerts => Ok(followed(
+            state.diagnostics()?.alerts(),
+            TopicSnapshot::ServerAlerts,
+            TopicEvent::ServerAlerts,
+        )),
         Topic::ServerDiagnostics => {
             let (snapshot, events) = state.diagnostics()?.follow().await?;
             Ok(Feed {
@@ -146,25 +133,26 @@ pub(super) async fn open(topic: Topic, since: Option<u64>, state: &AppState) -> 
             let (snapshot, live, watching) = state.map()?.watch();
             Ok(Feed {
                 snapshot: TopicSnapshot::ServerMap(snapshot),
-                events: Some(map_events(live, watching)),
+                events: Some(watched_events(live, watching, TopicEvent::ServerMap)),
             })
         }
-        Topic::ServerChanges => {
-            let mut live = state.changes()?.live();
-            let snapshot = live.borrow_and_update().clone();
+        Topic::ServerEntities => {
+            let (snapshot, live, watching) = state.entities()?.watch();
             Ok(Feed {
-                snapshot: TopicSnapshot::ServerChanges(snapshot),
-                events: Some(status_events(live, TopicEvent::ServerChanges)),
+                snapshot: TopicSnapshot::ServerEntities(snapshot),
+                events: Some(watched_events(live, watching, TopicEvent::ServerEntities)),
             })
         }
-        Topic::ServerResources => {
-            let mut resources = state.supervision.resources();
-            let snapshot = resources.borrow_and_update().clone();
-            Ok(Feed {
-                snapshot: TopicSnapshot::ServerResources(snapshot),
-                events: Some(status_events(resources, TopicEvent::ServerResources)),
-            })
-        }
+        Topic::ServerChanges => Ok(followed(
+            state.changes()?.live(),
+            TopicSnapshot::ServerChanges,
+            TopicEvent::ServerChanges,
+        )),
+        Topic::ServerResources => Ok(followed(
+            state.supervision.resources(),
+            TopicSnapshot::ServerResources,
+            TopicEvent::ServerResources,
+        )),
     }
 }
 
@@ -194,6 +182,22 @@ fn metrics_events(samples: broadcast::Receiver<LiveSample>) -> Events {
     }))
 }
 
+/// A status as it stands, then the whole of it each time it changes.
+fn followed<T>(
+    mut status: watch::Receiver<T>,
+    snapshot: fn(T) -> TopicSnapshot,
+    event: fn(T) -> TopicEvent,
+) -> Feed
+where
+    T: Clone + Send + Sync + 'static,
+{
+    let current = status.borrow_and_update().clone();
+    Feed {
+        snapshot: snapshot(current),
+        events: Some(status_events(status, event)),
+    }
+}
+
 /// The whole status each time it changes. A client too slow to see every change only misses the
 /// ones a newer status already replaced.
 fn status_events<T>(status: watch::Receiver<T>, event: fn(T) -> TopicEvent) -> Events
@@ -207,18 +211,18 @@ where
     }))
 }
 
-/// The map's changes, holding the guard that keeps the server sending positions: it goes with the
-/// subscription.
-fn map_events(live: watch::Receiver<observer_domain::map::MapLive>, watching: Watching) -> Events {
+/// The changes of a view the server reads for only while someone looks, holding the guard that
+/// keeps it reading: it goes with the subscription.
+fn watched_events<T>(live: watch::Receiver<T>, watching: Watching, event: fn(T) -> TopicEvent) -> Events
+where
+    T: Clone + Send + Sync + 'static,
+{
     Box::pin(stream::unfold(
         (live, watching),
-        |(mut live, watching)| async move {
+        move |(mut live, watching)| async move {
             live.changed().await.ok()?;
             let current = live.borrow_and_update().clone();
-            Some((
-                Delivery::Event(Box::new(TopicEvent::ServerMap(current))),
-                (live, watching),
-            ))
+            Some((Delivery::Event(Box::new(event(current))), (live, watching)))
         },
     ))
 }
