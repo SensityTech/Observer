@@ -30,7 +30,7 @@ const serve = (replies: Record<string, unknown>) => {
 /** The bans' category, once its kick message is read; `puts` are the saves asked of Observer. */
 const open = async () => {
     const asked = serve({
-        'GET /servers/default/bans/settings': { message: 'Banned: {reason}', tokenMatches: 1 },
+        'GET /servers/default/bans/settings': { message: 'Banned: {reason}', tokenMatches: 1, templates: [] },
         [`GET ${KICKS}`]: { message: STORED },
         [`PUT ${KICKS}`]: { message: 'Kicked by {by}: {reason}' },
     });

@@ -1035,7 +1035,19 @@ good. A ban holds the player's licence and every other identifier and hardware t
 links to, so a second account that shares their tokens is refused too. The Bans page lists active, ended
 and lifted bans, and finds them by name, licence, reason or ban ID; finding them by another identifier
 takes **View player identifiers**. Lifting a ban takes a permission of its own and keeps the ban in the
-list, with who lifted it and why. Every ban and every lift is in the audit log.
+list, with who lifted it and why. Every ban, every edit and every lift is in the audit log.
+
+The settings' Bans and kicks category keeps **ban templates**: the reasons you ban for most, each with
+its usual length, in the order you put them. The ban dialog offers them, and picking one fills in the
+reason and the length, which the staff can still change before banning. The list is saved with the
+refusal message, by who may change settings.
+
+An active ban can be edited: its reason, its end, or both. A new length counts from the edit, as a new
+ban's counts from the ban, and a ban can be made permanent. Editing takes a permission of its own,
+**Edit bans**: a ban made to end sooner lets its player back in sooner, which banning does not allow.
+The ban keeps who made it and when. Each edit is kept with it, with who made it, when, and the reason or
+the end it replaced: the Bans page and the player's profile show them under the ban's reason. From then
+on a connecting player is checked against the new end and reads the new reason.
 
 The bridge holds each connecting player on `playerConnecting` while Observer checks them, which takes
 milliseconds. A banned player is refused with the **refusal message** of the settings' Bans and kicks

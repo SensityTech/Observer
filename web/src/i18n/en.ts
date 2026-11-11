@@ -261,6 +261,11 @@ const permissions = {
         name: 'Message players',
         description: "Write to one connected player, through whatever the server's resources show.",
     },
+    bansEdit: {
+        name: 'Edit bans',
+        description:
+            'Change the reason or the end of an active ban, whoever made it. A ban made to end sooner lets its player back in sooner.',
+    },
     allowlistManage: {
         name: 'Manage the allowlist',
         description:
@@ -2932,11 +2937,27 @@ export const en = {
         actions: (code: string) => `Actions for ban ${code}`,
         openProfile: 'Open profile',
         copyCode: 'Copy ban ID',
+        actionsHead: 'Actions',
+        edit: 'Edit ban…',
         lift: 'Lift ban…',
+        edits: {
+            summary: (times: number, by: string) =>
+                times === 1
+                    ? `Edited by ${by}`
+                    : `Edited ${count(times, { one: 'time', other: 'times' })}, last by ${by}`,
+            by: (by: string, when: string) => `${by} · ${when}`,
+            reason: (before: string) => `Reason before: ${before}`,
+            ends: (before: string, after: string) => `End: ${before} → ${after}`,
+            forGood: 'never',
+        },
         dialog: {
             titlePlayer: (name: string) => `Ban ${name}`,
             titleIdentifiers: 'Ban identifiers',
             licence: (licence: string, online: boolean) => (online ? `${licence} · connected now` : licence),
+            template: 'Template',
+            noTemplate: 'None',
+            templateOption: (reason: string, length: string) => `${reason} · ${length}`,
+            templateHint: 'Fills in the length and the reason, which you can still change.',
             length: 'How long',
             lengths: {
                 hour: '1 hour',
@@ -2969,9 +2990,27 @@ export const en = {
                 `${name} is connected: the server drops them at once, with the refusal message.`,
             submit: (length: string) => `Ban for ${length}`,
             submitPermanent: 'Ban for good',
+            submitNoLength: 'Ban',
         },
         banned: (code: string) => `Banned. The ban ID is ${code}.`,
+        editedNotice: (code: string) => `Ban ${code} edited.`,
         liftedNotice: (code: string) => `Ban ${code} lifted.`,
+        editDialog: {
+            title: (name: string) => `Edit ${name}'s ban`,
+            titleCode: (code: string) => `Edit ban ${code}`,
+            ends: 'Ends',
+            keep: 'As it is',
+            stillEnds: (when: string, zone: string) => `Still ends ${when}, ${zone}.`,
+            stillNever: 'Still never ends.',
+            endsNow: (when: string, zone: string, before: string | null) =>
+                before === null
+                    ? `Counted from now: ends ${when}, ${zone}. It never ended before.`
+                    : `Counted from now: ends ${when}, ${zone}, instead of ${before}.`,
+            neverNow: (before: string) =>
+                `Never ends, instead of ${before}: lift it by hand to let them back in.`,
+            unchanged: 'Nothing to save: change the reason or the end.',
+            submit: 'Save changes',
+        },
         liftDialog: {
             title: (name: string) => `Lift ${name}'s ban?`,
             titleCode: (code: string) => `Lift ban ${code}?`,
@@ -5469,7 +5508,7 @@ export const en = {
             },
             bans: {
                 name: 'Bans and kicks',
-                about: 'What a banned player and a kicked player read, and how much of a ban a player must show to be refused. Banning and lifting is on the Bans page.',
+                about: 'What a banned player and a kicked player read, how much of a ban a player must show to be refused, and the reasons the ban dialog offers. Banning and lifting is on the Bans page.',
             },
             allowlist: {
                 name: 'Allowlist',
@@ -5825,6 +5864,10 @@ export const en = {
                 label: 'Hardware tokens to match',
                 about: "How many of a ban's hardware tokens a player must show to be refused by them alone. Any identifier the ban holds refuses at once; 0 never refuses on tokens alone.",
             },
+            banTemplates: {
+                label: 'Ban templates',
+                about: 'The reasons you ban for most, each with its usual length. The ban dialog offers them in this order: picking one fills in the reason and the length, which the staff can still change.',
+            },
             allowlistEnabled: {
                 label: 'Approved players only',
                 about: 'A player who is not approved is refused with the message below, and what they asked shows on the Allowlist page. Bans come first. Players already connected stay.',
@@ -6087,7 +6130,25 @@ export const en = {
             kickMessageMissing: 'Write a message: a kicked player always reads one.',
             kickSaved: 'Saved. The next kick reads it.',
             tokensOutOfRange: (max: number) => `From 0 to ${formatNumber('en', max)}.`,
-            saved: 'Saved. The next connection reads it.',
+            templates: 'Templates, in the order the ban dialog offers them',
+            noTemplates: 'No template yet: the ban dialog asks for a length and a reason each time.',
+            addTemplate: 'Add a template',
+            templatesFull: (max: number) =>
+                `${formatNumber('en', max)} templates at most: remove one to add another.`,
+            moveUp: (template: string) => `Move “${template}” up`,
+            moveDown: (template: string) => `Move “${template}” down`,
+            editTemplate: (template: string) => `Edit “${template}”`,
+            removeTemplate: (template: string) => `Remove “${template}”`,
+            templateDialog: {
+                add: 'Add a template',
+                edit: 'Edit the template',
+                reasonHint: 'What the ban dialog fills in as the reason, which the banned player reads.',
+                listed: 'This reason is listed already with this length.',
+                kept: 'It is kept once you save the settings.',
+                submitAdd: 'Add',
+                submitEdit: 'Done',
+            },
+            saved: 'Saved. The next connection and the next ban read it.',
             discarded: 'Changes discarded.',
             readOnly: 'Your account can read these; changing them takes the permission to change settings.',
             loadFailed: 'These settings could not be read.',
@@ -6341,6 +6402,7 @@ export const en = {
             player_drops_exported: 'Drop log exported',
             player_banned: 'Player banned',
             ban_lifted: 'Ban lifted',
+            ban_edited: 'Ban edited',
             bans_settings_changed: 'Ban settings changed',
             map_image_changed: 'Map image changed',
             map_settings_changed: 'Live map settings changed',
@@ -6583,6 +6645,10 @@ export const en = {
             updated: 'Updated',
             forgotten: 'Skipped as forgotten',
             invalid: 'Invalid',
+            endsAt: 'Ends',
+            refusalMessage: 'Refusal message',
+            tokenMatches: 'Hardware tokens to match',
+            templates: 'Ban templates',
             // The started resources that depended on the one stopped or restarted.
             dependants: 'Stopped with it',
             startedAgain: 'Started again',
@@ -6606,6 +6672,10 @@ export const en = {
         days: (value: number) => count(value, { one: 'day', other: 'days' }),
         // A profile whose retention is unset is never deleted.
         keptForGood: 'kept for good',
+        // A permanent ban has no end.
+        neverEnds: 'never',
+        noTemplate: 'none',
+        template: (reason: string, length: string) => `${reason} (${length})`,
         snapshotKinds: { dump: 'a stack dump', report: 'a thread report' },
         snapshotFailures: {
             lowDisk: 'less than 1 GB free',
@@ -7090,8 +7160,10 @@ export const en = {
                 : 'One deletion cannot take that many entities.',
         invalid_entities_settings: 'The server lists its entities every 5, 10, 15, 30 or 60 seconds.',
         invalid_bans_settings: (params) =>
-            typeof params.maxMessage === 'number' && typeof params.maxTokens === 'number'
-                ? `Write a refusal message of ${formatNumber('en', params.maxMessage)} characters at most, and ask for 0 to ${formatNumber('en', params.maxTokens)} tokens.`
+            typeof params.maxMessage === 'number' &&
+            typeof params.maxTokens === 'number' &&
+            typeof params.maxTemplates === 'number'
+                ? `Write a refusal message of ${formatNumber('en', params.maxMessage)} characters at most, ask for 0 to ${formatNumber('en', params.maxTokens)} tokens, and keep to ${formatNumber('en', params.maxTemplates)} templates, each with a reason and a length a ban can take.`
                 : 'These settings are out of range.',
         player_not_connected: 'This player is no longer connected.',
         invalid_kick: (params) =>

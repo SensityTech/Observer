@@ -105,10 +105,12 @@ pub(crate) fn routes() -> Vec<Route> {
     // too, which the service checks on what is asked. Retentions and erasures are the owner's.
     let players = Permission(P::PLAYERS_VIEW);
     let erase = ReauthenticatedOwner;
-    // Bans are seen, made and lifted under three permissions. The refusal message is a text
-    // Observer shows players, so changing it takes the settings' permission and the password again.
+    // Bans are seen, made, edited and lifted under four permissions. The refusal message is a text
+    // Observer shows players, so changing it takes the settings' permission and the password again;
+    // the templates are saved with it, and read by whoever bans.
     let bans = Permission(P::BANS_VIEW);
     let ban = Permission(P::PLAYERS_BAN);
+    let edit_ban = Permission(P::BANS_EDIT);
     let lift = Permission(P::BANS_LIFT);
     let read_ban_settings = Permission(P::SETTINGS_VIEW);
     let change_ban_settings = Reauthenticated(P::SETTINGS_MANAGE);
@@ -288,6 +290,8 @@ pub(crate) fn routes() -> Vec<Route> {
         route(M::POST,   "/servers/default/bans",              ban,     bans::create),
         route(M::GET,    "/servers/default/bans/settings",     read_ban_settings,   bans::settings),
         route(M::PUT,    "/servers/default/bans/settings",     change_ban_settings, bans::change_settings),
+        route(M::GET,    "/servers/default/bans/templates",    ban,     bans::templates),
+        route(M::PATCH,  "/servers/default/bans/{code}",       edit_ban, bans::edit),
         route(M::POST,   "/servers/default/bans/{code}/lift",  lift,    bans::lift),
         route(M::POST,   "/servers/default/kicks",             kick,     moderation::kick),
         route(M::POST,   "/servers/default/kicks/all",         control,  moderation::kick_all),

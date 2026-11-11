@@ -2,15 +2,17 @@ import { infiniteQueryOptions, queryOptions } from '@tanstack/react-query';
 
 import { getJson, send } from './client';
 import type { Ban } from './generated/Ban';
+import type { BanEditRequest } from './generated/BanEditRequest';
 import type { BanFilter } from './generated/BanFilter';
 import type { BanPage } from './generated/BanPage';
 import type { BanRequest } from './generated/BanRequest';
 import type { BansSettings } from './generated/BansSettings';
+import type { BanTemplate } from './generated/BanTemplate';
 import type { LiftRequest } from './generated/LiftRequest';
 
 const PATH = '/servers/default/bans';
 
-/** Every bans query, a profile's included: what a ban or a lift changes. */
+/** Every bans query, a profile's included: what a ban, an edit or a lift changes. */
 export const allBans = { queryKey: ['bans'] };
 
 /** The list's query string, without the default filter or an empty search. */
@@ -46,10 +48,19 @@ export const playerBansQuery = (player: number) =>
 
 export const banPlayer = (request: BanRequest) => send<Ban>('POST', PATH, request);
 
+export const editBan = (code: string, request: BanEditRequest) =>
+    send<Ban>('PATCH', `${PATH}/${encodeURIComponent(code)}`, request);
+
 export const liftBan = (code: string, reason: string) =>
     send('POST', `${PATH}/${encodeURIComponent(code)}/lift`, {
         reason: reason.trim() === '' ? null : reason.trim(),
     } satisfies LiftRequest);
+
+/** The templates as whoever bans reads them; the settings hold them too, for who reads those. */
+export const banTemplatesQuery = queryOptions({
+    queryKey: ['bans', 'templates'],
+    queryFn: ({ signal }) => getJson<BanTemplate[]>(`${PATH}/templates`, signal),
+});
 
 export const bansSettingsQuery = queryOptions({
     queryKey: ['bans', 'settings'],
@@ -65,5 +76,6 @@ export const characters = (text: string) => [...text].length;
 export const MAX_REASON = 200;
 export const MAX_MESSAGE = 600;
 export const MAX_TOKENS = 8;
+export const MAX_TEMPLATES = 50;
 /** The longest ban short of a permanent one, as the API takes it: ten years. */
 export const MAX_MINUTES = 3650 * 24 * 60;

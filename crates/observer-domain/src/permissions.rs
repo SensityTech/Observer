@@ -47,7 +47,8 @@ impl Permissions {
     pub const PLAYERS_KICK: Self = Self(1 << 29);
     pub const PLAYERS_ANNOUNCE: Self = Self(1 << 30);
     pub const PLAYERS_MESSAGE: Self = Self(1 << 31);
-    pub const ALLOWLIST_MANAGE: Self = Self(1 << 32);
+    pub const BANS_EDIT: Self = Self(1 << 32);
+    pub const ALLOWLIST_MANAGE: Self = Self(1 << 33);
 
     /// Every permission in the catalog, which is what the owner holds.
     pub fn all() -> Self {
@@ -527,6 +528,16 @@ pub const CATALOG: &[PermissionInfo] = &[
     },
     PermissionInfo {
         bit: 32,
+        constant: "BANS_EDIT",
+        key: "bansEdit",
+        area: PermissionArea::Players,
+        // Anyone's active ban: the reason its player reads, and its end, which brought closer
+        // lets them back in sooner.
+        danger: Danger::Sensitive,
+        implies: Permissions::BANS_VIEW,
+    },
+    PermissionInfo {
+        bit: 33,
         constant: "ALLOWLIST_MANAGE",
         key: "allowlistManage",
         area: PermissionArea::Players,
@@ -580,7 +591,8 @@ mod tests {
             (29, "PLAYERS_KICK", Permissions::PLAYERS_KICK),
             (30, "PLAYERS_ANNOUNCE", Permissions::PLAYERS_ANNOUNCE),
             (31, "PLAYERS_MESSAGE", Permissions::PLAYERS_MESSAGE),
-            (32, "ALLOWLIST_MANAGE", Permissions::ALLOWLIST_MANAGE),
+            (32, "BANS_EDIT", Permissions::BANS_EDIT),
+            (33, "ALLOWLIST_MANAGE", Permissions::ALLOWLIST_MANAGE),
         ];
 
         assert_eq!(CATALOG.len(), frozen.len());

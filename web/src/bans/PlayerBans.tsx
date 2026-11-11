@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { Ban as BanIcon, Undo2 } from 'lucide-react';
+import { Ban as BanIcon, Pencil, Undo2 } from 'lucide-react';
 import { useState } from 'react';
 
 import { playerBansQuery } from '../api/bans';
@@ -14,13 +14,14 @@ import { useI18n } from '../i18n/I18nProvider';
 import { cn } from '../lib/cn';
 import { useNow } from '../lib/useNow';
 import { useVisit } from '../players/words';
-import { LiftDialog } from './dialogs';
-import { BanStateChip, minutesOf } from './words';
+import { EditDialog, LiftDialog } from './dialogs';
+import { BanEdits, BanStateChip, minutesOf } from './words';
 
 /** The bans of a profile: the one in force said at the top, every one listed below. */
 export function PlayerBans({ player, zone }: { player: number; zone: string }) {
     const me = useMe();
     const bans = useQuery(playerBansQuery(player));
+    const [editing, setEditing] = useState<Ban | null>(null);
     const [lifting, setLifting] = useState<Ban | null>(null);
     if (!bans.isSuccess || bans.data.length === 0) {
         return null;
@@ -32,10 +33,19 @@ export function PlayerBans({ player, zone }: { player: number; zone: string }) {
                 <ActiveBan
                     ban={active}
                     zone={zone}
+                    onEdit={allows(me, Permission.BansEdit) ? () => setEditing(active) : undefined}
                     onLift={allows(me, Permission.BansLift) ? () => setLifting(active) : undefined}
                 />
             )}
             <BansCard bans={bans.data} zone={zone} />
+            {editing !== null && (
+                <EditDialog
+                    ban={editing}
+                    zone={zone}
+                    onClose={() => setEditing(null)}
+                    onEdited={() => setEditing(null)}
+                />
+            )}
             {lifting !== null && (
                 <LiftDialog
                     ban={lifting}
@@ -47,7 +57,17 @@ export function PlayerBans({ player, zone }: { player: number; zone: string }) {
     );
 }
 
-function ActiveBan({ ban, zone, onLift }: { ban: Ban; zone: string; onLift?: () => void }) {
+function ActiveBan({
+    ban,
+    zone,
+    onEdit,
+    onLift,
+}: {
+    ban: Ban;
+    zone: string;
+    onEdit?: () => void;
+    onLift?: () => void;
+}) {
     const { t, format } = useI18n();
     const words = t.bans.profile;
     const visit = useVisit(zone);
@@ -68,10 +88,19 @@ function ActiveBan({ ban, zone, onLift }: { ban: Ban; zone: string; onLift?: () 
                     <span className="text-ink-3">{words.madeBy(ban.by, visit(ban.createdAt), ban.code)}</span>
                     <span className="text-ink-3">{t.bans.refused(ban.refused)}</span>
                 </span>
-                {onLift !== undefined && (
-                    <Button size="sm" icon={Undo2} onClick={onLift}>
-                        {t.bans.lift}
-                    </Button>
+                {(onEdit !== undefined || onLift !== undefined) && (
+                    <span className="flex flex-wrap gap-2">
+                        {onEdit !== undefined && (
+                            <Button size="sm" icon={Pencil} onClick={onEdit}>
+                                {t.bans.edit}
+                            </Button>
+                        )}
+                        {onLift !== undefined && (
+                            <Button size="sm" icon={Undo2} onClick={onLift}>
+                                {t.bans.lift}
+                            </Button>
+                        )}
+                    </span>
                 )}
             </span>
         </Notice>
@@ -120,6 +149,7 @@ function BansCard({ bans, zone }: { bans: Ban[]; zone: string }) {
                                 </td>
                                 <td className={cn(table.td, 'max-w-96 align-top [overflow-wrap:anywhere]')}>
                                     {ban.reason}
+                                    <BanEdits ban={ban} zone={zone} />
                                 </td>
                                 <td className={cn(table.td, 'align-top whitespace-nowrap')}>
                                     {words.lengthOf(minutesOf(ban))}
@@ -149,6 +179,7 @@ function BansCard({ bans, zone }: { bans: Ban[]; zone: string }) {
                             <BanStateChip ban={ban} />
                         </div>
                         <p className="text-ui text-ink-2 [overflow-wrap:anywhere]">{ban.reason}</p>
+                        <BanEdits ban={ban} zone={zone} />
                         <p className="text-meta text-ink-3">
                             {words.lengthOf(minutesOf(ban))} · {ban.by} · {visit(ban.createdAt)}
                         </p>

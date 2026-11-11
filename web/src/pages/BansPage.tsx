@@ -1,6 +1,6 @@
 import { keepPreviousData, useInfiniteQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
-import { Ban as BanIcon, ChevronDown, Plus, Search, Undo2 } from 'lucide-react';
+import { Ban as BanIcon, ChevronDown, Ellipsis, Pencil, Plus, Search, Undo2 } from 'lucide-react';
 import { useState } from 'react';
 
 import { bansQuery } from '../api/bans';
@@ -10,12 +10,13 @@ import type { BanFilter } from '../api/generated/BanFilter';
 import { Permission } from '../api/generated/Permission';
 import { shortLicence } from '../api/players';
 import { allows, useMe } from '../auth/me';
-import { BanDialog, LiftDialog } from '../bans/dialogs';
-import { BanEnds } from '../bans/words';
-import { Button } from '../components/Button';
+import { BanDialog, EditDialog, LiftDialog } from '../bans/dialogs';
+import { BanEdits, BanEnds } from '../bans/words';
+import { Button, buttonVariants } from '../components/Button';
 import { Card } from '../components/Card';
 import { CopyValue } from '../components/CopyValue';
 import { TextField } from '../components/Field';
+import { Menu } from '../components/Menu';
 import { Notice } from '../components/Notice';
 import { Segmented } from '../components/Segmented';
 import { table } from '../components/table';
@@ -39,6 +40,7 @@ export function BansPage() {
     const [draft, setDraft] = useState('');
     const [search, setSearch] = useState('');
     const [banning, setBanning] = useState(false);
+    const [editing, setEditing] = useState<Ban | null>(null);
     const [lifting, setLifting] = useState<Ban | null>(null);
     const [done, setDone] = useState<Done | null>(null);
     const list = useInfiniteQuery({ ...bansQuery(filter, search), placeholderData: keepPreviousData });
@@ -53,6 +55,7 @@ export function BansPage() {
             ? errorMessage(t, list.error)
             : null;
     const canBan = allows(me, Permission.PlayersBan);
+    const canEdit = allows(me, Permission.BansEdit);
     const canLift = allows(me, Permission.BansLift);
     const countOf = (each: BanFilter) =>
         counts === undefined
@@ -187,9 +190,9 @@ export function BansPage() {
                                             <th scope="col" className={table.th}>
                                                 {words.code}
                                             </th>
-                                            {canLift && (
+                                            {(canEdit || canLift) && (
                                                 <th scope="col" className={table.th}>
-                                                    <span className="sr-only">{words.lift}</span>
+                                                    <span className="sr-only">{words.actionsHead}</span>
                                                 </th>
                                             )}
                                         </tr>
@@ -200,6 +203,7 @@ export function BansPage() {
                                                 key={ban.code}
                                                 ban={ban}
                                                 zone={zone}
+                                                onEdit={canEdit ? () => setEditing(ban) : undefined}
                                                 onLift={canLift ? () => setLifting(ban) : undefined}
                                             />
                                         ))}
@@ -212,6 +216,7 @@ export function BansPage() {
                                         key={ban.code}
                                         ban={ban}
                                         zone={zone}
+                                        onEdit={canEdit ? () => setEditing(ban) : undefined}
                                         onLift={canLift ? () => setLifting(ban) : undefined}
                                     />
                                 ))}
@@ -246,6 +251,17 @@ export function BansPage() {
                     onBanned={(ban) => {
                         setBanning(false);
                         setDone({ tone: 'success', message: words.banned(ban.code) });
+                    }}
+                />
+            )}
+            {editing !== null && (
+                <EditDialog
+                    ban={editing}
+                    zone={zone}
+                    onClose={() => setEditing(null)}
+                    onEdited={(ban) => {
+                        setEditing(null);
+                        setDone({ tone: 'success', message: words.editedNotice(ban.code) });
                     }}
                 />
             )}
@@ -295,7 +311,9 @@ function Who({ ban }: { ban: Ban }) {
     );
 }
 
-function BanRow({ ban, zone, onLift }: { ban: Ban; zone: string; onLift?: () => void }) {
+type RowActions = { onEdit?: () => void; onLift?: () => void };
+
+function BanRow({ ban, zone, onEdit, onLift }: { ban: Ban; zone: string } & RowActions) {
     const { t } = useI18n();
     const visit = useVisit(zone);
     return (
@@ -306,6 +324,7 @@ function BanRow({ ban, zone, onLift }: { ban: Ban; zone: string; onLift?: () => 
             <td className={cn(table.td, 'max-w-80 min-w-40 align-top [overflow-wrap:anywhere]')}>
                 {ban.reason}
                 <div className={table.sub}>{t.bans.refused(ban.refused)}</div>
+                <BanEdits ban={ban} zone={zone} />
             </td>
             <td className={cn(table.td, 'min-w-32 align-top')}>
                 <BanEnds ban={ban} zone={zone} />
@@ -317,12 +336,24 @@ function BanRow({ ban, zone, onLift }: { ban: Ban; zone: string; onLift?: () => 
             <td className={cn(table.td, 'align-top')}>
                 <CopyValue value={ban.code} shown={ban.code} label={t.bans.copyCode} />
             </td>
-            {onLift !== undefined && (
-                <td className={cn(table.td, 'align-top text-right')}>
+            {(onEdit !== undefined || onLift !== undefined) && (
+                <td className={cn(table.td, 'w-[1%] align-top whitespace-nowrap')}>
                     {ban.state === 'active' && (
-                        <Button tone="ghost" size="sm" icon={Undo2} onClick={onLift}>
-                            {t.bans.lift}
-                        </Button>
+                        <Menu
+                            placement="below-end"
+                            label={t.bans.actions(ban.code)}
+                            buttonClassName={buttonVariants({ tone: 'ghost', size: 'icon-sm' })}
+                            items={[
+                                ...(onEdit === undefined
+                                    ? []
+                                    : [{ label: t.bans.edit, icon: Pencil, onSelect: onEdit }]),
+                                ...(onLift === undefined
+                                    ? []
+                                    : [{ label: t.bans.lift, icon: Undo2, onSelect: onLift }]),
+                            ]}
+                        >
+                            <Ellipsis size={16} strokeWidth={1.5} aria-hidden="true" />
+                        </Menu>
                     )}
                 </td>
             )}
@@ -330,7 +361,7 @@ function BanRow({ ban, zone, onLift }: { ban: Ban; zone: string; onLift?: () => 
     );
 }
 
-function BanItem({ ban, zone, onLift }: { ban: Ban; zone: string; onLift?: () => void }) {
+function BanItem({ ban, zone, onEdit, onLift }: { ban: Ban; zone: string } & RowActions) {
     const { t } = useI18n();
     const words = t.bans;
     const visit = useVisit(zone);
@@ -338,6 +369,7 @@ function BanItem({ ban, zone, onLift }: { ban: Ban; zone: string; onLift?: () =>
         <li className="flex flex-col gap-2 border-b border-line px-4 py-3 last:border-b-0">
             <Who ban={ban} />
             <p className="text-ui text-ink-2 [overflow-wrap:anywhere]">{ban.reason}</p>
+            <BanEdits ban={ban} zone={zone} />
             <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-small">
                 <div className="flex min-w-0 flex-col gap-0.5">
                     <dt className="text-meta text-ink-3">
@@ -361,10 +393,19 @@ function BanItem({ ban, zone, onLift }: { ban: Ban; zone: string; onLift?: () =>
                     </dd>
                 </div>
             </dl>
-            {onLift !== undefined && ban.state === 'active' && (
-                <Button icon={Undo2} onClick={onLift}>
-                    {words.lift}
-                </Button>
+            {ban.state === 'active' && (onEdit !== undefined || onLift !== undefined) && (
+                <div className="flex gap-2 [&>button]:flex-1">
+                    {onEdit !== undefined && (
+                        <Button icon={Pencil} onClick={onEdit}>
+                            {words.edit}
+                        </Button>
+                    )}
+                    {onLift !== undefined && (
+                        <Button icon={Undo2} onClick={onLift}>
+                            {words.lift}
+                        </Button>
+                    )}
+                </div>
             )}
         </li>
     );
