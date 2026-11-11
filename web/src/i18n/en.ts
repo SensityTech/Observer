@@ -100,6 +100,7 @@ import type { RollbackReason } from '../api/generated/RollbackReason';
 import type { UpdateBlock } from '../api/generated/UpdateBlock';
 import type { UpdateStep } from '../api/generated/UpdateStep';
 import type { UpdateWhen } from '../api/generated/UpdateWhen';
+import type { VehicleClass } from '../api/generated/VehicleClass';
 import type { DestinationKind } from '../api/backups';
 import { parsePermissions, permissionKeys, type PermissionKey } from '../auth/permissions';
 import type { InvisibleKind } from '../changes/invisible';
@@ -492,6 +493,7 @@ export const en = {
         players: 'Players',
         map: 'Live map',
         bans: 'Bans',
+        entities: 'Entities',
         drops: 'Drops',
         changes: 'File changes',
         tools: 'Tools',
@@ -2536,6 +2538,138 @@ export const en = {
         unknownPing: 'unknown',
     },
     entities: {
+        title: 'Entities',
+        gloss: 'The vehicles, peds and objects the server holds.',
+        list: 'Entities',
+        count: (value: number) => count(value, { one: 'entity', other: 'entities' }),
+        playerPeds: (value: number) =>
+            `and ${count(value, { one: "player's own ped", other: "players' own peds" })}, never listed`,
+        filter: 'Type',
+        filters: { all: 'All', vehicle: 'Vehicles', ped: 'Peds', object: 'Objects' } satisfies Record<
+            EntityKind | 'all',
+            string
+        >,
+        search: 'Search',
+        searchHint: 'Net id, model, resource or owner',
+        searchHintNoOwner: 'Net id, model or resource',
+        submit: 'Search',
+        class: 'Class',
+        createdBy: 'Created by',
+        owner: 'Owner',
+        bucket: 'Bucket',
+        any: 'Any',
+        anyResource: 'Any resource',
+        noResource: 'No resource',
+        anyone: 'Anyone',
+        noOwner: 'No owner',
+        someOwner: 'A player',
+        player: (netId: number, name: string | null) => (name === null ? `#${netId}` : `#${netId} ${name}`),
+        mostCommon: 'Most common',
+        modelCount: (model: string, value: number) => `${model} ×${formatNumber('en', value)}`,
+        showModel: (model: string) => `Show the entities of model ${model}`,
+        clear: 'Clear the filters',
+        caption: 'The entities the filters keep',
+        columns: {
+            kind: 'Type',
+            model: 'Model',
+            resource: 'Created by',
+            owner: 'Owner',
+            position: 'Position',
+        },
+        actions: 'Actions',
+        // A vehicle reads as its class, as `GetVehicleType` tells them apart.
+        classes: {
+            car: 'Car',
+            bike: 'Bike',
+            boat: 'Boat',
+            helicopter: 'Helicopter',
+            plane: 'Plane',
+            submarine: 'Submarine',
+            trailer: 'Trailer',
+            train: 'Train',
+            other: 'Vehicle',
+        } satisfies Record<VehicleClass, string>,
+        kindNames: { vehicle: 'Vehicle', ped: 'Ped', object: 'Object' } satisfies Record<EntityKind, string>,
+        netId: (value: number) => `#${value}`,
+        lookingUp: 'Looking it up',
+        playerInside: 'Player inside',
+        bucketOf: (value: number) => `bucket ${formatNumber('en', value)}`,
+        /** An entity said whole, for what acts on it: `Car 0x3C4E2113, #1042`. */
+        named: (kind: string, model: string, netId: number) => `${kind} ${model}, #${netId}`,
+        select: (entity: string) => `Select ${entity}`,
+        selectPage: 'Select the entities of this page',
+        never: {
+            occupied: 'A player sits inside: it is never deleted',
+            train: 'A train is never deleted',
+        },
+        showOnMap: (entity: string) => `Show ${entity} on the map`,
+        deleteOne: (entity: string) => `Delete ${entity}`,
+        selected: (value: number) => `${formatNumber('en', value)} selected`,
+        atMost: (value: number) => `${formatNumber('en', value)} at most`,
+        clearSelection: 'Clear',
+        deleteSelected: (value: number) => `Delete ${formatNumber('en', value)}`,
+        listed: (ago: string, seconds: number) =>
+            `Listed ${ago} ago, every ${count(seconds, { one: 'second', other: 'seconds' })} while this page is open`,
+        waiting: 'Waiting for the server to list its entities…',
+        cost: 'What the last sweep cost',
+        costOf: (work: string, frames: number) =>
+            `The last sweep took ${work} of the server's main thread, over ${count(frames, { one: 'frame', other: 'frames' })}.`,
+        range: (from: number, to: number, of: number) =>
+            `${formatNumber('en', from)}–${formatNumber('en', to)} of ${formatNumber('en', of)}`,
+        previous: 'Previous',
+        next: 'Next',
+        loading: 'Loading the entities…',
+        failed: 'The entities could not be read.',
+        noMatch: 'No entity matches these filters.',
+        none: 'The server holds no entity right now.',
+        stale: (age: string) =>
+            `This list is ${age} old: the server stopped answering. Nothing can be deleted from it until a new one comes.`,
+        spaced: (seconds: number) =>
+            `Listing its entities costs this server more than it should: it now lists them every ${count(seconds, { one: 'second', other: 'seconds' })}.`,
+        truncated: (value: number) =>
+            `The last sweep stopped after ${count(value, { one: 'entity', other: 'entities' })} to spare the server. The list is partial; the counts are whole.`,
+        unavailable: {
+            onesync: {
+                title: 'Entities need OneSync',
+                body: "Without OneSync the server does not know its entities, so there is nothing to list. It is one of the server's",
+                link: 'launch settings',
+            },
+            game: {
+                title: 'Only GTA V servers are read',
+                body: 'This server runs another game, whose entities Observer does not list.',
+            },
+        },
+        stopped: {
+            title: 'The server is not running',
+            body: 'Its entities are listed while FXServer runs and this page is open.',
+        },
+        deleted: (deleted: number, asked: number) =>
+            deleted === asked
+                ? `Deleted ${count(asked, { one: 'entity', other: 'entities' })}.`
+                : `Deleted ${formatNumber('en', deleted)} of ${count(asked, { one: 'entity', other: 'entities' })}.`,
+        dialog: {
+            title: (value: number) => `Delete ${count(value, { one: 'entity', other: 'entities' })}?`,
+            titleOne: (kind: string) => `Delete this ${kind.toLowerCase()}?`,
+            body: 'This cannot be undone. Players near them see them vanish, and a script that still uses one may fail.',
+            bodyOne:
+                'This cannot be undone. Players near it see it vanish, and a script that still uses it may fail.',
+            times: (value: number) => `×${formatNumber('en', value)}`,
+            more: (value: number) =>
+                `and ${count(value, { one: 'other', other: 'others' })}, in smaller groups`,
+            scripted: (value: number) =>
+                `${formatNumber('en', value)} ${plural('en', value, { one: 'was', other: 'were' })} created by a script.`,
+            scriptedWhy: 'A garage, a job or a persistence resource may still expect them.',
+            owned: (value: number) =>
+                `${formatNumber('en', value)} ${plural('en', value, { one: 'is', other: 'are' })} simulated by a connected player's game.`,
+            createdBy: (resource: string) => `It was created by ${resource}`,
+            createdByWhy: ', which may still expect it.',
+            ownedOne: "A connected player's game simulates it.",
+            word: 'DELETE',
+            type: (word: string, value: number) =>
+                `Type ${word} to delete ${count(value, { one: 'entity', other: 'entities' })}`,
+            confirm: (value: number) => `Delete ${formatNumber('en', value)}`,
+            confirmOne: 'Delete',
+        },
         kinds: { vehicle: 'vehicle', ped: 'ped', object: 'object' } satisfies Record<EntityKind, string>,
         /** A group of entities of one model: `8 × 0xB779A091 vehicle (qb-garages)`. */
         group: (value: number, model: string, kind: string, resource: string | null) =>

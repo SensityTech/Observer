@@ -115,6 +115,7 @@ describe('AppShell', () => {
             en.nav.changes,
             en.nav.statistics,
             en.nav.drops,
+            en.nav.entities,
             en.nav.diagnostics,
             en.nav.tools,
             en.nav.audit,
