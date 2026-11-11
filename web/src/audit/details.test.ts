@@ -44,6 +44,33 @@ describe('auditDetails', () => {
         ).toBe('Test branches: not set → feature/a, feature/b');
     });
 
+    it("should say what an edit changed on a ban, a permanent ban's end as never", () => {
+        const before = '2026-11-12T20:04:00.000Z';
+        expect(
+            auditDetails(en, format, {
+                reason: { before: 'Aimbot', after: 'Aimbot, two clips' },
+                endsAt: { before, after: null },
+            }),
+        ).toBe(`Reason: Aimbot → Aimbot, two clips · Ends: ${formatTimestamp(new Date(before))} → never`);
+    });
+
+    it('should list the ban templates before and after, each with its length', () => {
+        expect(
+            auditDetails(en, format, {
+                tokenMatches: { before: 1, after: 2 },
+                templates: {
+                    before: [],
+                    after: [
+                        { reason: 'Cheating', minutes: null },
+                        { reason: 'Insults', minutes: 4320 },
+                    ],
+                },
+            }),
+        ).toBe(
+            'Hardware tokens to match: 1 → 2 · Ban templates: none → Cheating (Permanent), Insults (3 days)',
+        );
+    });
+
     it('should show times in local time and counts as numbers', () => {
         const first = '2026-10-28T08:01:27.884Z';
         expect(auditDetails(en, format, { network: '203.0.113.7', failures: 1200, firstAt: first })).toBe(

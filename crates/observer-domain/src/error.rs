@@ -170,11 +170,12 @@ pub enum ErrorCode {
     BanNotFound,
     /// The ban already ended or was lifted.
     BanNotActive,
-    /// A ban cannot be made as asked. Params: `field`, `reason`, `minutes` or `identifiers` (none
-    /// left once checked, or too many).
+    /// A ban cannot be made or edited as asked. Params: `field`, `reason`, `minutes` or
+    /// `identifiers` (none left once checked, or too many).
     InvalidBan,
-    /// The refusal message is empty or too long, or the tokens needed are out of range. Params:
-    /// `maxMessage`, `maxTokens`.
+    /// The refusal message is empty or too long, the tokens needed are out of range, a template
+    /// has no reason or a length no ban takes, or there are too many templates. Params:
+    /// `maxMessage`, `maxTokens`, `maxTemplates`.
     InvalidBansSettings,
     /// The live map's image was refused. Params: `problem`, `notLocal`, `missing`, `unreadable`,
     /// `tooLarge` or `notAnImage`.

@@ -1,5 +1,5 @@
-//! Bans over HTTP: who sees them, who makes and lifts them, and the refusal message, which takes
-//! the settings' permission and the password again.
+//! Bans over HTTP: who sees them, who makes, edits and lifts them, and the refusal message and the
+//! templates, which take the settings' permission and the password again.
 
 use axum::http::{Method, StatusCode};
 use jiff::SignedDuration;
@@ -13,6 +13,7 @@ const DASHBOARD_VIEW: &str = "1";
 const BANS_VIEW: &str = "400000";
 const PLAYERS_BAN: &str = "800000";
 const BANS_LIFT: &str = "1000000";
+const BANS_EDIT: &str = "4000000";
 const SETTINGS_MANAGE: &str = "400";
 const LICENSE: &str = "license:00000000000000000000000000000000000000aa";
 const BANS: &str = "/api/servers/default/bans";
@@ -115,6 +116,77 @@ async fn bans_are_seen_made_and_lifted_under_their_own_permissions() {
 }
 
 #[tokio::test]
+async fn an_active_ban_is_edited_under_a_permission_of_its_own() {
+    let server = Server::new().await;
+    let owner = server.owner().await;
+    let player = server.player_to_ban().await;
+    let viewer = server.member(&owner, "hopper", BANS_VIEW).await;
+    let reviewer = server.member(&owner, "sarah", BANS_LIFT).await;
+    let moderator = server.member(&owner, "maxime", PLAYERS_BAN).await;
+    let editor = server.member(&owner, "grace", BANS_EDIT).await;
+    let ban = json!({ "player": player, "reason": "Aimbot on stream", "minutes": 60 });
+    let banned = server.call(Method::POST, BANS, Some(&moderator), Some(ban)).await;
+    let made = banned.json();
+    let path = format!("{BANS}/{}", made["code"].as_str().unwrap());
+    let week = json!({ "reason": "Aimbot, two clips", "ends": { "kind": "in", "minutes": 10080 } });
+    let minute = json!({ "reason": null, "ends": { "kind": "in", "minutes": 1 } });
+
+    let mut refused = Vec::new();
+    for member in [&viewer, &reviewer, &moderator] {
+        let reply = server
+            .call(Method::PATCH, &path, Some(member), Some(week.clone()))
+            .await;
+        refused.push((reply.status, reply.json()["params"]["permission"].clone()));
+    }
+    let extended = server.call(Method::PATCH, &path, Some(&editor), Some(week)).await;
+    let sooner = server
+        .call(Method::PATCH, &path, Some(&editor), Some(minute))
+        .await;
+    let unknown = server
+        .call(
+            Method::PATCH,
+            &format!("{BANS}/ZZZZ-ZZZZ"),
+            Some(&editor),
+            Some(json!({ "reason": "x", "ends": null })),
+        )
+        .await;
+    let listed = server.call(Method::GET, BANS, Some(&viewer), None).await;
+
+    assert_eq!(refused, vec![(StatusCode::FORBIDDEN, json!("bansEdit")); 3]);
+    assert_eq!(extended.status, StatusCode::OK, "{}", extended.text);
+    let edited = extended.json();
+    assert_eq!(edited["reason"], "Aimbot, two clips");
+    assert_eq!(
+        (&edited["by"], &edited["createdAt"]),
+        (&made["by"], &made["createdAt"])
+    );
+    assert_eq!(edited["edits"].as_array().unwrap().len(), 1);
+    assert_eq!(edited["edits"][0]["by"], "grace");
+    assert_eq!(
+        edited["edits"][0]["reason"],
+        json!({ "before": "Aimbot on stream", "after": "Aimbot, two clips" })
+    );
+    assert_eq!(edited["edits"][0]["ends"]["before"], made["endsAt"]);
+    assert_eq!(edited["edits"][0]["ends"]["after"], edited["endsAt"]);
+    assert_eq!(sooner.status, StatusCode::OK, "{}", sooner.text);
+    assert_eq!(sooner.json()["edits"][0]["reason"], json!(null));
+    assert_eq!(sooner.json()["edits"][0]["ends"]["before"], edited["endsAt"]);
+    assert_eq!(unknown.status, StatusCode::NOT_FOUND);
+    assert_eq!(unknown.code(), "ban_not_found");
+    assert_eq!(listed.json()["bans"][0]["edits"].as_array().unwrap().len(), 2);
+    let audited = server.audited("ban_edited").await;
+    assert_eq!(audited.len(), 2);
+    assert_eq!(audited[1]["target"], made["code"]);
+    assert_eq!(audited[1]["actorName"], "grace");
+    assert_eq!(
+        audited[1]["details"]["reason"],
+        json!({ "before": "Aimbot on stream", "after": "Aimbot, two clips" })
+    );
+    assert_eq!(audited[1]["details"]["endsAt"]["before"], made["endsAt"]);
+    assert_eq!(audited[0]["details"].get("reason"), None);
+}
+
+#[tokio::test]
 async fn a_profile_lists_the_bans_made_from_it() {
     let server = Server::new().await;
     let owner = server.owner().await;
@@ -160,7 +232,7 @@ async fn the_refusal_message_takes_the_settings_permission_and_the_password_agai
     let owner = server.owner().await;
     let moderator = server.member(&owner, "maxime", PLAYERS_BAN).await;
     let manager = server.member(&owner, "sarah", SETTINGS_MANAGE).await;
-    let settings = json!({ "message": "Banned: {reason}", "tokenMatches": 2 });
+    let settings = json!({ "message": "Banned: {reason}", "tokenMatches": 2, "templates": [] });
     let path = format!("{BANS}/settings");
 
     let refused = server
@@ -189,6 +261,74 @@ async fn the_refusal_message_takes_the_settings_permission_and_the_password_agai
     assert_eq!(changed.status, StatusCode::OK, "{}", changed.text);
     assert_eq!(
         read.json(),
-        json!({ "message": "Banned: {reason}", "tokenMatches": 2 })
+        json!({ "message": "Banned: {reason}", "tokenMatches": 2, "templates": [] })
+    );
+}
+
+#[tokio::test]
+async fn templates_are_saved_with_the_settings_and_read_by_who_bans() {
+    let server = Server::new().await;
+    let owner = server.owner().await;
+    let viewer = server.member(&owner, "hopper", BANS_VIEW).await;
+    let moderator = server.member(&owner, "maxime", PLAYERS_BAN).await;
+    let settings = format!("{BANS}/settings");
+    let templates = format!("{BANS}/templates");
+    let stored = server.call(Method::GET, &settings, Some(&owner), None).await;
+    let with = |templates: serde_json::Value| {
+        let mut settings = stored.json();
+        settings["templates"] = templates;
+        settings
+    };
+
+    let none_yet = server.call(Method::GET, &templates, Some(&moderator), None).await;
+    let unusable = server
+        .call(
+            Method::PUT,
+            &settings,
+            Some(&owner),
+            Some(with(json!([{ "reason": " ", "minutes": null }]))),
+        )
+        .await;
+    let without = server
+        .call(
+            Method::PUT,
+            &settings,
+            Some(&owner),
+            Some(json!({ "message": "Banned: {reason}", "tokenMatches": 1 })),
+        )
+        .await;
+    let saved = server
+        .call(
+            Method::PUT,
+            &settings,
+            Some(&owner),
+            Some(with(json!([
+                { "reason": "Cheating", "minutes": null },
+                { "reason": " Insults ", "minutes": 4320 },
+            ]))),
+        )
+        .await;
+    let unseen = server.call(Method::GET, &templates, Some(&viewer), None).await;
+    let offered = server.call(Method::GET, &templates, Some(&moderator), None).await;
+
+    assert_eq!(none_yet.json(), json!([]));
+    assert_eq!(unusable.status, StatusCode::BAD_REQUEST);
+    assert_eq!(unusable.code(), "invalid_bans_settings");
+    assert_eq!(without.status, StatusCode::BAD_REQUEST);
+    assert_eq!(without.code(), "invalid_request");
+    assert_eq!(saved.status, StatusCode::OK, "{}", saved.text);
+    assert_eq!(unseen.status, StatusCode::FORBIDDEN);
+    assert_eq!(
+        offered.json(),
+        json!([
+            { "reason": "Cheating", "minutes": null },
+            { "reason": "Insults", "minutes": 4320 },
+        ])
+    );
+    let changed = server.audited("bans_settings_changed").await;
+    assert_eq!(changed.len(), 1);
+    assert_eq!(
+        changed[0]["details"],
+        json!({ "templates": { "before": [], "after": offered.json() } })
     );
 }

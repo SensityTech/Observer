@@ -12,6 +12,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 
 import type { Ban } from '../api/generated/Ban';
 import type { BanPage } from '../api/generated/BanPage';
+import type { BanTemplate } from '../api/generated/BanTemplate';
 import type { Me } from '../api/generated/Me';
 import { MeContext } from '../auth/me';
 import { en } from '../i18n/en';
@@ -32,6 +33,8 @@ const me = (permissions: string): Me => ({
 const VIEWER = me('404000');
 const BANNER = me('c04000');
 const LIFTER = me('1404000');
+const EDITOR = me('4404000');
+const EDITOR_AND_LIFTER = me('5404000');
 
 const KAITO: Ban = {
     code: 'K7QM-2XPA',
@@ -47,6 +50,7 @@ const KAITO: Ban = {
     state: 'active',
     lifted: null,
     refused: 2,
+    edits: [],
 };
 const TYPED: Ban = {
     ...KAITO,
@@ -66,9 +70,15 @@ const PAGE: BanPage = {
     zone: 'Europe/Paris',
 };
 
+const TEMPLATES: BanTemplate[] = [
+    { reason: 'Cheating', minutes: null },
+    { reason: 'Insults in voice chat', minutes: 3 * 24 * 60 },
+    { reason: 'Combat logging', minutes: 90 },
+];
+
 const json = (body: unknown, status = 200) => Response.json(body, { status });
 
-const api = () =>
+const api = ({ page = PAGE, templates = [] as BanTemplate[] } = {}) =>
     vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = new URL(String(input), 'http://localhost');
         if (url.pathname === BANS_PATH && init?.method === 'POST') {
@@ -77,8 +87,14 @@ const api = () =>
         if (url.pathname.endsWith('/lift')) {
             return new Response(null, { status: 204 });
         }
+        if (init?.method === 'PATCH') {
+            return json(KAITO);
+        }
+        if (url.pathname === `${BANS_PATH}/templates`) {
+            return json(templates);
+        }
         if (url.pathname === BANS_PATH) {
-            return json(PAGE);
+            return json(page);
         }
         return json({ code: 'not_found', params: {} }, 404);
     });
@@ -128,6 +144,9 @@ describe('BansPage', () => {
         HTMLDialogElement.prototype.close ??= function (this: HTMLDialogElement) {
             this.open = false;
         };
+        // jsdom opens no popover: a row's menu stays hidden, its items are pressed where they are,
+        // and closing it is nothing to do.
+        HTMLElement.prototype.hidePopover ??= () => {};
     });
 
     beforeEach(() => {
@@ -152,6 +171,7 @@ describe('BansPage', () => {
         expect(within(typed!).getByText('2026-11-16 21:04')).not.toBeNull();
         expect(screen.queryByRole('button', { name: en.bans.banIdentifiers })).toBeNull();
         expect(screen.queryByRole('button', { name: en.bans.lift })).toBeNull();
+        expect(screen.queryByRole('button', { name: en.bans.actions('K7QM-2XPA') })).toBeNull();
         expect(screen.getByRole('button', { name: `${en.bans.filters.ended} 5` })).not.toBeNull();
     });
 
@@ -202,7 +222,7 @@ describe('BansPage', () => {
     it('should lift an active ban with the reason given', async () => {
         const fetch = await open(LIFTER);
 
-        fireEvent.click(within(rows()[0]!).getByRole('button', { name: en.bans.lift }));
+        fireEvent.click(within(rows()[0]!).getByRole('menuitem', { name: en.bans.lift, hidden: true }));
         const dialog = within(screen.getByRole('dialog'));
         expect(dialog.getByText(en.bans.liftDialog.title('kaito'))).not.toBeNull();
         fireEvent.change(dialog.getByRole('textbox'), { target: { value: ' appeal accepted ' } });
@@ -214,5 +234,164 @@ describe('BansPage', () => {
             { path: `${BANS_PATH}/K7QM-2XPA/lift`, body: JSON.stringify({ reason: 'appeal accepted' }) },
         ]);
         expect(screen.getByText(en.bans.liftedNotice('K7QM-2XPA'))).not.toBeNull();
+    });
+
+    it('should fill in the reason and the length of the template picked, which can still be changed', async () => {
+        const fetch = await open(BANNER, api({ templates: TEMPLATES }));
+        const words = en.bans.dialog;
+
+        fireEvent.click(screen.getByRole('button', { name: en.bans.banIdentifiers }));
+        await settle();
+        const dialog = within(screen.getByRole('dialog'));
+        const template = dialog.getByLabelText<HTMLSelectElement>(words.template);
+        const reason = dialog.getByLabelText<HTMLTextAreaElement>(words.reason);
+        expect(
+            within(template).getByText(words.templateOption('Cheating', en.bans.permanent)),
+        ).not.toBeNull();
+        fireEvent.change(template, { target: { value: '1' } });
+
+        expect(reason.value).toBe('Insults in voice chat');
+        expect(
+            dialog.getByRole('button', { name: words.lengths.threeDays }).getAttribute('aria-pressed'),
+        ).toBe('true');
+        expect(template.value).toBe('1');
+        fireEvent.change(template, { target: { value: '2' } });
+        expect(dialog.getByLabelText<HTMLInputElement>(words.amount).value).toBe('90');
+        expect(dialog.getByLabelText<HTMLSelectElement>(words.unit).value).toBe('minutes');
+        fireEvent.change(reason, { target: { value: 'Combat logging, third time' } });
+        expect(template.value).toBe('');
+        fireEvent.change(dialog.getByLabelText(words.identifiers), { target: { value: LICENSE } });
+        fireEvent.click(dialog.getByRole('button', { name: words.submit('90 minutes') }));
+        await settle();
+        await settle();
+
+        expect(sent(fetch, 'POST')).toEqual([
+            {
+                path: BANS_PATH,
+                body: JSON.stringify({
+                    player: null,
+                    identifiers: [LICENSE],
+                    reason: 'Combat logging, third time',
+                    minutes: 90,
+                }),
+            },
+        ]);
+    });
+
+    it('should offer no template where the settings hold none', async () => {
+        await open(BANNER);
+
+        fireEvent.click(screen.getByRole('button', { name: en.bans.banIdentifiers }));
+        await settle();
+
+        expect(within(screen.getByRole('dialog')).queryByLabelText(en.bans.dialog.template)).toBeNull();
+    });
+
+    it('should change the reason and the end of an active ban, a new length counted from now', async () => {
+        const fetch = await open(EDITOR_AND_LIFTER);
+        const words = en.bans.editDialog;
+
+        fireEvent.click(within(rows()[0]!).getByRole('menuitem', { name: en.bans.edit, hidden: true }));
+        const dialog = within(screen.getByRole('dialog'));
+        expect(dialog.getByText(words.title('kaito'))).not.toBeNull();
+        expect(dialog.getByText(words.stillNever)).not.toBeNull();
+        fireEvent.click(dialog.getByRole('button', { name: words.submit }));
+        expect(dialog.getByText(words.unchanged)).not.toBeNull();
+        expect(sent(fetch, 'PATCH')).toEqual([]);
+        fireEvent.change(dialog.getByLabelText(en.bans.dialog.reason), {
+            target: { value: ' Aimbot, two clips ' },
+        });
+        fireEvent.click(dialog.getByRole('button', { name: en.bans.dialog.lengths.week }));
+        fireEvent.click(dialog.getByRole('button', { name: words.submit }));
+        await settle();
+        await settle();
+
+        expect(sent(fetch, 'PATCH')).toEqual([
+            {
+                path: `${BANS_PATH}/K7QM-2XPA`,
+                body: JSON.stringify({
+                    reason: 'Aimbot, two clips',
+                    ends: { kind: 'in', minutes: 7 * 24 * 60 },
+                }),
+            },
+        ]);
+        expect(screen.getByText(en.bans.editedNotice('K7QM-2XPA'))).not.toBeNull();
+        expect(screen.queryByRole('dialog')).toBeNull();
+    });
+
+    it('should send only what an edit changes', async () => {
+        const fetch = await open(EDITOR_AND_LIFTER);
+
+        fireEvent.click(within(rows()[1]!).getByRole('menuitem', { name: en.bans.edit, hidden: true }));
+        const dialog = within(screen.getByRole('dialog'));
+        fireEvent.click(dialog.getByRole('button', { name: en.bans.dialog.lengths.permanent }));
+        fireEvent.click(dialog.getByRole('button', { name: en.bans.editDialog.submit }));
+        await settle();
+        await settle();
+
+        expect(sent(fetch, 'PATCH')).toEqual([
+            {
+                path: `${BANS_PATH}/BX6E-N3QH`,
+                body: JSON.stringify({ reason: null, ends: { kind: 'never' } }),
+            },
+        ]);
+    });
+
+    it('should make a permanent ban end, for who edits bans without lifting them', async () => {
+        const fetch = await open(EDITOR);
+
+        expect(within(rows()[0]!).queryByRole('menuitem', { name: en.bans.lift, hidden: true })).toBeNull();
+        fireEvent.click(within(rows()[0]!).getByRole('menuitem', { name: en.bans.edit, hidden: true }));
+        const dialog = within(screen.getByRole('dialog'));
+        fireEvent.click(dialog.getByRole('button', { name: en.bans.dialog.lengths.day }));
+        fireEvent.click(dialog.getByRole('button', { name: en.bans.editDialog.submit }));
+        await settle();
+        await settle();
+
+        expect(sent(fetch, 'PATCH')).toEqual([
+            {
+                path: `${BANS_PATH}/K7QM-2XPA`,
+                body: JSON.stringify({ reason: null, ends: { kind: 'in', minutes: 24 * 60 } }),
+            },
+        ]);
+    });
+
+    it('should offer no edit to who bans or lifts without the permission to edit', async () => {
+        await open(BANNER);
+        expect(screen.queryByRole('button', { name: en.bans.actions('K7QM-2XPA') })).toBeNull();
+        cleanup();
+
+        await open(LIFTER);
+        expect(within(rows()[0]!).getByRole('menuitem', { name: en.bans.lift, hidden: true })).not.toBeNull();
+        expect(within(rows()[0]!).queryByRole('menuitem', { name: en.bans.edit, hidden: true })).toBeNull();
+    });
+
+    it('should say under its reason what was changed on a ban, by whom and when', async () => {
+        const edited: Ban = {
+            ...KAITO,
+            edits: [
+                {
+                    at: '2026-11-10T13:02:00Z',
+                    by: 'sarah',
+                    reason: { before: 'Aimbot', after: KAITO.reason },
+                    ends: null,
+                },
+                {
+                    at: '2026-11-10T08:00:00Z',
+                    by: 'maxime',
+                    reason: null,
+                    ends: { before: '2026-11-12T20:04:00Z', after: null },
+                },
+            ],
+        };
+        await open(VIEWER, api({ page: { ...PAGE, bans: [edited, TYPED] } }));
+        const words = en.bans.edits;
+
+        const [kaito, typed] = rows();
+        expect(within(kaito!).getByText(words.summary(2, 'sarah'))).not.toBeNull();
+        expect(within(kaito!).getByText(words.by('sarah', '2026-11-10 14:02'))).not.toBeNull();
+        expect(within(kaito!).getByText(words.reason('Aimbot'))).not.toBeNull();
+        expect(within(kaito!).getByText(words.ends('2026-11-12 21:04', words.forGood))).not.toBeNull();
+        expect(within(typed!).queryByText(/^Edited/)).toBeNull();
     });
 });

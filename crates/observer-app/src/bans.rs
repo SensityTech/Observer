@@ -9,9 +9,9 @@ use jiff::tz::TimeZone;
 use jiff::{SignedDuration, Timestamp};
 use observer_domain::audit::AuditAction;
 use observer_domain::bans::{
-    self as rules, Ban, BanFilter, BanPage, BanRequest, BanSearch, BansSettings, LiftRequest,
-    MAX_BAN_MINUTES, MAX_BANNED_IDENTIFIERS, MAX_LIFT_REASON_CHARS, MAX_MESSAGE_CHARS, MAX_REASON_CHARS,
-    MAX_TOKEN_MATCHES, RefusalValues,
+    self as rules, Ban, BanEditRequest, BanEnd, BanFilter, BanPage, BanRequest, BanSearch, BanTemplate,
+    BansSettings, LiftRequest, MAX_BAN_TEMPLATES, MAX_BANNED_IDENTIFIERS, MAX_LIFT_REASON_CHARS,
+    MAX_MESSAGE_CHARS, MAX_REASON_CHARS, MAX_TOKEN_MATCHES, RefusalValues,
 };
 use observer_domain::error::{ApiError, ErrorCode};
 use observer_domain::permissions::Permissions;
@@ -21,8 +21,8 @@ use observer_fxserver::bridge::{BanEvent, BridgeAction, Refusal};
 use observer_fxserver::players::{PlayerReport, PlayerReportKind, Shown};
 use observer_fxserver::supervisor::Supervisor;
 use observer_store::Database;
-use observer_store::bans::{self as stored, BanMatch, BanQuery, Candidate, Lifted, NewBan};
-use serde_json::json;
+use observer_store::bans::{self as stored, BanMatch, BanQuery, Candidate, Lifted, NewBan, NewEdit};
+use serde_json::{Map, Value, json};
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::{broadcast, watch};
 use tokio::task::JoinHandle;
@@ -289,10 +289,7 @@ impl Bans {
     pub async fn ban(&self, caller: &Caller, request: BanRequest) -> Result<Ban, Error> {
         let invalid = |field: &str| Error::from(ApiError::new(ErrorCode::InvalidBan).with("field", field));
         let reason = rules::clean_line(&request.reason, MAX_REASON_CHARS).ok_or_else(|| invalid("reason"))?;
-        if request
-            .minutes
-            .is_some_and(|minutes| !(1..=MAX_BAN_MINUTES).contains(&minutes))
-        {
+        if !rules::lasts(request.minutes) {
             return Err(invalid("minutes"));
         }
         if request.identifiers.len() > MAX_BANNED_IDENTIFIERS {
@@ -300,9 +297,7 @@ impl Bans {
         }
         let typed = rules::parse_banned(&request.identifiers);
         let now = self.inner.clock.now();
-        let ends_at = request
-            .minutes
-            .map(|minutes| now + SignedDuration::from_mins(i64::from(minutes)));
+        let ends_at = ending(now, request.minutes);
         let player = request.player;
         let caller_record = Record::by(caller, AuditAction::PlayerBanned);
         let (by_user, by_name) = (caller.user_id, caller.username.clone());
@@ -445,6 +440,64 @@ impl Bans {
             .await
     }
 
+    /// Changes an active ban's reason, its end, or both, and keeps what they replace.
+    pub async fn edit(&self, caller: &Caller, code: &str, request: BanEditRequest) -> Result<Ban, Error> {
+        let invalid = |field: &str| Error::from(ApiError::new(ErrorCode::InvalidBan).with("field", field));
+        let code = rules::parse_ban_code(code).ok_or(ErrorCode::BanNotFound)?;
+        let reason = request
+            .reason
+            .as_deref()
+            .map(|reason| rules::clean_line(reason, MAX_REASON_CHARS).ok_or_else(|| invalid("reason")))
+            .transpose()?;
+        let minutes = request.ends.map(BanEnd::minutes);
+        if !minutes.is_none_or(rules::lasts) {
+            return Err(invalid("minutes"));
+        }
+        let record = Record::by(caller, AuditAction::BanEdited).target(code.clone());
+        let (by_user, by_name) = (caller.user_id, caller.username.clone());
+        let now = self.inner.clock.now();
+        let edited = code.clone();
+        self.inner
+            .db
+            .write(move |tx| -> Result<(), Error> {
+                let Some(standing) = stored::standing(tx, &code, now)? else {
+                    return Err(if stored::code_taken(tx, &code)? {
+                        ErrorCode::BanNotActive.into()
+                    } else {
+                        ErrorCode::BanNotFound.into()
+                    });
+                };
+                let reason = reason.unwrap_or_else(|| standing.reason.clone());
+                let ends_at = minutes.map_or(standing.ends_at, |minutes| ending(now, minutes));
+                let mut details = Map::new();
+                if reason != standing.reason {
+                    let change = json!({ "before": standing.reason, "after": reason });
+                    details.insert("reason".to_owned(), change);
+                }
+                if ends_at != standing.ends_at {
+                    let change = json!({ "before": standing.ends_at, "after": ends_at });
+                    details.insert("endsAt".to_owned(), change);
+                }
+                if details.is_empty() {
+                    return Ok(());
+                }
+                stored::edit(
+                    tx,
+                    &NewEdit {
+                        ban: standing.id,
+                        by_user: Some(by_user),
+                        by_name: &by_name,
+                        at: now,
+                        reason: (&standing.reason, &reason),
+                        ends_at: (standing.ends_at, ends_at),
+                    },
+                )?;
+                Ok(record.details(Value::Object(details)).write(tx, now)?)
+            })
+            .await?;
+        self.by_code(&edited).await
+    }
+
     /// A page of the list, latest first. A search by an identifier other than the licence needs
     /// `PLAYER_IDENTIFIERS_VIEW`, as the players' search does.
     pub async fn page(
@@ -519,21 +572,40 @@ impl Bans {
         Ok(self.inner.db.read(stored::settings).await?)
     }
 
-    /// Changes the refusal message or the tokens a match needs, from the next connection.
+    /// The reasons and lengths the ban dialog offers, in the settings' order.
+    pub async fn templates(&self) -> Result<Vec<BanTemplate>, Error> {
+        Ok(self.inner.db.read(stored::templates).await?)
+    }
+
+    /// Changes the refusal message or the tokens a match needs, from the next connection, or the
+    /// templates, from the next ban.
     pub async fn change_settings(&self, caller: &Caller, settings: BansSettings) -> Result<(), Error> {
         let settings = settings.checked().ok_or_else(|| {
             Error::from(
                 ApiError::new(ErrorCode::InvalidBansSettings)
                     .with("maxMessage", MAX_MESSAGE_CHARS)
-                    .with("maxTokens", MAX_TOKEN_MATCHES),
+                    .with("maxTokens", MAX_TOKEN_MATCHES)
+                    .with("maxTemplates", MAX_BAN_TEMPLATES),
             )
         })?;
         let before = self.settings().await?;
         if before == settings {
             return Ok(());
         }
-        let record = Record::by(caller, AuditAction::BansSettingsChanged)
-            .details(json!({ "from": before, "to": settings }));
+        let mut details = Map::new();
+        if before.message != settings.message {
+            let change = json!({ "before": before.message, "after": settings.message });
+            details.insert("message".to_owned(), change);
+        }
+        if before.token_matches != settings.token_matches {
+            let change = json!({ "before": before.token_matches, "after": settings.token_matches });
+            details.insert("tokenMatches".to_owned(), change);
+        }
+        if before.templates != settings.templates {
+            let change = json!({ "before": before.templates, "after": settings.templates });
+            details.insert("templates".to_owned(), change);
+        }
+        let record = Record::by(caller, AuditAction::BansSettingsChanged).details(Value::Object(details));
         let now = self.inner.clock.now();
         self.inner
             .db
@@ -543,6 +615,11 @@ impl Bans {
             })
             .await
     }
+}
+
+/// When a ban that lasts `minutes` from `now` ends; never, when there are none.
+fn ending(now: Timestamp, minutes: Option<u32>) -> Option<Timestamp> {
+    minutes.map(|minutes| now + SignedDuration::from_mins(i64::from(minutes)))
 }
 
 /// What a ban holds, its licence and its name: the identifiers typed by hand, and those of the
