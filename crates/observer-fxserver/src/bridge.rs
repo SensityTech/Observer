@@ -11,7 +11,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::layout::Layout;
-use crate::stdin::MAX_BRIDGE_JSON;
+use crate::resources::Reported;
+use crate::stdin::{MAX_BRIDGE_JSON, safe};
 use crate::trace::TraceKind;
 
 /// The server convar that holds the bridge's name, for resources to find it. Set with `+set`,
@@ -290,14 +291,6 @@ pub fn start_changes(
     event(low)
 }
 
-/// Whether `text` is 1 to `max` bytes of ASCII letters, digits and `extra`.
-fn safe(text: &str, max: usize, extra: &[u8]) -> bool {
-    (1..=max).contains(&text.len())
-        && text
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || extra.contains(&byte))
-}
-
 impl BridgeEvent {
     pub fn name(&self) -> &'static str {
         match self {
@@ -454,6 +447,15 @@ pub enum Report {
         rss: u64,
         #[serde(default)]
         external: u64,
+    },
+    /// One page of every resource FXServer knows, in name order: once the cfg has run, and again
+    /// after each `refresh`. The pages of one list carry its number, as `list`.
+    ResourceList {
+        #[serde(rename = "list")]
+        number: u64,
+        page: u32,
+        last: bool,
+        resources: Vec<Reported>,
     },
 }
 
@@ -1087,6 +1089,76 @@ mod tests {
             Report::from_trace(&trace(BRIDGE, json!({ "type": "other", "kind": "hb" })), BRIDGE),
             None
         );
+    }
+
+    #[test]
+    fn a_page_of_the_resource_list_is_read_with_what_each_manifest_says() {
+        let page = Report::from_trace(
+            &TraceKind::Script {
+                resource: BRIDGE.to_owned(),
+                payload: json!({
+                    "type": "observer",
+                    "kind": "resource_list",
+                    "list": 2,
+                    "page": 1,
+                    "last": false,
+                    "resources": [
+                        {
+                            "name": "ox_inventory",
+                            "state": "started",
+                            "path": "C:/srv/resources//[ox]/ox_inventory",
+                            "version": "2.44.1",
+                            "needs": ["/onesync", "ox_lib"],
+                            "provides": ["inventory"]
+                        },
+                        { "name": "taxi", "state": "stopped" }
+                    ]
+                }),
+            },
+            BRIDGE,
+        );
+
+        assert_eq!(
+            page,
+            Some(Report::ResourceList {
+                number: 2,
+                page: 1,
+                last: false,
+                resources: vec![
+                    Reported {
+                        name: "ox_inventory".to_owned(),
+                        state: "started".to_owned(),
+                        path: Some("C:/srv/resources//[ox]/ox_inventory".to_owned()),
+                        version: Some("2.44.1".to_owned()),
+                        needs: vec!["/onesync".to_owned(), "ox_lib".to_owned()],
+                        provides: vec!["inventory".to_owned()],
+                    },
+                    Reported {
+                        name: "taxi".to_owned(),
+                        state: "stopped".to_owned(),
+                        ..Reported::default()
+                    },
+                ],
+            })
+        );
+    }
+
+    #[test]
+    fn the_resource_reports_the_list_once_the_cfg_has_run_and_after_each_refresh() {
+        let lua = FILES[1].1;
+
+        assert!(lua.contains("report('resource_list', { list = list, page = page, last = page == pages"));
+        assert!(lua.contains("    reportResourceList()\n    reportPlayers()\n"));
+        assert!(lua.contains("AddEventHandler('onResourceListRefresh', function()"));
+        for native in [
+            "GetResourceState(name)",
+            "GetResourcePath(name)",
+            "GetResourceMetadata(name, 'version', 0)",
+            "'dependency', 'dependencie'",
+            "'provide'",
+        ] {
+            assert!(lua.contains(native), "{native}");
+        }
     }
 
     #[test]
