@@ -152,6 +152,17 @@ describe('auditDetails', () => {
         expect(auditDetails(en, format, { from: 'signal' })).toBe('From: a signal');
     });
 
+    it('should name the resources an order stopped along, and whether a restart started them again', () => {
+        expect(auditDetails(en, format, { command: 'start taxi' })).toBe('Command: start taxi');
+        expect(
+            auditDetails(en, format, {
+                command: 'restart ox_lib',
+                dependants: ['ox_target', 'ox_inventory'],
+                startedAgain: true,
+            }),
+        ).toBe('Command: restart ox_lib · Stopped with it: ox_target, ox_inventory · Started again: yes');
+    });
+
     it('should show what it does not know as the log stores it', () => {
         expect(auditDetails(en, format, { trigger: 'manual', refusal: 'unheard_of', extra: { a: 1 } })).toBe(
             'trigger: manual · Reason: unheard_of · extra: {"a":1}',

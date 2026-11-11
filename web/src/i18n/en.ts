@@ -218,6 +218,11 @@ const permissions = {
         name: 'See the live map',
         description: 'Where every connected player stands, as the server sees it, a few times a minute.',
     },
+    resourcesControl: {
+        name: 'Start and stop resources',
+        description:
+            'Start, stop and restart a resource of the running server, and have FXServer read its resource folders again.',
+    },
 } satisfies Record<PermissionKey, { name: string; description: string }>;
 
 const permissionNames = (hex: string) =>
@@ -5705,6 +5710,10 @@ export const en = {
             observer_update_started: 'Observer update started',
             observer_update_cancelled: 'Observer update cancelled',
             observer_update_finished: 'Observer update finished',
+            resource_started: 'Resource started',
+            resource_stopped: 'Resource stopped',
+            resource_restarted: 'Resource restarted',
+            resources_rescanned: 'Resource folders rescanned',
         } satisfies Record<AuditAction, string>,
         outcomes: {
             success: 'Success',
@@ -5895,6 +5904,9 @@ export const en = {
             updated: 'Updated',
             forgotten: 'Skipped as forgotten',
             invalid: 'Invalid',
+            // The started resources that depended on the one stopped or restarted.
+            dependants: 'Stopped with it',
+            startedAgain: 'Started again',
         },
         days: (value: number) => count(value, { one: 'day', other: 'days' }),
         // A profile whose retention is unset is never deleted.
@@ -6369,6 +6381,13 @@ export const en = {
             const key = stringParam(params, 'reason');
             return isUpdateBlock(key) ? updateBlocks[key] : 'This Observer cannot install a release.';
         },
+        resources_not_listed: 'FXServer has not listed its resources yet. It does once its cfg has run.',
+        resource_not_found: 'FXServer knows no resource of that name in this run.',
+        resource_name_refused:
+            'Observer puts a resource in a console command only by letters, digits, _, . and -. Start and stop this one from the console.',
+        resource_busy: 'FXServer has not answered the last order on this resource yet.',
+        resource_changed:
+            'The resource was started or stopped since: it is no longer as this order needs it.',
     } satisfies Record<ErrorCode, ErrorMessage>,
     failure: {
         unknown: 'Something went wrong. Try again.',

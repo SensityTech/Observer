@@ -488,6 +488,8 @@ pub enum ControlError {
     Refused(#[from] CommandRefusal),
     #[error(transparent)]
     Stdin(#[from] StdinError),
+    #[error("Observer's bridge is not a resource to start or stop")]
+    Bridge,
 }
 
 type Reply<T> = oneshot::Sender<Result<T, ControlError>>;
@@ -1507,7 +1509,15 @@ impl Actor {
         }
     }
 
+    /// The bridge is Observer's own: it ends with the server, and by nothing asked for here.
     fn resource(&self, verb: ResourceVerb, name: ResourceName, by: String) -> Result<Written, ControlError> {
+        let bridge = self
+            .run
+            .as_ref()
+            .is_some_and(|run| name.as_str().eq_ignore_ascii_case(&run.bridge));
+        if bridge {
+            return Err(ControlError::Bridge);
+        }
         self.asked(SystemLine::Resource(verb, name), by)
     }
 

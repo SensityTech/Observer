@@ -13,6 +13,7 @@ use crate::diagnostics::{AlertList, DiagnosticsEvent, DiagnosticsSnapshot};
 use crate::error::ErrorCode;
 use crate::map::MapLive;
 use crate::metrics::{LiveSample, MetricsSnapshot};
+use crate::resources::ResourcesView;
 use crate::schedule::ScheduleStatus;
 use crate::server::{ConsoleBatch, ConsoleSnapshot, ServerStatus};
 
@@ -73,10 +74,14 @@ pub enum Topic {
     /// only then. Needs the live map permission.
     #[serde(rename = "server.map")]
     ServerMap,
+    /// Every resource FXServer knows in the run that is up, as it stands. Needs the dashboard
+    /// permission, or the one that starts and stops resources.
+    #[serde(rename = "server.resources")]
+    ServerResources,
 }
 
 impl Topic {
-    pub const ALL: [Self; 11] = [
+    pub const ALL: [Self; 12] = [
         Self::Status,
         Self::Audit,
         Self::ServerStatus,
@@ -88,6 +93,7 @@ impl Topic {
         Self::ServerDiagnostics,
         Self::ServerChanges,
         Self::ServerMap,
+        Self::ServerResources,
     ];
 }
 
@@ -165,6 +171,8 @@ pub enum TopicSnapshot {
     ServerChanges(ChangesLive),
     #[serde(rename = "server.map")]
     ServerMap(MapLive),
+    #[serde(rename = "server.resources")]
+    ServerResources(ResourcesView),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, TS)]
@@ -196,6 +204,9 @@ pub enum TopicEvent {
     /// Every placed player again, at each report of the bridge.
     #[serde(rename = "server.map")]
     ServerMap(MapLive),
+    /// Every resource again, whenever one changes: a few times a second at most.
+    #[serde(rename = "server.resources")]
+    ServerResources(ResourcesView),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]

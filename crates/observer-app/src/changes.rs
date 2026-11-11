@@ -46,6 +46,14 @@ pub(crate) const SERVER: &str = Servers::DEFAULT;
 const UPKEEP_EVERY: Duration = Duration::from_hours(1);
 /// A console command matches a live change this long before it at most.
 const COMMAND_WINDOW: SignedDuration = SignedDuration::from_secs(2);
+/// What starts, stops or restarts a resource through Observer, each with its `command` in the
+/// audit log: a line typed in the console, or an order of the Resources page.
+const COMMANDS: [AuditAction; 4] = [
+    AuditAction::ConsoleCommandSent,
+    AuditAction::ResourceStarted,
+    AuditAction::ResourceStopped,
+    AuditAction::ResourceRestarted,
+];
 /// Live changes a run records at most; past them a crash loop of `ensure` adds nothing.
 const MAX_LIVE_CHANGES: u32 = 2000;
 const MAX_NAME: usize = 64;
@@ -643,9 +651,7 @@ impl Changes {
             self.inner
                 .shared
                 .db
-                .read(move |conn| {
-                    observer_store::audit::of_actions(conn, &[AuditAction::ConsoleCommandSent], from, at, 100)
-                })
+                .read(move |conn| observer_store::audit::of_actions(conn, &COMMANDS, from, at, 100))
                 .await?
         };
         let attributed: Vec<LiveChange> = changes
@@ -857,8 +863,8 @@ fn live_changes(events: &[ResourceEvent], at: Timestamp) -> Vec<LiveChange> {
     changes
 }
 
-/// Who typed a command in Observer's console that starts, stops or restarts `name`, and the
-/// command as the audit log shows it, masked.
+/// Who had `name` started, stopped or restarted through Observer, by a command typed in its
+/// console or an order of the Resources page, and the command as the audit log shows it, masked.
 fn command_for(name: &str, commands: &[observer_domain::audit::AuditEntry]) -> Option<(String, String)> {
     commands.iter().rev().find_map(|entry| {
         let shown = entry.details.get("command")?.as_str()?;
