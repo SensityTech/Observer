@@ -443,6 +443,39 @@ async fn a_new_launch_applies_from_the_next_start() {
 }
 
 #[tokio::test]
+async fn the_status_says_whether_the_running_server_raises_txadmins_events() {
+    let mut lab = Lab::online(&[]).await;
+    let mut status = lab.supervisor.status();
+    assert_eq!(status.borrow().txadmin_events, Some(false));
+    let mut launch = lab.launch.clone();
+    launch.settings.txadmin_events = true;
+
+    lab.supervisor.configure(launch).await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(
+        status.borrow().txadmin_events,
+        Some(false),
+        "the running server keeps its launch"
+    );
+    lab.supervisor.restart("test").await.unwrap();
+
+    timeout(
+        WAIT,
+        status.wait_for(|status| status.txadmin_events == Some(true)),
+    )
+    .await
+    .expect("the restart did not take the new launch")
+    .unwrap();
+    lab.supervisor.stop("test").await.unwrap();
+    timeout(WAIT, status.wait_for(|status| status.pid.is_none()))
+        .await
+        .expect("the server did not stop")
+        .unwrap();
+    assert_eq!(status.borrow().txadmin_events, None);
+    lab.shut_down(false).await;
+}
+
+#[tokio::test]
 async fn a_started_server_goes_online_then_stops_gracefully() {
     let mut lab = Lab::new(&[]).await;
 

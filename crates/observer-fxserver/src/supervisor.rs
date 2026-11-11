@@ -420,6 +420,8 @@ pub struct Status {
     pub port: Option<u16>,
     /// The bridge's resource name in the server that runs now, drawn for its start.
     pub bridge: Option<String>,
+    /// Whether the server that runs now raises txAdmin's events too, as it was launched.
+    pub txadmin_events: Option<bool>,
     /// How far the start has come, while the server is starting.
     pub start: Option<StartStatus>,
 }
@@ -567,6 +569,7 @@ impl Supervisor {
             name: None,
             port: None,
             bridge: None,
+            txadmin_events: None,
             start: None,
         };
         let (status_tx, status) = watch::channel(initial);
@@ -898,6 +901,8 @@ struct Run {
     layout: Layout,
     /// The bridge's name in this run: only its reports are taken.
     bridge: String,
+    /// Whether this run was launched to raise txAdmin's events too.
+    txadmin_events: bool,
     exit: ExitWatch,
     tree: Arc<ProcessTree>,
     stdin: StdinWriter,
@@ -2171,6 +2176,7 @@ impl Actor {
             game_build: None,
             layout,
             bridge: prepared.bridge,
+            txadmin_events: prepared.settings.txadmin_events,
             exit: spawned.exit,
             tree,
             stdin,
@@ -2462,6 +2468,7 @@ impl Actor {
             name: self.name.clone(),
             port: self.port,
             bridge: run.map(|run| run.bridge.clone()),
+            txadmin_events: run.map(|run| run.txadmin_events),
             start: run
                 .filter(|_| self.state == State::Starting)
                 .and_then(|run| run.start.as_ref())
