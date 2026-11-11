@@ -33,4 +33,5 @@ export const Permission = {
     PlayersKick: 1n << 29n,
     PlayersAnnounce: 1n << 30n,
     PlayersMessage: 1n << 31n,
+    BansEdit: 1n << 32n,
 } as const;

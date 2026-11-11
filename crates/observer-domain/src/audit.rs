@@ -153,6 +153,10 @@ pub enum AuditAction {
     PlayerBanned,
     /// The target is the ban's code; `details` hold the reason given, if any.
     BanLifted,
+    /// An active ban's reason or end was changed. The target is the ban's code; `details` hold
+    /// `reason` and `endsAt`, whichever changed, each with its value before and after: an end is
+    /// null for a permanent ban.
+    BanEdited,
     /// `details` hold each changed setting with its value before and after.
     BansSettingsChanged,
     /// The owner added the live map's image, or removed it. `details` hold its size, never the path
@@ -273,7 +277,7 @@ pub enum AuditAction {
 }
 
 impl AuditAction {
-    pub const ALL: [Self; 122] = [
+    pub const ALL: [Self; 123] = [
         Self::SetupCompleted,
         Self::SetupLinkCreated,
         Self::LoginSucceeded,
@@ -353,6 +357,7 @@ impl AuditAction {
         Self::PlayerDropsExported,
         Self::PlayerBanned,
         Self::BanLifted,
+        Self::BanEdited,
         Self::BansSettingsChanged,
         Self::MapImageChanged,
         Self::MapSettingsChanged,
@@ -480,6 +485,7 @@ impl AuditAction {
             Self::PlayerDropsExported => "player_drops_exported",
             Self::PlayerBanned => "player_banned",
             Self::BanLifted => "ban_lifted",
+            Self::BanEdited => "ban_edited",
             Self::BansSettingsChanged => "bans_settings_changed",
             Self::MapImageChanged => "map_image_changed",
             Self::MapSettingsChanged => "map_settings_changed",

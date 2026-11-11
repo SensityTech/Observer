@@ -34,6 +34,7 @@ export type SettingId =
     | 'backupsLast'
     | 'refusalMessage'
     | 'tokenMatches'
+    | 'banTemplates'
     | 'kickMessage'
     | 'mapImagery'
     | 'mapImage'
@@ -172,6 +173,7 @@ export const CATEGORIES: readonly Category[] = [
         settings: [
             { id: 'refusalMessage', applies: 'now' },
             { id: 'tokenMatches', applies: 'now' },
+            { id: 'banTemplates', applies: 'now' },
             { id: 'kickMessage', applies: 'now' },
         ],
     },

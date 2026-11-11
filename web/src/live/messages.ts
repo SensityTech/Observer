@@ -249,6 +249,7 @@ const AUDIT_ACTIONS = {
     players_retention_changed: true,
     player_banned: true,
     ban_lifted: true,
+    ban_edited: true,
     bans_settings_changed: true,
     map_image_changed: true,
     map_settings_changed: true,

@@ -1,10 +1,13 @@
-//! Bans and what each one holds, the identifiers a connecting player is checked against, and the
-//! bans' settings.
+//! Bans and what each one holds, what was changed on them since, the identifiers a connecting
+//! player is checked against, and the bans' settings with their templates.
 
 use std::fmt::Write as _;
 
 use jiff::Timestamp;
-use observer_domain::bans::{Ban, BanCounts, BanFilter, BanLift, BanState, BansSettings};
+use observer_domain::bans::{
+    Ban, BanCounts, BanEdit, BanEndChange, BanFilter, BanLift, BanReasonChange, BanState, BanTemplate,
+    BansSettings,
+};
 use rusqlite::{Connection, OptionalExtension, Row, ToSql, Transaction, params, params_from_iter};
 
 use crate::database::StoreError;
@@ -202,6 +205,66 @@ pub fn lift(
     })
 }
 
+/// An active ban as an edit finds it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Standing {
+    pub id: i64,
+    pub reason: String,
+    pub ends_at: Option<Timestamp>,
+}
+
+/// The ban of this code while it is active at `now`.
+pub fn standing(conn: &Connection, code: &str, now: Timestamp) -> Result<Option<Standing>, StoreError> {
+    Ok(conn
+        .query_row(
+            "SELECT id, reason, ends_at FROM ban
+             WHERE code = ?1 AND lifted_at IS NULL AND (ends_at IS NULL OR ends_at > ?2)",
+            params![code, Utc(now)],
+            |row| {
+                Ok(Standing {
+                    id: row.get(0)?,
+                    reason: row.get(1)?,
+                    ends_at: row.get::<_, Option<Utc>>(2)?.map(|at| at.0),
+                })
+            },
+        )
+        .optional()?)
+}
+
+/// A change of a ban's reason, of its end, or of both, each as `(before, after)`.
+#[derive(Debug, Clone)]
+pub struct NewEdit<'a> {
+    pub ban: i64,
+    pub by_user: Option<i64>,
+    pub by_name: &'a str,
+    pub at: Timestamp,
+    pub reason: (&'a str, &'a str),
+    pub ends_at: (Option<Timestamp>, Option<Timestamp>),
+}
+
+/// Gives the ban its new reason and end, and keeps what they replace.
+pub fn edit(tx: &Transaction<'_>, edit: &NewEdit<'_>) -> Result<(), StoreError> {
+    tx.execute(
+        "UPDATE ban SET reason = ?2, ends_at = ?3 WHERE id = ?1",
+        params![edit.ban, edit.reason.1, edit.ends_at.1.map(Utc)],
+    )?;
+    tx.execute(
+        "INSERT INTO ban_edit (ban, at, by_user, by_name, reason_before, reason_after, ends_before, ends_after)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        params![
+            edit.ban,
+            Utc(edit.at),
+            edit.by_user,
+            edit.by_name,
+            edit.reason.0,
+            edit.reason.1,
+            edit.ends_at.0.map(Utc),
+            edit.ends_at.1.map(Utc),
+        ],
+    )?;
+    Ok(())
+}
+
 /// What a page of the list asks for.
 #[derive(Debug, Clone)]
 pub struct BanQuery {
@@ -276,8 +339,8 @@ pub fn page(conn: &Connection, query: &BanQuery) -> Result<Vec<(Ban, i64)>, Stor
     let _ = write!(sql, " ORDER BY b.id DESC LIMIT ?{}", values.len());
     let mut statement = conn.prepare(&sql)?;
     let now = query.now;
-    let rows = statement.query_map(params_from_iter(values), |row| Ok((ban(row, now)?, row.get(0)?)))?;
-    Ok(rows.collect::<Result<_, _>>()?)
+    let rows = statement.query_map(params_from_iter(values), |row| ban(row, now))?;
+    edited(conn, rows.collect::<Result<_, _>>()?)
 }
 
 pub fn counts(conn: &Connection, now: Timestamp) -> Result<BanCounts, StoreError> {
@@ -304,20 +367,58 @@ pub fn of_player(conn: &Connection, player: i64, now: Timestamp) -> Result<Vec<B
         "SELECT {COLUMNS} FROM ban b WHERE b.player = ?1 ORDER BY b.id DESC"
     ))?;
     let rows = statement.query_map([player], |row| ban(row, now))?;
-    Ok(rows.collect::<Result<_, _>>()?)
+    Ok(edited(conn, rows.collect::<Result<_, _>>()?)?
+        .into_iter()
+        .map(|(ban, _)| ban)
+        .collect())
 }
 
 pub fn by_code(conn: &Connection, code: &str, now: Timestamp) -> Result<Option<Ban>, StoreError> {
-    Ok(conn
+    let found = conn
         .query_row(
             &format!("SELECT {COLUMNS} FROM ban b WHERE b.code = ?1"),
             [code],
             |row| ban(row, now),
         )
-        .optional()?)
+        .optional()?;
+    Ok(edited(conn, found.into_iter().collect())?
+        .pop()
+        .map(|(ban, _)| ban))
 }
 
-fn ban(row: &Row<'_>, now: Timestamp) -> rusqlite::Result<Ban> {
+/// The bans with what was changed on each, latest first.
+fn edited(conn: &Connection, mut bans: Vec<(Ban, i64)>) -> Result<Vec<(Ban, i64)>, StoreError> {
+    let mut statement = conn.prepare_cached(
+        "SELECT at, by_name, reason_before, reason_after, ends_before, ends_after FROM ban_edit
+         WHERE ban = ?1 ORDER BY id DESC",
+    )?;
+    for (ban, id) in &mut bans {
+        let rows = statement.query_map([*id], |row| {
+            let reason: (String, String) = (row.get(2)?, row.get(3)?);
+            let ends = (
+                row.get::<_, Option<Utc>>(4)?.map(|at| at.0),
+                row.get::<_, Option<Utc>>(5)?.map(|at| at.0),
+            );
+            Ok(BanEdit {
+                at: row.get::<_, Utc>(0)?.0,
+                by: row.get(1)?,
+                reason: (reason.0 != reason.1).then_some(BanReasonChange {
+                    before: reason.0,
+                    after: reason.1,
+                }),
+                ends: (ends.0 != ends.1).then_some(BanEndChange {
+                    before: ends.0,
+                    after: ends.1,
+                }),
+            })
+        })?;
+        ban.edits = rows.collect::<Result<_, _>>()?;
+    }
+    Ok(bans)
+}
+
+/// A ban without its edits, and its id.
+fn ban(row: &Row<'_>, now: Timestamp) -> rusqlite::Result<(Ban, i64)> {
     let ends_at = row.get::<_, Option<Utc>>(8)?.map(|at| at.0);
     let lifted_at = row.get::<_, Option<Utc>>(9)?.map(|at| at.0);
     let lifted = match (lifted_at, row.get::<_, Option<String>>(10)?) {
@@ -335,7 +436,7 @@ fn ban(row: &Row<'_>, now: Timestamp) -> rusqlite::Result<Ban> {
     } else {
         BanState::Active
     };
-    Ok(Ban {
+    let ban = Ban {
         code: row.get(1)?,
         player: row.get(2)?,
         name: row.get(3)?,
@@ -349,7 +450,9 @@ fn ban(row: &Row<'_>, now: Timestamp) -> rusqlite::Result<Ban> {
         refused: row.get(12)?,
         identifiers: row.get(13)?,
         tokens: row.get(14)?,
-    })
+        edits: Vec::new(),
+    };
+    Ok((ban, row.get(0)?))
 }
 
 pub fn settings(conn: &Connection) -> Result<BansSettings, StoreError> {
@@ -359,14 +462,38 @@ pub fn settings(conn: &Connection) -> Result<BansSettings, StoreError> {
         token_matches: settings::get(conn, TOKEN_MATCHES)?
             .and_then(|value| value.parse().ok())
             .unwrap_or(defaults.token_matches),
+        templates: Vec::new(),
     };
-    // A value edited by hand that the panel could not have saved falls back to the default.
-    Ok(stored.checked().unwrap_or(defaults))
+    // A value edited by hand that the panel could not have saved falls back to the default, and
+    // such a template is left out.
+    Ok(BansSettings {
+        templates: templates(conn)?,
+        ..stored.checked().unwrap_or(defaults)
+    })
+}
+
+/// The templates in the order the settings list them.
+pub fn templates(conn: &Connection) -> Result<Vec<BanTemplate>, StoreError> {
+    let mut statement = conn.prepare_cached("SELECT reason, minutes FROM ban_template ORDER BY position")?;
+    let rows = statement.query_map([], |row| {
+        Ok(BanTemplate {
+            reason: row.get(0)?,
+            minutes: row.get(1)?,
+        })
+    })?;
+    let stored: Vec<BanTemplate> = rows.collect::<Result<_, _>>()?;
+    Ok(stored.iter().filter_map(BanTemplate::checked).collect())
 }
 
 pub fn save_settings(tx: &Transaction<'_>, saved: &BansSettings) -> Result<(), StoreError> {
     settings::set(tx, MESSAGE, &saved.message)?;
     settings::set(tx, TOKEN_MATCHES, &saved.token_matches.to_string())?;
+    tx.execute("DELETE FROM ban_template", [])?;
+    let mut statement =
+        tx.prepare_cached("INSERT INTO ban_template (position, reason, minutes) VALUES (?1, ?2, ?3)")?;
+    for (position, template) in (0_u32..).zip(&saved.templates) {
+        statement.execute(params![position, template.reason, template.minutes])?;
+    }
     Ok(())
 }
 
@@ -562,6 +689,247 @@ mod tests {
         );
     }
 
+    fn change(
+        conn: &mut Connection,
+        ban: i64,
+        by: &str,
+        when: &str,
+        reason: (&str, &str),
+        ends_at: (Option<&str>, Option<&str>),
+    ) {
+        let tx = conn.transaction().unwrap();
+        edit(
+            &tx,
+            &NewEdit {
+                ban,
+                by_user: Some(3),
+                by_name: by,
+                at: at(when),
+                reason,
+                ends_at: (ends_at.0.map(at), ends_at.1.map(at)),
+            },
+        )
+        .unwrap();
+        tx.commit().unwrap();
+    }
+
+    #[test]
+    fn an_edit_gives_the_ban_its_new_values_and_keeps_what_they_replace() {
+        let mut conn = memory();
+        let id = write(&mut conn, "AAAA-AAAA", Some("2026-11-12T20:00:00Z"), &[token(1)]);
+        let now = at("2026-11-10T00:00:00Z");
+
+        change(
+            &mut conn,
+            id,
+            "sarah",
+            "2026-11-10T08:00:00Z",
+            ("Aimbot on stream", "Aimbot on stream"),
+            (Some("2026-11-12T20:00:00Z"), None),
+        );
+        change(
+            &mut conn,
+            id,
+            "maxime",
+            "2026-11-10T09:00:00Z",
+            ("Aimbot on stream", "Aimbot, confirmed by two clips"),
+            (None, None),
+        );
+
+        let ban = by_code(&conn, "AAAA-AAAA", now).unwrap().unwrap();
+        assert_eq!(ban.reason, "Aimbot, confirmed by two clips");
+        assert_eq!((ban.ends_at, ban.state), (None, BanState::Active));
+        assert_eq!(
+            (ban.by.as_str(), ban.created_at),
+            ("maxime", at("2026-11-09T20:00:00Z"))
+        );
+        assert_eq!(
+            ban.edits,
+            [
+                BanEdit {
+                    at: at("2026-11-10T09:00:00Z"),
+                    by: "maxime".to_owned(),
+                    reason: Some(BanReasonChange {
+                        before: "Aimbot on stream".to_owned(),
+                        after: "Aimbot, confirmed by two clips".to_owned(),
+                    }),
+                    ends: None,
+                },
+                BanEdit {
+                    at: at("2026-11-10T08:00:00Z"),
+                    by: "sarah".to_owned(),
+                    reason: None,
+                    ends: Some(BanEndChange {
+                        before: Some(at("2026-11-12T20:00:00Z")),
+                        after: None,
+                    }),
+                },
+            ]
+        );
+        let listed = page(
+            &conn,
+            &BanQuery {
+                filter: BanFilter::Active,
+                search: BanMatch::All,
+                after: None,
+                limit: 10,
+                now,
+            },
+        )
+        .unwrap();
+        assert_eq!(listed[0].0.edits.len(), 2);
+    }
+
+    #[test]
+    fn an_edit_that_changes_nothing_is_refused_by_the_schema() {
+        let mut conn = memory();
+        let id = write(&mut conn, "AAAA-AAAA", None, &[token(1)]);
+        let tx = conn.transaction().unwrap();
+
+        let same = edit(
+            &tx,
+            &NewEdit {
+                ban: id,
+                by_user: None,
+                by_name: "sarah",
+                at: at("2026-11-10T08:00:00Z"),
+                reason: ("Aimbot on stream", "Aimbot on stream"),
+                ends_at: (None, None),
+            },
+        );
+
+        assert!(same.is_err());
+    }
+
+    #[test]
+    fn a_player_is_checked_against_the_end_an_edit_gave() {
+        let mut conn = memory();
+        let held = [token(1)];
+        let shortened = write(&mut conn, "AAAA-AAAA", None, &held);
+        let extended = write(&mut conn, "BBBB-BBBB", Some("2026-11-10T06:00:00Z"), &held);
+        change(
+            &mut conn,
+            shortened,
+            "sarah",
+            "2026-11-10T00:00:00Z",
+            ("Aimbot on stream", "Aimbot on stream"),
+            (None, Some("2026-11-10T12:00:00Z")),
+        );
+        change(
+            &mut conn,
+            extended,
+            "sarah",
+            "2026-11-10T00:00:00Z",
+            ("Aimbot on stream", "Ban evasion"),
+            (Some("2026-11-10T06:00:00Z"), Some("2026-11-11T00:00:00Z")),
+        );
+        let codes = |now: &str| -> Vec<(String, String)> {
+            candidates(&conn, &held, at(now))
+                .unwrap()
+                .into_iter()
+                .map(|candidate| (candidate.code, candidate.reason))
+                .collect()
+        };
+
+        assert_eq!(
+            codes("2026-11-10T11:00:00Z"),
+            [
+                ("BBBB-BBBB".to_owned(), "Ban evasion".to_owned()),
+                ("AAAA-AAAA".to_owned(), "Aimbot on stream".to_owned()),
+            ]
+        );
+        assert_eq!(
+            codes("2026-11-10T13:00:00Z"),
+            [("BBBB-BBBB".to_owned(), "Ban evasion".to_owned())]
+        );
+        assert_eq!(codes("2026-11-11T00:00:00Z"), []);
+    }
+
+    #[test]
+    fn only_an_active_ban_stands_to_be_edited() {
+        let mut conn = memory();
+        write(&mut conn, "AAAA-AAAA", Some("2026-11-09T21:00:00Z"), &[token(1)]);
+        write(&mut conn, "BBBB-BBBB", None, &[token(1)]);
+        let active = write(&mut conn, "CCCC-CCCC", Some("2026-11-12T20:00:00Z"), &[token(1)]);
+        let now = at("2026-11-10T00:00:00Z");
+        let tx = conn.transaction().unwrap();
+        lift(&tx, "BBBB-BBBB", "sarah", None, now).unwrap();
+        tx.commit().unwrap();
+
+        assert_eq!(standing(&conn, "AAAA-AAAA", now).unwrap(), None);
+        assert_eq!(standing(&conn, "BBBB-BBBB", now).unwrap(), None);
+        assert_eq!(standing(&conn, "ZZZZ-ZZZZ", now).unwrap(), None);
+        assert_eq!(
+            standing(&conn, "CCCC-CCCC", now).unwrap(),
+            Some(Standing {
+                id: active,
+                reason: "Aimbot on stream".to_owned(),
+                ends_at: Some(at("2026-11-12T20:00:00Z")),
+            })
+        );
+    }
+
+    fn template(reason: &str, minutes: Option<u32>) -> BanTemplate {
+        BanTemplate {
+            reason: reason.to_owned(),
+            minutes,
+        }
+    }
+
+    #[test]
+    fn templates_are_kept_in_their_order_and_replaced_whole() {
+        let mut conn = memory();
+        let save = |conn: &mut Connection, templates: Vec<BanTemplate>| {
+            let tx = conn.transaction().unwrap();
+            save_settings(
+                &tx,
+                &BansSettings {
+                    templates,
+                    ..BansSettings::default()
+                },
+            )
+            .unwrap();
+            tx.commit().unwrap();
+        };
+
+        save(
+            &mut conn,
+            vec![
+                template("Cheating", None),
+                template("Insults", Some(3 * 24 * 60)),
+                template("Combat logging", Some(24 * 60)),
+            ],
+        );
+        save(
+            &mut conn,
+            vec![
+                template("Combat logging", Some(24 * 60)),
+                template("Cheating", None),
+            ],
+        );
+
+        assert_eq!(
+            settings(&conn).unwrap().templates,
+            [
+                template("Combat logging", Some(24 * 60)),
+                template("Cheating", None)
+            ]
+        );
+        assert_eq!(templates(&conn).unwrap(), settings(&conn).unwrap().templates);
+    }
+
+    #[test]
+    fn a_template_edited_into_one_no_ban_could_be_made_from_is_left_out() {
+        let conn = memory();
+        conn.execute_batch(
+            "INSERT INTO ban_template (position, reason, minutes) VALUES (0, ' ', NULL), (1, 'Cheating', 60)",
+        )
+        .unwrap();
+
+        assert_eq!(templates(&conn).unwrap(), [template("Cheating", Some(60))]);
+        assert_eq!(settings(&conn).unwrap().message, BansSettings::default().message);
+    }
+
     #[test]
     fn settings_edited_out_of_range_fall_back_to_the_defaults() {
         let mut conn = memory();
@@ -572,6 +940,7 @@ mod tests {
             &BansSettings {
                 message: "Banned: {reason}".to_owned(),
                 token_matches: 2,
+                templates: vec![template("Cheating", None)],
             },
         )
         .unwrap();
@@ -580,6 +949,12 @@ mod tests {
 
         settings::set(&conn, TOKEN_MATCHES, "99").unwrap();
 
-        assert_eq!(settings(&conn).unwrap(), BansSettings::default());
+        assert_eq!(
+            settings(&conn).unwrap(),
+            BansSettings {
+                templates: vec![template("Cheating", None)],
+                ..BansSettings::default()
+            }
+        );
     }
 }

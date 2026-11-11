@@ -22,6 +22,7 @@ const TIMES = new Set<string>([
     'occurrence',
     'previousAt',
     'startedAt',
+    'endsAt',
 ]);
 const ACTIONS = new Set<string>(['attempted', 'action']);
 /** The schedule's lists, the resources an order stopped, and the nested entries of the details. */
@@ -161,7 +162,23 @@ const word = (t: Messages, format: Format, key: string, value: unknown): string 
         if (key === 'profileDays') {
             return t.audit.keptForGood;
         }
+        if (key === 'endsAt') {
+            return t.audit.neverEnds;
+        }
         return key === 'timeZone' ? t.audit.hostZone : t.audit.unset;
+    }
+    if (key === 'templates' && Array.isArray(value)) {
+        return value.length === 0
+            ? t.audit.noTemplate
+            : value
+                  .filter(isRecord)
+                  .map((template) =>
+                      t.audit.template(
+                          String(template.reason),
+                          t.bans.lengthOf(typeof template.minutes === 'number' ? template.minutes : null),
+                      ),
+                  )
+                  .join(', ');
     }
     if (HIDDEN.has(key) && value === true) {
         return t.audit.changed;
