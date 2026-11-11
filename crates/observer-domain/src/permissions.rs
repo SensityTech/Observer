@@ -41,8 +41,9 @@ impl Permissions {
     pub const PLAYERS_BAN: Self = Self(1 << 23);
     pub const BANS_LIFT: Self = Self(1 << 24);
     pub const PLAYERS_MAP: Self = Self(1 << 25);
-    pub const ENTITIES_VIEW: Self = Self(1 << 26);
-    pub const ENTITIES_DELETE: Self = Self(1 << 27);
+    pub const RESOURCES_CONTROL: Self = Self(1 << 26);
+    pub const ENTITIES_VIEW: Self = Self(1 << 27);
+    pub const ENTITIES_DELETE: Self = Self(1 << 28);
 
     /// Every permission in the catalog, which is what the owner holds.
     pub fn all() -> Self {
@@ -467,6 +468,15 @@ pub const CATALOG: &[PermissionInfo] = &[
     },
     PermissionInfo {
         bit: 26,
+        constant: "RESOURCES_CONTROL",
+        key: "resourcesControl",
+        area: PermissionArea::Server,
+        // A resource that stops takes with it every one that depends on it, under the players.
+        danger: Danger::Sensitive,
+        implies: Permissions::NONE,
+    },
+    PermissionInfo {
+        bit: 27,
         constant: "ENTITIES_VIEW",
         key: "entitiesView",
         area: PermissionArea::Entities,
@@ -476,7 +486,7 @@ pub const CATALOG: &[PermissionInfo] = &[
         implies: Permissions::NONE,
     },
     PermissionInfo {
-        bit: 27,
+        bit: 28,
         constant: "ENTITIES_DELETE",
         key: "entitiesDelete",
         area: PermissionArea::Entities,
@@ -524,8 +534,9 @@ mod tests {
             (23, "PLAYERS_BAN", Permissions::PLAYERS_BAN),
             (24, "BANS_LIFT", Permissions::BANS_LIFT),
             (25, "PLAYERS_MAP", Permissions::PLAYERS_MAP),
-            (26, "ENTITIES_VIEW", Permissions::ENTITIES_VIEW),
-            (27, "ENTITIES_DELETE", Permissions::ENTITIES_DELETE),
+            (26, "RESOURCES_CONTROL", Permissions::RESOURCES_CONTROL),
+            (27, "ENTITIES_VIEW", Permissions::ENTITIES_VIEW),
+            (28, "ENTITIES_DELETE", Permissions::ENTITIES_DELETE),
         ];
 
         assert_eq!(CATALOG.len(), frozen.len());

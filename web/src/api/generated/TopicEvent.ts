@@ -8,7 +8,8 @@ import type { DiagnosticsEvent } from "./DiagnosticsEvent";
 import type { EntitiesLive } from "./EntitiesLive";
 import type { LiveSample } from "./LiveSample";
 import type { MapLive } from "./MapLive";
+import type { ResourcesView } from "./ResourcesView";
 import type { ScheduleStatus } from "./ScheduleStatus";
 import type { ServerStatus } from "./ServerStatus";
 
-export type TopicEvent = { "topic": "audit", "data": AuditEntry } | { "topic": "server.status", "data": ServerStatus } | { "topic": "console", "data": ConsoleBatch } | { "topic": "metrics.live", "data": LiveSample } | { "topic": "server.schedule", "data": ScheduleStatus } | { "topic": "server.artifacts", "data": ArtifactsStatus } | { "topic": "server.alerts", "data": AlertList } | { "topic": "server.diagnostics", "data": DiagnosticsEvent } | { "topic": "server.changes", "data": ChangesLive } | { "topic": "server.map", "data": MapLive } | { "topic": "server.entities", "data": EntitiesLive };
+export type TopicEvent = { "topic": "audit", "data": AuditEntry } | { "topic": "server.status", "data": ServerStatus } | { "topic": "console", "data": ConsoleBatch } | { "topic": "metrics.live", "data": LiveSample } | { "topic": "server.schedule", "data": ScheduleStatus } | { "topic": "server.artifacts", "data": ArtifactsStatus } | { "topic": "server.alerts", "data": AlertList } | { "topic": "server.diagnostics", "data": DiagnosticsEvent } | { "topic": "server.changes", "data": ChangesLive } | { "topic": "server.map", "data": MapLive } | { "topic": "server.resources", "data": ResourcesView } | { "topic": "server.entities", "data": EntitiesLive };

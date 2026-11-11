@@ -20,6 +20,7 @@ mod files;
 mod map;
 mod metrics;
 mod players;
+mod resources;
 mod schedule;
 mod servers;
 mod settings;
@@ -79,6 +80,9 @@ pub(crate) fn routes() -> Vec<Route> {
     // which the handler checks once it has read the line.
     let command = Permission(P::CONSOLE_WRITE);
     let logs = Permission(P::LOGS_DOWNLOAD);
+    // Starting, stopping and restarting a resource, and having FXServer read its folders again:
+    // one permission of their own, less than the console's, which runs any command.
+    let resources = Permission(P::RESOURCES_CONTROL);
     // The schedule's settings take the password again; skipping, restoring or delaying its next
     // restart are operations, and so is a single restart, which is the server control's.
     let plan = Permission(P::SCHEDULE_MANAGE);
@@ -208,6 +212,10 @@ pub(crate) fn routes() -> Vec<Route> {
         route(M::POST,   "/servers/default/console",    command,      servers::command),
         route(M::GET,    "/servers/default/console/logs",        logs, servers::log_files),
         route(M::GET,    "/servers/default/console/logs/{name}", logs, servers::download_log),
+        route(M::POST,   "/servers/default/resources/start",   resources, resources::start),
+        route(M::POST,   "/servers/default/resources/stop",    resources, resources::stop),
+        route(M::POST,   "/servers/default/resources/restart", resources, resources::restart),
+        route(M::POST,   "/servers/default/resources/rescan",  resources, resources::rescan),
         route(M::PUT,    "/servers/default/schedule",       edit_schedule, schedule::change),
         route(M::POST,   "/servers/default/schedule/skip",  plan,          schedule::skip),
         route(M::DELETE, "/servers/default/schedule/skip",  plan,          schedule::restore),

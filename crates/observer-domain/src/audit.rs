@@ -244,10 +244,21 @@ pub enum AuditAction {
     /// `to`); a failure when the release could not be downloaded or verified (`reason`), or when
     /// the new version did not finish starting and the previous one came back (`rolledBack`).
     ObserverUpdateFinished,
+    /// Someone started a resource from the panel. The target is the resource; `details` hold the
+    /// `command` written to FXServer's console.
+    ResourceStarted,
+    /// Someone stopped a resource. `details` hold the `command` and the `dependants`: the started
+    /// resources that depend on it, which FXServer stops with it.
+    ResourceStopped,
+    /// Someone restarted a resource. `details` hold the `command`, the `dependants` and whether
+    /// Observer started those again (`startedAgain`).
+    ResourceRestarted,
+    /// Someone had FXServer read its resource folders again.
+    ResourcesRescanned,
 }
 
 impl AuditAction {
-    pub const ALL: [Self; 113] = [
+    pub const ALL: [Self; 117] = [
         Self::SetupCompleted,
         Self::SetupLinkCreated,
         Self::LoginSucceeded,
@@ -361,6 +372,10 @@ impl AuditAction {
         Self::ObserverUpdateStarted,
         Self::ObserverUpdateCancelled,
         Self::ObserverUpdateFinished,
+        Self::ResourceStarted,
+        Self::ResourceStopped,
+        Self::ResourceRestarted,
+        Self::ResourcesRescanned,
     ];
 
     #[expect(clippy::too_many_lines, reason = "one arm per action, read best as one list")]
@@ -479,6 +494,10 @@ impl AuditAction {
             Self::ObserverUpdateStarted => "observer_update_started",
             Self::ObserverUpdateCancelled => "observer_update_cancelled",
             Self::ObserverUpdateFinished => "observer_update_finished",
+            Self::ResourceStarted => "resource_started",
+            Self::ResourceStopped => "resource_stopped",
+            Self::ResourceRestarted => "resource_restarted",
+            Self::ResourcesRescanned => "resources_rescanned",
         }
     }
 

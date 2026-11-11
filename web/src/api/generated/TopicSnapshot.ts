@@ -9,7 +9,8 @@ import type { EntitiesLive } from "./EntitiesLive";
 import type { MapLive } from "./MapLive";
 import type { MetricsSnapshot } from "./MetricsSnapshot";
 import type { ObserverStatus } from "./ObserverStatus";
+import type { ResourcesView } from "./ResourcesView";
 import type { ScheduleStatus } from "./ScheduleStatus";
 import type { ServerStatus } from "./ServerStatus";
 
-export type TopicSnapshot = { "topic": "status", "data": ObserverStatus } | { "topic": "audit", "data": AuditSnapshot } | { "topic": "server.status", "data": ServerStatus } | { "topic": "console", "data": ConsoleSnapshot } | { "topic": "metrics.live", "data": MetricsSnapshot } | { "topic": "server.schedule", "data": ScheduleStatus } | { "topic": "server.artifacts", "data": ArtifactsStatus } | { "topic": "server.alerts", "data": AlertList } | { "topic": "server.diagnostics", "data": DiagnosticsSnapshot } | { "topic": "server.changes", "data": ChangesLive } | { "topic": "server.map", "data": MapLive } | { "topic": "server.entities", "data": EntitiesLive };
+export type TopicSnapshot = { "topic": "status", "data": ObserverStatus } | { "topic": "audit", "data": AuditSnapshot } | { "topic": "server.status", "data": ServerStatus } | { "topic": "console", "data": ConsoleSnapshot } | { "topic": "metrics.live", "data": MetricsSnapshot } | { "topic": "server.schedule", "data": ScheduleStatus } | { "topic": "server.artifacts", "data": ArtifactsStatus } | { "topic": "server.alerts", "data": AlertList } | { "topic": "server.diagnostics", "data": DiagnosticsSnapshot } | { "topic": "server.changes", "data": ChangesLive } | { "topic": "server.map", "data": MapLive } | { "topic": "server.resources", "data": ResourcesView } | { "topic": "server.entities", "data": EntitiesLive };

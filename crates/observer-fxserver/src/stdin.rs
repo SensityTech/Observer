@@ -35,8 +35,56 @@ const QUIT_REASONS: [StopReason; 5] = [
     StopReason::CrashLoop,
 ];
 
+const RESOURCE_VERBS: [ResourceVerb; 3] = [ResourceVerb::Start, ResourceVerb::Stop, ResourceVerb::Restart];
+const REFRESH: &str = "refresh";
+/// The longest resource name a line of Observer's carries.
+const MAX_RESOURCE_NAME: usize = 64;
+
+/// What Observer has FXServer do with one resource, by FXServer's own command of that name
+/// (`ServerResources.cpp`): `restart` leaves a stopped resource stopped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResourceVerb {
+    Start,
+    Stop,
+    Restart,
+}
+
+impl ResourceVerb {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Start => "start",
+            Self::Stop => "stop",
+            Self::Restart => "restart",
+        }
+    }
+}
+
+/// A resource's name fit for a console command: 1 to 64 ASCII letters, digits, `_`, `.` and `-`,
+/// which leaves no space, quote, bracket or semicolon for the console to read otherwise.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResourceName(String);
+
+impl ResourceName {
+    pub fn new(name: &str) -> Option<Self> {
+        safe(name, MAX_RESOURCE_NAME, b"_.-").then(|| Self(name.to_owned()))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// Whether `text` is 1 to `max` bytes of ASCII letters, digits and `extra`.
+pub(crate) fn safe(text: &str, max: usize, extra: &[u8]) -> bool {
+    (1..=max).contains(&text.len())
+        && text
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || extra.contains(&byte))
+}
+
 /// A line Observer writes on its own behalf. No variant carries text a user typed: the reason of
-/// `quit` comes from a closed list, and bridge events travel hex-encoded.
+/// `quit` comes from a closed list, bridge events travel hex-encoded, and a resource is named as
+/// FXServer reported it, by a name the console reads as one word.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SystemLine {
     Quit(StopReason),
@@ -45,6 +93,9 @@ pub enum SystemLine {
     SetPerfUser,
     SetPerfPassword(String),
     SetPlayersToken(String),
+    Resource(ResourceVerb, ResourceName),
+    /// Has FXServer read its resource folders again: new resources and changed manifests.
+    Refresh,
 }
 
 impl SystemLine {
@@ -56,6 +107,8 @@ impl SystemLine {
             Self::SetPerfUser => format!("set sv_prometheusBasicAuthUser {PERF_USER}"),
             Self::SetPerfPassword(password) => format!("set sv_prometheusBasicAuthPassword {password}"),
             Self::SetPlayersToken(token) => format!("set sv_playersToken {token}"),
+            Self::Resource(verb, name) => format!("{} {}", verb.as_str(), name.as_str()),
+            Self::Refresh => REFRESH.to_owned(),
         }
     }
 
@@ -63,7 +116,7 @@ impl SystemLine {
     /// connection gets.
     fn echo(&self) -> Option<String> {
         match self {
-            Self::Quit(_) => Some(self.render()),
+            Self::Quit(_) | Self::Resource(..) | Self::Refresh => Some(self.render()),
             Self::Bridge(event) => Some(format!("observer_cmd {}", event.name())),
             // Verdicts come one per connection, and the asks for positions and entities every few
             // seconds: the console would fill with them.
@@ -99,7 +152,12 @@ pub fn allowed(line: &str) -> bool {
     if let Some(token) = line.strip_prefix("set sv_playersToken ") {
         return is_token(token);
     }
-    line == format!("set sv_prometheusBasicAuthUser {PERF_USER}")
+    if let Some((verb, name)) = line.split_once(' ')
+        && RESOURCE_VERBS.iter().any(|known| known.as_str() == verb)
+    {
+        return ResourceName::new(name).is_some();
+    }
+    line == REFRESH || line == format!("set sv_prometheusBasicAuthUser {PERF_USER}")
 }
 
 fn is_token(text: &str) -> bool {
@@ -254,7 +312,16 @@ pub enum StdinError {
 
 pub(crate) enum Write {
     System(SystemLine),
-    User { command: UserCommand, actor: String },
+    /// A line of Observer's that someone asked for: checked as any of them, and echoed as that
+    /// person's command.
+    Asked {
+        line: SystemLine,
+        actor: String,
+    },
+    User {
+        command: UserCommand,
+        actor: String,
+    },
 }
 
 type Request = (Write, oneshot::Sender<Result<(), StdinError>>);
@@ -291,13 +358,17 @@ impl StdinWriter {
 async fn own(stdin: Stdin, mut queue: mpsc::Receiver<Request>, generation: u32, console: Arc<ConsoleHub>) {
     while let Some((write, reply)) = queue.recv().await {
         let (line, echo) = match &write {
-            Write::System(line) => {
+            Write::System(line) | Write::Asked { line, .. } => {
                 let text = line.render();
                 if !allowed(&text) {
                     let _ = reply.send(Err(StdinError::NotAllowed));
                     continue;
                 }
-                let echo = line.echo().map(|echo| (LineKind::Observer, None, echo, false));
+                let (kind, actor) = match &write {
+                    Write::Asked { actor, .. } => (LineKind::Command, Some(actor.clone())),
+                    _ => (LineKind::Observer, None),
+                };
+                let echo = line.echo().map(|echo| (kind, actor, echo, false));
                 (text, echo)
             }
             Write::User { command, actor } => {
@@ -397,6 +468,11 @@ mod tests {
         let mut lines: Vec<SystemLine> = QUIT_REASONS.into_iter().map(SystemLine::Quit).collect();
         lines.extend(credentials.lines());
         lines.extend(events_carrying("alice").into_iter().map(SystemLine::Bridge));
+        for name in ["chat", "ox_lib", "pma-voice", "es.extended", &"n".repeat(64)] {
+            let name = ResourceName::new(name).unwrap();
+            lines.extend(RESOURCE_VERBS.map(|verb| SystemLine::Resource(verb, name.clone())));
+        }
+        lines.push(SystemLine::Refresh);
 
         for line in lines {
             assert!(allowed(&line.render()), "{:?} was refused", line.render());
@@ -432,11 +508,61 @@ mod tests {
             "set sv_prometheusBasicAuthPassword short",
             "set sv_playersToken 0123456789abcdef0123456789abcdeg",
             "set sv_licenseKey cfxk_x",
-            "refresh",
+            "refresh ",
+            "refresh; quit",
+            "start",
+            "start ",
+            "stop  chat",
+            "stop chat ",
+            "restart chat; quit",
+            "start chat\nquit",
+            "stop \"chat\"",
+            "stop [maps]",
+            "start chat extra",
+            "ensure chat",
+            "Stop chat",
+            "exec chat",
         ] {
             assert!(!allowed(line), "{line:?} was allowed");
         }
         assert!(!allowed(&format!("observer_cmd {}", "ab".repeat(MAX_BRIDGE_HEX))));
+        assert!(!allowed(&format!("stop {}", "n".repeat(MAX_RESOURCE_NAME + 1))));
+    }
+
+    #[test]
+    fn a_resource_is_named_in_a_line_only_by_a_name_the_console_reads_as_one_word() {
+        for name in ["chat", "ox_lib", "pma-voice", "es.extended", "9mm", "A"] {
+            let line = SystemLine::Resource(ResourceVerb::Stop, ResourceName::new(name).unwrap()).render();
+
+            assert_eq!(line, format!("stop {name}"));
+            assert_eq!(command::split(&line), [line.as_str()]);
+            assert_eq!(command::words(&line), ["stop", name]);
+        }
+        for name in [
+            "",
+            "two words",
+            "evil;quit",
+            "\"quoted\"",
+            "[maps]",
+            "tab\tbed",
+            "line\nbreak",
+            "back\\slash",
+            "caf\u{e9}",
+            "//comment",
+            "#comment",
+            "$var",
+            &"n".repeat(MAX_RESOURCE_NAME + 1),
+        ] {
+            assert_eq!(ResourceName::new(name), None, "{name:?}");
+        }
+    }
+
+    #[test]
+    fn a_line_someone_asked_for_shows_in_the_console_as_it_is_written() {
+        let stop = SystemLine::Resource(ResourceVerb::Stop, ResourceName::new("chat").unwrap());
+
+        assert_eq!(stop.echo().as_deref(), Some("stop chat"));
+        assert_eq!(SystemLine::Refresh.echo().as_deref(), Some("refresh"));
     }
 
     #[test]

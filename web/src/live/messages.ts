@@ -27,6 +27,7 @@ import type { LaunchReadiness } from '../api/generated/LaunchReadiness';
 import type { LineKind } from '../api/generated/LineKind';
 import type { Listener } from '../api/generated/Listener';
 import type { ListenerRole } from '../api/generated/ListenerRole';
+import type { LiveChangeKind } from '../api/generated/LiveChangeKind';
 import type { LiveSample } from '../api/generated/LiveSample';
 import type { MapLive } from '../api/generated/MapLive';
 import type { NoticeKind } from '../api/generated/NoticeKind';
@@ -35,6 +36,11 @@ import type { Outcome } from '../api/generated/Outcome';
 import type { PartialReason } from '../api/generated/PartialReason';
 import type { ProcessKind } from '../api/generated/ProcessKind';
 import type { Protocol } from '../api/generated/Protocol';
+import type { ResourceOrigin } from '../api/generated/ResourceOrigin';
+import type { ResourceRow } from '../api/generated/ResourceRow';
+import type { ResourceState } from '../api/generated/ResourceState';
+import type { ResourcesStage } from '../api/generated/ResourcesStage';
+import type { ResourcesView } from '../api/generated/ResourcesView';
 import type { RestartSource } from '../api/generated/RestartSource';
 import type { ScheduleMode } from '../api/generated/ScheduleMode';
 import type { ScheduleStatus } from '../api/generated/ScheduleStatus';
@@ -75,6 +81,8 @@ const TOPICS = {
     'server.diagnostics': true,
     'server.changes': true,
     'server.map': true,
+    'server.resources': true,
+
     'server.entities': true,
 } satisfies Record<Topic, true>;
 
@@ -274,6 +282,10 @@ const AUDIT_ACTIONS = {
     observer_update_started: true,
     observer_update_cancelled: true,
     observer_update_finished: true,
+    resource_started: true,
+    resource_stopped: true,
+    resource_restarted: true,
+    resources_rescanned: true,
 } satisfies Record<AuditAction, true>;
 
 const OUTCOMES = { success: true, failure: true, denied: true } satisfies Record<Outcome, true>;
@@ -967,6 +979,75 @@ export const isMapLive = (value: unknown): value is MapLive =>
     orNull(isTimestamp)(value.at) &&
     isCount(value.waiting) &&
     isFlag(value.onesync);
+
+const RESOURCES_STAGES = {
+    stopped: true,
+    starting: true,
+    listed: true,
+    unreported: true,
+} satisfies Record<ResourcesStage, true>;
+const RESOURCE_ORIGINS = { server: true, build: true } satisfies Record<ResourceOrigin, true>;
+const RESOURCE_STATES = {
+    started: true,
+    starting: true,
+    stopped: true,
+    stopping: true,
+    unknown: true,
+} satisfies Record<ResourceState, true>;
+const LIVE_CHANGE_KINDS = {
+    started: true,
+    stopped: true,
+    restarted: true,
+} satisfies Record<LiveChangeKind, true>;
+
+const isResourceWarnings = (value: unknown) =>
+    isRecord(value) &&
+    isCount(value.count) &&
+    isCount(value.heavy) &&
+    isCount(value.oversized) &&
+    isCount(value.missing);
+
+const isResourceTurn = (value: unknown) =>
+    isRecord(value) &&
+    isTimestamp(value.at) &&
+    oneOf<LiveChangeKind>(LIVE_CHANGE_KINDS)(value.kind) &&
+    orNull(isText)(value.by) &&
+    orNull(isText)(value.with);
+
+const isResourceAsked = (value: unknown) =>
+    isRecord(value) && oneOf<LiveChangeKind>(LIVE_CHANGE_KINDS)(value.kind) && isText(value.by);
+
+const isResourceRow = (value: unknown): value is ResourceRow =>
+    isRecord(value) &&
+    isText(value.name) &&
+    isText(value.folder) &&
+    oneOf<ResourceOrigin>(RESOURCE_ORIGINS)(value.origin) &&
+    orNull(isText)(value.version) &&
+    oneOf<ResourceState>(RESOURCE_STATES)(value.state) &&
+    orNull(isTimestamp)(value.failedAt) &&
+    (value.warnings === null || isResourceWarnings(value.warnings)) &&
+    isListOf(isText)(value.dependants) &&
+    isFlag(value.controllable) &&
+    (value.last === null || isResourceTurn(value.last)) &&
+    (value.asked === null || isResourceAsked(value.asked));
+
+const isResourcesRescan = (value: unknown) =>
+    isRecord(value) &&
+    isTimestamp(value.at) &&
+    orNull(isText)(value.by) &&
+    isListOf(isText)(value.added) &&
+    isCount(value.addedCount) &&
+    orNull(isCount)(value.changed);
+
+export const isResourcesView = (value: unknown): value is ResourcesView =>
+    isRecord(value) &&
+    oneOf<ResourcesStage>(RESOURCES_STAGES)(value.stage) &&
+    isCount(value.generation) &&
+    isListOf(isResourceRow)(value.resources) &&
+    isFlag(value.truncated) &&
+    (value.rescan === null || isResourcesRescan(value.rescan)) &&
+    isFlag(value.rescanning);
+
 const UNAVAILABLE = { onesync: true, game: true } satisfies Record<EntitiesUnavailable, true>;
 
 const isEntityCounts = (value: unknown): value is EntityCounts =>
@@ -1023,6 +1104,9 @@ const isSnapshotData = (topic: Topic, data: unknown) => {
             return isChangesLive(data);
         case 'server.map':
             return isMapLive(data);
+        case 'server.resources':
+            return isResourcesView(data);
+
         case 'server.entities':
             return isEntitiesLive(data);
     }
@@ -1052,6 +1136,9 @@ const isEventData = (topic: Topic, data: unknown) => {
             return isChangesLive(data);
         case 'server.map':
             return isMapLive(data);
+        case 'server.resources':
+            return isResourcesView(data);
+
         case 'server.entities':
             return isEntitiesLive(data);
     }
