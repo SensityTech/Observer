@@ -3,7 +3,14 @@ import { Link } from '@tanstack/react-router';
 import { ArrowRight } from 'lucide-react';
 import { useState } from 'react';
 
-import { bansSettingsQuery, characters, MAX_MESSAGE, MAX_TOKENS, saveBansSettings } from '../api/bans';
+import {
+    bansSettingsQuery,
+    characters,
+    fillMessage,
+    MAX_MESSAGE,
+    MAX_TOKENS,
+    saveBansSettings,
+} from '../api/bans';
 import type { BansSettings as Settings } from '../api/generated/BansSettings';
 import { Permission } from '../api/generated/Permission';
 import { allows, useMe } from '../auth/me';
@@ -13,13 +20,14 @@ import { errorMessage } from '../i18n/errors';
 import { useI18n } from '../i18n/I18nProvider';
 import { cn } from '../lib/cn';
 import { SettingsForm, useSection } from './Form';
-import { MessageField } from './MessageField';
+import { KickSettings } from './Kicks';
+import { MessageEditor } from './MessageEditor';
 import { CategoryHead, SettingRow, SettingsGroup } from './Row';
 
 type Outcome = { tone: 'success' | 'danger'; message: string };
 const PLACEHOLDERS = ['reason', 'ends', 'id', 'name', 'by'] as const;
 
-/** What a banned player reads, and how much of a ban a player must show to be refused. */
+/** What banned and kicked players read, and how much of a ban a player must show to be refused. */
 export function BansSettings() {
     const { t } = useI18n();
     const me = useMe();
@@ -57,6 +65,7 @@ export function BansSettings() {
             {settings.isSuccess && (
                 <SettingsForm>
                     <BansForm stored={settings.data} />
+                    <KickSettings />
                 </SettingsForm>
             )}
         </>
@@ -119,27 +128,28 @@ function BansForm({ stored }: { stored: Settings }) {
         <fieldset disabled={!canManage} className="flex min-w-0 flex-col gap-4">
             {!canManage && <Notice>{words.readOnly}</Notice>}
             {outcome !== null && <Notice tone={outcome.tone}>{outcome.message}</Notice>}
-            <SettingsGroup title={t.settings.categories.bans.name}>
+            <SettingsGroup title={words.bans}>
                 <SettingRow
                     id="refusalMessage"
                     field
                     changed={canManage && changed.includes('refusalMessage')}
                 >
                     {(ids) => (
-                        <MessageField
+                        <MessageEditor
                             ids={ids}
                             value={draft.message}
-                            problem={tried ? messageProblem : null}
+                            onChange={(message) => setDraft({ ...draft, message })}
                             placeholders={PLACEHOLDERS}
-                            example={{
+                            insertLabel={words.insert}
+                            problem={tried ? messageProblem : null}
+                            previewLabel={words.preview}
+                            preview={fillMessage(draft.message.trim(), {
                                 reason: words.example.reason,
                                 ends: words.example.ends,
                                 id: words.example.code,
                                 name: words.example.name,
                                 by: words.example.by,
-                            }}
-                            words={words}
-                            onChange={(message) => setDraft({ ...draft, message })}
+                            })}
                         />
                     )}
                 </SettingRow>

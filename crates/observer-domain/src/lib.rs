@@ -30,6 +30,7 @@ pub mod live;
 pub mod maintenance;
 pub mod map;
 pub mod metrics;
+pub mod moderation;
 pub mod permissions;
 pub mod players;
 pub mod resources;

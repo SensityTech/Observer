@@ -9,7 +9,7 @@ type Format = {
     timestamp: (rfc3339: string) => string;
 };
 
-const IDS = new Set<string>(['userId', 'sessionId', 'pid', 'crash']);
+const IDS = new Set<string>(['userId', 'sessionId', 'pid', 'crash', 'serverId']);
 /** FXServer build numbers, which read as they are written, not as quantities. */
 const BUILDS = new Set<string>(['build', 'from', 'to', 'previous']);
 const MASKS = new Set<string>(['permissions', 'added', 'removed']);

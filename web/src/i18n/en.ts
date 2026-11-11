@@ -148,7 +148,8 @@ const permissions = {
     },
     serverControl: {
         name: 'Start and stop the server',
-        description: 'Start, stop and restart FXServer, now or once at a set time.',
+        description:
+            'Start, stop and restart FXServer, now or once at a set time, and kick everyone connected at once.',
     },
     scheduleManage: {
         name: 'Manage the schedule',
@@ -247,6 +248,18 @@ const permissions = {
         name: 'Delete entities',
         description:
             'Delete vehicles, peds and objects from the game, up to a hundred at a time. Players near them see them vanish.',
+    },
+    playersKick: {
+        name: 'Kick players',
+        description: 'Drop a connected player, who reads the kick message and can connect again.',
+    },
+    playersAnnounce: {
+        name: 'Send announcements',
+        description: "Write to every connected player, through whatever the server's resources show.",
+    },
+    playersMessage: {
+        name: 'Message players',
+        description: "Write to one connected player, through whatever the server's resources show.",
     },
     allowlistManage: {
         name: 'Manage the allowlist',
@@ -2993,6 +3006,57 @@ export const en = {
             return count(minutes, { one: 'minute', other: 'minutes' });
         },
     },
+    moderation: {
+        actions: (name: string) => `Actions for ${name}`,
+        openProfile: 'Open profile',
+        kick: 'Kick…',
+        message: 'Message…',
+        more: 'More server actions',
+        counter: (used: number, max: number) => `${formatNumber('en', used)} / ${formatNumber('en', max)}`,
+        player: (id: number, licence: string | null) =>
+            licence === null ? `Server ID ${id}` : `Server ID ${id} · ${licence}`,
+        raised: (event: string) =>
+            `Observer shows players nothing of it: it raises ${event}, and your server's resources show it. Without one that handles it, nobody reads it.`,
+        kickDialog: {
+            title: (name: string) => `Kick ${name}`,
+            reason: 'Reason',
+            reasonHint: 'The player reads it in the kick message, and can connect again at once.',
+            reasonMissing: 'Say why: the player reads it.',
+            submit: 'Kick',
+            done: (name: string) => `The server was told to kick ${name}.`,
+        },
+        kickAll: {
+            menu: 'Kick everyone…',
+            title: 'Kick everyone?',
+            lead: (players: number) =>
+                players === 0
+                    ? 'No player is connected.'
+                    : `${count(players, { one: 'player is', other: 'players are' })} connected. Each one is dropped with the kick message, and can connect again at once.`,
+            reason: 'Reason',
+            reasonHint: 'Every player reads it in the kick message.',
+            reasonMissing: 'Say why: every player reads it.',
+            submit: 'Kick everyone',
+            done: (players: number) =>
+                players === 0
+                    ? 'Nobody was connected.'
+                    : `The server was told to kick the ${count(players, { one: 'player', other: 'players' })} connected.`,
+        },
+        announce: {
+            menu: 'Send an announcement…',
+            title: 'Send an announcement',
+            text: 'Announcement',
+            missing: 'Write the announcement.',
+            submit: 'Send',
+            done: 'The announcement was sent to the server.',
+        },
+        messageDialog: {
+            title: (name: string) => `Message ${name}`,
+            text: 'Message',
+            missing: 'Write the message.',
+            submit: 'Send',
+            done: (name: string) => `The message for ${name} was sent to the server.`,
+        },
+    },
     drops: {
         title: 'Player drops',
         gloss: 'How sessions end, and whether it changes.',
@@ -5404,8 +5468,8 @@ export const en = {
                 about: 'How Observer starts FXServer: the folder, the cfg, OneSync and what goes on the command line. Most of these apply at the next start of FXServer.',
             },
             bans: {
-                name: 'Bans',
-                about: 'What a banned player reads, and how much of a ban they must show to be refused. Banning and lifting is on the Bans page.',
+                name: 'Bans and kicks',
+                about: 'What a banned player and a kicked player read, and how much of a ban a player must show to be refused. Banning and lifting is on the Bans page.',
             },
             allowlist: {
                 name: 'Allowlist',
@@ -5727,7 +5791,11 @@ export const en = {
             },
             refusalMessage: {
                 label: 'Refusal message',
-                about: 'What a banned player reads when the server refuses them, or drops them: the only text Observer ever shows players. {reason}, {ends}, {id}, {name} and {by} are filled in.',
+                about: 'What a banned player reads when the server refuses them, or drops them. With the kick message, it is all the text Observer ever shows players. {reason}, {ends}, {id}, {name} and {by} are filled in.',
+            },
+            kickMessage: {
+                label: 'Kick message',
+                about: 'What a player reads when the staff kicks them, or kicks everyone. {reason} and {by} are filled in.',
             },
             mapImagery: {
                 label: 'Map',
@@ -6012,6 +6080,12 @@ export const en = {
             },
             messageMissing: 'Write a message: a banned player always reads one.',
             messageTooLong: (max: number) => `${formatNumber('en', max)} characters at most.`,
+            bans: 'Bans',
+            kicks: 'Kicks',
+            kickPreview: 'Preview, with an example kick',
+            kickExample: { reason: 'RDM at the hospital', by: 'maxime' },
+            kickMessageMissing: 'Write a message: a kicked player always reads one.',
+            kickSaved: 'Saved. The next kick reads it.',
             tokensOutOfRange: (max: number) => `From 0 to ${formatNumber('en', max)}.`,
             saved: 'Saved. The next connection reads it.',
             discarded: 'Changes discarded.',
@@ -6303,6 +6377,11 @@ export const en = {
             resource_stopped: 'Resource stopped',
             resource_restarted: 'Resource restarted',
             resources_rescanned: 'Resource folders rescanned',
+            player_kicked: 'Player kicked',
+            everyone_kicked: 'Everyone kicked',
+            kick_settings_changed: 'Kick message changed',
+            announcement_sent: 'Announcement sent',
+            direct_message_sent: 'Message sent to a player',
             allowlist_request_approved: 'Allowlist request approved',
             allowlist_request_denied: 'Allowlist request denied',
             allowlist_requests_denied: 'Allowlist requests denied',
@@ -6513,7 +6592,10 @@ export const en = {
             entities: 'Entities',
             more: 'In smaller groups',
             everySeconds: 'Every',
+            serverId: 'Server ID',
             license: 'Licence',
+            message: 'Message',
+            players: 'Players connected',
             playerName: 'Player',
             note: 'Note',
             denied: 'Denied',
@@ -7011,6 +7093,19 @@ export const en = {
             typeof params.maxMessage === 'number' && typeof params.maxTokens === 'number'
                 ? `Write a refusal message of ${formatNumber('en', params.maxMessage)} characters at most, and ask for 0 to ${formatNumber('en', params.maxTokens)} tokens.`
                 : 'These settings are out of range.',
+        player_not_connected: 'This player is no longer connected.',
+        invalid_kick: (params) =>
+            typeof params.max === 'number'
+                ? `Give a reason of ${formatNumber('en', params.max)} characters at most: the player reads it.`
+                : 'Give a reason: the player reads it.',
+        invalid_kick_settings: (params) =>
+            typeof params.maxMessage === 'number'
+                ? `Write a kick message of ${formatNumber('en', params.maxMessage)} characters at most.`
+                : 'Write a kick message.',
+        invalid_message: (params) =>
+            typeof params.max === 'number'
+                ? `Write a text of ${formatNumber('en', params.max)} characters at most.`
+                : 'Write a text.',
         allowlist_request_not_found: 'No request waits under this ID: someone answered it already.',
         approval_not_found: 'This approval is gone: someone took it back already.',
         already_approved: 'This licence is approved already.',

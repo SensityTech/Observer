@@ -22,6 +22,7 @@ mod files;
 mod maintenance;
 mod map;
 mod metrics;
+mod moderation;
 mod players;
 mod resources;
 mod schedule;
@@ -111,6 +112,12 @@ pub(crate) fn routes() -> Vec<Route> {
     let lift = Permission(P::BANS_LIFT);
     let read_ban_settings = Permission(P::SETTINGS_VIEW);
     let change_ban_settings = Reauthenticated(P::SETTINGS_MANAGE);
+    // A kick, an announcement and a message to a player are three permissions. Kicking everyone
+    // empties the server as a restart does, so it is the server control's. The kick message is
+    // shown to players as the bans' message is: the settings' permission and the password again.
+    let kick = Permission(P::PLAYERS_KICK);
+    let announce = Permission(P::PLAYERS_ANNOUNCE);
+    let message = Permission(P::PLAYERS_MESSAGE);
     // The allowlist's lists hold names and licences, the players' own; answering a request,
     // approving a licence or taking an approval back is its own permission. Its switch and its
     // message go by the rule of the bans' message.
@@ -282,6 +289,12 @@ pub(crate) fn routes() -> Vec<Route> {
         route(M::GET,    "/servers/default/bans/settings",     read_ban_settings,   bans::settings),
         route(M::PUT,    "/servers/default/bans/settings",     change_ban_settings, bans::change_settings),
         route(M::POST,   "/servers/default/bans/{code}/lift",  lift,    bans::lift),
+        route(M::POST,   "/servers/default/kicks",             kick,     moderation::kick),
+        route(M::POST,   "/servers/default/kicks/all",         control,  moderation::kick_all),
+        route(M::GET,    "/servers/default/kicks/settings",    read_ban_settings,   moderation::settings),
+        route(M::PUT,    "/servers/default/kicks/settings",    change_ban_settings, moderation::change_settings),
+        route(M::POST,   "/servers/default/announcements",     announce, moderation::announce),
+        route(M::POST,   "/servers/default/messages",          message,  moderation::message),
         route(M::GET,    "/servers/default/allowlist/requests",                allowlist, allowlist::requests),
         route(M::POST,   "/servers/default/allowlist/requests/deny",           admit,     allowlist::deny_requests),
         route(M::POST,   "/servers/default/allowlist/requests/{code}/approve", admit,     allowlist::approve_request),

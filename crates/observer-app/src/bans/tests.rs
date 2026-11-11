@@ -263,6 +263,124 @@ async fn a_banned_player_is_refused_with_the_owners_message_and_counted() {
 }
 
 #[tokio::test]
+async fn a_ban_is_told_as_txadmin_tells_one_with_what_it_holds_and_who_it_drops() {
+    let lab = Lab::new().await;
+    let (bans, task) = lab.bans();
+    let kaito = lab.kaito().await;
+    let two_days = Some(2 * 24 * 60);
+    let ban = bans
+        .ban(
+            &staff(Permissions::PLAYERS_BAN),
+            request(Some(kaito), &[], two_days),
+        )
+        .await
+        .unwrap();
+    let held = [
+        ("discord".to_owned(), DISCORD.to_owned()),
+        (
+            "license".to_owned(),
+            KAITO.trim_start_matches("license:").to_owned(),
+        ),
+        ("token".to_owned(), token(1)),
+        ("token".to_owned(), token(2)),
+    ];
+    let second_account = showing(&[&format!("license:{}", "c".repeat(40))], &[token(1)]);
+    let dropped = [(4, second_account.clone()), (9, showing(&[KAITO], &[]))];
+    let sharing = [(7, second_account.clone()), (4, second_account)];
+    let by_hand = Ban {
+        name: None,
+        license: None,
+        ends_at: None,
+        ..ban.clone()
+    };
+    let settings = BansSettings::default();
+
+    let told = bans.txadmin_ban(&ban, two_days, &held, &dropped, &settings);
+    let nobody = bans.txadmin_ban(&by_hand, None, &held[..1], &[], &settings);
+    let shared = bans.txadmin_ban(&by_hand, None, &held, &sharing, &settings);
+
+    assert_eq!(
+        (told.author.as_str(), told.reason.as_str()),
+        ("maxime", "Aimbot on stream")
+    );
+    assert_eq!(told.action_id, ban.code);
+    assert_eq!(told.expiration, ban.ends_at.map(Timestamp::as_second));
+    assert_eq!(
+        (told.duration_input.as_str(), told.duration_translated.as_deref()),
+        ("2 days", Some("2 days"))
+    );
+    assert_eq!(
+        told.target_net_id,
+        Some(9),
+        "the player banned, not the account that shares a token"
+    );
+    assert_eq!(told.target_ids, [KAITO.to_owned(), format!("discord:{DISCORD}")]);
+    assert_eq!(told.target_hwids, [token(1), token(2)]);
+    assert_eq!(told.target_name, "kaito");
+    assert_eq!(
+        told.kick_message,
+        format!(
+            "You are banned from this server.\nReason: Aimbot on stream\nEnds: 2026-11-11 21:00 (Europe/Paris)\nBan ID: {}",
+            ban.code
+        )
+    );
+    assert_eq!(nobody.expiration, None);
+    assert_eq!(
+        (
+            nobody.duration_input.as_str(),
+            nobody.duration_translated,
+            nobody.target_net_id
+        ),
+        ("permanent", None, None)
+    );
+    assert_eq!(
+        shared.target_net_id,
+        Some(4),
+        "the lowest id among the players dropped, whatever their order"
+    );
+    assert_eq!(nobody.target_ids, [format!("discord:{DISCORD}")]);
+    assert_eq!(nobody.target_hwids, Vec::<String>::new());
+    assert_eq!(nobody.target_name, "identifiers");
+    task.close().await;
+}
+
+#[tokio::test]
+async fn a_lifted_ban_is_told_as_txadmin_tells_an_action_revoked_with_what_the_ban_holds() {
+    let lab = Lab::new().await;
+    let (bans, task) = lab.bans();
+    let kaito = lab.kaito().await;
+    let ban = bans
+        .ban(&staff(Permissions::PLAYERS_BAN), request(Some(kaito), &[], None))
+        .await
+        .unwrap();
+    let code = ban.code.clone();
+    let held = lab.db.read(move |conn| stored::held(conn, &code)).await.unwrap();
+    let by_hand = Ban {
+        name: None,
+        ..ban.clone()
+    };
+
+    let told = txadmin_revocation(&ban, &held, "sarah");
+    let unnamed = serde_json::to_value(txadmin_revocation(&by_hand, &held, "sarah")).unwrap();
+
+    assert_eq!(told.action_id, ban.code);
+    assert_eq!(told.action_type, TxAdminAction::Ban);
+    assert_eq!(
+        (
+            told.action_reason.as_str(),
+            told.action_author.as_str(),
+            told.revoked_by.as_str()
+        ),
+        ("Aimbot on stream", "maxime", "sarah")
+    );
+    assert_eq!(told.player_name.as_deref(), Some("kaito"));
+    assert_eq!(told.player_ids, [KAITO.to_owned(), format!("discord:{DISCORD}")]);
+    assert_eq!(told.player_hwids, [token(1), token(2)]);
+    assert_eq!(unnamed["playerName"], json!(false));
+    task.close().await;
+}
+
+#[tokio::test]
 async fn tokens_alone_refuse_only_as_many_as_the_settings_ask() {
     let lab = Lab::new().await;
     let (bans, task) = lab.bans();

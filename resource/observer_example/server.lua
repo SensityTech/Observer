@@ -1,7 +1,7 @@
 -- Listens to the server events of Observer's integration contract (resource/CONTRACT.md) and prints
 -- each one with its fields, and gives players labels for Observer's panel from the console. It
 -- shows nothing to players: the comments mark where your own notifications, cancellation notices,
--- saves and labels would go.
+-- saves, labels and the staff's announcements and messages would go.
 
 -- The contract this resource was written for.
 local CONTRACT_VERSION = 6
@@ -90,6 +90,24 @@ end)
 AddEventHandler('observer:playerBanned', function(payload)
     log('playerBanned ' .. fields(payload, { 'player', 'ban', 'reason', 'endsAt', 'by', 'name', 'license' }))
     -- Your saves go here: player payload.player is dropped right after this event.
+end)
+
+AddEventHandler('observer:playerKicked', function(payload)
+    log('playerKicked ' .. fields(payload, { 'player', 'reason', 'by', 'cause' }))
+    -- Your saves go here: player payload.player is still connected, and dropped once the handlers
+    -- of the kick have run.
+end)
+
+AddEventHandler('observer:announcement', function(payload)
+    log('announcement ' .. fields(payload, { 'by', 'message' }))
+    -- What shows it to everyone goes here, a line of FXServer's chat (`chat:addMessage`) or your own
+    -- notification: Observer shows players nothing of an announcement.
+end)
+
+AddEventHandler('observer:directMessage', function(payload)
+    log('directMessage ' .. fields(payload, { 'player', 'by', 'message' }))
+    -- What shows it to payload.player alone goes here, the same way, while
+    -- GetPlayerName(payload.player) still answers: they may have left since the staff wrote.
 end)
 
 AddEventHandler('observer:maintenance', function(payload)

@@ -44,7 +44,10 @@ impl Permissions {
     pub const RESOURCES_CONTROL: Self = Self(1 << 26);
     pub const ENTITIES_VIEW: Self = Self(1 << 27);
     pub const ENTITIES_DELETE: Self = Self(1 << 28);
-    pub const ALLOWLIST_MANAGE: Self = Self(1 << 29);
+    pub const PLAYERS_KICK: Self = Self(1 << 29);
+    pub const PLAYERS_ANNOUNCE: Self = Self(1 << 30);
+    pub const PLAYERS_MESSAGE: Self = Self(1 << 31);
+    pub const ALLOWLIST_MANAGE: Self = Self(1 << 32);
 
     /// Every permission in the catalog, which is what the owner holds.
     pub fn all() -> Self {
@@ -497,6 +500,33 @@ pub const CATALOG: &[PermissionInfo] = &[
     },
     PermissionInfo {
         bit: 29,
+        constant: "PLAYERS_KICK",
+        key: "playersKick",
+        area: PermissionArea::Players,
+        // A kick drops a connected player, who reads the owner's message and may come back.
+        danger: Danger::Sensitive,
+        implies: Permissions::PLAYERS_VIEW,
+    },
+    PermissionInfo {
+        bit: 30,
+        constant: "PLAYERS_ANNOUNCE",
+        key: "playersAnnounce",
+        area: PermissionArea::Players,
+        // An announcement goes to every connected player, in whatever the server's resources show.
+        danger: Danger::Sensitive,
+        implies: Permissions::NONE,
+    },
+    PermissionInfo {
+        bit: 31,
+        constant: "PLAYERS_MESSAGE",
+        key: "playersMessage",
+        area: PermissionArea::Players,
+        // A message reaches one connected player, in the staff's name.
+        danger: Danger::Sensitive,
+        implies: Permissions::PLAYERS_VIEW,
+    },
+    PermissionInfo {
+        bit: 32,
         constant: "ALLOWLIST_MANAGE",
         key: "allowlistManage",
         area: PermissionArea::Players,
@@ -547,7 +577,10 @@ mod tests {
             (26, "RESOURCES_CONTROL", Permissions::RESOURCES_CONTROL),
             (27, "ENTITIES_VIEW", Permissions::ENTITIES_VIEW),
             (28, "ENTITIES_DELETE", Permissions::ENTITIES_DELETE),
-            (29, "ALLOWLIST_MANAGE", Permissions::ALLOWLIST_MANAGE),
+            (29, "PLAYERS_KICK", Permissions::PLAYERS_KICK),
+            (30, "PLAYERS_ANNOUNCE", Permissions::PLAYERS_ANNOUNCE),
+            (31, "PLAYERS_MESSAGE", Permissions::PLAYERS_MESSAGE),
+            (32, "ALLOWLIST_MANAGE", Permissions::ALLOWLIST_MANAGE),
         ];
 
         assert_eq!(CATALOG.len(), frozen.len());

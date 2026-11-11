@@ -1,8 +1,8 @@
 -- Observer's side of the server: it reports health to Observer through FXServer's structured trace
 -- channel, and turns Observer's commands into server events for other resources to handle.
 -- It never shows anything to players but what the owner wrote: the refusal messages, one for bans,
--- one for maintenance mode, one for the allowlist, and the name the server takes in the server list
--- during maintenance.
+-- one for maintenance mode, one for the allowlist, the kick message, and the name the server takes
+-- in the server list during maintenance.
 
 -- Bumped when a field is renamed or removed, when resources must find the bridge another way, and
 -- when the bridge gains an export, so that a resource can tell whether it is there; new fields keep
@@ -34,6 +34,8 @@ local EVENTS = {
     restartRescheduled = true,
     shuttingDown = true,
     startChanges = true,
+    announcement = true,
+    directMessage = true,
     maintenance = true,
 }
 
@@ -771,6 +773,28 @@ local function deleteListed(payload)
     end)
 end
 
+-- Whether the owner asked for txAdmin's events beside Observer's own.
+local function txadminEvents()
+    return GetConvarInt('observer_txadmin_events', 0) == 1
+end
+
+-- One of txAdmin's events, raised with the payload Observer wrote for it when the owner asked.
+local function txadminEvent(name, payload)
+    if type(payload.event) == 'table' and txadminEvents() then
+        TriggerEvent(name, payload.event)
+    end
+end
+
+-- `observer:playerKicked` for one player of a kick. Handlers may keep the table: each gets its own.
+local function kickedEvent(event, id)
+    local copy = {}
+    for key, value in pairs(event) do
+        copy[key] = value
+    end
+    copy.player = id
+    return copy
+end
+
 -- The convars FiveM's server list reads a server's name from, each with the server convar that
 -- keeps what it held while the server carries its maintenance name: convars, so that a bridge
 -- restarted in the middle of a run still gives the names back.
@@ -805,6 +829,54 @@ local ACTIONS = {
             TriggerEvent('observer:playerBanned', payload.event)
         end
         DropPlayer(tostring(id), payload.message)
+    end,
+    -- Every event of a kick is raised before its first drop: all its players are still connected.
+    kick = function(payload)
+        local event = payload.event
+        if type(payload.message) ~= 'string' or payload.message == '' or type(event) ~= 'table' then
+            return
+        end
+        local everyone = payload.all == true
+        local players = everyone and GetPlayers() or payload.players
+        if type(players) ~= 'table' then
+            return
+        end
+        local txadmin = txadminEvents()
+        local function txadminKicked(target)
+            TriggerEvent('txAdmin:events:playerKicked', {
+                target = target,
+                author = event.by,
+                reason = event.reason,
+                dropMessage = payload.message,
+            })
+        end
+        local kicked = {}
+        for _, player in ipairs(players) do
+            local id = connected(player)
+            if id then
+                kicked[#kicked + 1] = id
+                TriggerEvent('observer:playerKicked', kickedEvent(event, id))
+                if txadmin and not everyone then
+                    txadminKicked(id)
+                end
+            end
+        end
+        -- txAdmin tells of a kick of everyone once, with -1 for the player.
+        if txadmin and everyone then
+            txadminKicked(-1)
+        end
+        for _, id in ipairs(kicked) do
+            DropPlayer(tostring(id), payload.message)
+        end
+    end,
+    -- A ban just made, for resources written against txAdmin: Observer raises nothing of its own
+    -- for a ban that drops nobody.
+    banned = function(payload)
+        txadminEvent('txAdmin:events:playerBanned', payload)
+    end,
+    -- A ban just lifted, for resources written against txAdmin: Observer raises nothing of its own.
+    lifted = function(payload)
+        txadminEvent('txAdmin:events:actionRevoked', payload)
     end,
     positions = function(payload)
         if type(payload.everyMs) ~= 'number' or type(payload.forMs) ~= 'number' then
@@ -1018,6 +1090,19 @@ local TXADMIN = {
             { 'txAdmin:events:serverShuttingDown', { delay = payload.delayMs, author = payload.by, message = '' } },
         }
     end,
+    announcement = function(payload)
+        return {
+            { 'txAdmin:events:announcement', { message = payload.message, author = payload.by } },
+        }
+    end,
+    directMessage = function(payload)
+        return {
+            {
+                'txAdmin:events:playerDirectMessage',
+                { target = payload.player, author = payload.by, message = payload.message },
+            },
+        }
+    end,
 }
 
 -- Observer sends JSON in lowercase hex, which no quote, semicolon or line break can break up.
@@ -1053,7 +1138,7 @@ RegisterCommand('observer_cmd', function(source, args)
     end
     TriggerEvent('observer:' .. command.event, command.payload)
     local txadmin = TXADMIN[command.event]
-    if txadmin and GetConvarInt('observer_txadmin_events', 0) == 1 then
+    if txadmin and txadminEvents() then
         for _, event in ipairs(txadmin(command.payload)) do
             TriggerEvent(event[1], event[2])
         end

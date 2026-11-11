@@ -255,6 +255,21 @@ pub enum AuditAction {
     ResourceRestarted,
     /// Someone had FXServer read its resource folders again.
     ResourcesRescanned,
+    /// A connected player was kicked. The target is their name, when the server gave one;
+    /// `details` hold their `serverId`, their `license` and the `reason`.
+    PlayerKicked,
+    /// Everyone connected was kicked. `details` hold the `reason` and the `players` Observer
+    /// counted as connected.
+    EveryoneKicked,
+    /// `details` hold each changed setting with its value before and after.
+    KickSettingsChanged,
+    /// An announcement was raised for the server's resources to show. `details` hold its
+    /// `message`.
+    AnnouncementSent,
+    /// A message to one connected player was raised for the server's resources to show. The
+    /// target is the player's name, when the server gave one; `details` hold their `serverId`,
+    /// their `license` and the `message`.
+    DirectMessageSent,
     /// A refused player's request was approved. The target is the request's code; `details` hold
     /// the licence and the player's name.
     AllowlistRequestApproved,
@@ -283,7 +298,7 @@ pub enum AuditAction {
 }
 
 impl AuditAction {
-    pub const ALL: [Self; 128] = [
+    pub const ALL: [Self; 133] = [
         Self::SetupCompleted,
         Self::SetupLinkCreated,
         Self::LoginSucceeded,
@@ -401,6 +416,11 @@ impl AuditAction {
         Self::ResourceStopped,
         Self::ResourceRestarted,
         Self::ResourcesRescanned,
+        Self::PlayerKicked,
+        Self::EveryoneKicked,
+        Self::KickSettingsChanged,
+        Self::AnnouncementSent,
+        Self::DirectMessageSent,
         Self::AllowlistRequestApproved,
         Self::AllowlistRequestDenied,
         Self::AllowlistRequestsDenied,
@@ -534,6 +554,11 @@ impl AuditAction {
             Self::ResourceStopped => "resource_stopped",
             Self::ResourceRestarted => "resource_restarted",
             Self::ResourcesRescanned => "resources_rescanned",
+            Self::PlayerKicked => "player_kicked",
+            Self::EveryoneKicked => "everyone_kicked",
+            Self::KickSettingsChanged => "kick_settings_changed",
+            Self::AnnouncementSent => "announcement_sent",
+            Self::DirectMessageSent => "direct_message_sent",
             Self::AllowlistRequestApproved => "allowlist_request_approved",
             Self::AllowlistRequestDenied => "allowlist_request_denied",
             Self::AllowlistRequestsDenied => "allowlist_requests_denied",

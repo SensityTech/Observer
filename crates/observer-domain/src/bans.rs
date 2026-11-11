@@ -147,7 +147,7 @@ impl BansSettings {
     /// or more tokens than a ban is worth.
     #[must_use]
     pub fn checked(&self) -> Option<Self> {
-        let message = clean_message(&self.message)?;
+        let message = clean_message(&self.message, MAX_MESSAGE_CHARS)?;
         (self.token_matches <= MAX_TOKEN_MATCHES).then_some(Self {
             message,
             token_matches: self.token_matches,
@@ -163,9 +163,9 @@ pub fn clean_line(text: &str, max: usize) -> Option<String> {
     (!kept.is_empty() && kept.chars().count() <= max).then(|| kept.to_owned())
 }
 
-/// The owner's message, line by line: hidden characters removed from each, blank lines at its
-/// ends dropped.
-pub(crate) fn clean_message(text: &str) -> Option<String> {
+/// A text of several lines typed in the panel: hidden characters removed from each line, blank
+/// lines at its ends dropped. `None` when nothing is left or more than `max` characters are.
+pub fn clean_message(text: &str, max: usize) -> Option<String> {
     let lines: Vec<String> = text
         .lines()
         .map(|line| {
@@ -179,7 +179,7 @@ pub(crate) fn clean_message(text: &str) -> Option<String> {
     let first = lines.iter().position(|line| !line.trim().is_empty())?;
     let last = lines.iter().rposition(|line| !line.trim().is_empty())?;
     let message = lines[first..=last].join("\n");
-    (message.chars().count() <= MAX_MESSAGE_CHARS).then_some(message)
+    (message.chars().count() <= max).then_some(message)
 }
 
 /// What the refusal message's placeholders stand for.
@@ -194,21 +194,19 @@ pub struct RefusalValues<'a> {
 
 /// The ban's refusal message, its placeholders filled in.
 pub fn refusal(message: &str, values: &RefusalValues<'_>) -> String {
-    fill(
-        message,
-        &[
-            ("{reason}", values.reason),
-            ("{ends}", values.ends),
-            ("{id}", values.code),
-            ("{name}", values.name),
-            ("{by}", values.by),
-        ],
-    )
+    let placeholders = [
+        ("{reason}", values.reason),
+        ("{ends}", values.ends),
+        ("{id}", values.code),
+        ("{name}", values.name),
+        ("{by}", values.by),
+    ];
+    fill(message, &placeholders, MAX_REFUSAL_BYTES)
 }
 
-/// A message the owner wrote with its placeholders filled in, in one pass: a value that holds
-/// `{name}` stays as written. Cut to [`MAX_REFUSAL_BYTES`] on a character boundary.
-pub fn fill(message: &str, placeholders: &[(&str, &str)]) -> String {
+/// An owner's message with its placeholders filled in, in one pass, and cut to `max_bytes` on a
+/// character boundary.
+pub fn fill(message: &str, placeholders: &[(&str, &str)], max_bytes: usize) -> String {
     let mut text = String::with_capacity(message.len());
     let mut rest = message;
     while let Some(start) = rest.find('{') {
@@ -223,7 +221,7 @@ pub fn fill(message: &str, placeholders: &[(&str, &str)]) -> String {
         }
     }
     text.push_str(rest);
-    let mut end = text.len().min(MAX_REFUSAL_BYTES);
+    let mut end = text.len().min(max_bytes);
     while !text.is_char_boundary(end) {
         end -= 1;
     }

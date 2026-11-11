@@ -5,7 +5,7 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use crate::bans::{clean_line, clean_message, fill};
+use crate::bans::{MAX_MESSAGE_CHARS, MAX_REFUSAL_BYTES, clean_line, clean_message, fill};
 
 /// The most players the list of those who still get in holds.
 pub const MAX_PASSES: u32 = 200;
@@ -47,7 +47,7 @@ impl MaintenanceSettings {
             name => name,
         };
         Some(Self {
-            message: clean_message(&self.message)?,
+            message: clean_message(&self.message, MAX_MESSAGE_CHARS)?,
             server_name,
         })
     }
@@ -56,7 +56,7 @@ impl MaintenanceSettings {
 /// What a player reads when maintenance refuses them: the owner's message with their name filled
 /// in.
 pub fn refusal(message: &str, name: &str) -> String {
-    fill(message, &[("{name}", name)])
+    fill(message, &[("{name}", name)], MAX_REFUSAL_BYTES)
 }
 
 /// `PUT /api/servers/default/maintenance`.

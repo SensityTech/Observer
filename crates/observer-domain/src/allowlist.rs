@@ -5,7 +5,7 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use crate::bans::{CODE_ALPHABET, clean_message, fill};
+use crate::bans::{CODE_ALPHABET, MAX_MESSAGE_CHARS, MAX_REFUSAL_BYTES, clean_message, fill};
 use crate::players::{Search, SearchRefusal};
 
 /// The longest note the staff writes beside a licence approved ahead of a first visit.
@@ -40,7 +40,7 @@ impl AllowlistSettings {
     pub fn checked(&self) -> Option<Self> {
         Some(Self {
             enabled: self.enabled,
-            message: clean_message(&self.message)?,
+            message: clean_message(&self.message, MAX_MESSAGE_CHARS)?,
         })
     }
 }
@@ -48,7 +48,7 @@ impl AllowlistSettings {
 /// What a player who is not approved reads: the owner's message with the request's code and the
 /// player's name filled in.
 pub fn refusal(message: &str, request: &str, name: &str) -> String {
-    fill(message, &[("{id}", request), ("{name}", name)])
+    fill(message, &[("{id}", request), ("{name}", name)], MAX_REFUSAL_BYTES)
 }
 
 /// A request's code from six random bytes: `XXX-XXX`, shorter than a ban's so that nobody takes

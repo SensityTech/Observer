@@ -11,7 +11,7 @@ use super::{OWNER_PASSWORD, Server};
 
 const DASHBOARD_VIEW: &str = "1";
 const PLAYERS_VIEW: &str = "4000";
-const ALLOWLIST_MANAGE: &str = "20000000";
+const ALLOWLIST_MANAGE: &str = "100000000";
 const SETTINGS_MANAGE: &str = "400";
 const KAITO: &str = "license:00000000000000000000000000000000000000aa";
 const MIRA: &str = "license:00000000000000000000000000000000000000bb";

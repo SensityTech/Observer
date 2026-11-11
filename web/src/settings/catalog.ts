@@ -34,6 +34,7 @@ export type SettingId =
     | 'backupsLast'
     | 'refusalMessage'
     | 'tokenMatches'
+    | 'kickMessage'
     | 'allowlistEnabled'
     | 'allowlistMessage'
     | 'maintenanceMessage'
@@ -178,6 +179,7 @@ export const CATEGORIES: readonly Category[] = [
         settings: [
             { id: 'refusalMessage', applies: 'now' },
             { id: 'tokenMatches', applies: 'now' },
+            { id: 'kickMessage', applies: 'now' },
         ],
     },
     {

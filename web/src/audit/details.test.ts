@@ -289,6 +289,20 @@ describe('auditDetails', () => {
         );
     });
 
+    it('should read a kick and a message with the server ID as it is written and the licence named', () => {
+        const license = 'license:00000000000000000000000000000000000000aa';
+
+        expect(auditDetails(en, format, { serverId: 1204, license, reason: 'RDM' }, 'player_kicked')).toBe(
+            `Server ID: 1204 · Licence: ${license} · Reason: RDM`,
+        );
+        expect(auditDetails(en, format, { reason: 'Maintenance', players: 1204 }, 'everyone_kicked')).toBe(
+            'Reason: Maintenance · Players connected: 1,204',
+        );
+        expect(
+            auditDetails(en, format, { serverId: 3, license: null, message: 'Hello' }, 'direct_message_sent'),
+        ).toBe('Server ID: 3 · Licence: not set · Message: Hello');
+    });
+
     it('should leave a file group changed as the log stores it, not as changed settings', () => {
         const before = { name: 'scripts', rules: [], reach: 'read' };
         const after = { name: 'assets', rules: [], reach: 'assets' };
