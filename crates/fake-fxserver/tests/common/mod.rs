@@ -5,8 +5,11 @@
 #![allow(dead_code, clippy::unwrap_used)]
 
 use std::io::ErrorKind;
-use std::net::{Ipv4Addr, TcpListener};
+use std::net::{Ipv4Addr, SocketAddr, TcpListener};
 use std::ops::RangeInclusive;
+use std::sync::LazyLock;
+
+use tokio::sync::{Semaphore, SemaphorePermit};
 
 /// The loopback address a test holds its port on, which leaves 127.0.0.1 to FXServer.
 const CLAIMS: Ipv4Addr = Ipv4Addr::new(127, 0, 0, 2);
@@ -20,6 +23,7 @@ pub struct Port {
     /// listens once it has started. Whoever is given this one meanwhile, in this run or another,
     /// cannot claim it and asks for another.
     _claim: TcpListener,
+    _turn: Option<SemaphorePermit<'static>>,
 }
 
 impl Port {
@@ -35,6 +39,7 @@ impl Port {
                     return Self {
                         number,
                         _claim: claim,
+                        _turn: None,
                     };
                 }
                 Err(error) if error.kind() == ErrorKind::AddrInUse => {}
@@ -42,4 +47,30 @@ impl Port {
             }
         }
     }
+}
+
+/// Lends ports to the labs of a test file, to so many of them at a time, which bounds how many
+/// servers the file runs at once.
+pub struct Ports(Semaphore);
+
+impl Ports {
+    pub const fn new(at_a_time: usize) -> Self {
+        Self(Semaphore::const_new(at_a_time))
+    }
+
+    pub async fn lease(&'static self) -> Port {
+        let turn = self.0.acquire().await.unwrap();
+        Port {
+            _turn: Some(turn),
+            ..Port::free()
+        }
+    }
+}
+
+/// The panel's address the labs give Observer, which the cfg checks only compare with: a port held
+/// for the whole run, so that no server is given it.
+pub fn panel() -> SocketAddr {
+    static PANEL: LazyLock<TcpListener> =
+        LazyLock::new(|| TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap());
+    PANEL.local_addr().unwrap()
 }
