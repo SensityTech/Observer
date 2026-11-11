@@ -304,7 +304,7 @@ async fn a_ban_is_told_as_txadmin_tells_one_with_what_it_holds_and_who_it_drops(
         ("maxime", "Aimbot on stream")
     );
     assert_eq!(told.action_id, ban.code);
-    assert_eq!(told.expiration, Expiration(ban.ends_at.map(Timestamp::as_second)));
+    assert_eq!(told.expiration, ban.ends_at.map(Timestamp::as_second));
     assert_eq!(
         (told.duration_input.as_str(), told.duration_translated.as_deref()),
         ("2 days", Some("2 days"))
@@ -324,7 +324,7 @@ async fn a_ban_is_told_as_txadmin_tells_one_with_what_it_holds_and_who_it_drops(
             ban.code
         )
     );
-    assert_eq!(nobody.expiration, Expiration(None));
+    assert_eq!(nobody.expiration, None);
     assert_eq!(
         (
             nobody.duration_input.as_str(),
@@ -341,6 +341,42 @@ async fn a_ban_is_told_as_txadmin_tells_one_with_what_it_holds_and_who_it_drops(
     assert_eq!(nobody.target_ids, [format!("discord:{DISCORD}")]);
     assert_eq!(nobody.target_hwids, Vec::<String>::new());
     assert_eq!(nobody.target_name, "identifiers");
+    task.close().await;
+}
+
+#[tokio::test]
+async fn a_lifted_ban_is_told_as_txadmin_tells_an_action_revoked_with_what_the_ban_holds() {
+    let lab = Lab::new().await;
+    let (bans, task) = lab.bans();
+    let kaito = lab.kaito().await;
+    let ban = bans
+        .ban(&staff(Permissions::PLAYERS_BAN), request(Some(kaito), &[], None))
+        .await
+        .unwrap();
+    let code = ban.code.clone();
+    let held = lab.db.read(move |conn| stored::held(conn, &code)).await.unwrap();
+    let by_hand = Ban {
+        name: None,
+        ..ban.clone()
+    };
+
+    let told = txadmin_revocation(&ban, &held, "sarah");
+    let unnamed = serde_json::to_value(txadmin_revocation(&by_hand, &held, "sarah")).unwrap();
+
+    assert_eq!(told.action_id, ban.code);
+    assert_eq!(told.action_type, TxAdminAction::Ban);
+    assert_eq!(
+        (
+            told.action_reason.as_str(),
+            told.action_author.as_str(),
+            told.revoked_by.as_str()
+        ),
+        ("Aimbot on stream", "maxime", "sarah")
+    );
+    assert_eq!(told.player_name.as_deref(), Some("kaito"));
+    assert_eq!(told.player_ids, [KAITO.to_owned(), format!("discord:{DISCORD}")]);
+    assert_eq!(told.player_hwids, [token(1), token(2)]);
+    assert_eq!(unnamed["playerName"], json!(false));
     task.close().await;
 }
 

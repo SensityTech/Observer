@@ -982,7 +982,8 @@ address would be refused together.
 
 Your resources hear of both through `observer:playerRefused` and `observer:playerBanned`, in the
 contract. With **Send txAdmin's events too**, each ban made while the server runs also raises
-`txAdmin:events:playerBanned`, whether or not the player is connected.
+`txAdmin:events:playerBanned`, whether or not the player is connected, and each ban lifted raises
+`txAdmin:events:actionRevoked`.
 
 ## Kicks, announcements and messages
 

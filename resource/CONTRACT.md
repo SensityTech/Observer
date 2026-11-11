@@ -41,7 +41,8 @@ bridge, so that a resource can check for it before calling it.
 
 Version 5 added what the staff does to connected players: the bridge drops the players the staff
 kicks, with the kick message the owner wrote, and raises `observer:playerKicked`,
-`observer:announcement` and `observer:directMessage`.
+`observer:announcement` and `observer:directMessage`; with txAdmin's events, it also tells of each
+ban made or lifted.
 Version 4 added bans: the bridge holds every connecting player until Observer checks them, refuses a
 banned one, drops a connected player when they are banned, and raises `observer:playerRefused` and
 `observer:playerBanned`. Version 3 added the player labels: `setPlayerLabel` and `clearPlayerLabel`. Version 2 changed how a
@@ -295,9 +296,9 @@ resources, read `observer_bridge` and the bridge's files. Run only server resour
 Resources written for txAdmin can keep working: with **Send txAdmin's events too** checked in the
 launch settings, the bridge also raises txAdmin's events, from the next start of FXServer. Each comes
 right after Observer's own event, but for a ban's: txAdmin tells of a ban once, when it is made, and
-so does the bridge, before the players the ban drops hear `observer:playerBanned`. The
-`translatedMessage` of a restart warning and the `message` of a shutdown are always empty: Observer
-writes no text.
+so does the bridge, before the players the ban drops hear `observer:playerBanned`. A ban lifted
+raises only txAdmin's event: Observer has none of its own for it. The `translatedMessage` of a
+restart warning and the `message` of a shutdown are always empty: Observer writes no text.
 
 | Observer's event | txAdmin's events, in order | Their payload |
 |---|---|---|
@@ -310,6 +311,7 @@ writes no text.
 | `observer:directMessage` | `txAdmin:events:playerDirectMessage` | `target` (`player`), `author` (`by`), `message` |
 | `observer:playerRefused` | none | |
 | `observer:playerBanned` | `txAdmin:events:playerBanned` | Once for each ban made while the server runs, whether or not it drops anyone: `author` (`by`), `reason`, `actionId` (the ban's code), `expiration` (Unix seconds, `false` for a permanent ban), `durationInput` (`permanent`, or the length in txAdmin's units, as `2 hours`, `1 day`, `2 weeks` or `1 month`; in minutes when none of them holds it whole), `durationTranslated` (the same words, nil for a permanent ban: Observer translates nothing), `targetNetId` (the connected player the ban drops, nil for none; of several, the one the ban names, else the lowest id), `targetIds` (`kind:value`, the licence first), `targetHwids` (hardware tokens), `targetName` (`identifiers` for a ban that names no player), `kickMessage` (the refusal message, as a player the ban drops reads it). The console's line holds only so much: tokens are left out first, then identifiers, from the last |
+| none: a ban lifted | `txAdmin:events:actionRevoked` | Once for each ban lifted while the server runs: `actionId` (the ban's code), `actionType` (always `ban`), `actionReason` (the ban's reason), `actionAuthor` (who banned), `playerName` (`false` for a ban that names no player), `playerIds` (`kind:value`, the licence first), `playerHwids` (hardware tokens), `revokedBy` (who lifted the ban). The console's line holds only so much: tokens are left out first, then identifiers, from the last |
 
 txAdmin showed announcements and direct messages to players itself. Observer does not: a resource
 written for txAdmin's events shows them, the events alone show nothing.

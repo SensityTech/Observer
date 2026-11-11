@@ -283,6 +283,13 @@ local function txadminEvents()
     return GetConvarInt('observer_txadmin_events', 0) == 1
 end
 
+-- One of txAdmin's events, raised with the payload Observer wrote for it when the owner asked.
+local function txadminEvent(name, payload)
+    if type(payload.event) == 'table' and txadminEvents() then
+        TriggerEvent(name, payload.event)
+    end
+end
+
 -- `observer:playerKicked` for one player of a kick. Handlers may keep the table: each gets its own.
 local function kickedEvent(event, id)
     local copy = {}
@@ -352,9 +359,11 @@ local ACTIONS = {
     -- A ban just made, for resources written against txAdmin: Observer raises nothing of its own
     -- for a ban that drops nobody.
     banned = function(payload)
-        if type(payload.event) == 'table' and txadminEvents() then
-            TriggerEvent('txAdmin:events:playerBanned', payload.event)
-        end
+        txadminEvent('txAdmin:events:playerBanned', payload)
+    end,
+    -- A ban just lifted, for resources written against txAdmin: Observer raises nothing of its own.
+    lifted = function(payload)
+        txadminEvent('txAdmin:events:actionRevoked', payload)
     end,
     positions = function(payload)
         if type(payload.everyMs) ~= 'number' or type(payload.forMs) ~= 'number' then

@@ -17,7 +17,7 @@ use observer_app::{
     Sampling, Schedule, ScheduleSetup, ScheduleTask, Servers, Setup, Sources, Supervision,
 };
 use observer_domain::audit::{ActorKind, AuditAction, AuditEntry, AuditFilter, Outcome};
-use observer_domain::bans::{BanFilter, BanRequest};
+use observer_domain::bans::{BanFilter, BanRequest, LiftRequest};
 use observer_domain::diagnostics::{
     Alert, AlertKind, AnalysisState, CrashFileKind, CrashKind, DiagnosticsEvent, ListenerRole, ProcessKind,
     Protocol, Scope,
@@ -1647,9 +1647,8 @@ Ban ID: {}",
     assert_eq!(refusals, [(second.code.clone(), 1), (first.code.clone(), 1)]);
 }
 
-#[tokio::test]
-async fn a_ban_is_told_to_txadmin_s_listeners_once_before_it_drops_anyone() {
-    let mut observer = Observer::new(false).await;
+/// Has the owner check **Send txAdmin's events too**, which the next start of the server takes.
+async fn ask_for_txadmin_events(observer: &Observer) {
     let stored = observer
         .servers
         .launch_settings(Servers::DEFAULT)
@@ -1670,6 +1669,12 @@ async fn a_ban_is_told_to_txadmin_s_listeners_once_before_it_drops_anyone() {
         )
         .await
         .unwrap();
+}
+
+#[tokio::test]
+async fn a_ban_is_told_to_txadmin_s_listeners_once_before_it_drops_anyone() {
+    let mut observer = Observer::new(false).await;
+    ask_for_txadmin_events(&observer).await;
     let (bans, banning) = bans_over(&observer);
     let owner = observer.owner.clone();
     let absent = format!("license:{}", "a".repeat(40));
@@ -1731,18 +1736,57 @@ async fn a_ban_is_told_to_txadmin_s_listeners_once_before_it_drops_anyone() {
 }
 
 #[tokio::test]
-async fn a_ban_writes_nothing_for_txadmin_s_listeners_unless_the_owner_asked() {
+async fn a_lifted_ban_is_told_to_txadmin_s_listeners() {
+    let mut observer = Observer::new(false).await;
+    ask_for_txadmin_events(&observer).await;
+    let (bans, banning) = bans_over(&observer);
+    let owner = observer.owner.clone();
+    let license = format!("license:{}", "a".repeat(40));
+    let ban = bans.ban(&owner, ban_of(&license, None)).await.unwrap();
+
+    observer.supervision.start_server(&owner).await.unwrap();
+    observer.state(ServerState::Online).await;
+    let appeal = LiftRequest {
+        reason: Some("Appeal accepted".to_owned()),
+    };
+    bans.lift(&owner, &ban.code, appeal).await.unwrap();
+    let revoked = plain(&observer.console_until("txAdmin:events:actionRevoked").await.5);
+    observer.supervision.stop_server(&owner).await.unwrap();
+    observer.state(ServerState::Stopped).await;
+    banning.close().await;
+    observer.stop_observer().await;
+
+    for field in [
+        format!(r#""actionId":"{}""#, ban.code),
+        r#""actionType":"ban""#.to_owned(),
+        r#""actionReason":"Aimbot""#.to_owned(),
+        r#""actionAuthor":"ada""#.to_owned(),
+        r#""playerName":false"#.to_owned(),
+        format!(r#""playerIds":["{license}"]"#),
+        r#""playerHwids":[]"#.to_owned(),
+        r#""revokedBy":"ada""#.to_owned(),
+    ] {
+        assert!(revoked.contains(&field), "{field} in {revoked}");
+    }
+}
+
+#[tokio::test]
+async fn a_ban_and_its_lift_write_nothing_for_txadmin_s_listeners_unless_the_owner_asked() {
     let mut observer = Observer::new(false).await;
     let (bans, banning) = bans_over(&observer);
     let owner = observer.owner.clone();
 
     observer.supervision.start_server(&owner).await.unwrap();
     observer.state(ServerState::Online).await;
-    bans.ban(&owner, ban_of(&format!("license:{}", "a".repeat(40)), None))
+    let ban = bans
+        .ban(&owner, ban_of(&format!("license:{}", "a".repeat(40)), None))
         .await
         .unwrap();
-    observer.type_line("fake_print after the ban").await;
-    observer.console_until("] after the ban").await;
+    bans.lift(&owner, &ban.code, LiftRequest { reason: None })
+        .await
+        .unwrap();
+    observer.type_line("fake_print after the lift").await;
+    observer.console_until("] after the lift").await;
     let lines: Vec<String> = observer.console().iter().map(|line| plain(&line.5)).collect();
     observer.supervision.stop_server(&owner).await.unwrap();
     observer.state(ServerState::Stopped).await;
@@ -1750,9 +1794,11 @@ async fn a_ban_writes_nothing_for_txadmin_s_listeners_unless_the_owner_asked() {
     observer.stop_observer().await;
 
     assert!(
-        !lines
-            .iter()
-            .any(|line| line.contains("observer_cmd banned") || line.contains("txAdmin:events:playerBanned")),
+        !lines.iter().any(|line| {
+            ["observer_cmd banned", "observer_cmd lifted", "txAdmin:events:"]
+                .iter()
+                .any(|needle| line.contains(needle))
+        }),
         "{lines:#?}"
     );
 }
