@@ -28,6 +28,7 @@ use crate::bridge::{self, BridgeAction, BridgeEvent, Report, StopReason};
 use crate::cfg;
 use crate::console::{ConsoleHub, LineAssembler, LineFlags, LineKind, on_channel, plain, sanitize};
 use crate::crashes::{self, Collected, DumpLimits, HangSnapshotLimits, SnapshotFailure};
+use crate::entities::{EntityReport, EntityReportKind};
 use crate::exit;
 use crate::health::{self, HangCause, Health, HealthLimits, PlayerList, Players, Probe, Problem, Verdict};
 use crate::hook;
@@ -62,6 +63,8 @@ const PROCESS_EVENTS: usize = 1024;
 const PLAYER_REPORTS: usize = 8192;
 /// Every resource of a server that counts reports each second it had something to count.
 const HOOK_REPORTS: usize = 8192;
+/// A sweep of the entities comes in a few dozen parts.
+const ENTITY_REPORTS: usize = 256;
 /// How often the tree's members are compared with what its notifications said.
 const RECONCILE_EVERY: Duration = Duration::from_secs(5);
 /// A member younger than this is the notifications' to report: a fork may not have run its program
@@ -540,6 +543,7 @@ pub struct Supervisor {
     events: broadcast::Sender<Event>,
     processes: broadcast::Sender<TreeEvent>,
     players: broadcast::Sender<PlayerReport>,
+    entities: broadcast::Sender<EntityReport>,
     counts: broadcast::Sender<HookReport>,
     status: watch::Receiver<Status>,
     readings: watch::Receiver<Readings>,
@@ -553,6 +557,7 @@ impl Supervisor {
         let events = broadcast::channel(EVENTS).0;
         let processes = broadcast::channel(PROCESS_EVENTS).0;
         let players = broadcast::channel(PLAYER_REPORTS).0;
+        let entities = broadcast::channel(ENTITY_REPORTS).0;
         let counts = broadcast::channel(HOOK_REPORTS).0;
         let initial = Status {
             state: State::Stopped,
@@ -586,6 +591,7 @@ impl Supervisor {
             events: events.clone(),
             processes: processes.clone(),
             players: players.clone(),
+            entities: entities.clone(),
             status: status_tx,
             readings: readings_tx,
             requests: requests_rx,
@@ -619,6 +625,7 @@ impl Supervisor {
                 events,
                 processes,
                 players,
+                entities,
                 counts,
                 status,
                 readings,
@@ -755,6 +762,12 @@ impl Supervisor {
     /// logged, since a join carries the player's address.
     pub fn player_reports(&self) -> broadcast::Receiver<PlayerReport> {
         self.players.subscribe()
+    }
+
+    /// What the bridge reports about the server's entities, while Observer asks for them: the
+    /// parts of each sweep, and the answers to deletions.
+    pub fn entity_reports(&self) -> broadcast::Receiver<EntityReport> {
+        self.entities.subscribe()
     }
 
     /// What the resources of a start that counts report, each second. Off the event bus too:
@@ -1018,6 +1031,7 @@ struct Actor {
     events: broadcast::Sender<Event>,
     processes: broadcast::Sender<TreeEvent>,
     players: broadcast::Sender<PlayerReport>,
+    entities: broadcast::Sender<EntityReport>,
     counts: broadcast::Sender<HookReport>,
     status: watch::Sender<Status>,
     readings: watch::Sender<Readings>,
@@ -1772,6 +1786,13 @@ impl Actor {
                 generation: trace.generation,
                 at_ms: now_ms(),
                 received: Instant::now(),
+                kind,
+            });
+            return;
+        }
+        if let Some(kind) = EntityReportKind::from_trace(&trace.kind, &run.bridge) {
+            let _ = self.entities.send(EntityReport {
+                generation: trace.generation,
                 kind,
             });
             return;

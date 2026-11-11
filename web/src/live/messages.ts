@@ -52,6 +52,9 @@ import type { SpawnFailure } from '../api/generated/SpawnFailure';
 import type { StateCause } from '../api/generated/StateCause';
 import type { SyscallGroup } from '../api/generated/SyscallGroup';
 import type { ThreadRun } from '../api/generated/ThreadRun';
+import type { EntitiesLive } from '../api/generated/EntitiesLive';
+import type { EntitiesUnavailable } from '../api/generated/EntitiesUnavailable';
+import type { EntityCounts } from '../api/generated/EntityCounts';
 import type { Topic } from '../api/generated/Topic';
 import type { TreeProcess } from '../api/generated/TreeProcess';
 import type { UnsubscribeReason } from '../api/generated/UnsubscribeReason';
@@ -72,6 +75,7 @@ const TOPICS = {
     'server.diagnostics': true,
     'server.changes': true,
     'server.map': true,
+    'server.entities': true,
 } satisfies Record<Topic, true>;
 
 const UNSUBSCRIBE_REASONS = { forbidden: true, disabled: true } satisfies Record<UnsubscribeReason, true>;
@@ -240,6 +244,8 @@ const AUDIT_ACTIONS = {
     bans_settings_changed: true,
     map_image_changed: true,
     map_settings_changed: true,
+    entities_deleted: true,
+    entities_settings_changed: true,
     player_drops_exported: true,
     drop_rates_exported: true,
     drops_retention_changed: true,
@@ -961,6 +967,30 @@ export const isMapLive = (value: unknown): value is MapLive =>
     orNull(isTimestamp)(value.at) &&
     isCount(value.waiting) &&
     isFlag(value.onesync);
+const UNAVAILABLE = { onesync: true, game: true } satisfies Record<EntitiesUnavailable, true>;
+
+const isEntityCounts = (value: unknown): value is EntityCounts =>
+    isRecord(value) &&
+    orNull(isCount)(value.vehicles) &&
+    orNull(isCount)(value.peds) &&
+    orNull(isCount)(value.objects) &&
+    isCount(value.playerPeds);
+
+export const isEntitiesLive = (value: unknown): value is EntitiesLive =>
+    isRecord(value) &&
+    orNull(isText)(value.run) &&
+    isCount(value.sweep) &&
+    orNull(isTimestamp)(value.at) &&
+    orNull(oneOf<EntitiesUnavailable>(UNAVAILABLE))(value.unavailable) &&
+    orNull(isEntityCounts)(value.counts) &&
+    isCount(value.listed) &&
+    isFlag(value.truncated) &&
+    isCount(value.everyMs) &&
+    isFlag(value.spaced) &&
+    orNull(isCount)(value.workUs) &&
+    orNull(isCount)(value.listUs) &&
+    orNull(isCount)(value.frames);
+
 const isSnapshotData = (topic: Topic, data: unknown) => {
     if (!isRecord(data)) {
         return false;
@@ -993,6 +1023,8 @@ const isSnapshotData = (topic: Topic, data: unknown) => {
             return isChangesLive(data);
         case 'server.map':
             return isMapLive(data);
+        case 'server.entities':
+            return isEntitiesLive(data);
     }
 };
 
@@ -1020,6 +1052,8 @@ const isEventData = (topic: Topic, data: unknown) => {
             return isChangesLive(data);
         case 'server.map':
             return isMapLive(data);
+        case 'server.entities':
+            return isEntitiesLive(data);
     }
 };
 

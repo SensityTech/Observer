@@ -352,6 +352,18 @@ pub enum BridgeAction {
     },
     /// Has the bridge report where the players stand every `every_ms` for `for_ms`, or stop with 0.
     Positions { every_ms: u32, for_ms: u32 },
+    /// Has the bridge list the server's entities every `every_ms` for `for_ms`, or stop with 0.
+    Entities { every_ms: u32, for_ms: u32 },
+    /// Has the bridge delete entities it listed, and report what became of each. `targets` holds
+    /// a net id then the serial the bridge drew for that entity, one pair after the other. The
+    /// bridge deletes nothing once `deadline`, in Unix seconds, has passed, and nothing of
+    /// another start of itself than `epoch`.
+    DeleteEntities {
+        request: u32,
+        epoch: i64,
+        deadline: i64,
+        targets: Vec<u32>,
+    },
 }
 
 /// What a banned player reads, and the `observer:playerRefused` the bridge raises for it.
@@ -387,6 +399,8 @@ impl BridgeAction {
             Self::Verdict { .. } => "verdict",
             Self::Drop { .. } => "drop",
             Self::Positions { .. } => "positions",
+            Self::Entities { .. } => "entities",
+            Self::DeleteEntities { .. } => "deleteEntities",
         }
     }
 
@@ -400,7 +414,10 @@ impl BridgeAction {
     pub fn fitted(mut self) -> Self {
         while self.encode().len() > 2 * MAX_BRIDGE_JSON {
             let (message, event) = match &mut self {
-                Self::Verdict { refusal: None, .. } | Self::Positions { .. } => return self,
+                Self::Verdict { refusal: None, .. }
+                | Self::Positions { .. }
+                | Self::Entities { .. }
+                | Self::DeleteEntities { .. } => return self,
                 Self::Verdict {
                     refusal: Some(Refusal { message, event }),
                     ..
@@ -842,7 +859,7 @@ mod tests {
         }
     }
 
-    fn every_action() -> [BridgeAction; 3] {
+    fn every_action() -> [BridgeAction; 5] {
         [
             BridgeAction::Verdict {
                 request: 7,
@@ -860,7 +877,43 @@ mod tests {
                 every_ms: 2000,
                 for_ms: 30_000,
             },
+            BridgeAction::Entities {
+                every_ms: 15_000,
+                for_ms: 30_000,
+            },
+            BridgeAction::DeleteEntities {
+                request: 4,
+                epoch: 4210,
+                deadline: 1_793_000_009,
+                targets: vec![12, 3, 13, 8],
+            },
         ]
+    }
+
+    #[test]
+    fn the_most_entities_one_deletion_takes_fit_the_console_line() {
+        let largest = BridgeAction::DeleteEntities {
+            request: u32::MAX,
+            epoch: i64::from(u32::MAX),
+            deadline: 9_999_999_999,
+            targets: [u32::from(u16::MAX), 0x7fff_ffff].repeat(observer_domain::entities::MAX_DELETE),
+        };
+
+        assert!(crate::stdin::allowed(&format!(
+            "observer_cmd {}",
+            largest.encode()
+        )));
+        assert_eq!(
+            decode(&every_action()[4].encode()),
+            json!({
+                "action": "deleteEntities",
+                "payload": { "request": 4, "epoch": 4210, "deadline": 1_793_000_009, "targets": [12, 3, 13, 8] }
+            })
+        );
+        assert_eq!(
+            decode(&every_action()[3].encode()),
+            json!({ "action": "entities", "payload": { "everyMs": 15_000, "forMs": 30_000 } })
+        );
     }
 
     #[test]

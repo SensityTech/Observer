@@ -7,6 +7,7 @@ pub mod changes;
 pub mod command;
 pub mod console;
 pub mod crashes;
+pub mod entities;
 pub mod exit;
 pub mod folders;
 pub mod health;

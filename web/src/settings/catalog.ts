@@ -48,6 +48,7 @@ export type SettingId =
     | 'switchDrops'
     | 'switchUpdates'
     | 'switchDebug'
+    | 'switchEntities'
     | 'changesEnabled'
     | 'startEvent'
     | 'extensions'
@@ -196,6 +197,7 @@ export const CATEGORIES: readonly Category[] = [
             { id: 'switchDrops' },
             { id: 'switchUpdates' },
             { id: 'switchDebug' },
+            { id: 'switchEntities' },
         ],
     },
     {
@@ -281,6 +283,7 @@ export const SWITCH_OF = {
     drops: 'switchDrops',
     updates: 'switchUpdates',
     debug: 'switchDebug',
+    entities: 'switchEntities',
 } satisfies Record<Feature, SettingId>;
 
 /** When each setting applies, found by its id. */

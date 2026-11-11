@@ -58,6 +58,7 @@ pub(super) fn allows(topic: Topic, held: Permissions) -> bool {
         Topic::ServerDiagnostics => any(&[Permissions::DIAGNOSTICS_VIEW]),
         Topic::ServerChanges => any(&[Permissions::CHANGES_VIEW]),
         Topic::ServerMap => any(&[Permissions::PLAYERS_MAP]),
+        Topic::ServerEntities => any(&[Permissions::ENTITIES_VIEW]),
     }
 }
 
@@ -145,6 +146,13 @@ pub(super) async fn open(topic: Topic, since: Option<u64>, state: &AppState) -> 
             Ok(Feed {
                 snapshot: TopicSnapshot::ServerMap(snapshot),
                 events: Some(watched_events(live, watching, TopicEvent::ServerMap)),
+            })
+        }
+        Topic::ServerEntities => {
+            let (snapshot, live, watching) = state.entities()?.watch();
+            Ok(Feed {
+                snapshot: TopicSnapshot::ServerEntities(snapshot),
+                events: Some(watched_events(live, watching, TopicEvent::ServerEntities)),
             })
         }
         Topic::ServerChanges => {

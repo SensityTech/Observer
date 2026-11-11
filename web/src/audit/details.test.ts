@@ -214,6 +214,27 @@ describe('auditDetails', () => {
         );
     });
 
+    it('should word what a deletion of entities took and left, and how often they are listed', () => {
+        expect(
+            auditDetails(en, format, {
+                asked: 15,
+                deleted: 12,
+                outcomes: { occupied: 2, gone: 1 },
+                entities: [
+                    { model: '0xB779A091', kind: 'vehicle', resource: 'qb-garages', count: 8 },
+                    { model: '0x705E61F2', kind: 'ped', resource: null, count: 1 },
+                ],
+                more: 3,
+            }),
+        ).toBe(
+            'Asked for: 15 · Deleted: 12 · Not deleted: 2 had a player inside, 1 was already gone · ' +
+                'Entities: 8 × 0xB779A091 vehicle (qb-garages), 1 × 0x705E61F2 ped · In smaller groups: 3',
+        );
+        expect(auditDetails(en, format, { from: { everySeconds: 15 }, to: { everySeconds: 30 } })).toBe(
+            'Before: (Every: 15 s) · After: (Every: 30 s)',
+        );
+    });
+
     it('should name the two snapshots a read of changed contents compared, either one a check of the disk, and how it showed them', () => {
         expect(
             auditDetails(

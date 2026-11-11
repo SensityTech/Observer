@@ -35,6 +35,8 @@ import type { DropCategory } from '../api/generated/DropCategory';
 import type { DropKind } from '../api/generated/DropKind';
 import type { DropsRange } from '../api/generated/DropsRange';
 import type { EndpointProtocol } from '../api/generated/EndpointProtocol';
+import type { EntityKind } from '../api/generated/EntityKind';
+import type { EntityOutcome } from '../api/generated/EntityOutcome';
 import type { EnvironmentFact } from '../api/generated/EnvironmentFact';
 import type { ErrorCode } from '../api/generated/ErrorCode';
 import type { EscrowPolicy } from '../api/generated/EscrowPolicy';
@@ -218,6 +220,16 @@ const permissions = {
         name: 'See the live map',
         description: 'Where every connected player stands, as the server sees it, a few times a minute.',
     },
+    entitiesView: {
+        name: 'See the entities',
+        description:
+            "The server's vehicles, peds and objects: their model, the resource that created them and where they stand. Who owns one also takes See the live map.",
+    },
+    entitiesDelete: {
+        name: 'Delete entities',
+        description:
+            'Delete vehicles, peds and objects from the game, up to a hundred at a time. Players near them see them vanish.',
+    },
 } satisfies Record<PermissionKey, { name: string; description: string }>;
 
 const permissionNames = (hex: string) =>
@@ -235,6 +247,7 @@ const features = {
     drops: 'Player drops',
     updates: 'Updates',
     debug: 'Debug',
+    entities: 'Entities',
 } satisfies Record<Feature, string>;
 
 const isFeature = (key: string): key is Feature => Object.hasOwn(features, key);
@@ -2521,6 +2534,29 @@ export const en = {
         stopped: 'The server is not running: no one is on the map.',
         scale: (metres: string) => `${metres} m`,
         unknownPing: 'unknown',
+    },
+    entities: {
+        kinds: { vehicle: 'vehicle', ped: 'ped', object: 'object' } satisfies Record<EntityKind, string>,
+        /** A group of entities of one model: `8 × 0xB779A091 vehicle (qb-garages)`. */
+        group: (value: number, model: string, kind: string, resource: string | null) =>
+            `${formatNumber('en', value)} × ${model} ${kind}${resource === null ? '' : ` (${resource})`}`,
+        // What became of the entities a deletion did not delete, each said of how many.
+        notDeleted: {
+            unconfirmed: (value: number) =>
+                `${formatNumber('en', value)} ${plural('en', value, { one: 'is still there', other: 'are still there' })}`,
+            unanswered: (value: number) => `the server did not answer for ${formatNumber('en', value)}`,
+            gone: (value: number) =>
+                `${formatNumber('en', value)} ${plural('en', value, { one: 'was already gone', other: 'were already gone' })}`,
+            changed: (value: number) =>
+                `${formatNumber('en', value)} ${plural('en', value, { one: 'was no longer the entity listed', other: 'were no longer the entities listed' })}`,
+            player: (value: number) =>
+                `${formatNumber('en', value)} ${plural('en', value, { one: "is a player's own ped", other: "are players' own peds" })}`,
+            occupied: (value: number) => `${formatNumber('en', value)} had a player inside`,
+            train: (value: number) =>
+                `${formatNumber('en', value)} ${plural('en', value, { one: 'is a train', other: 'are trains' })}`,
+            late: (value: number) => `the server read the request too late for ${formatNumber('en', value)}`,
+            error: (value: number) => `${formatNumber('en', value)} failed`,
+        } satisfies Record<Exclude<EntityOutcome, 'deleted'>, (value: number) => string>,
     },
     bans: {
         title: 'Bans',
@@ -5094,6 +5130,10 @@ export const en = {
                 label: 'Debug',
                 about: "Counts the events, state bag writes and HTTP requests of every Lua resource, for the Debug pages. It adds two lines to the build's Lua scheduler at each start while it is on, and takes them out when it is off.",
             },
+            switchEntities: {
+                label: 'Entities',
+                about: "The server's vehicles, peds and objects, listed while someone looks at them, found on the Live map and deleted on request. Nothing of them is kept. Off, the server is never asked for them.",
+            },
             switchUpdates: {
                 label: 'Updates',
                 about: 'Every 6 hours, Observer asks GitHub for a newer release, which the owner installs from the About page. Off, Observer never contacts GitHub.',
@@ -5516,6 +5556,7 @@ export const en = {
                 updateProbation: 'settling an update once Observer restarted',
                 hookLines: "the two lines in the build's Lua scheduler",
                 hookCounts: 'reading what the resources count',
+                entityList: 'listing the entities while someone looks at them',
             } satisfies Record<FeatureTask, string>,
             turnedOn: (name: string) => `${name} is on.`,
             turnedOnLater: (name: string, state: string) => `${name}: ${state}.`,
@@ -5678,6 +5719,8 @@ export const en = {
             bans_settings_changed: 'Ban settings changed',
             map_image_changed: 'Map image changed',
             map_settings_changed: 'Live map settings changed',
+            entities_deleted: 'Entities deleted',
+            entities_settings_changed: 'Entities settings changed',
             drop_rates_exported: 'Drop rates exported',
             drops_retention_changed: 'Drop retention changed',
             change_contents_viewed: 'Changed file read',
@@ -5895,6 +5938,12 @@ export const en = {
             updated: 'Updated',
             forgotten: 'Skipped as forgotten',
             invalid: 'Invalid',
+            asked: 'Asked for',
+            deleted: 'Deleted',
+            outcomes: 'Not deleted',
+            entities: 'Entities',
+            more: 'In smaller groups',
+            everySeconds: 'Every',
         },
         days: (value: number) => count(value, { one: 'day', other: 'days' }),
         // A profile whose retention is unset is never deleted.
@@ -6099,6 +6148,7 @@ export const en = {
         drops: 'Player drops',
         changes: 'Changes',
         backups: 'Backups',
+        entities: 'Entities',
     } satisfies Record<PermissionArea, string>,
     danger: {
         sensitive: 'Sensitive',
@@ -6293,6 +6343,17 @@ export const en = {
         no_map_image: 'No map image is set.',
         invalid_map_settings:
             'Some settings are out of range: the thresholds must be ordered, the cadence 1, 2 or 5 seconds, and the edges must enclose an area.',
+        entities_not_listed:
+            'The server has not listed its entities yet: wait for the list, then try again. Nothing was deleted.',
+        entities_changed:
+            'The server restarted since this list was read: its net IDs name other entities now. Nothing was deleted.',
+        entities_out_of_date: 'This list is out of date: the server stopped answering. Nothing was deleted.',
+        entities_deleting: 'Another deletion is still under way: try again in a few seconds.',
+        too_many_entities: (params) =>
+            typeof params.max === 'number'
+                ? `One deletion takes ${formatNumber('en', params.max)} entities at most.`
+                : 'One deletion cannot take that many entities.',
+        invalid_entities_settings: 'The server lists its entities every 5, 10, 15, 30 or 60 seconds.',
         invalid_bans_settings: (params) =>
             typeof params.maxMessage === 'number' && typeof params.maxTokens === 'number'
                 ? `Write a refusal message of ${formatNumber('en', params.maxMessage)} characters at most, and ask for 0 to ${formatNumber('en', params.maxTokens)} tokens.`

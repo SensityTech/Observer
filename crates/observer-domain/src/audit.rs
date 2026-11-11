@@ -160,6 +160,12 @@ pub enum AuditAction {
     MapImageChanged,
     /// `details` hold the live map's settings before and after.
     MapSettingsChanged,
+    /// Someone deleted entities of the game. `details` hold how many were asked for and how many
+    /// were deleted, the count of each other outcome, and the largest groups deleted, each a
+    /// model, a kind and the resource that created them.
+    EntitiesDeleted,
+    /// `details` hold the entities' settings before and after.
+    EntitiesSettingsChanged,
     /// The daily drop rates went out as CSV.
     DropRatesExported,
     /// How long players' sessions and their texts are kept changed.
@@ -241,7 +247,7 @@ pub enum AuditAction {
 }
 
 impl AuditAction {
-    pub const ALL: [Self; 111] = [
+    pub const ALL: [Self; 113] = [
         Self::SetupCompleted,
         Self::SetupLinkCreated,
         Self::LoginSucceeded,
@@ -324,6 +330,8 @@ impl AuditAction {
         Self::BansSettingsChanged,
         Self::MapImageChanged,
         Self::MapSettingsChanged,
+        Self::EntitiesDeleted,
+        Self::EntitiesSettingsChanged,
         Self::DropRatesExported,
         Self::DropsRetentionChanged,
         Self::ChangeContentsViewed,
@@ -440,6 +448,8 @@ impl AuditAction {
             Self::BansSettingsChanged => "bans_settings_changed",
             Self::MapImageChanged => "map_image_changed",
             Self::MapSettingsChanged => "map_settings_changed",
+            Self::EntitiesDeleted => "entities_deleted",
+            Self::EntitiesSettingsChanged => "entities_settings_changed",
             Self::DropRatesExported => "drop_rates_exported",
             Self::DropsRetentionChanged => "drops_retention_changed",
             Self::ChangeContentsViewed => "change_contents_viewed",
