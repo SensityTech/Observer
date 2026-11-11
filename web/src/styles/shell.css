@@ -584,6 +584,7 @@
             gap: 2px 6px;
         }
         .controls {
+            flex-wrap: wrap;
             width: 100%;
             margin-left: 0;
         }
@@ -592,6 +593,10 @@
         }
         .controls > .controls-more {
             flex: 0 0 auto;
+        }
+        .controls > .controls-maintenance {
+            flex-basis: 100%;
+            order: 1;
         }
         .content {
             padding-top: 16px;

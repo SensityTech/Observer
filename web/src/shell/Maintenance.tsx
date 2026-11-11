@@ -32,7 +32,13 @@ export function MaintenanceButton() {
     }
     return (
         <>
-            <Button size="sm" tone="ghost" icon={Construction} onClick={() => setAsking(true)}>
+            <Button
+                size="sm"
+                tone="ghost"
+                icon={Construction}
+                className="controls-maintenance"
+                onClick={() => setAsking(true)}
+            >
                 {t.maintenance.button}
             </Button>
             {asking && <MaintenanceDialog passes={maintenance.passes} onClose={() => setAsking(false)} />}
