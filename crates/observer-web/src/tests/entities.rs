@@ -8,8 +8,8 @@ use super::live::{receive, send};
 use super::{OWNER_PASSWORD, Server};
 
 const DASHBOARD_VIEW: &str = "1";
-const ENTITIES_VIEW: &str = "4000000";
-const ENTITIES_DELETE: &str = "8000000";
+const ENTITIES_VIEW: &str = "8000000";
+const ENTITIES_DELETE: &str = "10000000";
 const SETTINGS_VIEW: &str = "200";
 const SETTINGS_MANAGE: &str = "600";
 const ENTITIES: &str = "/api/servers/default/entities";
