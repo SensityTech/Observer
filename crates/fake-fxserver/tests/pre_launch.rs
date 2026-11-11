@@ -3,14 +3,17 @@
 // The helpers below are test code too, though not inside a `#[test]` function.
 #![allow(clippy::unwrap_used)]
 
+mod common;
+
 use std::collections::VecDeque;
 use std::fs;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, LazyLock, Mutex, PoisonError};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use common::{Port, Ports};
 use observer_domain::launch::{ExtraArgument, LaunchSettings, OneSync};
 use observer_fxserver::console::{ConsoleHub, plain};
 use observer_fxserver::health::HealthLimits;
@@ -31,28 +34,8 @@ const HEARTBEAT_MS: &str = "200";
 /// How often the fake work looks at its flags.
 const POLL: Duration = Duration::from_millis(10);
 
-/// The ports tests may use, lent to one test at a time. 41929 and up belong to other Observers
-/// of the development host.
-static PORTS: LazyLock<Mutex<Vec<u16>>> = LazyLock::new(|| Mutex::new((41920..=41928).collect()));
-
-struct Port(u16);
-
-impl Port {
-    async fn lease() -> Self {
-        loop {
-            if let Some(port) = PORTS.lock().unwrap_or_else(PoisonError::into_inner).pop() {
-                return Self(port);
-            }
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
-    }
-}
-
-impl Drop for Port {
-    fn drop(&mut self) {
-        PORTS.lock().unwrap_or_else(PoisonError::into_inner).push(self.0);
-    }
-}
+/// The labs' ports, lent to nine at a time.
+static PORTS: Ports = Ports::new(9);
 
 /// What one run of the fake work does.
 #[derive(Debug, Clone)]
@@ -170,7 +153,7 @@ impl Lab {
 
     /// A lab whose supervisor runs `work` before each spawn, with settings `tune` adjusts.
     async fn tuned(work: &Arc<Work>, tune: impl FnOnce(&mut Settings)) -> Self {
-        let port = Port::lease().await;
+        let port = PORTS.lease().await;
         let dir = tempfile::tempdir().unwrap();
         let program = fake_program(&dir.path().join("build"));
         fs::create_dir_all(program.parent().unwrap()).unwrap();
@@ -181,7 +164,7 @@ impl Lab {
             data.join("server.cfg"),
             format!(
                 "endpoint_add_tcp \"127.0.0.1:{0}\"\nendpoint_add_udp \"127.0.0.1:{0}\"\nsv_hostname \"Observer test\"\nsv_maxclients 8\n",
-                port.0
+                port.number
             ),
         )
         .unwrap();
@@ -385,7 +368,7 @@ async fn the_work_runs_before_the_spawn_and_its_lines_carry_the_coming_generatio
     );
     assert_eq!(
         seen[0].endpoint.map(|endpoint| endpoint.port()),
-        Some(lab.port.0),
+        Some(lab.port.number),
         "and the scan of its cfg"
     );
     assert_eq!(seen[0].cause, Cause::Requested { by: by("test") });

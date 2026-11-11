@@ -3,12 +3,14 @@
 // The helpers below are test code too, though not inside a `#[test]` function.
 #![allow(clippy::unwrap_used)]
 
+mod common;
+
 use std::fs;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr};
 use std::path::{Path, PathBuf};
-use std::sync::{LazyLock, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
+use common::{Port, Ports};
 use jiff::{SignedDuration, Timestamp, Unit};
 use observer_app::{
     Accounts, AuditLog, Bans, BansSetup, Caller, Client, Clock, DatabaseFiles, Diagnostics, DiagnosticsSetup,
@@ -62,27 +64,8 @@ const FAKE: [(&str, &str); 3] = [
     ("fake_tick_ms", "12"),
 ];
 
-/// Ports of their own: test binaries run one after the other, but this one's tests run together.
-static PORTS: LazyLock<Mutex<Vec<u16>>> = LazyLock::new(|| Mutex::new((41926..=41928).collect()));
-
-struct Port(u16);
-
-impl Port {
-    async fn lease() -> Self {
-        loop {
-            if let Some(port) = PORTS.lock().unwrap_or_else(PoisonError::into_inner).pop() {
-                return Self(port);
-            }
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
-    }
-}
-
-impl Drop for Port {
-    fn drop(&mut self) {
-        PORTS.lock().unwrap_or_else(PoisonError::into_inner).push(self.0);
-    }
-}
+/// The Observers' ports, lent to three at a time.
+static PORTS: Ports = Ports::new(3);
 
 struct Observer {
     dir: TempDir,
@@ -148,7 +131,7 @@ impl Services {
             accounts: self.accounts.clone(),
             servers: self.servers.clone(),
             data_dir: dir.join("observer-data"),
-            panel: SocketAddr::from(([127, 0, 0, 1], 41975)),
+            panel: common::panel(),
             artifacts: dir.join("observer-data/artifacts"),
             console_logs: dir.join("observer-data/logs/console"),
             log: None,
@@ -216,7 +199,7 @@ impl Observer {
 
     /// The fake takes `arguments` instead of [`FAKE`]'s.
     async fn launched(auto_start: bool, longest_sleep: Duration, arguments: &[(&str, &str)]) -> Self {
-        let port = Port::lease().await;
+        let port = PORTS.lease().await;
         let dir = tempfile::tempdir().unwrap();
         let build = dir.path().join("observer-data/artifacts").join(BUILD.to_string());
         let program = fake_program(&build);
@@ -228,7 +211,7 @@ impl Observer {
             data.join("server.cfg"),
             format!(
                 "endpoint_add_tcp \"127.0.0.1:{0}\"\nendpoint_add_udp \"127.0.0.1:{0}\"\nsv_maxclients 8\nsets sv_projectName \"^2Observer ^7lab\"\n",
-                port.0
+                port.number
             ),
         )
         .unwrap();
@@ -515,7 +498,7 @@ async fn a_server_started_from_the_panel_runs_a_command_then_stops_gracefully() 
     assert_eq!(online.cause, Some(StateCause::Ready));
     assert_eq!(online.build, Some(35245));
     assert_eq!(online.name.as_deref(), Some("Observer lab"));
-    assert_eq!(online.port, Some(observer.port.0));
+    assert_eq!(online.port, Some(observer.port.number));
     assert!(online.started_at.is_some());
     assert_eq!(
         delivery,
