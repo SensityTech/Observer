@@ -88,32 +88,21 @@ pub(super) async fn open(topic: Topic, since: Option<u64>, state: &AppState) -> 
                 events: Some(audit_events(entries, latest_id)),
             })
         }
-        Topic::ServerStatus => {
-            let mut status = state.supervision.status();
-            let snapshot = status.borrow_and_update().clone();
-            Ok(Feed {
-                snapshot: TopicSnapshot::ServerStatus(snapshot),
-                events: Some(status_events(status, TopicEvent::ServerStatus)),
-            })
-        }
-        Topic::ServerSchedule => {
-            let mut status = state.schedule.status();
-            let snapshot = status.borrow_and_update().clone();
-            Ok(Feed {
-                snapshot: TopicSnapshot::ServerSchedule(snapshot),
-                events: Some(status_events(status, TopicEvent::ServerSchedule)),
-            })
-        }
-        Topic::ServerArtifacts => {
-            let mut status = state.artifacts.status();
-            let snapshot = status.borrow_and_update().clone();
-            Ok(Feed {
-                snapshot: TopicSnapshot::ServerArtifacts(Box::new(snapshot)),
-                events: Some(status_events(status, |status| {
-                    TopicEvent::ServerArtifacts(Box::new(status))
-                })),
-            })
-        }
+        Topic::ServerStatus => Ok(followed(
+            state.supervision.status(),
+            TopicSnapshot::ServerStatus,
+            TopicEvent::ServerStatus,
+        )),
+        Topic::ServerSchedule => Ok(followed(
+            state.schedule.status(),
+            TopicSnapshot::ServerSchedule,
+            TopicEvent::ServerSchedule,
+        )),
+        Topic::ServerArtifacts => Ok(followed(
+            state.artifacts.status(),
+            |status| TopicSnapshot::ServerArtifacts(Box::new(status)),
+            |status| TopicEvent::ServerArtifacts(Box::new(status)),
+        )),
         Topic::Console => {
             let (snapshot, lines) = state.supervision.console(since);
             Ok(Feed {
@@ -128,14 +117,11 @@ pub(super) async fn open(topic: Topic, since: Option<u64>, state: &AppState) -> 
                 events: Some(metrics_events(samples)),
             })
         }
-        Topic::ServerAlerts => {
-            let mut alerts = state.diagnostics()?.alerts();
-            let snapshot = alerts.borrow_and_update().clone();
-            Ok(Feed {
-                snapshot: TopicSnapshot::ServerAlerts(snapshot),
-                events: Some(status_events(alerts, TopicEvent::ServerAlerts)),
-            })
-        }
+        Topic::ServerAlerts => Ok(followed(
+            state.diagnostics()?.alerts(),
+            TopicSnapshot::ServerAlerts,
+            TopicEvent::ServerAlerts,
+        )),
         Topic::ServerDiagnostics => {
             let (snapshot, events) = state.diagnostics()?.follow().await?;
             Ok(Feed {
@@ -157,22 +143,16 @@ pub(super) async fn open(topic: Topic, since: Option<u64>, state: &AppState) -> 
                 events: Some(watched_events(live, watching, TopicEvent::ServerEntities)),
             })
         }
-        Topic::ServerChanges => {
-            let mut live = state.changes()?.live();
-            let snapshot = live.borrow_and_update().clone();
-            Ok(Feed {
-                snapshot: TopicSnapshot::ServerChanges(snapshot),
-                events: Some(status_events(live, TopicEvent::ServerChanges)),
-            })
-        }
-        Topic::ServerResources => {
-            let mut resources = state.supervision.resources();
-            let snapshot = resources.borrow_and_update().clone();
-            Ok(Feed {
-                snapshot: TopicSnapshot::ServerResources(snapshot),
-                events: Some(status_events(resources, TopicEvent::ServerResources)),
-            })
-        }
+        Topic::ServerChanges => Ok(followed(
+            state.changes()?.live(),
+            TopicSnapshot::ServerChanges,
+            TopicEvent::ServerChanges,
+        )),
+        Topic::ServerResources => Ok(followed(
+            state.supervision.resources(),
+            TopicSnapshot::ServerResources,
+            TopicEvent::ServerResources,
+        )),
     }
 }
 
@@ -200,6 +180,22 @@ fn metrics_events(samples: broadcast::Receiver<LiveSample>) -> Events {
         };
         Some((delivery, samples))
     }))
+}
+
+/// A status as it stands, then the whole of it each time it changes.
+fn followed<T>(
+    mut status: watch::Receiver<T>,
+    snapshot: fn(T) -> TopicSnapshot,
+    event: fn(T) -> TopicEvent,
+) -> Feed
+where
+    T: Clone + Send + Sync + 'static,
+{
+    let current = status.borrow_and_update().clone();
+    Feed {
+        snapshot: snapshot(current),
+        events: Some(status_events(status, event)),
+    }
 }
 
 /// The whole status each time it changes. A client too slow to see every change only misses the
