@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { Link } from '@tanstack/react-router';
+import { Link, useSearch } from '@tanstack/react-router';
 import {
     Ban as BanIcon,
     ExternalLink,
@@ -14,6 +14,8 @@ import {
 } from 'lucide-react';
 import { useId, useMemo, useState, type ReactNode } from 'react';
 
+import type { EntityItem } from '../api/generated/EntityItem';
+import type { MapBounds } from '../api/generated/MapBounds';
 import type { MapLive } from '../api/generated/MapLive';
 import type { MapPlayer } from '../api/generated/MapPlayer';
 import type { MapSettings } from '../api/generated/MapSettings';
@@ -29,6 +31,10 @@ import { FieldError, inputClass } from '../components/Field';
 import { Notice } from '../components/Notice';
 import { Segmented } from '../components/Segmented';
 import { Switch } from '../components/Switch';
+import { DeleteDialog } from '../entities/DeleteDialog';
+import { around } from '../entities/layer';
+import { EntityCanvas, EntityCard, LayerBar, useEntityLayer } from '../entities/MapLayer';
+import { deletionNotice } from '../entities/words';
 import { useI18n } from '../i18n/I18nProvider';
 import { cn } from '../lib/cn';
 import { WIDE, useMedia } from '../lib/useMedia';
@@ -36,6 +42,7 @@ import { useNow } from '../lib/useNow';
 import { useTopic } from '../live/context';
 import { tierOf, type Tier } from '../map/geometry';
 import { MapCanvas, TIER_MARK, type Dot } from '../map/MapCanvas';
+import type { MapSearch } from '../map/search';
 import { KickDialog, MessageDialog } from '../moderation/dialogs';
 import { TILE_STYLES, isTileStyle, type TileStyle } from '../map/tiles';
 import { extend, type Trails } from '../map/trails';
@@ -68,6 +75,21 @@ export function MapPage() {
     const me = useMe();
     const view = useQuery(mapQuery);
     const online = useQuery(onlineQuery);
+    const address: MapSearch = useSearch({ strict: false });
+    const layer = useEntityLayer(allows(me, Permission.EntitiesView), address.entity);
+    const [frame, setFrame] = useState<(MapBounds & { at: number }) | null>(null);
+    const [deleting, setDeleting] = useState<EntityItem | null>(null);
+    const [deleted, setDeleted] = useState<ReturnType<typeof deletionNotice> | null>(null);
+    // The entity the address names is brought into view once the list has it.
+    const [broughtFor, setBroughtFor] = useState<number | null>(null);
+    if (
+        address.entity !== undefined &&
+        layer.item?.netId === address.entity &&
+        broughtFor !== address.entity
+    ) {
+        setBroughtFor(address.entity);
+        setFrame({ ...around(layer.item.x, layer.item.y), at: address.entity });
+    }
     const status = useServerStatus().status;
     const [live, setLive] = useState<MapLive | null>(null);
     const [trails, setTrails] = useState<Trails>(new Map());
@@ -156,6 +178,7 @@ export function MapPage() {
 
     const show = (netId: number) => {
         setSelected(netId);
+        layer.pick(null);
         setFocus({ id: netId, at: Date.now() });
     };
     /** Enter in the search goes to the first player it leaves. */
@@ -167,9 +190,18 @@ export function MapPage() {
         }
     };
 
-    // Beside the map when the list is, so that it never covers the player it is about.
+    // Beside the map when the list is, so that it never covers what it is about.
     const card =
-        chosen === null ? null : (
+        chosen === null ? (
+            layer.picked === null ? null : (
+                <EntityCard
+                    layer={layer}
+                    beside={beside}
+                    canDelete={allows(me, Permission.EntitiesDelete)}
+                    onDelete={setDeleting}
+                />
+            )
+        ) : (
             <section
                 data-overlay={beside ? undefined : true}
                 aria-label={words.selected}
@@ -287,9 +319,19 @@ export function MapPage() {
                         <Switch checked={trailing} onChange={(event) => setTrailing(event.target.checked)} />
                         {words.trails}
                     </label>
+                    {layer.allowed && (
+                        <label className="flex h-9.5 items-center gap-2.5 text-ui font-medium text-ink max-md:h-11">
+                            <Switch
+                                checked={layer.on}
+                                onChange={(event) => layer.turn(event.target.checked)}
+                            />
+                            {words.entities.layer}
+                        </label>
+                    )}
                 </div>
             </div>
             {live !== null && !live.onesync && <Notice tone="warning">{words.noOneSync}</Notice>}
+            {deleted !== null && <Notice tone={deleted.tone}>{deleted.message}</Notice>}
             <div className="grid grid-cols-1 items-start gap-3 2xl:grid-cols-[minmax(0,1fr)_19rem]">
                 <section className="card flex min-w-0 flex-col" aria-labelledby="map-title">
                     <div className="card-head">
@@ -339,34 +381,61 @@ export function MapPage() {
                         selected={selected}
                         names={names}
                         focus={followFocus ?? focus}
+                        frame={frame}
+                        renderLayer={
+                            layer.shown === null
+                                ? undefined
+                                : (projection) => (
+                                      <EntityCanvas
+                                          projection={projection}
+                                          points={layer.shown?.points ?? []}
+                                          cells={layer.shown?.cells ?? []}
+                                          cell={layer.shown?.cell ?? null}
+                                          picked={layer.picked}
+                                      />
+                                  )
+                        }
+                        onViewport={layer.allowed ? layer.watch : undefined}
+                        onPress={(at) => {
+                            const cell = layer.press(at);
+                            if (cell !== null) {
+                                setFrame({ ...cell, at: Date.now() });
+                            }
+                        }}
                         onSelect={(id) => {
                             setSelected(id);
                             if (id === null) {
                                 setFollowing(false);
+                            } else {
+                                layer.pick(null);
                             }
                         }}
                         className="h-[calc(100dvh-17rem)] min-h-96 max-md:h-[62dvh] max-md:min-h-80"
                     >
-                        {isTileStyle(settings.imagery) && isTileStyle(imagery) && (
-                            <div data-overlay className="absolute top-3 left-3">
-                                <Segmented
-                                    label={words.style}
-                                    choices={TILE_STYLES}
-                                    value={imagery}
-                                    words={words.styles}
-                                    className="bg-surface shadow-pop"
-                                    onChange={(next) => {
-                                        setStyle(next);
-                                        setUnsent(null);
-                                        try {
-                                            localStorage.setItem(STYLE_KEY, next);
-                                        } catch {
-                                            // Private browsing: the choice lasts for this page only.
-                                        }
-                                    }}
-                                />
-                            </div>
-                        )}
+                        {/* One row that wraps: the layer's bar goes under the styles where both do not fit. */}
+                        <div className="pointer-events-none absolute inset-x-3 top-3 flex flex-wrap items-start gap-2 [&>*]:pointer-events-auto">
+                            {isTileStyle(settings.imagery) && isTileStyle(imagery) && (
+                                <div data-overlay>
+                                    <Segmented
+                                        label={words.style}
+                                        choices={TILE_STYLES}
+                                        value={imagery}
+                                        words={words.styles}
+                                        className="bg-surface shadow-pop"
+                                        onChange={(next) => {
+                                            setStyle(next);
+                                            setUnsent(null);
+                                            try {
+                                                localStorage.setItem(STYLE_KEY, next);
+                                            } catch {
+                                                // Private browsing: the choice lasts for this page only.
+                                            }
+                                        }}
+                                    />
+                                </div>
+                            )}
+                            {layer.on && <LayerBar layer={layer} className="ml-auto" />}
+                        </div>
                         {isTileStyle(imagery) && tiles === null && (
                             <output
                                 data-overlay
@@ -421,6 +490,9 @@ export function MapPage() {
                     </MapCanvas>
                     <div className="flex flex-wrap items-center gap-x-4 gap-y-1 rounded-b-card border-t border-line bg-bg-subtle py-2 pr-3 pl-5 text-meta text-ink-3 max-md:pl-4">
                         <span className="mr-auto">{words.every(settings.everySeconds)}</span>
+                        {layer.live !== null && layer.live.everyMs > 0 && (
+                            <span>{words.entities.every(Math.round(layer.live.everyMs / 1000))}</span>
+                        )}
                         {tiles !== null && <span>{words.credit}</span>}
                         {live?.at != null && (
                             <span>
@@ -506,6 +578,19 @@ export function MapPage() {
                     <p className="border-t border-line p-4 text-small text-ink-3">{words.listHint}</p>
                 </aside>
             </div>
+            {deleting !== null && layer.live?.run != null && layer.limits !== null && (
+                <DeleteDialog
+                    items={[deleting]}
+                    run={layer.live.run}
+                    limits={layer.limits}
+                    onClose={() => setDeleting(null)}
+                    onDone={(results) => {
+                        setDeleted(deletionNotice(t, results));
+                        setDeleting(null);
+                        layer.pick(null);
+                    }}
+                />
+            )}
             {banning !== null && banning.player !== null && (
                 <BanDialog
                     target={{

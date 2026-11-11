@@ -42,9 +42,11 @@ impl Permissions {
     pub const BANS_LIFT: Self = Self(1 << 24);
     pub const PLAYERS_MAP: Self = Self(1 << 25);
     pub const RESOURCES_CONTROL: Self = Self(1 << 26);
-    pub const PLAYERS_KICK: Self = Self(1 << 27);
-    pub const PLAYERS_ANNOUNCE: Self = Self(1 << 28);
-    pub const PLAYERS_MESSAGE: Self = Self(1 << 29);
+    pub const ENTITIES_VIEW: Self = Self(1 << 27);
+    pub const ENTITIES_DELETE: Self = Self(1 << 28);
+    pub const PLAYERS_KICK: Self = Self(1 << 29);
+    pub const PLAYERS_ANNOUNCE: Self = Self(1 << 30);
+    pub const PLAYERS_MESSAGE: Self = Self(1 << 31);
 
     /// Every permission in the catalog, which is what the owner holds.
     pub fn all() -> Self {
@@ -213,6 +215,7 @@ pub enum PermissionArea {
     Drops,
     Changes,
     Backups,
+    Entities,
 }
 
 /// One permission of the catalog, as `GET /api/permissions` returns it.
@@ -477,6 +480,25 @@ pub const CATALOG: &[PermissionInfo] = &[
     },
     PermissionInfo {
         bit: 27,
+        constant: "ENTITIES_VIEW",
+        key: "entitiesView",
+        area: PermissionArea::Entities,
+        // Models, creating resources and where each entity stands. Who owns one, and whether a
+        // player sits in it, stay behind PLAYERS_MAP: they say where a player is.
+        danger: Danger::Normal,
+        implies: Permissions::NONE,
+    },
+    PermissionInfo {
+        bit: 28,
+        constant: "ENTITIES_DELETE",
+        key: "entitiesDelete",
+        area: PermissionArea::Entities,
+        // Players see the entity vanish, and a script still using it may fail.
+        danger: Danger::Sensitive,
+        implies: Permissions::ENTITIES_VIEW,
+    },
+    PermissionInfo {
+        bit: 29,
         constant: "PLAYERS_KICK",
         key: "playersKick",
         area: PermissionArea::Players,
@@ -485,7 +507,7 @@ pub const CATALOG: &[PermissionInfo] = &[
         implies: Permissions::PLAYERS_VIEW,
     },
     PermissionInfo {
-        bit: 28,
+        bit: 30,
         constant: "PLAYERS_ANNOUNCE",
         key: "playersAnnounce",
         area: PermissionArea::Players,
@@ -494,7 +516,7 @@ pub const CATALOG: &[PermissionInfo] = &[
         implies: Permissions::NONE,
     },
     PermissionInfo {
-        bit: 29,
+        bit: 31,
         constant: "PLAYERS_MESSAGE",
         key: "playersMessage",
         area: PermissionArea::Players,
@@ -543,9 +565,11 @@ mod tests {
             (24, "BANS_LIFT", Permissions::BANS_LIFT),
             (25, "PLAYERS_MAP", Permissions::PLAYERS_MAP),
             (26, "RESOURCES_CONTROL", Permissions::RESOURCES_CONTROL),
-            (27, "PLAYERS_KICK", Permissions::PLAYERS_KICK),
-            (28, "PLAYERS_ANNOUNCE", Permissions::PLAYERS_ANNOUNCE),
-            (29, "PLAYERS_MESSAGE", Permissions::PLAYERS_MESSAGE),
+            (27, "ENTITIES_VIEW", Permissions::ENTITIES_VIEW),
+            (28, "ENTITIES_DELETE", Permissions::ENTITIES_DELETE),
+            (29, "PLAYERS_KICK", Permissions::PLAYERS_KICK),
+            (30, "PLAYERS_ANNOUNCE", Permissions::PLAYERS_ANNOUNCE),
+            (31, "PLAYERS_MESSAGE", Permissions::PLAYERS_MESSAGE),
         ];
 
         assert_eq!(CATALOG.len(), frozen.len());

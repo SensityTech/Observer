@@ -33,6 +33,9 @@ pub enum Feature {
     /// state bag writes and outgoing HTTP requests. Off until the owner turns it on, since it adds
     /// two lines to the build's Lua scheduler.
     Debug,
+    /// The server's vehicles, peds and objects, listed while a panel looks at them, found on the
+    /// live map, and deleted on request.
+    Entities,
 }
 
 /// When a change of a switch takes effect.
@@ -109,6 +112,9 @@ pub enum FeatureTask {
     HookLines,
     /// Reads and totals what the resources count.
     HookCounts,
+    /// Has the server list its entities while a panel looks at them, and keeps the list in
+    /// memory until nobody does.
+    EntityList,
 }
 
 /// When a task of a feature runs.
@@ -149,7 +155,7 @@ pub enum ServerFolder {
 }
 
 impl Feature {
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 10] = [
         Self::Sftp,
         Self::Changes,
         Self::Tools,
@@ -159,6 +165,7 @@ impl Feature {
         Self::Drops,
         Self::Updates,
         Self::Debug,
+        Self::Entities,
     ];
 
     /// The name on the wire, in the store and in `observer.toml`.
@@ -173,6 +180,7 @@ impl Feature {
             Self::Drops => "drops",
             Self::Updates => "updates",
             Self::Debug => "debug",
+            Self::Entities => "entities",
         }
     }
 
@@ -251,6 +259,7 @@ impl Feature {
             run(T::HookLines, C::ServerStart),
             run(T::HookCounts, C::Continuous),
         ];
+        const ENTITIES: &[FeatureTaskRun] = &[run(T::EntityList, C::Continuous)];
         match self {
             Self::Sftp => SFTP,
             Self::Changes => CHANGES,
@@ -261,6 +270,7 @@ impl Feature {
             Self::Drops => DROPS,
             Self::Updates => UPDATES,
             Self::Debug => DEBUG,
+            Self::Entities => ENTITIES,
         }
     }
 
@@ -303,7 +313,7 @@ impl Feature {
     /// The files and folders it keeps, under Observer's data folder.
     pub const fn files(self) -> &'static [&'static str] {
         match self {
-            Self::Sftp | Self::Debug => &[],
+            Self::Sftp | Self::Debug | Self::Entities => &[],
             Self::Changes => &["changes.sqlite3"],
             Self::Tools => &["tools/backups"],
             Self::Diagnostics => &["crashes"],
@@ -316,9 +326,13 @@ impl Feature {
         match self {
             Self::Sftp | Self::Tools => ServerFolder::Writes,
             Self::Changes => ServerFolder::Reads,
-            Self::Diagnostics | Self::Metrics | Self::Players | Self::Drops | Self::Updates | Self::Debug => {
-                ServerFolder::Untouched
-            }
+            Self::Diagnostics
+            | Self::Metrics
+            | Self::Players
+            | Self::Drops
+            | Self::Updates
+            | Self::Debug
+            | Self::Entities => ServerFolder::Untouched,
         }
     }
 
@@ -334,6 +348,7 @@ impl Feature {
             Self::Drops => &["/servers/default/drops"],
             Self::Updates => &["/updates"],
             Self::Debug => &["/debug"],
+            Self::Entities => &["/servers/default/entities"],
         }
     }
 
@@ -343,6 +358,7 @@ impl Feature {
             Self::Diagnostics => &[Topic::ServerDiagnostics, Topic::ServerAlerts],
             Self::Metrics => &[Topic::MetricsLive],
             Self::Players => &[Topic::ServerMap],
+            Self::Entities => &[Topic::ServerEntities],
             Self::Sftp | Self::Tools | Self::Drops | Self::Updates | Self::Debug => &[],
         }
     }

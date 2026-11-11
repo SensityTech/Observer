@@ -72,6 +72,21 @@
 //! - on stdin: `fake_move <id> <x> <y> <z>`, which puts a player at a position the bridge reports
 //!   while Observer asks for positions; the others go round a circle. With `onesync off` the bridge
 //!   reports no position, as it reads them from OneSync;
+//! - on stdin or in the cfg: `fake_entity <vehicle|bike|boat|heli|train|ped|object> <x> <y> <z>
+//!   [resource or -] [owner or -] [bucket]`, an entity of the game under the next net id, from 1,
+//!   and `fake_entities <vehicles> <peds> <objects>`, as many spread over the map as a small busy
+//!   server holds; the bridge lists them while Observer asks, in sweeps of 500 rows a part, with
+//!   every player's own ped counted and left out, and deletes those Observer names. Nothing here
+//!   was measured on a real FXServer: the entities are the fake's own, and the bridge's natives
+//!   are taken to do what their names say. `fake_entity_gone <net id>` removes one as the game
+//!   does by itself, `fake_entity_stays <net id>` has the game keep one it is asked to delete,
+//!   `fake_enter <player> [net id]` seats a player in a vehicle or takes them out, and
+//!   `fake_possess <player> <net id>` makes a ped a player's own;
+//! - `fake_entities_every_ms`: how often the bridge sweeps, whatever Observer asks, for tests that
+//!   cannot wait five seconds; `fake_entities_row_us` (2) and `fake_entities_list_us`: what a
+//!   sweep costs for each entity and for listing them, in microseconds, which cuts a sweep short
+//!   past its budget and spaces the next ones out; `set gamename rdr3` and `onesync off` each
+//!   leave the server without entities to list;
 //! - on stdin: `fake_debug <resource> <list> <fields...>`, one row of a hook's report (`ev`, `np`,
 //!   `un`, `sb`, `sbl` or `http`) printed as that resource;
 //! - on stdin: `fake_crash [code]`, `fake_hang`, `fake_spin` (a busy loop), `fake_print <text>`,
@@ -92,6 +107,7 @@
 
 mod console;
 mod dump;
+mod entities;
 mod http;
 mod players;
 mod resources;
@@ -260,6 +276,11 @@ struct Fake {
     server: Arc<Server>,
     waiting: Vec<Waiting>,
     following: Option<Following>,
+    /// While Observer asks for the entities.
+    listing: Option<Following>,
+    world: entities::World,
+    /// The answers to deletions, each sent once the bridge has checked what is left.
+    deleted: Vec<(Instant, serde_json::Value)>,
     placed: HashMap<u32, [f64; 3]>,
     last_request: u32,
     traces: Traces,
@@ -381,6 +402,9 @@ fn main() {
             traces,
             waiting: Vec::new(),
             following: None,
+            listing: None,
+            world: entities::World::default(),
+            deleted: Vec::new(),
             placed: HashMap::new(),
             last_request: 0,
             endpoint: None,
@@ -504,6 +528,7 @@ impl Fake {
             self.admit_unanswered(now);
             self.report_positions(now);
             self.report_resources(now);
+            self.report_entities(now);
             self.beat(now);
             self.count(now);
             self.server.tick();
@@ -570,6 +595,7 @@ impl Fake {
             ("fake_join", _) => self.join(args.first(), args.get(1), args.get(2)),
             ("fake_connecting", _) => self.connecting(args.first(), args.get(1), args.get(2)),
             ("fake_move", Some(id)) => self.place(id, &args[1..]),
+            (entity, Some(_)) if entities::COMMANDS.contains(&entity) => self.world.command(entity, args),
             ("fake_drop", Some(id)) => {
                 let category = args
                     .get(1)
@@ -679,6 +705,7 @@ impl Fake {
         self.resource_event(resource, "stop");
         if self.bridge.as_ref().is_some_and(|bridge| bridge.name == resource) {
             self.bridge = None;
+            self.listing = None;
             self.unreported = Unreported::default();
         }
     }
@@ -766,6 +793,9 @@ impl Fake {
                 second: 0,
                 greeted: 0,
             });
+            self.listing = None;
+            self.deleted.clear();
+            self.world.bridge_started(self.server.uptime_ms());
             self.bridge = Some(Bridge {
                 name: resource.to_owned(),
                 next_heartbeat: Instant::now(),
@@ -981,6 +1011,47 @@ impl Fake {
         }
     }
 
+    /// The entities, swept while Observer asks, and the answers to its deletions once due.
+    fn report_entities(&mut self, now: Instant) {
+        let (due, later): (Vec<_>, Vec<_>) = std::mem::take(&mut self.deleted)
+            .into_iter()
+            .partition(|(at, _)| now >= *at);
+        self.deleted = later;
+        for (_, reply) in due {
+            self.bridge_report(&reply);
+        }
+        let Some(listing) = self.listing.as_mut() else {
+            return;
+        };
+        if now >= listing.until {
+            self.listing = None;
+            self.world.unspaced();
+            return;
+        }
+        if now < listing.next {
+            return;
+        }
+        let every_ms = u64::try_from(listing.every.as_millis()).unwrap_or(u64::MAX);
+        let parts = self.world.sweep(&entities::Server {
+            players: self.server.players().len(),
+            onesync: self.server.convar("onesync").is_some_and(|value| value != "off"),
+            gta: self.server.convar("gamename").is_none_or(|game| game == "gta5"),
+            every_ms,
+            row_us: self.server.number("fake_entities_row_us").unwrap_or(2),
+            list_us: self.server.number("fake_entities_list_us"),
+        });
+        let cadence = self
+            .server
+            .number("fake_entities_every_ms")
+            .unwrap_or_else(|| self.world.cadence_ms(every_ms));
+        if let Some(listing) = self.listing.as_mut() {
+            listing.next = now + Duration::from_millis(cadence);
+        }
+        for part in parts {
+            self.bridge_report(&part);
+        }
+    }
+
     /// Who waited for a verdict longer than the bridge waits gets in.
     fn admit_unanswered(&mut self, now: Instant) {
         let (due, waiting): (Vec<Waiting>, Vec<Waiting>) = std::mem::take(&mut self.waiting)
@@ -1170,6 +1241,31 @@ impl Fake {
                     until: now + Duration::from_millis(lasting),
                     next: now,
                 });
+            }
+            Some("entities") => {
+                let every = payload["everyMs"].as_u64().unwrap_or(15_000).clamp(5000, 60_000);
+                let lasting = payload["forMs"].as_u64().unwrap_or(0).min(60_000);
+                let now = Instant::now();
+                // An ask that renews one keeps the sweeps where they were.
+                let next = self.listing.as_ref().map_or(now, |listing| listing.next);
+                self.listing = (lasting > 0).then(|| Following {
+                    every: Duration::from_millis(every),
+                    until: now + Duration::from_millis(lasting),
+                    next,
+                });
+                if self.listing.is_none() {
+                    self.world.unspaced();
+                }
+            }
+            Some("deleteEntities") => {
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |since| i64::try_from(since.as_secs()).unwrap_or(i64::MAX));
+                if let Some(reply) = self.world.delete(payload, now) {
+                    // The real bridge looks again a quarter of a second after it asked the game.
+                    self.deleted
+                        .push((Instant::now() + Duration::from_millis(250), reply));
+                }
             }
             Some("drop") => {
                 let (Some(id), Some(message)) = (

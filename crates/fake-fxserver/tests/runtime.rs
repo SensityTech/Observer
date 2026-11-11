@@ -14,9 +14,10 @@ use common::{Port, Ports};
 use jiff::{SignedDuration, Timestamp, Unit};
 use observer_app::{
     Accounts, AuditLog, Bans, BansSetup, BansTask, Caller, Client, Clock, DatabaseFiles, Diagnostics,
-    DiagnosticsSetup, DiagnosticsTask, Drops, DropsSetup, Error, LiveMap, LogQuery, MapSetup, Metrics,
-    MetricsSetup, Moderation, ModerationSetup, PasswordCost, Players, PlayersSetup, PlayersTask, Running,
-    Sampling, Schedule, ScheduleSetup, ScheduleTask, Servers, Setup, Sources, Supervision,
+    DiagnosticsSetup, DiagnosticsTask, Drops, DropsSetup, Entities, EntitiesSetup, Error, LiveMap, LogQuery,
+    MapSetup, Metrics, MetricsSetup, Moderation, ModerationSetup, PasswordCost, Players, PlayersSetup,
+    PlayersTask, Running, Sampling, Schedule, ScheduleSetup, ScheduleTask, Servers, Setup, Sources,
+    Supervision,
 };
 use observer_domain::audit::{ActorKind, AuditAction, AuditEntry, AuditFilter, Outcome};
 use observer_domain::bans::{BanFilter, BanRequest, LiftRequest};
@@ -26,6 +27,10 @@ use observer_domain::diagnostics::{
     Protocol, Scope,
 };
 use observer_domain::drops::{DropCategory, DropsRange, TileKind};
+use observer_domain::entities::{
+    EntitiesLive, EntitiesUnavailable, EntityDeleteRequest, EntityFilters, EntityKind, EntityOutcome,
+    EntityPage, EntitySort, EntityTarget, VehicleClass,
+};
 use observer_domain::error::ErrorCode;
 use observer_domain::launch::{ExtraArgument, LaunchSettings, OneSync};
 use observer_domain::metrics::{LiveSample, MarkerKind, Range, Series, ThreadGroup, ThreadShares};
@@ -2739,4 +2744,297 @@ async fn a_rescan_says_what_fxserver_found_and_a_failed_start_shows_as_one() {
         .await;
     assert_eq!(row(&view, "bank").failed_at, None, "it started since");
     observer.stop_observer().await;
+}
+
+/// The whole list, by net id.
+async fn entities_page(entities: &Entities, observer: &Observer) -> EntityPage {
+    entities
+        .page(
+            &observer.owner,
+            &EntityFilters::default(),
+            EntitySort::NetId,
+            false,
+            0,
+        )
+        .await
+        .unwrap()
+}
+
+/// The list's state once `wanted` holds, which a sweep of the bridge brings.
+async fn entities_live(
+    live: &mut watch::Receiver<EntitiesLive>,
+    wanted: impl FnMut(&EntitiesLive) -> bool,
+) -> EntitiesLive {
+    timeout(WAIT, live.wait_for(wanted))
+        .await
+        .expect("the bridge sent no such sweep while the list was followed")
+        .unwrap()
+        .clone()
+}
+
+fn entity_target(page: &EntityPage, net_id: u16) -> EntityTarget {
+    let item = page
+        .items
+        .iter()
+        .find(|item| item.net_id == net_id)
+        .unwrap_or_else(|| panic!("no entity {net_id} in {:?}", page.items));
+    EntityTarget {
+        net_id,
+        serial: item.serial,
+        model: item.model,
+    }
+}
+
+#[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one run of a server: its list, a deletion and what the audit log keeps of it"
+)]
+async fn the_entities_are_listed_while_someone_looks_and_deleted_one_by_one() {
+    let mut observer = Observer::new(false).await;
+    let (metrics, sampling, players, playing) = follow_players(&observer).await;
+    let (entities, listing) = Entities::start(EntitiesSetup {
+        db: observer.db.clone(),
+        clock: Clock::system(),
+        supervision: observer.supervision.clone(),
+        players: Some(players.clone()),
+    });
+    let send = |line: &'static str| {
+        let observer = &observer;
+        async move {
+            observer
+                .supervision
+                .command(&observer.owner, line, CONSOLE_ROUTE.0, CONSOLE_ROUTE.1)
+                .await
+                .unwrap();
+        }
+    };
+    observer.supervision.start_server(&observer.owner).await.unwrap();
+    observer.state(ServerState::Online).await;
+    // A car from a resource that Ada's game simulates, a train, two objects, and a helicopter
+    // Ada sits in: net ids 1 to 5.
+    send(
+        "fake_join Ada; fake_entity vehicle 412.6 -1208.3 32.1 qb-garages 1 2; fake_entity train 0 0 0; \
+         fake_entity object 1 2 3 ox_inventory; fake_entity object 5 6 7; fake_entity heli 9 9 9; \
+         fake_enter 1 5",
+    )
+    .await;
+    confirmed(&players, 1).await;
+
+    let (before, mut live, watching) = entities.watch();
+    let listed = entities_live(&mut live, |live| live.run.is_some()).await;
+    let page = entities_page(&entities, &observer).await;
+    // Ada steps into the car after the sweep: the list does not know, the bridge does.
+    send("fake_enter 1 1").await;
+    let deletion = entities
+        .delete(
+            &observer.owner,
+            EntityDeleteRequest {
+                run: listed.run.clone().unwrap(),
+                targets: vec![
+                    entity_target(&page, 5),
+                    entity_target(&page, 2),
+                    entity_target(&page, 3),
+                    entity_target(&page, 1),
+                    EntityTarget {
+                        model: 7,
+                        ..entity_target(&page, 4)
+                    },
+                ],
+            },
+        )
+        .await
+        .unwrap();
+    let after = entities_page(&entities, &observer).await;
+    send("fake_entity_gone 4").await;
+    let gone = entities
+        .delete(
+            &observer.owner,
+            EntityDeleteRequest {
+                run: listed.run.clone().unwrap(),
+                targets: vec![entity_target(&page, 4)],
+            },
+        )
+        .await
+        .unwrap();
+    drop(watching);
+    let forgotten = entities_live(&mut live, |live| live.run.is_none()).await;
+    let audited = observer.audited(AuditAction::EntitiesDeleted).await;
+    observer.supervision.stop_server(&observer.owner).await.unwrap();
+    observer.state(ServerState::Stopped).await;
+    listing.close().await;
+    playing.close().await;
+    sampling.close().await;
+    metrics.close().await.unwrap();
+    observer.stop_observer().await;
+
+    assert_eq!(before, EntitiesLive::default());
+    assert_eq!((listed.sweep, listed.listed, listed.every_ms), (1, 5, 15_000));
+    let counts = listed.counts.unwrap();
+    assert_eq!(
+        (counts.vehicles, counts.objects, counts.peds, counts.player_peds),
+        (Some(3), Some(2), Some(1), 1)
+    );
+    assert!(!listed.truncated && !listed.spaced && listed.unavailable.is_none());
+    assert_eq!(page.items.len(), 5);
+    let car = &page.items[0];
+    assert_eq!(
+        (car.net_id, car.kind, car.class),
+        (1, EntityKind::Vehicle, Some(VehicleClass::Car))
+    );
+    assert_eq!((car.x, car.y, car.z, car.bucket), (412.6, -1208.3, 32.1, 2));
+    assert_eq!(car.resource.as_deref(), Some("qb-garages"));
+    assert_eq!(
+        (car.owned, car.owner, car.owner_name.as_deref(), car.occupied),
+        (true, Some(1), Some("Ada"), false)
+    );
+    assert_eq!(page.items[1].class, Some(VehicleClass::Train));
+    assert!(page.items[4].occupied);
+    assert_eq!(page.facets.kinds.vehicles, 3);
+    let outcomes = |deletion: &observer_domain::entities::EntityDeletion| -> Vec<(u16, EntityOutcome)> {
+        deletion
+            .results
+            .iter()
+            .map(|result| (result.net_id, result.outcome))
+            .collect()
+    };
+    assert_eq!(
+        outcomes(&deletion),
+        [
+            (5, EntityOutcome::Occupied),
+            (2, EntityOutcome::Train),
+            (3, EntityOutcome::Deleted),
+            (1, EntityOutcome::Occupied),
+            (4, EntityOutcome::Changed),
+        ]
+    );
+    let left: Vec<u16> = after.items.iter().map(|item| item.net_id).collect();
+    assert_eq!(
+        left,
+        [1, 2, 4, 5],
+        "the list shows the deletion before the next sweep"
+    );
+    assert_eq!((after.live.listed, after.live.sweep), (4, 1));
+    assert_eq!(outcomes(&gone), [(4, EntityOutcome::Gone)]);
+    assert_eq!(forgotten, EntitiesLive::default());
+    assert_eq!(audited.len(), 2);
+    let first = &audited[1];
+    assert_eq!(first.actor_name.as_deref(), Some("ada"));
+    assert_eq!(first.outcome, Outcome::Success);
+    assert_eq!(
+        first.details,
+        json!({
+            "asked": 5,
+            "deleted": 1,
+            "outcomes": { "occupied": 2, "train": 1, "changed": 1 },
+            "entities": [{ "model": "0xE0FAF6D2", "kind": "object", "resource": "ox_inventory", "count": 1 }],
+        })
+    );
+    assert_eq!(audited[0].details["outcomes"], json!({ "gone": 1 }));
+    let console: Vec<String> = observer.console().iter().map(|line| plain(&line.5)).collect();
+    assert!(
+        console
+            .iter()
+            .any(|line| line.contains("observer_cmd deleteEntities")),
+        "a deletion shows in the console"
+    );
+    assert!(
+        !console.iter().any(|line| line.contains("observer_cmd entities")),
+        "the asks for the list fill the console"
+    );
+}
+
+#[tokio::test]
+async fn the_server_lists_its_entities_only_while_someone_looks() {
+    let mut observer = Observer::launched(
+        false,
+        Duration::from_millis(50),
+        &[("fake_heartbeat_ms", "200"), ("fake_entities_every_ms", "100")],
+    )
+    .await;
+    let (entities, listing) = Entities::start(EntitiesSetup {
+        db: observer.db.clone(),
+        clock: Clock::system(),
+        supervision: observer.supervision.clone(),
+        players: None,
+    });
+    observer.supervision.start_server(&observer.owner).await.unwrap();
+    observer.state(ServerState::Online).await;
+    observer
+        .supervision
+        .command(
+            &observer.owner,
+            "fake_entities 4 3 20; fake_entity_stays 1",
+            CONSOLE_ROUTE.0,
+            CONSOLE_ROUTE.1,
+        )
+        .await
+        .unwrap();
+
+    let (_, mut live, watching) = entities.watch();
+    let swept = entities_live(&mut live, |live| live.sweep >= 3).await;
+    let page = entities_page(&entities, &observer).await;
+    let kept = entities
+        .delete(
+            &observer.owner,
+            EntityDeleteRequest {
+                run: swept.run.clone().unwrap(),
+                targets: vec![entity_target(&page, 1)],
+            },
+        )
+        .await
+        .unwrap();
+    drop(watching);
+    entities_live(&mut live, |live| live.run.is_none()).await;
+    // Twenty sweeps' worth of time, had the bridge gone on without anyone looking.
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    let (_, mut live, watching) = entities.watch();
+    let again = entities_live(&mut live, |live| live.run.is_some()).await;
+    drop(watching);
+    observer.supervision.stop_server(&observer.owner).await.unwrap();
+    observer.state(ServerState::Stopped).await;
+    let stopped = entities_page(&entities, &observer).await;
+    listing.close().await;
+    observer.stop_observer().await;
+
+    assert_eq!(swept.listed, 27);
+    assert_eq!(swept.run, again.run, "the same server, the same bridge");
+    assert_eq!(kept.results[0].outcome, EntityOutcome::Unconfirmed);
+    assert!(
+        again.sweep <= swept.sweep + 8,
+        "the bridge went on sweeping with nobody looking: {} then {}",
+        swept.sweep,
+        again.sweep
+    );
+    assert_eq!(stopped.live, EntitiesLive::default());
+}
+
+#[tokio::test]
+async fn a_server_without_onesync_has_no_entities_to_list() {
+    let mut observer = Observer::new(false).await;
+    let cfg = observer.dir.path().join("server-data/server.cfg");
+    let mut text = fs::read_to_string(&cfg).unwrap();
+    text.push_str("set onesync off\nfake_entities 2 2 2\n");
+    fs::write(&cfg, text).unwrap();
+    let (entities, listing) = Entities::start(EntitiesSetup {
+        db: observer.db.clone(),
+        clock: Clock::system(),
+        supervision: observer.supervision.clone(),
+        players: None,
+    });
+    observer.supervision.start_server(&observer.owner).await.unwrap();
+    observer.state(ServerState::Online).await;
+
+    let (_, mut live, watching) = entities.watch();
+    let told = entities_live(&mut live, |live| live.unavailable.is_some()).await;
+    let page = entities_page(&entities, &observer).await;
+    drop(watching);
+    observer.supervision.stop_server(&observer.owner).await.unwrap();
+    observer.state(ServerState::Stopped).await;
+    listing.close().await;
+    observer.stop_observer().await;
+
+    assert_eq!(told.unavailable, Some(EntitiesUnavailable::Onesync));
+    assert_eq!((told.run, told.listed, told.counts), (None, 0, None));
+    assert_eq!(page.items, []);
 }

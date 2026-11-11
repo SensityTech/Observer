@@ -192,6 +192,20 @@ pub enum ErrorCode {
     /// The thresholds are not ordered, the cadence is not 1, 2 or 5 seconds, or the edges enclose
     /// no area.
     InvalidMapSettings,
+    /// The server's entities are not listed yet: the first sweep comes a moment after someone
+    /// starts looking at them.
+    EntitiesNotListed,
+    /// The server or its bridge started again since the list was read: its net ids name other
+    /// entities now.
+    EntitiesChanged,
+    /// The list is too old to delete from: the server stopped answering.
+    EntitiesOutOfDate,
+    /// Another deletion is still under way.
+    EntitiesDeleting,
+    /// Params: `max`, the most entities one deletion takes.
+    TooManyEntities,
+    /// The cadence is not one the panel offers.
+    InvalidEntitiesSettings,
     /// The file changes' database could not be opened: it was set aside, or Observer is stopping.
     ChangesUnavailable,
     /// No start or check of the server has this id.

@@ -83,6 +83,10 @@ fn status(code: ErrorCode) -> StatusCode {
         | ErrorCode::ServerNotRunning
         | ErrorCode::ServerStopping
         | ErrorCode::ServerNotStarting
+        | ErrorCode::EntitiesNotListed
+        | ErrorCode::EntitiesChanged
+        | ErrorCode::EntitiesOutOfDate
+        | ErrorCode::EntitiesDeleting
         | ErrorCode::CfgNotEditable
         | ErrorCode::CfgChanged
         | ErrorCode::NothingToSkip
@@ -161,6 +165,8 @@ fn status(code: ErrorCode) -> StatusCode {
         | ErrorCode::InvalidKickSettings
         | ErrorCode::InvalidMessage
         | ErrorCode::InvalidMapSettings
+        | ErrorCode::TooManyEntities
+        | ErrorCode::InvalidEntitiesSettings
         | ErrorCode::InvalidBackupSettings
         | ErrorCode::InvalidBackupDestination => StatusCode::BAD_REQUEST,
         ErrorCode::TooManyAttempts

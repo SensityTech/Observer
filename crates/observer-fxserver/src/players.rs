@@ -25,7 +25,7 @@ const MAX_TEXT_BYTES: usize = 4096;
 /// The bridge sends at most 100 players a page.
 const MAX_PAGE: usize = 200;
 /// Past any map: a position beyond is not one the game holds.
-const MAX_COORDINATE: f64 = 100_000.0;
+pub(crate) const MAX_COORDINATE: f64 = 100_000.0;
 
 /// A report and when Observer received it.
 #[derive(Debug, Clone, PartialEq)]

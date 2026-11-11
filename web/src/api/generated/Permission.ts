@@ -28,7 +28,9 @@ export const Permission = {
     BansLift: 1n << 24n,
     PlayersMap: 1n << 25n,
     ResourcesControl: 1n << 26n,
-    PlayersKick: 1n << 27n,
-    PlayersAnnounce: 1n << 28n,
-    PlayersMessage: 1n << 29n,
+    EntitiesView: 1n << 27n,
+    EntitiesDelete: 1n << 28n,
+    PlayersKick: 1n << 29n,
+    PlayersAnnounce: 1n << 30n,
+    PlayersMessage: 1n << 31n,
 } as const;

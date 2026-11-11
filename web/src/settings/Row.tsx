@@ -1,5 +1,5 @@
-import { useLocation } from '@tanstack/react-router';
-import { Clock } from 'lucide-react';
+import { Link, useLocation, type LinkProps } from '@tanstack/react-router';
+import { ArrowRight, Clock } from 'lucide-react';
 import { useEffect, useId, useRef, type ReactNode } from 'react';
 
 import { Chip } from '../components/Chip';
@@ -126,6 +126,33 @@ export function CategoryHead({ category, aside }: { category: CategoryId; aside?
             </div>
             {aside}
         </div>
+    );
+}
+
+/** The way from a category to the page that acts on what it sets. */
+export function CategoryLink({ to, children }: { to: LinkProps['to']; children: ReactNode }) {
+    return (
+        <Link
+            to={to}
+            className="inline-flex items-center gap-1.5 text-ui font-medium text-ink underline-offset-2 hover:underline max-md:min-h-11"
+        >
+            {children}
+            <ArrowRight size={14} strokeWidth={1.5} aria-hidden="true" />
+        </Link>
+    );
+}
+
+/** A category whose settings are still being read. */
+export function CategoryLoading() {
+    const { t } = useI18n();
+    return (
+        <section className="card">
+            <div className="card-body flex flex-col gap-3" aria-busy="true">
+                <span className="sr-only">{t.common.loading}</span>
+                <span className="skeleton w-1/3" />
+                <span className="skeleton w-1/2" />
+            </div>
+        </section>
     );
 }
 

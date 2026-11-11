@@ -20,8 +20,9 @@ use std::sync::Arc;
 use axum::extract::Request;
 use axum::{Router, middleware};
 use observer_app::{
-    Accounts, Artifacts, AuditLog, Backups, Bans, Changes, DebugCounts, Diagnostics, Drops, Error, Features,
-    Files, LiveMap, Metrics, Moderation, Players, Schedule, Servers, Statistics, Supervision, Tools, Updates,
+    Accounts, Artifacts, AuditLog, Backups, Bans, Changes, DebugCounts, Diagnostics, Drops, Entities, Error,
+    Features, Files, LiveMap, Metrics, Moderation, Players, Schedule, Servers, Statistics, Supervision,
+    Tools, Updates,
 };
 use observer_domain::about::Build;
 use observer_domain::features::Feature;
@@ -58,6 +59,7 @@ pub struct AppState {
     metrics: Option<Metrics>,
     players: Option<Players>,
     map: Option<LiveMap>,
+    entities: Option<Entities>,
     drops: Option<Drops>,
     changes: Option<Changes>,
     updates: Option<Updates>,
@@ -99,6 +101,7 @@ pub struct Services {
     pub metrics: Option<Metrics>,
     pub players: Option<Players>,
     pub map: Option<LiveMap>,
+    pub entities: Option<Entities>,
     pub drops: Option<Drops>,
     pub changes: Option<Changes>,
     pub updates: Option<Updates>,
@@ -131,6 +134,7 @@ impl AppState {
             metrics,
             players,
             map,
+            entities,
             drops,
             changes,
             updates,
@@ -155,6 +159,7 @@ impl AppState {
             metrics,
             players,
             map,
+            entities,
             drops,
             changes,
             updates,
@@ -195,6 +200,12 @@ impl AppState {
         self.map
             .as_ref()
             .ok_or_else(|| self.features.refusal(Feature::Players))
+    }
+
+    pub(crate) fn entities(&self) -> Result<&Entities, Error> {
+        self.entities
+            .as_ref()
+            .ok_or_else(|| self.features.refusal(Feature::Entities))
     }
 
     pub(crate) fn drops(&self) -> Result<&Drops, Error> {

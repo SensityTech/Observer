@@ -2,6 +2,7 @@ import {
     Ban,
     Blocks,
     BookOpen,
+    Boxes,
     CalendarClock,
     ChartLine,
     Contact,
@@ -46,6 +47,7 @@ export type NavEntry = {
         | '/changes'
         | '/drops'
         | '/docs'
+        | '/entities'
         | '/settings'
         | '/tools'
         | '/cfg'
@@ -116,6 +118,13 @@ export const navSections = (t: Messages) => ({
     insights: [
         { to: '/statistics', label: t.nav.statistics, icon: ChartLine, access: Permission.DashboardView },
         { to: '/drops', label: t.nav.drops, icon: Unplug, access: Permission.DropsView, nested: true },
+        {
+            to: '/entities',
+            label: t.nav.entities,
+            icon: Boxes,
+            access: Permission.EntitiesView,
+            nested: true,
+        },
         {
             to: '/diagnostics',
             label: t.nav.diagnostics,

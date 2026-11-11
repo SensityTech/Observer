@@ -47,8 +47,8 @@ describe('the settings catalog', () => {
 
 describe('search', () => {
     it('should find a setting by its name or by what its explanation says, whatever the case', () => {
-        // The live map's cadence says positions need it.
-        expect(found(OWNER, 'OneSync')).toEqual(['onesync', 'mapCadence']);
+        // The cadences of the live map and of the entities say that both need it.
+        expect(found(OWNER, 'OneSync')).toEqual(['onesync', 'mapCadence', 'entitiesCadence']);
         expect(found(OWNER, 'fingerprint')).toEqual(['hashRate', 'addressDays']);
         expect(found(OWNER, 'HASH')).toContain('hashRate');
     });
@@ -77,7 +77,7 @@ describe('search', () => {
     });
 
     it('should ignore accents typed or written', () => {
-        expect(found(OWNER, 'ÖneSync')).toEqual(['onesync', 'mapCadence']);
+        expect(found(OWNER, 'ÖneSync')).toEqual(['onesync', 'mapCadence', 'entitiesCadence']);
     });
 });
 
